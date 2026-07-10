@@ -428,6 +428,23 @@ export async function upcomingBooked(clientId: string): Promise<PendingBooking[]
   return res.rows;
 }
 
+/**
+ * The client's most recently CREATED upcoming confirmed booking — the class a
+ * post-booking café order should attach to when the model doesn't pass an
+ * explicit booking_id (the Wave flow books server-side in the webhook, so the
+ * model never sees that id; it just knows "the class they just paid for").
+ */
+export async function latestUpcomingBooking(clientId: string): Promise<PendingBooking | null> {
+  const res = await pool.query(
+    `select * from pending_bookings
+      where client_id = $1 and status = 'BOOKED' and slot_start > now()
+      order by created_at desc
+      limit 1`,
+    [clientId],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function markCancelled(bookingId: string): Promise<void> {
   await transition(pool, bookingId, "CANCELLED");
 }

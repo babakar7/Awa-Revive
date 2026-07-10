@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { pool } from "../db/index.js";
 import { verifyWaveSignature } from "../lib/wave.js";
-import { sendText } from "../lib/whatsapp.js";
+import { sendText, sendInteractive } from "../lib/whatsapp.js";
 import * as wix from "../lib/wix.js";
 import * as repo from "../domain/repo.js";
 import { transition } from "../domain/stateMachine.js";
@@ -170,6 +170,14 @@ async function fulfillPaidBooking(bookingId: string, log: any): Promise<void> {
     );
     await sendText(client.wa_phone, confirmation);
     await repo.addTurn(booking.client_id, "assistant", confirmation);
+
+    // Book-first, menu-after: now that the class is confirmed, offer the café
+    // menu as its own (separate) order. Skipped if a café was somehow already
+    // attached to this booking. Non-blocking — a proposal hiccup must never
+    // break the confirmed booking.
+    if (extras.length === 0) {
+      await proposeCafeMenuAfterBooking(client, booking, lang, log);
+    }
 
     // Café order → tell the team to prepare it (email + WhatsApp reception).
     // Never let a notification problem break the rest of the flow.
@@ -349,6 +357,67 @@ export function cafeConfirmationMessage(
         `☕ Ta commande :\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? `prête après ton cours${forClass}`}\n\n` +
         `À très vite ! 💪🏾`
       );
+  }
+}
+
+/**
+ * Book-first / menu-after: right after a class booking is confirmed, offer the
+ * café menu as a SEPARATE order (never bundled into the class payment). Sent as
+ * a native two-button present_options; the client's tap comes back into the
+ * agent, which then presents the items and creates a café-only link
+ * (create_cafe_payment_link). Non-blocking and best-effort by design.
+ */
+async function proposeCafeMenuAfterBooking(
+  client: any,
+  booking: any,
+  lang: string,
+  log: any,
+): Promise<void> {
+  try {
+    const { body, yes, no } = cafeMenuOfferCopy(lang);
+    const options = [
+      { id: "cafe_after_booking_yes", title: yes },
+      { id: "cafe_after_booking_no", title: no },
+    ];
+    const kind = await sendInteractive(client.wa_phone, body, yes, options);
+    // Log what the client saw so the rebuilt history stays coherent (same
+    // format the present_options tool uses).
+    await repo.addTurn(
+      booking.client_id,
+      "assistant",
+      `${body}\n[message interactif ${kind} — options : ${options.map((o) => o.title).join(" · ")}]`,
+    );
+  } catch (err) {
+    log.error({ err, bookingId: booking.id }, "Café menu offer after booking failed (non-blocking)");
+  }
+}
+
+function cafeMenuOfferCopy(lang: string): { body: string; yes: string; no: string } {
+  switch (lang) {
+    case "en":
+      return {
+        body:
+          "Fancy something to go with it? 🥤 We've got a studio menu — smoothies, detox juices, iced matcha, " +
+          "healthy bites… want to add anything to your visit?",
+        yes: "See the menu 🥤",
+        no: "No thanks 🙏🏾",
+      };
+    case "wo":
+      return {
+        body:
+          "Ndax dangaa bëgg lu mu ànd? 🥤 Am nañu menu ci studio bi — smoothies, jus détox, matcha glacé, " +
+          "snacks healthy… bëgg nga yokk dara?",
+        yes: "Xool menu bi 🥤",
+        no: "Baax na, jërëjëf 🙏🏾",
+      };
+    default:
+      return {
+        body:
+          "Et pour accompagner ? 🥤 On a un menu au studio — smoothies, jus détox, matcha glacé, snacks " +
+          "healthy… envie d'ajouter quelque chose à ta séance ?",
+        yes: "Voir le menu 🥤",
+        no: "Non merci 🙏🏾",
+      };
   }
 }
 

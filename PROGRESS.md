@@ -346,6 +346,40 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     d'habitude. Si le client a déjà nommé un cours/une heure, l'habitude est
     ignorée. 5 tests unitaires (106 au total).
 
+21. **Book-first, menu-after — le café n'est PLUS jamais dans le lien du cours (10/07)**.
+    Changement de fond après un bug observé en prod : Awa sautait parfois la
+    proposition de menu (conflit de prompt « crée le lien tout de suite » vs
+    « propose le menu avant le lien ») et bundlait un catalogue de catégories.
+    Cause racine : la proposition n'était QU'UNE règle de prompt, non enforced,
+    et elle se percutait avec la règle dure de création du lien. Nouveau modèle,
+    unifié avec le flux abonnement : **on réserve/paie le cours d'abord, on
+    propose le café ensuite, en lien Wave SÉPARÉ.**
+    - `create_payment_link` = cours SEUL : params `extras`/`order_note` retirés,
+      bloc extras supprimé, le lien ne porte plus jamais de café
+      ([tools.ts](src/agent/tools.ts)). Plus aucune tension avec la règle dure.
+    - **Flux Wave** : après paiement confirmé, le webhook envoie la confirmation
+      PUIS propose le menu automatiquement — present_options 2 boutons
+      [Voir le menu 🥤 (cafe_after_booking_yes)] / [Non merci 🙏🏾 (…_no)]
+      ([wave.ts](src/webhooks/wave.ts) `proposeCafeMenuAfterBooking`, copy fr/en/wo,
+      non bloquant, tour loggé). Le tap revient dans le modèle, qui présente les
+      incontournables puis crée le lien café. Guard : sauté si la résa portait
+      déjà des extras (legacy).
+    - `create_cafe_payment_link` ouvert aux résas **Wave OU abonnement** (garde =
+      résa du client, BOOKED, à venir — la contrainte `membership` a sauté).
+      `linked_booking_id` désormais OPTIONNEL : vide ⇒ rattaché à la dernière
+      résa à venir du client (`repo.latestUpcomingBooking`, tri `created_at desc`)
+      — indispensable côté Wave où le booking naît dans le webhook, le modèle n'a
+      jamais ce booking_id.
+    - **Flux abonnement inchangé** : Awa déclenche l'offre elle-même dans le tour
+      (book_with_membership renvoie booking_id → menu → create_cafe_payment_link).
+    - Compromis assumé (validé produit) : la conversion café baisse (2ᵉ paiement
+      Wave) mais le chemin de réservation n'a plus aucune friction et le bug de
+      skip disparaît par construction. Build + 106 tests OK.
+    - ⚠️ Reste : le lien café-seul en attente n'est PAS surfacé dans le contexte
+      dynamique (comme avant pour l'abonnement) — si le client demande « c'est
+      toujours valable ? » pour un lien café, Awa n'a pas l'info live. À ajouter
+      si le café devient très fréquent.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement

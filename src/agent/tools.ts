@@ -7,7 +7,6 @@ import {
   computeExtras,
   extrasFromJson,
   formatExtrasOneLine,
-  type ExtraLine,
 } from "../lib/cafeMenu.js";
 import * as wix from "../lib/wix.js";
 import * as wave from "../lib/wave.js";
@@ -47,15 +46,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "create_payment_link",
     description:
-      "Create a Wave payment link for a specific class slot. Re-verifies the slot is still open, cancels any " +
-      "previous unpaid link for this client, and returns the payment URL, amount and expiry to relay to the client. " +
-      "Supports group bookings: set participants > 1 to book several spots under the same name with ONE payment " +
-      "link for the total (price × participants). Can also bundle a menu order (extras) into the same link. " +
-      "Only call after the client clearly chose a slot and you know their first name. " +
-      "STOP before calling without extras: if the studio menu has not been proposed yet in this booking, propose it " +
-      "FIRST (one present_options [C'est tout ✅] [Voir le menu 🥤] — see Café Revive rules), then call this tool " +
-      "with the client's answer. Skip that step only if the menu was already proposed/declined in this booking or " +
-      "the client explicitly asked for the link right away.",
+      "Create a Wave payment link for a specific class slot (the CLASS only — never the café). Re-verifies the " +
+      "slot is still open, cancels any previous unpaid link for this client, and returns the payment URL, amount " +
+      "and expiry to relay to the client. Supports group bookings: set participants > 1 to book several spots " +
+      "under the same name with ONE payment link for the total (price × participants). Call this as soon as the " +
+      "client clearly chose a slot and you know their first name — do NOT ask about the menu first. The café " +
+      "menu is offered automatically AFTER the booking is confirmed (its own separate link via " +
+      "create_cafe_payment_link); nothing café-related goes on this link.",
     input_schema: {
       type: "object",
       properties: {
@@ -70,28 +67,6 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           description:
             "Number of spots to book under this name (default 1). One payment link covers all of them. " +
             "Each class has a max spots per booking (Wix policy) — the tool rejects amounts above it with the allowed max.",
-        },
-        extras: {
-          type: "array",
-          maxItems: 15,
-          description:
-            "Optional café order bundled into the SAME payment link. item_id values come ONLY from the ids " +
-            "listed in <cafe_menu>; the server computes all prices from the menu file.",
-          items: {
-            type: "object",
-            properties: {
-              item_id: { type: "string", description: "Menu item id exactly as listed in <cafe_menu>" },
-              qty: { type: "integer", minimum: 1, maximum: 10 },
-            },
-            required: ["item_id", "qty"],
-            additionalProperties: false,
-          },
-        },
-        order_note: {
-          type: "string",
-          description:
-            "Free-text note for the café order (timing, oat vs cow milk, brunch drink choice, allergies). " +
-            "Default when absent: order ready after the class.",
         },
       },
       required: ["service_id", "event_id", "slot_start", "client_name"],
@@ -157,18 +132,22 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "create_cafe_payment_link",
     description:
-      "Create a Wave payment link for a MENU order attached to a booking the client just made with their " +
-      "abonnement (the membership flow has no payment link, so the café gets its own small one). Use ONLY " +
-      "after book_with_membership succeeded and the client chose menu items: pass linked_booking_id = the " +
-      "booking_id that book_with_membership returned, plus the extras. The server prices everything from the " +
-      "menu file and returns the link + breakdown. Never use this for a class (that's create_payment_link) " +
-      "or for a café order with no class booking.",
+      "Create a Wave payment link for a MENU order attached to a class the client has ALREADY booked (paid by " +
+      "Wave or by abonnement — the café always rides on its own separate small link, it is never bundled into " +
+      "the class link). Use it whenever the client wants something from the menu once their class is confirmed: " +
+      "the studio automatically offers the menu right after every booking, and this tool turns their order into a " +
+      "café-only link. Leave linked_booking_id empty to attach to the class they just booked (the default), or " +
+      "pass a specific booking_id from get_my_bookings / book_with_membership if the client has several upcoming " +
+      "bookings and you must disambiguate. The server prices everything from the menu file and returns the link + " +
+      "breakdown. Never use this for a class (that's create_payment_link) or for a café order with no class booking.",
     input_schema: {
       type: "object",
       properties: {
         linked_booking_id: {
           type: "string",
-          description: "booking_id of the membership booking this café order accompanies (from book_with_membership)",
+          description:
+            "Optional booking_id of the confirmed class this café order accompanies (from get_my_bookings or " +
+            "book_with_membership). Omit to use the client's most recent upcoming booking.",
         },
         extras: {
           type: "array",
@@ -192,7 +171,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             "Free-text note (timing, oat vs cow milk, allergies). Default when absent: ready after the class.",
         },
       },
-      required: ["linked_booking_id", "extras"],
+      required: ["extras"],
       additionalProperties: false,
     },
   },
@@ -455,24 +434,6 @@ export async function executeTool(
         });
       }
 
-      // 2c. Café extras — prices come from cafe-menu.md, never from the model.
-      let extras: ExtraLine[] = [];
-      let extrasTotal = 0;
-      if (input.extras !== undefined) {
-        const resolved = computeExtras(CAFE_MENU.items, input.extras);
-        if (!resolved.ok) {
-          return JSON.stringify({
-            error: resolved.error,
-            message: resolved.message,
-            unknown_item_ids: resolved.unknownIds,
-            valid_item_ids: resolved.validIds,
-          });
-        }
-        extras = resolved.lines;
-        extrasTotal = resolved.totalXof;
-      }
-      const orderNote = String(input.order_note ?? "").slice(0, 200).trim() || null;
-
       // 3. Re-verify the slot still has enough open spots right now.
       const slot = (cached.slot_json as any) ?? {};
       const slotStart: string = slot.startDate ?? String(input.slot_start ?? "");
@@ -505,9 +466,10 @@ export async function executeTool(
       await repo.expireActiveBookings(client.id);
       await repo.updateClientName(client.id, clientName);
 
-      // 5. DRAFT booking → Wave session → AWAITING_PAYMENT.
-      const classTotalXof = service.priceXof * participants;
-      const totalXof = classTotalXof + extrasTotal;
+      // 5. DRAFT booking → Wave session → AWAITING_PAYMENT. Class only — the
+      //    café is never bundled here; it gets its own link after the booking
+      //    is confirmed (create_cafe_payment_link).
+      const totalXof = service.priceXof * participants;
       const draft = await repo.createDraftBooking({
         clientId: client.id,
         serviceId,
@@ -518,9 +480,9 @@ export async function executeTool(
         slotEnd: fresh.endDate ?? null,
         amountXof: totalXof,
         participants,
-        extrasJson: extras.length > 0 ? extras : null,
-        extrasAmountXof: extrasTotal,
-        orderNote: extras.length > 0 ? orderNote : null,
+        extrasJson: null,
+        extrasAmountXof: 0,
+        orderNote: null,
       });
 
       let session;
@@ -540,46 +502,40 @@ export async function executeTool(
       return JSON.stringify({
         payment_link: session.wave_launch_url,
         amount_fcfa: totalXof,
-        class_total_fcfa: classTotalXof,
+        class_total_fcfa: totalXof,
         participants,
         price_per_person_fcfa: service.priceXof,
-        extras:
-          extras.length > 0
-            ? extras.map((l) => ({ item: l.name, qty: l.qty, line_total_fcfa: l.lineTotalXof }))
-            : undefined,
-        extras_total_fcfa: extras.length > 0 ? extrasTotal : undefined,
-        order_note: orderNote ?? undefined,
         expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
         class: service.name,
         slot_start: fresh.startDate,
         slot_start_dakar: fmtDakar(fresh.startDate),
         note:
-          "Relay the link to the client. Spot(s) confirmed only once paid; confirmation arrives automatically on WhatsApp." +
-          (extras.length > 0
-            ? " The link includes the café order — state the breakdown (class + café = total)."
-            : ""),
+          "Relay the link to the client (class only). Spot(s) confirmed only once paid; confirmation arrives " +
+          "automatically on WhatsApp, and the café menu is offered right after that — do NOT bring up the menu now.",
       });
     }
 
     case "create_cafe_payment_link": {
-      const linkedBookingId = String(input.linked_booking_id ?? "");
-      if (!linkedBookingId) return JSON.stringify({ error: "invalid_arguments" });
+      const linkedBookingId = String(input.linked_booking_id ?? "").trim();
 
-      // The café must ride on one of THIS client's own membership bookings that
-      // is still upcoming — same ownership check as cancel_booking, so the
-      // model can't attach an order to someone else's or a stale booking.
-      const booking = await repo.findClientBooking(client.id, linkedBookingId);
+      // The café rides on one of THIS client's own confirmed, still-upcoming
+      // bookings (Wave- OR membership-paid). An explicit id is checked for
+      // ownership (same stance as cancel_booking); with no id we default to the
+      // class they most recently booked — the Wave flow books server-side, so
+      // the model never sees that booking_id.
+      const booking = linkedBookingId
+        ? await repo.findClientBooking(client.id, linkedBookingId)
+        : await repo.latestUpcomingBooking(client.id);
       if (
         !booking ||
         booking.status !== "BOOKED" ||
-        booking.payment_method !== "membership" ||
         new Date(booking.slot_start).getTime() <= Date.now()
       ) {
         return JSON.stringify({
           error: "unknown_booking",
           message:
-            "No matching upcoming membership booking for this client. A café-only link only attaches to a " +
-            "class the client just booked with their abonnement — re-run get_my_bookings.",
+            "No matching upcoming confirmed booking for this client. A café-only link attaches to a class the " +
+            "client has already booked (Wave or abonnement) — re-run get_my_bookings, or the client books a class first.",
         });
       }
 
@@ -633,9 +589,9 @@ export async function executeTool(
         for_class: booking.service_name,
         slot_start_dakar: fmtDakar(String(booking.slot_start)),
         note:
-          "Relay the link — this covers ONLY the café order (the class itself is already booked on the " +
-          "abonnement, nothing more to pay for it). State the items and total. Ready after the class unless " +
-          "the note says otherwise. Confirmation arrives automatically on WhatsApp once paid.",
+          "Relay the link — this covers ONLY the café order (the class itself is already booked and paid, " +
+          "nothing more to pay for it). State the items and total. Ready after the class unless the note says " +
+          "otherwise. Confirmation arrives automatically on WhatsApp once paid.",
       });
     }
 
