@@ -1,0 +1,39 @@
+name: CI
+
+# Every push to main deploys straight to Railway, so every push gets the full
+# check: typecheck + unit tests + payment-path integration tests (throwaway
+# Postgres in Docker — preinstalled on ubuntu-latest runners; all external
+# APIs mocked, no secrets needed).
+#
+# To actually BLOCK bad deploys (not just flag them), enable "Wait for CI" on
+# the service in the Railway dashboard — Railway then only deploys commits
+# whose checks pass.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Integration tests (payment path)
+        run: npm run test:integration
