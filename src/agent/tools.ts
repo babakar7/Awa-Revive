@@ -11,6 +11,7 @@ import {
 } from "../lib/cafeMenu.js";
 import * as wix from "../lib/wix.js";
 import * as wave from "../lib/wave.js";
+import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
 
@@ -124,8 +125,9 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     description:
       "Check whether this client has an active abonnement (Wix pricing plan) — identity is verified " +
       "server-side via their WhatsApp number. Call this when the client mentions having an abonnement, " +
-      "pack or credits, BEFORE creating any payment link. Returns their active plans with " +
-      "covers_classes (which classes each plan can pay for), or why verification failed.",
+      "pack or credits, asks how many sessions they have left, or BEFORE creating any payment link. " +
+      "Returns their active plans with covers_classes (which classes each plan can pay for) and " +
+      "remaining_sessions (current balance), or why verification failed.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -160,7 +162,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Cancel one of THIS client's upcoming bookings (all its spots). Only allowed 16 hours or more " +
       "before the class start — the server enforces this and refuses otherwise. Membership-paid bookings: " +
       "the plan session is automatically re-credited. Wave-paid bookings: the client will be refunded " +
-      "manually by reception (they are notified automatically). Call ONLY after get_my_bookings gave you " +
+      "manually by reception (they are notified automatically). Also the first step of a reschedule " +
+      "(cancel, then book the new slot in the same turn). Call ONLY after get_my_bookings gave you " +
       "the booking_id AND the client explicitly confirmed they want to cancel that specific class.",
     input_schema: {
       type: "object",
@@ -194,7 +197,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "handoff_to_human",
     description:
       "Escalate the conversation to the human reception team. Triggers: the client wants to call or speak to " +
-      "a person (e.g. \"je peux vous appeler ?\"), complaints, refunds, rescheduling/cancelling existing bookings, " +
+      "a person (e.g. \"je peux vous appeler ?\"), complaints, refunds beyond what cancel_booking handles, " +
+      "cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
       "medical questions, anything off-script. Records the handoff and returns the reception WhatsApp number " +
       "to give the client immediately.",
     input_schema: {
@@ -611,11 +615,14 @@ export async function executeTool(
       const activePlans = await Promise.all(
         memberships.map(async (m) => {
           const covers = await wix.planCoveredClassNames(m.planId);
+          const remaining = await wix.planRemainingSessions(contactId, m.planId, m.planName);
           return {
             plan: m.planName,
             expires: m.expiresAt,
             covers_classes:
               covers === null ? "unknown — coverage is verified at booking time" : covers,
+            remaining_sessions:
+              remaining === null ? "unknown — verified by Wix at booking time" : remaining,
           };
         }),
       );
@@ -624,8 +631,9 @@ export async function executeTool(
         active_plans: activePlans,
         note:
           "Only propose book_with_membership for classes in covers_classes — for other classes, " +
-          "say the plan doesn't cover them and offer normal Wave payment. Remaining sessions are " +
-          "still checked by Wix at booking time.",
+          "say the plan doesn't cover them and offer normal Wave payment. remaining_sessions is " +
+          "the current balance — a number can be relayed to the client as of right now; " +
+          "'unknown' means say the balance is checked at booking time, NEVER guess a number.",
       });
     }
 
@@ -722,6 +730,8 @@ export async function executeTool(
           wixBookingId,
           benefitTransactionId: redemption.transactionId || null,
         });
+        // One session was just deducted — the cached balance is stale.
+        invalidateMembershipCache(client.id);
         return JSON.stringify({
           booked: true,
           paid_with: redemption.membershipName,
@@ -853,6 +863,8 @@ export async function executeTool(
           );
         }
         await repo.markCancelled(bookingId);
+        // The re-credit (or pending manual one) changed the plan balance.
+        invalidateMembershipCache(client.id);
         return JSON.stringify({
           cancelled: true,
           class: booking.service_name,

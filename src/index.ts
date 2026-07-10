@@ -1,6 +1,7 @@
 import { assertConfig, config } from "./config.js";
 import { migrate, closeDb } from "./db/index.js";
 import { expireStaleBookings, expireStalePlanOrders } from "./domain/repo.js";
+import { nudgeExpiredLinks } from "./domain/expiryNudge.js";
 import { syncCancellations } from "./domain/cancellationSync.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import { buildServer } from "./server.js";
@@ -16,6 +17,8 @@ async function main() {
     try {
       const n = (await expireStaleBookings()) + (await expireStalePlanOrders());
       if (n > 0) app.log.info({ expired: n }, "Expired stale payment links");
+      // One-shot "want a fresh link?" follow-up for links that just expired.
+      await nudgeExpiredLinks(app.log);
       // Recover any booking that was paid but never turned into a Wix booking
       // (a crash between the PAID transition and fulfillment).
       const reconciled = await reconcileStuckBookings(app.log);

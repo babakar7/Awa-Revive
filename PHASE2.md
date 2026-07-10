@@ -21,9 +21,11 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
   consultation + exécution). Abonnement → séance re-créditée automatiquement
   (Benefit Programs revert) ; Wave → annulation + le client contacte la
   réception pour le remboursement (email automatique en parallèle). < 16h →
-  refus poli sans suggérer d'excuses. Reste Phase 2 : le **report** en un
-  geste (aujourd'hui : annulation + nouvelle résa si ≥ 16h, sinon handoff) et
-  les annulations partielles de groupe (handoff).
+  refus poli sans suggérer d'excuses. Le **report en un geste** → **FAIT
+  (10/07/2026)** : cancel + rebook orchestrés dans une seule conversation
+  (nouveau créneau choisi avant d'annuler ; Wave = OK explicite du client sur
+  remboursement + nouveau paiement). Reste Phase 2 : les annulations
+  partielles de groupe (handoff).
 - 🔥 ~~**Utiliser un abonnement existant pour réserver**~~ → **FAIT en Phase 1**
   (outils `check_membership` + `book_with_membership` : vérification d'identité
   par numéro WhatsApp, éligibilité et décompte du crédit délégués au checkout
@@ -61,8 +63,10 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
   réception coche "notifier le client" dans Wix au moment d'annuler — Wix est
   le canal officiel. Awa ne message plus le client sur annulation ; le sweep
   5 min ne fait plus qu'une synchro silencieuse de la base.
-- 🔧 **Relance lien de paiement expiré** ("ton lien a expiré, en veux-tu un
-  nouveau ?") si le client ne revient pas de lui-même.
+- ~~🔧 **Relance lien de paiement expiré**~~ → **FAIT (10/07/2026)**, sans
+  template : la relance part ~1 min après l'expiration TTL, donc toujours dans
+  la fenêtre 24h (le client venait d'écrire). One-shot (`expiry_nudged_at`),
+  silencieuse si le client est passé à autre chose.
 
 ## Intégration Wix temps réel
 

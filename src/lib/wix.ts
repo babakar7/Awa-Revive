@@ -427,6 +427,36 @@ export async function findEligibleBenefit(
 }
 
 /**
+ * Remaining session credits on one of this contact's plans, or null when the
+ * balance cannot be determined (no covered service in the catalog, pool not
+ * eligible right now, or the eligible pool belongs to another plan). Reuses
+ * the proven eligible-pools call — the balance rides on the same pool object
+ * used for redemption — instead of a separate, unverified pools-query API.
+ * Callers must treat null as "unknown", never as zero.
+ */
+export async function planRemainingSessions(
+  contactId: string,
+  planId: string,
+  planName: string,
+): Promise<number | null> {
+  try {
+    const services = await listServices();
+    const covered = services.find((s) => s.pricingPlanIds.includes(planId));
+    if (!covered) return null;
+    const benefit = await findEligibleBenefit(covered.id, contactId);
+    if (!benefit) return null;
+    // eligible-pools returns pools for the SERVICE — with several active plans
+    // the first pool may belong to another one. Only trust a name match.
+    const norm = (s: string) => s.trim().toLowerCase();
+    if (norm(benefit.planName) !== norm(planName)) return null;
+    return benefit.available;
+  } catch (err) {
+    console.error("Plan balance lookup failed (treated as unknown):", err);
+    return null;
+  }
+}
+
+/**
  * Deduct one session credit from the plan for this booking. Idempotent per
  * booking (idempotencyKey = booking id — Wix rejects duplicates with 409).
  * Throws "not_eligible" when the balance ran out or the plan's policy says no.

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import { CAFE_MENU, extrasFromJson, formatExtrasOneLine } from "../lib/cafeMenu.js";
+import type { MembershipContext } from "../lib/membershipContext.js";
 import type { PendingBooking, PlanOrder } from "../domain/repo.js";
 
 /**
@@ -87,7 +88,8 @@ ${CAFE_MENU.promptText}
 - Changing a café order before payment: create a fresh link with the corrected extras (the old link is cancelled automatically — say so). After payment: no changes through you; direct to the counter.
 
 # Abonnements (memberships)
-- The context above tells you on EVERY message whether this client has an active abonnement AND which classes it covers — you never have to wait for them to mention it.
+- The context above tells you on EVERY message whether this client has an active abonnement, which classes it covers AND its remaining session balance — you never have to wait for them to mention it.
+- "Il me reste combien de séances ?": answer from the balance in the context when it is a number (it is live — after a booking or cancellation it is refreshed). When the balance shows unknown, use check_membership once; if still unknown, say the balance is verified at booking time and offer reception for details — NEVER invent a number.
 - BEFORE proposing to book a class on the client's plan, check the covered-classes list in the context (or check_membership): if the class is covered, propose it confidently ("je te réserve avec ton abonnement ?"); if it is NOT covered, say so upfront and offer normal Wave payment instead — never propose the plan for a class it doesn't cover, and never say "on verra au moment de la réservation".
 - Client HAS an active plan + books one spot on a COVERED class: use book_with_membership directly (no payment). Wix deducts one session; on success, confirm the booking (class, date/time, "1 séance déduite de ton abonnement"). NEVER send a Wave link before book_with_membership has answered for that class.
 - book_with_membership says not_eligible: usually no sessions left this period (coverage was already known) — explain kindly, then offer the normal Wave payment or reception for plan questions.
@@ -108,7 +110,13 @@ ${CAFE_MENU.promptText}
 - Paid by abonnement: the session is re-credited automatically — tell them.
 - Paid by Wave: the cancellation is done, but for the refund the CLIENT must contact reception — give them the reception number and say they should reach out to arrange it. Never say reception will contact them, never promise a delay.
 - Less than 16h before the class: the tool refuses. Explain kindly that under the studio's policy the session is due within 16h of the class. If they insist or evoke a special situation, offer the reception contact for exceptional cases — NEVER suggest what would count as a valid excuse (no examples like illness or emergencies).
-- Rescheduling (changing time/date) is NOT something you can do: it's a cancellation + a new booking. If ≥16h before, offer to do exactly that (cancel then rebook). Otherwise, handoff.
+
+# Rescheduling ("je peux déplacer mon cours ?")
+You CAN reschedule, as a guided cancel + rebook in ONE conversation — never present it as impossible. Only if the EXISTING booking is ≥16h away (otherwise handoff, same exceptional-cases rule as cancellations).
+- Order matters: secure the NEW slot choice FIRST. get_my_bookings to identify the old booking, check_availability for the new date (present_options), let the client pick.
+- Paid by abonnement: once the new slot is picked, in the SAME turn call cancel_booking (session re-credited) then book_with_membership on the new slot, and confirm both in one message ("c'est déplacé ✅ …"). If book_with_membership fails right after the cancellation, the old spot is gone but the session was re-credited — apologize and offer other slots immediately.
+- Paid by Wave: a reschedule means the old payment is refunded (client contacts reception, as for any cancellation) and the new slot needs a NEW payment. Say this clearly BEFORE cancelling and get an explicit OK; then in the SAME turn call cancel_booking and create_payment_link, and send ONE message with: the confirmed cancellation, the refund instructions (reception number), and the new payment link.
+- Never cancel anything before the client has both chosen the new slot AND (for Wave) accepted the refund-plus-new-payment mechanics.
 
 # Linking accounts (email)
 - After a first payment, the system may automatically ask the client (in this chat) for the email of their existing Revive account. When the client replies with an email — then or in any account/history context — call record_email.
@@ -130,6 +138,7 @@ After calling the tool, give the client the reception WhatsApp number it returns
 - Messages prefixed "[note vocale]" are automatic transcriptions of the client's voice notes — treat them as the client's own words. Transcriptions can contain small errors: if a critical detail looks off (date, time, name, number of spots), confirm it briefly before acting on it.
 - Timezone: Dakar is GMT+0 year-round — tool timestamps ending in Z (UTC) are ALREADY Dakar time. Tools also return pre-formatted fields (start_dakar, slot_start_dakar): use those verbatim for the client (translate the words to their language if needed, keep the time unchanged). NEVER convert between timezones and NEVER mention GMT/UTC offsets — there is nothing to convert.
 - If the client has an active unpaid payment link, remind them of it when relevant instead of creating a new one, unless they want a different class/slot.
+- The system automatically sends a one-time nudge when a payment link expires unused ("ton lien a expiré, tu en veux un nouveau ?" — visible in the history). If the client answers yes, re-run check_availability for that same class and, if the slot is still open, create the fresh link right away — no need to re-ask which class or name.
 - If a message is off-topic small talk, answer briefly and kindly, then steer back to how you can help.`;
 
 /**
@@ -141,19 +150,20 @@ export function dynamicContext(args: {
   clientLanguage: string | null;
   activeBooking: PendingBooking | null;
   activePlanOrder: PlanOrder | null;
-  memberships: { plan: string; covers: string[] | null }[] | null;
+  memberships: MembershipContext[] | null;
   recentRefunds: PendingBooking[];
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
-  const ymd = (d: Date) => d.toISOString().slice(0, 10);
   const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 86_400_000);
+  const dayStart = (d: Date) => `${d.toISOString().slice(0, 10)}T00:00:00Z`;
+  // End bound must be the LAST moment of the day so a Sunday-19:00 slot isn't
+  // clipped — Wix filters startDate < endDate, and a bare date = midnight.
+  const dayEnd = (d: Date) => `${d.toISOString().slice(0, 10)}T23:59:59Z`;
+  const win = (from: Date, to: Date) => `${dayStart(from)} → ${dayEnd(to)}`;
   const dow = now.getUTCDay(); // 0=Sun … 6=Sat
   const thisMonday = addDays(now, dow === 0 ? -6 : 1 - dow);
   const nextMonday = addDays(thisMonday, 7);
-  const nextSunday = addDays(nextMonday, 6);
-  const thisSaturday = addDays(thisMonday, 5);
-  const thisSunday = addDays(thisMonday, 6);
   const lines = [
     `Current date/time (Africa/Dakar): ${now.toLocaleString("fr-FR", {
       timeZone: config.TIMEZONE,
@@ -161,16 +171,16 @@ export function dynamicContext(args: {
       timeStyle: "short",
     })}`,
     // Pre-computed date windows so the model NEVER does date arithmetic itself
-    // (it once read "la semaine prochaine" as the week after next). Use these
-    // dates verbatim as check_availability's date_from / date_to.
-    `Date windows (Africa/Dakar — use these EXACT dates, never compute your own):`,
-    `  • aujourd'hui / today: ${ymd(now)}`,
-    `  • demain / tomorrow: ${ymd(addDays(now, 1))}`,
-    `  • 7 prochains jours / next 7 days: ${ymd(now)} → ${ymd(addDays(now, 7))}`,
-    `  • cette semaine / this week: ${ymd(thisMonday)} → ${ymd(thisSunday)}`,
-    `  • la semaine prochaine / next week (Mon–Sun): ${ymd(nextMonday)} → ${ymd(nextSunday)}`,
-    `  • ce week-end / this weekend: ${ymd(thisSaturday)} → ${ymd(thisSunday)}`,
-    `  • le week-end prochain / next weekend: ${ymd(addDays(nextMonday, 5))} → ${ymd(nextSunday)}`,
+    // (it once read "la semaine prochaine" as the week after next). Pass the
+    // exact ISO values below as check_availability's date_from / date_to.
+    `Date windows (Africa/Dakar — pass these EXACT ISO values as date_from → date_to; never compute your own):`,
+    `  • aujourd'hui / today: ${win(now, now)}`,
+    `  • demain / tomorrow: ${win(addDays(now, 1), addDays(now, 1))}`,
+    `  • 7 prochains jours / next 7 days (default): ${win(now, addDays(now, 6))}`,
+    `  • cette semaine / this week (Mon–Sun): ${win(thisMonday, addDays(thisMonday, 6))}`,
+    `  • la semaine prochaine / next week (Mon–Sun): ${win(nextMonday, addDays(nextMonday, 6))}`,
+    `  • ce week-end / this weekend (Sat–Sun): ${win(addDays(thisMonday, 5), addDays(thisMonday, 6))}`,
+    `  • le week-end prochain / next weekend (Sat–Sun): ${win(addDays(nextMonday, 5), addDays(nextMonday, 6))}`,
   ];
   if (args.clientName) lines.push(`Client first name on file: ${args.clientName}`);
   if (args.clientLanguage) lines.push(`Client's last detected language: ${args.clientLanguage}`);
@@ -181,19 +191,27 @@ export function dynamicContext(args: {
     );
   } else if (args.memberships.length > 0) {
     const plans = args.memberships
-      .map((m) =>
-        m.covers === null
-          ? `"${m.plan}" (covered classes unknown — verified at booking time)`
-          : m.covers.length > 0
-            ? `"${m.plan}" (covers: ${m.covers.join(", ")})`
-            : `"${m.plan}" (covers NO classes — plan not linked to any class in Wix)`,
-      )
+      .map((m) => {
+        const covers =
+          m.covers === null
+            ? "covered classes unknown — verified at booking time"
+            : m.covers.length > 0
+              ? `covers: ${m.covers.join(", ")}`
+              : "covers NO classes — plan not linked to any class in Wix";
+        const balance =
+          m.remaining === null
+            ? "balance unknown — checked at booking"
+            : `${m.remaining} session(s) left`;
+        return `"${m.plan}" (${covers}; ${balance})`;
+      })
       .join("; ");
     lines.push(
       `Client has ACTIVE abonnement(s): ${plans} (verified live via their WhatsApp number). ` +
         `For a single-spot booking on a COVERED class, propose and use book_with_membership confidently (no payment link) — ` +
         `Wix still checks remaining sessions at booking. For a class NOT in the covered list, say upfront the plan doesn't ` +
-        `cover it and offer normal Wave payment. Create a Wave payment link for a covered class only if book_with_membership returns not_eligible.`,
+        `cover it and offer normal Wave payment. Create a Wave payment link for a covered class only if book_with_membership returns not_eligible. ` +
+        `If the client asks how many sessions they have left, answer from the balance above when it is a number ` +
+        `(it is live); when unknown, say the balance is verified at booking time — NEVER invent a number.`,
     );
   } else {
     lines.push(

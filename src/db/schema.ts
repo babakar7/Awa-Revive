@@ -65,6 +65,11 @@ alter table pending_bookings
 alter table pending_bookings
   add column if not exists fulfilling_at timestamptz;
 
+-- One-shot follow-up after a payment link expires unused ("ton lien a expiré,
+-- tu en veux un nouveau ?"). Set when the nudge is sent — never nudge twice.
+alter table pending_bookings
+  add column if not exists expiry_nudged_at timestamptz;
+
 alter table clients
   add column if not exists email_prompted_at timestamptz;
 

@@ -1,3 +1,4 @@
+
 # Plan d'implémentation — Webhooks Wix (annulations en temps réel)
 
 > ⚠️ **STATUT : MIS EN VEILLE (juillet 2026).** Décision produit : la réception

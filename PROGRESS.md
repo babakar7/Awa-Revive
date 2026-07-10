@@ -24,8 +24,12 @@ prompt-injection), règle des 16h vérifiée côté serveur.
 ## 2. État : TOUT LE PÉRIMÈTRE PHASE 1+ EST EN PRODUCTION ET VALIDÉ E2E
 
 Production : `https://resabot-production.up.railway.app` (Railway, service +
-Postgres). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
-phone_number_id 1175926012276896). Tests : 34/34 verts (`npm test`).
+Postgres), déployée depuis GitHub (`babakar7/Awa-Revive`, push sur main =
+déploiement). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
+phone_number_id 1175926012276896). Tests : 90 unitaires (`npm test`, rapides,
+sans réseau) + 14 d'intégration sur le chemin de paiement
+(`npm run test:integration`, Postgres jetable via Docker, APIs externes
+mockées) — exécutés en CI GitHub Actions à chaque push.
 
 Flux validés en conditions réelles (argent réel / site Wix réel) :
 
@@ -40,7 +44,7 @@ Flux validés en conditions réelles (argent réel / site Wix réel) :
 | Abonnements : détection auto + résa sans paiement | ✅ 05-06/07 | voir §4 — Benefit Programs, PAS le checkout eCommerce |
 | Annulation par Awa (règle 16h) | ✅ 06/07 | abonnement → re-crédit auto ; Wave → client contacte la réception pour remboursement |
 | Handoffs (« je peux vous appeler ? », plaintes…) | ✅ | numéro réception + email auto à support@revive.sn |
-| Emails réception (SMTP Namecheap) | ✅ | non-bloquants (voir §4) |
+| Notifications réception (email Brevo + WhatsApp) | ✅ | dual-channel non-bloquant, voir §4.6 |
 | Annulation côté réception (dashboard Wix) | ✅ | sweep 5 min = synchro **silencieuse** ; Wix notifie le client lui-même |
 | Typing indicator | ✅ | rafraîchi à chaque itération d'outil (Meta l'éteint à ~25 s) |
 
@@ -48,7 +52,8 @@ Flux validés en conditions réelles (argent réel / site Wix réel) :
 
 ```
 src/
-  index.ts            boot : assertConfig, migrate (idempotent), sweepers (TTL 60s, annulations 5min)
+  index.ts            boot : assertConfig, migrate (idempotent), sweepers (TTL + relance lien expiré +
+                      réconciliation 60s, annulations 5min)
   server.ts           Fastify, raw-body parser, /healthz, pages retour paiement
   config.ts           env (liste TOUTES les vars manquantes d'un coup) ; SMTP optionnel
   db/schema.ts        SCHEMA_SQL idempotent (create + alter if not exists)
@@ -58,6 +63,7 @@ src/
                       transition() = UPDATE atomique WHERE status=ANY(sources)
     repo.ts           accès DB (clients, bookings, conversations, handoffs, slot_cache)
     cancellationSync.ts  sweep 5 min : BOOKED vs statuts Wix → CANCELLED silencieux (pas de message client)
+    expiryNudge.ts    relance one-shot quand un lien de paiement expire sans paiement (fr/en/wo) — voir §4.18
   lib/
     whatsapp.ts       signature X-Hub-256, sendText (3 retries), typing indicator (loggé si rejeté)
     wave.ts           checkout session (+ Wave-Signature sortante, OBLIGATOIRE sur ce compte), verif webhook
@@ -65,8 +71,11 @@ src/
                       Benefit Programs (findEligibleBenefit / redeem / revert) — voir §4
     cafeMenu.ts       menu café : parse cafe-menu.md au boot (prix côté serveur uniquement),
                       computeExtras (résolution ids+qty → lignes tarifées, rejet des ids inconnus)
-    notify.ts         notifyReception() : email fire-and-forget (retourne AVANT l'envoi), timeouts 10-30 s
-    rateLimit.ts      20 msg/min/numéro ; serialize.ts : file par client
+    notify.ts         notifyReception() : email Brevo + WhatsApp réception, fire-and-forget
+                      (retourne AVANT l'envoi) ; fallback template si fenêtre 24h fermée (131047)
+    rateLimit.ts      20 msg/min/numéro (1 avertissement client par fenêtre) ; serialize.ts : file par client
+    membershipContext.ts  cache abonnements 10 min (plans + classes couvertes + solde) partagé agent/outils/webhook,
+                      invalidé quand le solde change — voir §4.18
   agent/
     systemPrompt.ts   prompt stable caché + dynamicContext (date, langue, lien actif, abonnements)
     tools.ts          list_classes, check_availability, create_payment_link, check_membership,
@@ -74,10 +83,16 @@ src/
     index.ts          boucle d'outils (max 8), détection de langue fr/en/wo (stopwords), cache abonnements 10 min
   webhooks/
     whatsapp.ts       GET handshake + POST signé → dedupe → rate limit → file par client
-    wave.ts           CHEMIN CRITIQUE : signature → 200 rapide → idempotence → PAID atomique →
-                      re-vérif places → création+confirmation Wix → BOOKED → confirmation WhatsApp
+    wave.ts           CHEMIN CRITIQUE : signature (fenêtre anti-rejeu 5 min) → 200 rapide →
+                      PAID atomique → claim de fulfillment (bail fulfilling_at 2 min) →
+                      re-vérif places → création+confirmation Wix → BOOKED → confirmation WhatsApp →
+                      idempotence marquée APRÈS traitement (échec = retry Wave rejouable) ;
+                      reconcileStuckBookings() : rattrape les PAID jamais réservés (crash) — voir §4.14
 scripts/              simulate-wave-webhook, daily-summary, mark-refunded (refund:done), test-email
-test/                 34 tests purs (signatures, state machine, langue) — pas de DB/réseau
+test/                 90 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
+test/integration/     14 tests d'intégration du chemin de paiement : Postgres jetable (docker run,
+                      globalSetup maison — PAS testcontainers, incompatible Node 20.17), mock fetch
+                      Wix/Wave/Meta/Brevo qui THROW sur tout appel inattendu — voir §4.15
 ```
 
 ## 4. Décisions & pièges découverts (à lire absolument avant de toucher au code)
@@ -111,10 +126,22 @@ test/                 34 tests purs (signatures, state machine, langue) — pas 
    pré-formatés (`start_dakar`, `slot_start_dakar`) que le modèle relaie tels
    quels ; interdiction (prompt) de convertir ou de mentionner GMT/UTC — le
    modèle s'était inventé une conversion fausse.
-6. **Emails réception** : `notifyReception()` retourne AVANT l'envoi SMTP (un
-   `await` sur l'envoi a déjà bloqué une réponse WhatsApp 2 minutes). SMTP =
-   Namecheap Private Email (`mail.privateemail.com:465`, support@revive.sn) ;
-   DNS (MX/SPF/DKIM) déjà corrects, rien à configurer.
+6. **Notifications réception = DEUX canaux (10/07)**, `notifyReception()` retourne
+   AVANT tout envoi (fire-and-forget — un `await` avait bloqué une réponse
+   WhatsApp 2 minutes).
+   - **Email via l'API HTTP de Brevo** (`api.brevo.com/v3/smtp/email`,
+     `BREVO_API_KEY`, expéditeur `EMAIL_FROM`, dest. `RECEPTION_EMAIL` =
+     support@revive.sn). **Pourquoi Brevo et pas SMTP : Railway bloque le SMTP
+     sortant** → nodemailer timeoutait systématiquement (`Connection timeout`).
+     Namecheap SMTP et Resend écartés (Resend : MX sur sous-domaine impossible
+     chez Wix DNS). Test : `npm run email:test`.
+   - **WhatsApp vers `RECEPTION_PHONE`** (Cloud API, depuis la vérif Meta
+     approuvée). Texte libre d'abord ; si la fenêtre 24h est fermée (erreur Meta
+     131047) ET qu'un template est configuré (`WA_RECEPTION_TEMPLATE`, 2 variables
+     {{1}} sujet / {{2}} détail aplati), repli auto sur ce template. La réception
+     n'écrit jamais à Awa → sans template approuvé le WhatsApp ne passe qu'après
+     un message entrant récent ; l'email reste le canal fiable. Test :
+     `npm run whatsapp:test`.
 7. **Annulations côté réception** : la réception coche "notifier le client"
    dans Wix → c'est Wix qui notifie. Awa ne message PLUS le client sur
    annulation externe (décision produit 05/07) ; le sweep ne fait que la
@@ -177,6 +204,100 @@ test/                 34 tests purs (signatures, state machine, langue) — pas 
     (l'ancien est annulé), après paiement → comptoir. `get_my_bookings` expose
     la commande (`cafe_order`).
 
+14. **Durcissement du chemin de paiement (10/07 après-midi)**, suite à une
+    revue de code complète. (a) L'id d'idempotence webhook Wave est enregistré
+    **APRÈS** le traitement réussi (avant, un crash entre l'insert et le PAID
+    rendait tous les retries Wave muets → paiement perdu en silence). Le
+    doublon de livraison reste sûr : c'est la transition PAID atomique + le
+    claim qui protègent, pas le dedupe. (b) Nouveau **bail de fulfillment**
+    (`fulfilling_at`, claim atomique, périmé à 2 min) : un retry webhook et le
+    sweep de réconciliation peuvent tenter en même temps, un seul gagne.
+    (c) **Sweep de réconciliation** (60 s, dans le sweeper TTL) : tout PAID
+    sans `wix_booking_id` vieux de ≥ 3 min est repris → BOOKED ou
+    REFUND_NEEDED. (d) Fenêtre **anti-rejeu 5 min** sur la signature Wave
+    (opt-in dans verifyWaveSignature — les tests unitaires signent avec des
+    timestamps fixes). (e) **Timeouts 15 s** sur TOUS les fetch sortants
+    (Wix/Wave/Meta) — un hang Wix bloquait la file entière d'un client.
+    (f) Historique **coalescé** dans l'agent : deux tours de même rôle
+    fusionnés (un envoi WhatsApp raté ne casse plus l'alternance
+    user/assistant exigée par l'API). (g) Divers : cache abonnements invalidé
+    à l'activation d'un plan, avertissement client au rate-limit (1×/fenêtre),
+    safeEqual admin sur digests SHA-256 (pas de fuite de longueur),
+    cancellationSweeper clearInterval au shutdown.
+15. **Tests d'intégration + CI (10/07)**. `test/integration/` : Postgres
+    jetable par run (`docker run postgres:16-alpine`, globalSetup maison —
+    testcontainers ABANDONNÉ, son undici exige Node ≥ 20.18.1 et la machine
+    est en 20.17.0), env posé dans globalSetup AVANT l'import de config.ts
+    (dotenv n'écrase jamais l'existant), mock fetch installé UNE fois par
+    suite (les notifications fire-and-forget en vol toucheraient les vraies
+    APIs avec un restore par test) et qui throw sur toute URL non mockée.
+    14 scénarios : signature, happy path, paiement tardif honoré, doublons
+    (même event id ET event id différent), 3 causes de remboursement,
+    récupération de PAID bloqué (retry, sweep, bail actif/périmé),
+    retriabilité. AUCUN secret réel requis. CI GitHub Actions
+    (`.github/workflows/ci.yml`) : tsc + unit + intégration à chaque push ;
+    « Wait for CI » à activer côté Railway pour bloquer les déploiements
+    rouges (pas seulement les signaler).
+16. **Messages interactifs cliquables (10/07)** — outil `present_options`
+    ([tools.ts](src/agent/tools.ts)) : Awa envoie un message natif WhatsApp
+    cliquable (≤3 options courtes → boutons ; sinon liste, max 10 lignes) et le
+    tool le DÉLIVRE lui-même. Le webhook entrant traite `type:"interactive"`
+    ([whatsapp.ts](src/webhooks/whatsapp.ts)) et injecte le clic comme
+    `[choix cliqué] <titre> (id: <id>)`. Après un `sent:true`, Awa répond la
+    sentinelle `<NO_REPLY>` pour ne pas doubler le message ; la boucle agent
+    n'honore la sentinelle QUE si un interactif est réellement parti (jamais de
+    client sans réponse — [index.ts](src/agent/index.ts)). Les créneaux Wix ont
+    un alias court `choice_id` (sha256 tronqué, colonne `slot_cache.choice_key`)
+    car les `event_id` dépassent la limite de 200 car. des ids de ligne WhatsApp ;
+    `create_payment_link`/`book_with_membership` acceptent l'un ou l'autre. Flux
+    café sans va-et-vient : **1 clic = 1 article, jamais « combien ? »** ; les
+    quantités passent par le texte libre (« mets-en 2 »). Le clic reste OPTIONNEL,
+    le texte libre toujours accepté. `buildInteractivePayload` est pur et testé.
+17. **Fenêtres de dates pré-calculées (10/07)** — bug réel : Awa proposait « la
+    semaine prochaine » avec un décalage d'une semaine (arithmétique de dates du
+    LLM peu fiable). Correctif : `dynamicContext` ([systemPrompt.ts](src/agent/systemPrompt.ts))
+    calcule et injecte les fenêtres prêtes à l'emploi (aujourd'hui, demain,
+    7 jours, cette/la semaine prochaine, ce/le week-end prochain), en ISO
+    `T00:00:00Z → T23:59:59Z` (bornes journée pleines — une borne à `date` nue =
+    minuit coupait le dimanche). Awa passe ces valeurs telles quelles à
+    `check_availability` (interdit de calculer elle-même) et annonce la période
+    dans son message. Dakar = GMT+0 = UTC, donc le calcul calendaire UTC == Dakar.
+
+18. **Trio UX (10/07 nuit)** — relance lien expiré, report en un geste, solde
+    d'abonnement visible.
+    - **Relance lien expiré** ([expiryNudge.ts](src/domain/expiryNudge.ts), depuis
+      le sweeper 60 s) : UNE relance WhatsApp (« ton lien a expiré, tu en veux un
+      nouveau ? », fr/en/wo) quand un lien expire par TTL sans paiement.
+      Garde-fous : `expiry_nudged_at` (one-shot, claim atomique AVANT envoi),
+      fenêtre 30 min (un déploiement ne rejoue jamais le backlog), cours pas
+      encore commencé, silence si le client a une ligne booking plus récente ou
+      un lien d'achat de plan actif — piège : un lien REMPLACÉ (expireActiveBookings)
+      garde un `link_expires_at` futur et retomberait dans la fenêtre à son TTL ;
+      c'est le filtre « pas de ligne plus récente » qui le bloque. Toujours dans
+      la fenêtre 24 h Meta (le client a écrit quelques minutes avant le lien).
+      Relance loggée comme tour assistant + consigne Context notes : si le client
+      répond oui, re-check_availability et nouveau lien direct, sans re-questions.
+    - **Report en un geste** (prompt, section Rescheduling) : annulation + re-résa
+      orchestrées dans UNE conversation, ≥ 16h uniquement (sinon handoff). Le
+      NOUVEAU créneau est choisi AVANT toute annulation. Abonnement →
+      cancel_booking + book_with_membership dans le même tour, confirmation
+      unique. Wave → OK explicite du client sur « remboursement via réception +
+      nouveau paiement » AVANT le cancel, puis cancel + create_payment_link dans
+      le même tour, un seul message (annulation + consignes remboursement + lien).
+      handoff_to_human ne mentionne plus le report que pour < 16h / groupes partiels.
+    - **Solde d'abonnement visible** : `planRemainingSessions` ([wix.ts](src/lib/wix.ts))
+      lit `balance.available` du pool éligible via le MÊME endpoint Benefit
+      Programs déjà éprouvé (pas d'API pools-query non vérifiée). Piège
+      multi-plans : eligible-pools répond pour un SERVICE, le pool peut
+      appartenir à un autre plan → match par nom de plan, sinon « unknown ».
+      Injecté dans le contexte dynamique de CHAQUE message + `remaining_sessions`
+      dans check_membership. Le cache abonnements vit désormais dans
+      [membershipContext.ts](src/lib/membershipContext.ts) (extrait de agent/index
+      pour éviter un import circulaire tools→agent) et est invalidé à chaque
+      changement de solde : book_with_membership, cancel_booking (re-crédit),
+      activation de plan. Un solde null = « vérifié à la résa », JAMAIS 0 ni un
+      chiffre inventé (consignes prompt + note d'outil).
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -221,6 +342,44 @@ test/                 34 tests purs (signatures, state machine, langue) — pas 
   Même jour : **dashboard admin `/admin`** (voir §6) et **menu café** — Awa
   prend des commandes café dans le même lien Wave que la résa, prix depuis
   `cafe-menu.md` côté serveur uniquement (voir §4.13).
+- **10/07 (après-midi)** : **revue de code complète + durcissement du chemin
+  de paiement** (§4.14) — le plus grave : un crash pendant le traitement d'un
+  webhook Wave pouvait perdre un paiement en silence (idempotence marquée trop
+  tôt) ; corrigé + bail de fulfillment + sweep de réconciliation + anti-rejeu +
+  timeouts partout. **Harnais de tests d'intégration** (14 scénarios sur le
+  chemin de paiement, Postgres Docker, §4.15) — dès le premier run il a
+  attrapé une mauvaise hypothèse (le happy path envoie 2 messages : confirmation
+  + demande d'email client non relié). **Repo GitHub** (`babakar7/Awa-Revive`)
+  connecté à Railway (push = déploiement) + **CI** à chaque push. Vu en prod
+  après déploiement : un webhook Wave orphelin (client_reference absent de la
+  DB — résidu des resets de test du matin, retry Wave inoffensif, à vérifier
+  dans le portail) et des POST Wix sur `/webhooks/wix` inexistant (404 — Wix
+  configuré côté site, endpoint jamais construit, chantier §4.7 en veille).
+  Même jour (fin) : **bug « Reformer Women Only » corrigé** — ce cours était
+  écrit en dur dans `business-info.md` ET `systemPrompt.ts` (exemple de variante
+  Reformer) alors qu'aucun service correspondant n'existe dans le catalogue Wix
+  (Foundation / Sculpt / Intense uniquement) → Awa le proposait à tort. Les deux
+  mentions supprimées, déployé en prod. Leçon : ne JAMAIS nommer un cours
+  spécifique dans business-info — le catalogue vient TOUJOURS de `list_classes`
+  (live Wix) ; business-info ne contient que les règles métier que Wix n'expose
+  pas (niveaux, tenue, prérequis). Même jour : **auto-deploy GitHub → Railway
+  activé** (repo `babakar7/Awa-Revive`, branche `main`) — voir §7.
+  Même jour (soir) : **email réception basculé SMTP → Brevo** (Railway bloque le
+  SMTP) + **2e canal WhatsApp réception** avec repli template hors fenêtre 24h
+  (§4.6) ; **messages interactifs cliquables** `present_options` + flux café
+  1 clic = 1 article (§4.16) ; **fix « semaine prochaine »** = fenêtres de dates
+  pré-calculées côté serveur (§4.17). **Décision transcription vocale** : la
+  clientèle écrit surtout en fr/en (wolof marginal) → OpenAI `gpt-4o-mini-transcribe`
+  retenu (banc d'essai wolof superflu), `OPENAI_API_KEY` posée ; implémentation
+  PAS encore faite (intercepter les messages `audio` → download média Meta →
+  transcription → injecter comme `[note vocale] …`, avec repli poli si échec).
+- **10/07 (nuit)** : **trio UX** (§4.18) — relance one-shot après expiration
+  d'un lien de paiement (sweeper + `expiry_nudged_at`), report en un geste
+  (cancel + rebook orchestrés dans le prompt, nouveau créneau choisi avant
+  d'annuler, OK explicite côté Wave), solde d'abonnement visible partout
+  (contexte dynamique + check_membership, cache extrait dans
+  `membershipContext.ts` et invalidé à chaque variation). 4 tests unitaires
+  ajoutés (94 au total) ; intégration 14/14 verte.
 
 ## 6. Reste à faire
 
@@ -235,8 +394,24 @@ test/                 34 tests purs (signatures, state machine, langue) — pas 
 - [ ] Commande café adossée à une résa (extras dans le lien Wave) — flux
   jamais encore validé E2E ; vérifier aussi l'email réception « commande café
   payée » et le détail dans la confirmation client.
+- [ ] Relance lien expiré : laisser expirer un lien de 10 FCFA sans payer →
+  UNE relance ~1 min après le TTL, puis répondre « oui » et vérifier qu'Awa
+  refait le lien directement.
+- [ ] Report en un geste : déplacer une résa abonnement (re-crédit + re-résa
+  même tour) et une résa Wave (OK explicite avant annulation).
+- [ ] Solde d'abonnement : « il me reste combien de séances ? » → chiffre
+  cohérent avec Wix, décrémenté après une résa, re-crédité après annulation.
 
 **Avant lancement (essentiellement côté Babakar, dans Wix) :**
+- [ ] **Remettre `ADMIN_USERS` en prod** — le dashboard `/admin` est
+  actuellement OUVERT sans login (choix explicite de Babakar pour la phase de
+  test, 10/07). Indispensable avant toute communication publique.
+- [ ] Activer **« Wait for CI »** sur le service Railway (Settings → Deploy)
+  pour que les commits rouges ne se déploient pas (la CI seule ne fait que
+  signaler).
+- [ ] Vérifier dans le portail Wave la session du webhook orphelin du 10/07
+  (client_reference `d5396719-ad49-...` — probablement un test de 10 FCFA
+  d'avant reset de DB).
 - [ ] Supprimer le plan "test fusion" + ses ordres ; masquer/supprimer
   "test service" ; remettre le vrai prix sur Pilates Fusion (10 FCFA de test) ;
   nettoyer les contacts test1/test2 (portent le vrai numéro de Babakar) et
@@ -260,12 +435,23 @@ test/                 34 tests purs (signatures, state machine, langue) — pas 
 `get_my_bookings` élargi aux résas comptoir/site (lookup par contactId),
 remboursements automatiques via l'API Wave (`POST /v1/checkout/sessions/:id/refund`),
 vente d'abonnements par Awa, Orange Money, rappels de séance (templates Meta),
-report en un geste, transcription vocale.
+report en un geste, transcription vocale (décidée : OpenAI `gpt-4o-mini-transcribe`,
+`OPENAI_API_KEY` déjà posée — reste à coder, voir chronologie 10/07 soir).
 
 ## 7. Runbook ops
 
-- Déploiement : `npm run build && npm test` puis `railway up --detach` ;
-  santé : `GET /healthz` ; logs : `railway logs`. La migration tourne au boot.
+- Déploiement : **auto-deploy actif** — `git push` sur `main` (repo
+  `babakar7/Awa-Revive`) rebuild et redéploie tout seul sur Railway. Faire
+  `npm run build && npm test` AVANT de pousser (et
+  `npm run test:integration` si le chemin de paiement est touché — Docker
+  requis, ~6 s). La CI GitHub Actions rejoue tout à chaque push ; tant que
+  « Wait for CI » n'est pas activé côté Railway, elle SIGNALE mais ne bloque
+  pas. Fallback manuel :
+  `railway up --detach` (indépendant de GitHub ; ne PAS combiner avec un push
+  pour un même changement = double build). Santé : `GET /healthz` ; logs :
+  `railway logs`. La migration tourne au boot. (Historique : l'auto-deploy
+  affichait « no project member has access to this repo » — résolu le 10/07 en
+  connectant le repo au compte Railway, pas juste via l'install de la GitHub App.)
 - Vars d'env : locales dans `.env` (secrets réels), prod via
   `railway variable set KEY=VALUE` (`--stdin` pour valeurs à espaces).
 - DB prod (lecture/requêtes) :

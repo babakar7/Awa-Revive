@@ -274,6 +274,62 @@ export async function expireStaleBookings(): Promise<number> {
   return res.rowCount ?? 0;
 }
 
+/**
+ * EXPIRED links worth a one-shot "want a fresh link?" nudge. Deliberately
+ * narrow so the nudge is never noise:
+ *   - the link expired by TTL, recently (a link expired days ago on an idle
+ *     conversation must stay silent — also protects against a deploy replaying
+ *     the whole backlog);
+ *   - the client has NOT moved on: no newer booking attempt of any status, no
+ *     active plan-purchase link (expireActiveBookings marks replaced links
+ *     EXPIRED with a future link_expires_at, so the recent-TTL window alone
+ *     would eventually match them once their TTL passes), and no client
+ *     message since the expiry (they re-engaged — Awa handles it in the
+ *     conversation, a parallel nudge would be spam);
+ *   - never nudged before (expiry_nudged_at is the one-shot flag).
+ */
+export async function expiredLinksToNudge(
+  windowMinutes = 30,
+  limit = 20,
+): Promise<(PendingBooking & { wa_phone: string; language: string | null })[]> {
+  const res = await pool.query(
+    `select b.*, c.wa_phone, c.language
+       from pending_bookings b
+       join clients c on c.id = b.client_id
+      where b.status = 'EXPIRED'
+        and b.expiry_nudged_at is null
+        and b.payment_link is not null
+        and b.link_expires_at < now()
+        and b.link_expires_at > now() - make_interval(mins => $1)
+        and b.slot_start > now()
+        and not exists (select 1 from pending_bookings n
+                         where n.client_id = b.client_id and n.created_at > b.created_at)
+        and not exists (select 1 from pending_plan_orders p
+                         where p.client_id = b.client_id
+                           and p.status in ('DRAFT', 'AWAITING_PAYMENT'))
+        and not exists (select 1 from conversations m
+                         where m.client_id = b.client_id and m.role = 'user'
+                           and m.created_at > b.link_expires_at)
+      order by b.link_expires_at asc
+      limit $2`,
+    [windowMinutes, limit],
+  );
+  return res.rows;
+}
+
+/**
+ * Atomically claim the right to send the expiry nudge for one booking.
+ * Returns false if another sweep already claimed it (one-shot guarantee).
+ */
+export async function claimExpiryNudge(bookingId: string): Promise<boolean> {
+  const res = await pool.query(
+    `update pending_bookings set expiry_nudged_at = now(), updated_at = now()
+      where id = $1 and expiry_nudged_at is null`,
+    [bookingId],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
 export async function activeAwaitingPayment(clientId: string): Promise<PendingBooking | null> {
   const res = await pool.query(
     `select * from pending_bookings

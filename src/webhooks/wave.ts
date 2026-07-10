@@ -7,7 +7,7 @@ import * as wix from "../lib/wix.js";
 import * as repo from "../domain/repo.js";
 import { transition } from "../domain/stateMachine.js";
 import { notifyReception } from "../lib/notify.js";
-import { invalidateMembershipCache } from "../agent/index.js";
+import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/cafeMenu.js";
 
 /**

@@ -1,57 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import * as repo from "../domain/repo.js";
-import * as wix from "../lib/wix.js";
+import { activeMemberships } from "../lib/membershipContext.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
 import { SYSTEM_PROMPT, dynamicContext } from "./systemPrompt.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
-
-/**
- * Automatic membership lookup, injected into Awa's context on every message —
- * clients must never pay Wave for a class their abonnement covers, even if
- * they don't think to mention it. Cached per client to keep latency flat.
- * Returns null when the lookup fails (context then says "unknown").
- */
-export interface MembershipContext {
-  plan: string;
-  /** Class names this plan can pay for; null when Wix exposes no plan↔service links. */
-  covers: string[] | null;
-}
-
-const membershipCache = new Map<string, { fetchedAt: number; plans: MembershipContext[] }>();
-const MEMBERSHIP_CACHE_TTL_MS = 10 * 60 * 1000;
-
-/**
- * Drop a client's cached memberships so the next message re-fetches them.
- * Called when a plan the client just bought through Awa is activated, so the
- * injected context reflects it immediately instead of lagging up to 10 min.
- */
-export function invalidateMembershipCache(clientId: string): void {
-  membershipCache.delete(clientId);
-}
-
-async function activeMemberships(client: repo.Client): Promise<MembershipContext[] | null> {
-  const hit = membershipCache.get(client.id);
-  if (hit && Date.now() - hit.fetchedAt < MEMBERSHIP_CACHE_TTL_MS) return hit.plans;
-  try {
-    const contactId = await wix.findContactIdByPhone(
-      `+${client.wa_phone.replace(/^\+/, "")}`,
-      client.name ?? undefined,
-    );
-    const memberships = contactId ? await wix.listActiveMemberships(contactId) : [];
-    const plans = await Promise.all(
-      memberships.map(async (m) => ({
-        plan: m.planName,
-        covers: await wix.planCoveredClassNames(m.planId),
-      })),
-    );
-    membershipCache.set(client.id, { fetchedAt: Date.now(), plans });
-    return plans;
-  } catch (err) {
-    console.error("Membership lookup failed (context will say unknown):", err);
-    return null;
-  }
-}
 
 const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
