@@ -50,8 +50,12 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Create a Wave payment link for a specific class slot. Re-verifies the slot is still open, cancels any " +
       "previous unpaid link for this client, and returns the payment URL, amount and expiry to relay to the client. " +
       "Supports group bookings: set participants > 1 to book several spots under the same name with ONE payment " +
-      "link for the total (price × participants). Can also bundle a café order (extras) into the same link. " +
-      "Only call after the client clearly chose a slot and you know their first name.",
+      "link for the total (price × participants). Can also bundle a menu order (extras) into the same link. " +
+      "Only call after the client clearly chose a slot and you know their first name. " +
+      "STOP before calling without extras: if the studio menu has not been proposed yet in this booking, propose it " +
+      "FIRST (one present_options [C'est tout ✅] [Voir le menu 🥤] — see Café Revive rules), then call this tool " +
+      "with the client's answer. Skip that step only if the menu was already proposed/declined in this booking or " +
+      "the client explicitly asked for the link right away.",
     input_schema: {
       type: "object",
       properties: {
