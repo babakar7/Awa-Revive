@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CAFE_MENU,
+  cafeFavouriteOptions,
   computeExtras,
   extrasFromJson,
   formatExtrasMultiline,
@@ -131,5 +132,31 @@ describe("formatters", () => {
   it("extrasFromJson filters garbage defensively", () => {
     expect(extrasFromJson(null)).toEqual([]);
     expect(extrasFromJson([{ bad: true }, ...lines])).toHaveLength(2);
+  });
+});
+
+describe("cafeFavouriteOptions (incontournables shown after a booking)", () => {
+  const favs = cafeFavouriteOptions();
+
+  it("resolves all 10 favourites live from cafe-menu.md", () => {
+    // Every favourite id must exist in the loaded menu, else the after-booking
+    // list would silently show fewer rows.
+    expect(favs).toHaveLength(10);
+    expect(favs.length).toBeLessThanOrEqual(10); // WhatsApp list cap
+  });
+
+  it("each row carries a menu id, a title, a priced description and a section", () => {
+    for (const row of favs) {
+      expect(CAFE_MENU.items.has(row.id)).toBe(true);
+      expect(row.title.length).toBeGreaterThan(0);
+      expect(row.description).toMatch(/\d+ F/); // price from the menu file
+      expect(row.description!.length).toBeLessThanOrEqual(72);
+      expect(row.section).toBeTruthy();
+    }
+  });
+
+  it("prices come from the menu, not hard-coded", () => {
+    const jantBi = favs.find((o) => o.id === "SMOOTHIE_JANT_BI")!;
+    expect(jantBi.description).toContain(`${CAFE_MENU.items.get("SMOOTHIE_JANT_BI")!.priceXof} F`);
   });
 });

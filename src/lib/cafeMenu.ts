@@ -82,6 +82,54 @@ function loadCafeMenu(): CafeMenu {
 
 export const CAFE_MENU = loadCafeMenu();
 
+/** A clickable menu row (mirrors present_options option shape). */
+export interface CafeOption {
+  id: string;
+  title: string;
+  description?: string;
+  section?: string;
+}
+
+/**
+ * The studio "incontournables" — the exact 10 favourites the prompt lists, kept
+ * here as the single source of truth so the webhook can show the same list the
+ * model shows. A WhatsApp list caps at 10 rows, so keep this ≤ 10.
+ */
+const FAVOURITE_IDS: { id: string; section: string }[] = [
+  { id: "MATCHA_VANILLE", section: "🍵 Iced Matcha" },
+  { id: "MATCHA_PISTACHE", section: "🍵 Iced Matcha" },
+  { id: "MATCHA_MANGUE", section: "🍵 Iced Matcha" },
+  { id: "MATCHA_CAFE", section: "🍵 Iced Matcha" },
+  { id: "SMOOTHIE_JANT_BI", section: "🥤 Smoothies" },
+  { id: "SMOOTHIE_COCO_BEACH", section: "🥤 Smoothies" },
+  { id: "FRAICHEUR_ZEST_UP", section: "🧊 Fraîcheur & détox" },
+  { id: "DETOX_PURIF_VERT", section: "🧊 Fraîcheur & détox" },
+  { id: "BRUNCH_MYKONOS", section: "🍽️ À manger" },
+  { id: "SALADE_CHICKEN_CRUNCH", section: "🍽️ À manger" },
+];
+
+/**
+ * Build the incontournables as present_options rows, priced live from the menu.
+ * Ids absent from cafe-menu.md (owner renamed/removed one) are skipped rather
+ * than shown broken — returns [] if none resolve (menu unavailable), so callers
+ * can decide not to send anything.
+ */
+export function cafeFavouriteOptions(): CafeOption[] {
+  const out: CafeOption[] = [];
+  for (const fav of FAVOURITE_IDS) {
+    const item = CAFE_MENU.items.get(fav.id);
+    if (!item) continue; // defensive: id changed in cafe-menu.md
+    const pitch = item.description ? ` · ${item.description}` : "";
+    out.push({
+      id: item.id,
+      title: item.name.slice(0, 24),
+      description: `${item.priceXof} F${pitch}`.slice(0, 72),
+      section: fav.section,
+    });
+  }
+  return out;
+}
+
 export type ExtrasResult =
   | { ok: true; lines: ExtraLine[]; totalXof: number }
   | {

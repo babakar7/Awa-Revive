@@ -8,7 +8,12 @@ import * as repo from "../domain/repo.js";
 import { transition } from "../domain/stateMachine.js";
 import { notifyReception } from "../lib/notify.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
-import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/cafeMenu.js";
+import {
+  cafeFavouriteOptions,
+  extrasFromJson,
+  formatExtrasMultiline,
+  type ExtraLine,
+} from "../lib/cafeMenu.js";
 
 /**
  * Wave webhook handler — the critical path (SPEC §7).
@@ -361,11 +366,12 @@ export function cafeConfirmationMessage(
 }
 
 /**
- * Book-first / menu-after: right after a class booking is confirmed, offer the
- * café menu as a SEPARATE order (never bundled into the class payment). Sent as
- * a native two-button present_options; the client's tap comes back into the
- * agent, which then presents the items and creates a café-only link
- * (create_cafe_payment_link). Non-blocking and best-effort by design.
+ * Book-first / menu-after: right after a class booking is confirmed, show the
+ * café menu as a SEPARATE order (never bundled into the class payment). Shows
+ * the studio "incontournables" DIRECTLY (one present_options list) rather than a
+ * vague yes/no — a tapped item comes back into the agent, which builds the order
+ * and creates a café-only link (create_cafe_payment_link). A decline (free text)
+ * is handled by the agent too. Non-blocking and best-effort by design.
  */
 async function proposeCafeMenuAfterBooking(
   client: any,
@@ -374,12 +380,10 @@ async function proposeCafeMenuAfterBooking(
   log: any,
 ): Promise<void> {
   try {
-    const { body, yes, no } = cafeMenuOfferCopy(lang);
-    const options = [
-      { id: "cafe_after_booking_yes", title: yes },
-      { id: "cafe_after_booking_no", title: no },
-    ];
-    const kind = await sendInteractive(client.wa_phone, body, yes, options);
+    const options = cafeFavouriteOptions();
+    if (options.length === 0) return; // menu unavailable — show nothing
+    const { body, button } = cafeMenuOfferCopy(lang);
+    const kind = await sendInteractive(client.wa_phone, body, button, options);
     // Log what the client saw so the rebuilt history stays coherent (same
     // format the present_options tool uses).
     await repo.addTurn(
@@ -392,31 +396,28 @@ async function proposeCafeMenuAfterBooking(
   }
 }
 
-function cafeMenuOfferCopy(lang: string): { body: string; yes: string; no: string } {
+function cafeMenuOfferCopy(lang: string): { body: string; button: string } {
   switch (lang) {
     case "en":
       return {
         body:
-          "Fancy something to go with it? 🥤 We've got a studio menu — smoothies, detox juices, iced matcha, " +
-          "healthy bites… want to add anything to your visit?",
-        yes: "See the menu 🥤",
-        no: "No thanks 🙏🏾",
+          "Fancy something with your session? 🥤 Here are our studio favourites 👇 — tap one to add it, " +
+          "tell me if you'd like something else, or just say no thanks.",
+        button: "See the menu",
       };
     case "wo":
       return {
         body:
-          "Ndax dangaa bëgg lu mu ànd? 🥤 Am nañu menu ci studio bi — smoothies, jus détox, matcha glacé, " +
-          "snacks healthy… bëgg nga yokk dara?",
-        yes: "Xool menu bi 🥤",
-        no: "Baax na, jërëjëf 🙏🏾",
+          "Ndax dangaa bëgg lu mu ànd sa séance? 🥤 Ñii ñooy sunu incontournables 👇 — tann benn, " +
+          "walla waxal ma lu la neex, walla neel déedéet.",
+        button: "Xool menu bi",
       };
     default:
       return {
         body:
-          "Et pour accompagner ? 🥤 On a un menu au studio — smoothies, jus détox, matcha glacé, snacks " +
-          "healthy… envie d'ajouter quelque chose à ta séance ?",
-        yes: "Voir le menu 🥤",
-        no: "Non merci 🙏🏾",
+          "Envie d'accompagner ta séance ? 🥤 Voici nos incontournables 👇 — tape sur un article pour " +
+          "l'ajouter, dis-moi si tu cherches autre chose, ou réponds simplement non merci.",
+        button: "Voir le menu",
       };
   }
 }
