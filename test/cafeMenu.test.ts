@@ -138,10 +138,11 @@ describe("formatters", () => {
 describe("cafeFavouriteOptions (incontournables shown after a booking)", () => {
   const favs = cafeFavouriteOptions();
 
-  it("resolves all 10 favourites live from cafe-menu.md", () => {
+  it("resolves all favourites live from cafe-menu.md", () => {
     // Every favourite id must exist in the loaded menu, else the after-booking
-    // list would silently show fewer rows.
-    expect(favs).toHaveLength(10);
+    // list would silently show fewer rows. (9 since MATCHA_CAFE was dropped
+    // from the populars on 10/07 — owner call.)
+    expect(favs).toHaveLength(9);
     expect(favs.length).toBeLessThanOrEqual(10); // WhatsApp list cap
   });
 

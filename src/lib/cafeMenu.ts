@@ -99,7 +99,6 @@ const FAVOURITE_IDS: { id: string; section: string }[] = [
   { id: "MATCHA_VANILLE", section: "🍵 Iced Matcha" },
   { id: "MATCHA_PISTACHE", section: "🍵 Iced Matcha" },
   { id: "MATCHA_MANGUE", section: "🍵 Iced Matcha" },
-  { id: "MATCHA_CAFE", section: "🍵 Iced Matcha" },
   { id: "SMOOTHIE_JANT_BI", section: "🥤 Smoothies" },
   { id: "SMOOTHIE_COCO_BEACH", section: "🥤 Smoothies" },
   { id: "FRAICHEUR_ZEST_UP", section: "🧊 Fraîcheur & détox" },
