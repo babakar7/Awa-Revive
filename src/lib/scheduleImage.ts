@@ -122,15 +122,17 @@ const ROW_H = 42;
 const DAY_GAP = 18;
 const FOOTER_H = 56;
 
+// Charte Revive (fournie par Babakar, 10/07) : prune #7c547d, mauve #a98baa,
+// rose poudré #f2e7e2, prune foncé #211921, crème #fbf6f0.
 const COLORS = {
-  bg: "#FAF7F2",
-  title: "#1F2937",
-  band: "#0F766E",
-  bandText: "#FFFFFF",
-  time: "#0F766E",
-  text: "#1F2937",
-  meta: "#6B7280",
-  rule: "#E5E7EB",
+  bg: "#fbf6f0",
+  title: "#211921",
+  band: "#7c547d",
+  bandText: "#fbf6f0",
+  time: "#7c547d",
+  text: "#211921",
+  meta: "#a98baa",
+  rule: "#f2e7e2",
 };
 
 /** Render the weekly grid to a PNG buffer. Throws if there is nothing to draw. */
