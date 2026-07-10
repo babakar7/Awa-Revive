@@ -65,6 +65,14 @@ Règles pour éviter ça :
   d'accord. `railway up` déploie sans commiter → git prend du retard sur le live
   (c'est ce retard qui crée le risque ci-dessus). Réserve `railway up` aux tests
   rapides que tu comptes commiter juste après.
+- **⚠️ Piège auto-deploy** : un push rebuild TOUT l'arbre depuis git. Donc si
+  l'arbre contient déjà du non-commité d'un autre agent (typiquement après des
+  `railway up`), un push « mes fichiers seulement » **régresse la prod** en
+  effaçant ce travail non commité pourtant live. Dans cet état, deux choix : soit
+  chacun a commité au fur et à mesure (idéal, pas de non-commité qui traîne),
+  soit il faut **un commit de réconciliation de tout l'arbre** (exception au
+  « chacun son travail ») avant de repartir proprement. La prévention = livrer
+  par `git push`, pas `railway up`, pour ne jamais laisser de non-commité live.
 - **`main` est la branche de déploiement** : `origin/main` doit toujours refléter
   ce qui tourne en prod. Avant de pousser, `npm run build && npm test` doivent
   passer (idéalement laisser la CI verte, cf. PROGRESS.md §7).
