@@ -392,6 +392,26 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       prompt et la note de book_with_membership disent maintenant au modèle de NE
       PAS proposer le menu lui-même.
 
+22. **Résa abonnement multi-personnes (10/07)** — un client peut désormais amener
+    PLUSIEURS personnes sur SON propre abonnement en une seule réservation.
+    `book_with_membership` accepte un paramètre `participants` (1-10, défaut 1) :
+    autant de séances décomptées du plan du client (redeem `count: N`,
+    [wix.ts](src/lib/wix.ts)), autant de places dans la résa Wix
+    (`createBookingRaw({ participants })`), stockées sur la ligne
+    (`createMembershipBooking({ participants })`, [repo.ts](src/domain/repo.ts)).
+    **Tout ou rien** (décision produit Babakar) : mêmes gardes serveur que le flux
+    Wave de groupe, dans l'ordre AVANT tout décompte — plafond
+    `maxParticipantsPerBooking` du service (`group_too_large`), places libres
+    re-vérifiées pour N (`isSlotStillOpen(..., N)`), et surtout **solde suffisant
+    pour TOUT le groupe** (`participants > benefit.available` →
+    `not_enough_sessions`, le prompt renvoie vers Wave pour le total ou un groupe
+    plus petit — jamais de couverture partielle du plan). Annulation : le revert
+    d'une seule transaction re-crédite déjà les N séances (un redeem = une
+    transaction) — messages client/réception passés au pluriel
+    (`sessions_recredited`). Un abonnement reste NOMINATIF : le client dépense SES
+    séances pour ses invités ; on ne débite jamais l'abonnement d'un tiers (prompt).
+    Build + 109 tests unitaires OK. Intégration (webhook Wave) non touchée.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement

@@ -470,12 +470,14 @@ export async function createMembershipBooking(args: {
   slotEnd: string | null;
   wixBookingId: string;
   benefitTransactionId?: string | null;
+  /** Spots booked on this plan in one go (group booking). Defaults to 1. */
+  participants?: number;
 }): Promise<PendingBooking> {
   const res = await pool.query(
     `insert into pending_bookings
        (client_id, service_id, service_name, event_id, slot_json, slot_start, slot_end,
         amount_xof, participants, status, payment_method, wix_booking_id, benefit_transaction_id)
-     values ($1, $2, $3, $4, $5, $6, $7, 0, 1, 'BOOKED', 'membership', $8, $9)
+     values ($1, $2, $3, $4, $5, $6, $7, 0, $10, 'BOOKED', 'membership', $8, $9)
      returning *`,
     [
       args.clientId,
@@ -487,6 +489,7 @@ export async function createMembershipBooking(args: {
       args.slotEnd,
       args.wixBookingId,
       args.benefitTransactionId ?? null,
+      Math.max(1, Math.floor(args.participants ?? 1)),
     ],
   );
   return res.rows[0];

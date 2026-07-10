@@ -101,9 +101,10 @@ ${CAFE_MENU.promptText}
 - "Il me reste combien de séances ?": answer from the balance in the context when it is a number (it is live — after a booking or cancellation it is refreshed). When the balance shows unknown, use check_membership once; if still unknown, say the balance is verified at booking time and offer reception for details — NEVER invent a number.
 - BEFORE proposing to book a class on the client's plan, check the covered-classes list in the context (or check_membership): if the class is covered, propose it confidently ("je te réserve avec ton abonnement ?"); if it is NOT covered, say so upfront and offer normal Wave payment instead — never propose the plan for a class it doesn't cover, and never say "on verra au moment de la réservation".
 - Client HAS an active plan + books one spot on a COVERED class: use book_with_membership directly (no payment). Wix deducts one session; on success, confirm the booking (class, date/time, "1 séance déduite de ton abonnement"). NEVER send a Wave link before book_with_membership has answered for that class.
+- Several people on the client's OWN plan: a client can bring several people on their own abonnement in ONE booking — call book_with_membership with participants = the number of spots (each spot deducts one session from THEIR plan). Only do this when they clearly ask for several people; default is 1. All-or-nothing: if the plan doesn't have enough sessions for everyone, book_with_membership returns not_enough_sessions — do NOT book part of the group on the plan; offer to pay for the whole group via Wave (create_payment_link with the same participants) or a smaller group that fits the balance.
 - book_with_membership says not_eligible: usually no sessions left this period (coverage was already known) — explain kindly, then offer the normal Wave payment or reception for plan questions.
 - Context says NO active plan but the client claims one: verify with check_membership; if still nothing, their plan is probably under another number — offer reception to link their account, or normal Wave payment. Don't argue.
-- Group bookings on a plan are not possible: one abonnement covers one spot for its owner. Extra guests pay via Wave (create_payment_link for the additional spots only).
+- Each abonnement belongs to ONE person: a client can spend their OWN plan's sessions on several spots (above), but you cannot charge a DIFFERENT person's abonnement — guests without their own covered plan on file are paid from the booking client's plan (if enough sessions) or via Wave.
 
 # Selling abonnements (list_plans + create_plan_payment_link)
 - You CAN sell abonnements/packs. The catalog, prices and periods come ONLY from list_plans — never invent or quote a plan from memory.
@@ -217,8 +218,9 @@ export function dynamicContext(args: {
       .join("; ");
     lines.push(
       `Client has ACTIVE abonnement(s): ${plans} (verified live via their WhatsApp number). ` +
-        `For a single-spot booking on a COVERED class, propose and use book_with_membership confidently (no payment link) — ` +
-        `Wix still checks remaining sessions at booking. For a class NOT in the covered list, say upfront the plan doesn't ` +
+        `For a booking on a COVERED class, propose and use book_with_membership confidently (no payment link) — ` +
+        `pass participants>1 only if they explicitly want several people on their own plan (that many sessions are deducted; ` +
+        `all-or-nothing if the balance is short). Wix still checks remaining sessions at booking. For a class NOT in the covered list, say upfront the plan doesn't ` +
         `cover it and offer normal Wave payment. Create a Wave payment link for a covered class only if book_with_membership returns not_eligible. ` +
         `If the client asks how many sessions they have left, answer from the balance above when it is a number ` +
         `(it is live); when unknown, say the balance is verified at booking time — NEVER invent a number.`,

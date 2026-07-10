@@ -517,13 +517,15 @@ export async function redeemMembershipForBooking(args: {
   wixBookingId: string;
   serviceId: string;
   benefit: EligibleBenefit;
+  /** Number of sessions to deduct (group booking on one plan). Defaults to 1. */
+  count?: number;
 }): Promise<{ transactionId: string; membershipName: string }> {
   try {
     const data = await wixPost("/benefit-programs/v1/benefits/redeem", {
       poolId: args.benefit.poolId,
       benefitKey: args.benefit.benefitKey,
       itemReference: { externalId: args.serviceId, providerAppId: WIX_BOOKINGS_APP_ID },
-      count: 1,
+      count: Math.max(1, Math.floor(args.count ?? 1)),
       beneficiary: { identityType: "MEMBER", memberId: args.benefit.memberId },
       namespace: PRICING_PLANS_NAMESPACE,
       idempotencyKey: `awa-booking-${args.wixBookingId}`,

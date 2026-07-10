@@ -112,11 +112,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "book_with_membership",
     description:
-      "Book ONE spot on a class slot using the client's active abonnement — no Wave payment. Wix itself " +
-      "validates that the plan covers this service and decrements the plan credit; if not eligible, this " +
-      "returns an error and you should offer the normal Wave payment instead. Only call when the " +
-      "context or check_membership shows an active plan whose covers_classes includes this class, " +
-      "and the client chose a slot from check_availability.",
+      "Book one OR several spots on a class slot using the client's active abonnement — no Wave payment. " +
+      "Set participants > 1 to book several people in ONE go, all deducted from THIS client's plan (one " +
+      "session per spot, same class/slot). Wix validates that the plan covers this service and that enough " +
+      "sessions remain; if not eligible or the balance can't cover the whole group, this returns an error " +
+      "and you should offer the normal Wave payment for the total instead (all-or-nothing — the plan never " +
+      "covers only part of a group). Only call when the context or check_membership shows an active plan " +
+      "whose covers_classes includes this class, and the client chose a slot from check_availability.",
     input_schema: {
       type: "object",
       properties: {
@@ -124,6 +126,14 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         event_id: { type: "string", description: "event_id (or choice_id) of the chosen slot from check_availability" },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
         client_name: { type: "string", description: "Client's first name" },
+        participants: {
+          type: "integer",
+          minimum: 1,
+          maximum: 10,
+          description:
+            "How many spots to book on this plan (default 1). Use > 1 only when the client explicitly wants " +
+            "to bring several people on their own abonnement — that many sessions are deducted from their plan.",
+        },
       },
       required: ["service_id", "event_id", "slot_start", "client_name"],
       additionalProperties: false,
@@ -728,6 +738,7 @@ export async function executeTool(
       const serviceId = String(input.service_id ?? "");
       const eventId = String(input.event_id ?? "");
       const clientName = String(input.client_name ?? "").slice(0, 80).trim();
+      const participants = Math.min(10, Math.max(1, Math.round(Number(input.participants ?? 1)) || 1));
       if (!serviceId || !eventId || !clientName) {
         return JSON.stringify({ error: "invalid_arguments" });
       }
@@ -744,13 +755,28 @@ export async function executeTool(
       const service = await wix.getService(serviceId);
       if (!service) return JSON.stringify({ error: "unknown_service_id" });
 
+      // Wix rejects a single booking above the service's per-booking cap — same
+      // guard as the Wave group flow, enforced BEFORE deducting any session.
+      if (participants > service.maxParticipantsPerBooking) {
+        return JSON.stringify({
+          error: "group_too_large",
+          max_participants_per_booking: service.maxParticipantsPerBooking,
+          message:
+            `This class allows at most ${service.maxParticipantsPerBooking} spot(s) per booking. ` +
+            `Offer to book ${service.maxParticipantsPerBooking} on the plan now, or contact reception for a larger group.`,
+        });
+      }
+
       const slot = (cached.slot_json as any) ?? {};
       const slotStart: string = slot.startDate ?? String(input.slot_start ?? "");
-      const fresh = await wix.isSlotStillOpen(serviceId, resolvedEventId, slotStart, 1);
+      const fresh = await wix.isSlotStillOpen(serviceId, resolvedEventId, slotStart, participants);
       if (!fresh) {
         return JSON.stringify({
           error: "slot_full",
-          message: "This slot just filled up. Offer alternatives via check_availability.",
+          message:
+            participants > 1
+              ? `Fewer than ${participants} open spots remain on this slot. Offer a smaller group or another slot via check_availability.`
+              : "This slot just filled up. Offer alternatives via check_availability.",
         });
       }
 
@@ -778,12 +804,27 @@ export async function executeTool(
         });
       }
 
-      // 2. Booking (CREATED) → 3. deduct one plan credit → 4. confirm in calendar.
+      // All-or-nothing for groups: the plan must have enough sessions to cover
+      // EVERY spot — never book part of a group on the plan. If it can't, offer
+      // Wave for the whole group instead.
+      if (participants > benefit.available) {
+        return JSON.stringify({
+          error: "not_enough_sessions",
+          remaining_sessions: benefit.available,
+          requested: participants,
+          message:
+            `The client's abonnement has only ${benefit.available} session(s) left — not enough for ${participants} ` +
+            `people. Do NOT book part of the group on the plan. Offer to pay for the whole group via the normal Wave ` +
+            `payment (create_payment_link with participants=${participants}), or a smaller group that fits the balance.`,
+        });
+      }
+
+      // 2. Booking (CREATED) → 3. deduct one credit per spot → 4. confirm in calendar.
       const wixBookingId = await wix.createBookingRaw({
         slot: fresh.raw,
         name: clientName,
         phone,
-        participants: 1,
+        participants,
         paymentOption: "MEMBERSHIP",
       });
 
@@ -792,6 +833,7 @@ export async function executeTool(
           wixBookingId,
           serviceId,
           benefit,
+          count: participants,
         });
         try {
           await wix.confirmBookingPaid(wixBookingId);
@@ -816,20 +858,25 @@ export async function executeTool(
           slotEnd: fresh.endDate ?? null,
           wixBookingId,
           benefitTransactionId: redemption.transactionId || null,
+          participants,
         });
-        // One session was just deducted — the cached balance is stale.
+        // Sessions were just deducted — the cached balance is stale.
         invalidateMembershipCache(client.id);
         return JSON.stringify({
           booked: true,
           booking_id: membershipBooking.id,
           paid_with: redemption.membershipName,
-          remaining_sessions: Math.max(0, benefit.available - 1),
+          participants,
+          sessions_deducted: participants,
+          remaining_sessions: Math.max(0, benefit.available - participants),
           class: service.name,
           slot_start: fresh.startDate,
           slot_start_dakar: fmtDakar(fresh.startDate),
           note:
-            "Booked and confirmed using the client's abonnement (one session deducted). " +
-            "Confirm to the client with class, date/time, that it used their plan (mention remaining_sessions), " +
+            (participants > 1
+              ? `Booked and confirmed ${participants} spots using the client's abonnement (${participants} sessions deducted). `
+              : "Booked and confirmed using the client's abonnement (one session deducted). ") +
+            "Confirm to the client with class, date/time, how many spots and that it used their plan (mention remaining_sessions), " +
             "and remind them cancellation is free up to 16h before the class (after that the session is due) — no payment needed. " +
             "Do NOT mention or propose the café menu in your confirmation: the system automatically shows the " +
             "menu list right after your message. When the client then picks an item, use create_cafe_payment_link " +
@@ -986,12 +1033,13 @@ export async function executeTool(
         }
         if (!recredited) {
           notifyReception(
-            "⚠️ Séance d'abonnement à re-créditer manuellement",
-            `Awa a annulé une réservation payée par abonnement mais n'a pas pu re-créditer la séance ` +
+            "⚠️ Séance(s) d'abonnement à re-créditer manuellement",
+            `Awa a annulé une réservation payée par abonnement mais n'a pas pu re-créditer ` +
               `automatiquement.\n  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
               `  Cours : ${booking.service_name} — ${fmtDakar(String(booking.slot_start))}\n` +
+              `  Séance(s) à re-créditer : ${booking.participants}\n` +
               `  Booking Wix : ${booking.wix_booking_id}\n\n` +
-              `À faire : re-créditer une séance sur le plan du client dans le dashboard Wix.`,
+              `À faire : re-créditer ${booking.participants} séance(s) sur le plan du client dans le dashboard Wix.`,
           );
         }
         await repo.markCancelled(bookingId);
@@ -1002,9 +1050,12 @@ export async function executeTool(
           class: booking.service_name,
           slot_start_dakar: fmtDakar(String(booking.slot_start)),
           session_recredited: recredited,
+          sessions_recredited: recredited ? booking.participants : 0,
           note: recredited
-            ? "Cancelled; the plan session was re-credited automatically. Tell the client."
-            : "Cancelled; the plan session will be re-credited by the reception team (already notified). Tell the client.",
+            ? (booking.participants > 1
+                ? `Cancelled; all ${booking.participants} plan sessions were re-credited automatically. Tell the client.`
+                : "Cancelled; the plan session was re-credited automatically. Tell the client.")
+            : "Cancelled; the plan session(s) will be re-credited by the reception team (already notified). Tell the client.",
         });
       }
 
