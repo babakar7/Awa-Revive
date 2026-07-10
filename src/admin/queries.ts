@@ -1,0 +1,200 @@
+import { pool } from "../db/index.js";
+
+/**
+ * Read-only SQL for the admin dashboard. No business logic here — mutations
+ * go through domain/stateMachine + domain/repo like everywhere else.
+ */
+
+export interface AdminClientRow {
+  id: string;
+  wa_phone: string;
+  name: string | null;
+  language: string | null;
+  claimed_email: string | null;
+  last_message_at: Date | null;
+  last_message: string | null;
+  message_count: number;
+}
+
+export async function listClients(search?: string): Promise<AdminClientRow[]> {
+  const params: unknown[] = [];
+  let where = "";
+  if (search && search.trim()) {
+    params.push(`%${search.trim()}%`);
+    where = `where c.name ilike $1 or c.wa_phone like $1`;
+  }
+  const res = await pool.query(
+    `select c.id, c.wa_phone, c.name, c.language, c.claimed_email,
+            m.created_at as last_message_at, m.content as last_message,
+            (select count(*) from conversations cc
+              where cc.client_id = c.id and cc.role in ('user','assistant'))::int as message_count
+       from clients c
+       left join lateral (
+         select content, created_at from conversations
+          where client_id = c.id and role in ('user','assistant')
+          order by created_at desc limit 1
+       ) m on true
+       ${where}
+      order by m.created_at desc nulls last
+      limit 100`,
+    params,
+  );
+  return res.rows;
+}
+
+export interface AdminTurn {
+  role: string;
+  content: string;
+  created_at: Date;
+}
+
+export async function getClient(clientId: string): Promise<any | null> {
+  const res = await pool.query(`select * from clients where id = $1`, [clientId]);
+  return res.rows[0] ?? null;
+}
+
+export async function getThread(clientId: string, limit = 200): Promise<AdminTurn[]> {
+  const res = await pool.query(
+    `select role, content, created_at
+       from (select role, content, created_at from conversations
+              where client_id = $1
+              order by created_at desc limit $2) t
+      order by created_at asc`,
+    [clientId, limit],
+  );
+  return res.rows;
+}
+
+export async function listBookings(status?: string, limit = 100): Promise<any[]> {
+  const params: unknown[] = [limit];
+  let where = "";
+  if (status) {
+    params.push(status);
+    where = "where b.status = $2";
+  }
+  const res = await pool.query(
+    `select b.*, c.name as client_name, c.wa_phone
+       from pending_bookings b join clients c on c.id = b.client_id
+       ${where}
+      order by b.created_at desc limit $1`,
+    params,
+  );
+  return res.rows;
+}
+
+/**
+ * Commandes café payées, rattachées à une résa. "today" = cours du jour
+ * (c'est le moment où la commande doit être préparée), "upcoming" = cours à
+ * venir. Dakar = UTC year-round, so current_date is the local business day.
+ */
+export async function listCafeOrders(): Promise<{ today: any[]; upcoming: any[] }> {
+  const base = `
+    select b.*, c.name as client_name, c.wa_phone
+      from pending_bookings b join clients c on c.id = b.client_id
+     where b.status = 'BOOKED' and b.extras_amount_xof > 0`;
+  const [today, upcoming] = await Promise.all([
+    pool.query(
+      `${base} and b.slot_start >= current_date and b.slot_start < current_date + 1
+       order by b.slot_start asc`,
+    ),
+    pool.query(
+      `${base} and b.slot_start >= current_date + 1
+       order by b.slot_start asc limit 50`,
+    ),
+  ]);
+  return { today: today.rows, upcoming: upcoming.rows };
+}
+
+export async function listPlanOrders(status?: string, limit = 50): Promise<any[]> {
+  const params: unknown[] = [limit];
+  let where = "";
+  if (status) {
+    params.push(status);
+    where = "where p.status = $2";
+  }
+  const res = await pool.query(
+    `select p.*, c.name as client_name, c.wa_phone
+       from pending_plan_orders p join clients c on c.id = p.client_id
+       ${where}
+      order by p.created_at desc limit $1`,
+    params,
+  );
+  return res.rows;
+}
+
+export async function listHandoffs(limit = 50): Promise<any[]> {
+  const res = await pool.query(
+    `select h.*, c.name as client_name, c.wa_phone
+       from handoffs h join clients c on c.id = h.client_id
+      order by h.created_at desc limit $1`,
+    [limit],
+  );
+  return res.rows;
+}
+
+/** Open items surfaced on the overview page. */
+export async function pendingActions(): Promise<{
+  refunds: any[];
+  planActivations: any[];
+  recentHandoffs: any[];
+}> {
+  const [refunds, planActivations, recentHandoffs] = await Promise.all([
+    listBookings("REFUND_NEEDED", 20),
+    listPlanOrders("PAID", 20),
+    pool
+      .query(
+        `select h.*, c.name as client_name, c.wa_phone
+           from handoffs h join clients c on c.id = h.client_id
+          where h.created_at > now() - interval '7 days'
+          order by h.created_at desc limit 15`,
+      )
+      .then((r) => r.rows),
+  ]);
+  return { refunds, planActivations, recentHandoffs };
+}
+
+export interface AdminStats {
+  msgToday: number;
+  msg7d: number;
+  activeClientsToday: number;
+  activeClients7d: number;
+  bookingsToday: number;
+  bookings7d: number;
+  revenueToday: number;
+  revenue7d: number;
+  refundsPending: number;
+}
+
+export async function stats(): Promise<AdminStats> {
+  // Dakar = UTC year-round, so current_date is the local business day.
+  const res = await pool.query(`
+    select
+      (select count(*) from conversations where role = 'user' and created_at >= current_date)::int as msg_today,
+      (select count(*) from conversations where role = 'user' and created_at > now() - interval '7 days')::int as msg_7d,
+      (select count(distinct client_id) from conversations where role = 'user' and created_at >= current_date)::int as clients_today,
+      (select count(distinct client_id) from conversations where role = 'user' and created_at > now() - interval '7 days')::int as clients_7d,
+      (select count(*) from pending_bookings where status = 'BOOKED' and updated_at >= current_date)::int as bookings_today,
+      (select count(*) from pending_bookings where status = 'BOOKED' and updated_at > now() - interval '7 days')::int as bookings_7d,
+      (coalesce((select sum(amount_xof) from pending_bookings
+         where status = 'BOOKED' and payment_method = 'wave' and updated_at >= current_date), 0)
+       + coalesce((select sum(amount_xof) from pending_plan_orders
+         where status in ('PAID','ACTIVATED') and updated_at >= current_date), 0))::int as revenue_today,
+      (coalesce((select sum(amount_xof) from pending_bookings
+         where status = 'BOOKED' and payment_method = 'wave' and updated_at > now() - interval '7 days'), 0)
+       + coalesce((select sum(amount_xof) from pending_plan_orders
+         where status in ('PAID','ACTIVATED') and updated_at > now() - interval '7 days'), 0))::int as revenue_7d,
+      (select count(*) from pending_bookings where status = 'REFUND_NEEDED')::int as refunds_pending
+  `);
+  const r = res.rows[0];
+  return {
+    msgToday: r.msg_today,
+    msg7d: r.msg_7d,
+    activeClientsToday: r.clients_today,
+    activeClients7d: r.clients_7d,
+    bookingsToday: r.bookings_today,
+    bookings7d: r.bookings_7d,
+    revenueToday: r.revenue_today,
+    revenue7d: r.revenue_7d,
+    refundsPending: r.refunds_pending,
+  };
+}

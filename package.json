@@ -1,0 +1,35 @@
+{
+  "name": "revive-booking-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "migrate": "tsx src/db/migrate.ts",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "simulate:wave": "tsx scripts/simulate-wave-webhook.ts",
+    "refund:done": "tsx scripts/mark-refunded.ts",
+    "summary": "tsx scripts/daily-summary.ts",
+    "email:test": "tsx scripts/test-email.ts",
+    "whatsapp:test": "tsx scripts/test-whatsapp-notify.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.2.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}

@@ -1,0 +1,236 @@
+# SPEC — WhatsApp Booking Agent (Phase 1)
+
+**Project:** Revive Bookings — an AI agent on WhatsApp that books clients into classes at **Revive** (studio) via Wix Bookings, taking payment first via Wave (Senegal mobile money).
+
+**Phone numbers:** Phase 1 runs entirely on **Meta's free test number** (WhatsApp Cloud API sandbox — messages limited to up to 5 pre-verified recipient numbers). A dedicated production number will be registered later; only `WA_PHONE_NUMBER_ID` and token change at that point — build nothing that assumes the test number. The studio's existing reception WhatsApp number stays outside this system and is used only as the human-handoff destination (`RECEPTION_PHONE`).
+
+**Payment-first invariant:** a booking is NEVER created in Wix until a Wave payment webhook is verified. No exceptions.
+
+---
+
+## 1. Architecture
+
+```
+Client (WhatsApp)
+   │  inbound msg
+   ▼
+Meta WhatsApp Cloud API ──webhook──► Backend ◄──webhook── Wave (payment events)
+                                       │
+                        ┌──────────────┼──────────────┐
+                        ▼              ▼              ▼
+                  Claude API      Wix Bookings     Postgres
+                 (conversation)  (availability,   (state, logs)
+                                  create booking)
+```
+
+Single deployable service. No frontend. All client interaction happens in WhatsApp.
+
+## 2. Stack (opinionated — deviate only with good reason)
+
+- **Node 20+ / TypeScript**, Fastify (or Express)
+- **Postgres** (any managed instance; Railway/Render bundled is fine)
+- **@anthropic-ai/sdk** for the agent loop, model `claude-sonnet-latest` (alias ok)
+- Deployment target: Railway/Render/Fly.io. Must expose HTTPS for webhooks.
+- Local dev: use a tunnel (ngrok/cloudflared) for webhook testing.
+
+## 3. Environment variables
+
+```
+# Meta / WhatsApp Cloud API
+WA_PHONE_NUMBER_ID=        # sender phone number ID
+WA_ACCESS_TOKEN=           # permanent system-user token
+WA_APP_SECRET=             # for X-Hub-Signature-256 verification
+WA_VERIFY_TOKEN=           # arbitrary string for webhook GET verification
+
+# Wix
+WIX_API_KEY=
+WIX_SITE_ID=
+
+# Wave
+WAVE_API_KEY=
+WAVE_WEBHOOK_SECRET=       # HMAC verification of Wave webhooks
+
+# Anthropic
+ANTHROPIC_API_KEY=
+
+# App
+DATABASE_URL=
+RECEPTION_PHONE=+221784644329   # Revive's existing reception WhatsApp number (human handoff target)
+PAYMENT_LINK_TTL_MINUTES=20
+BASE_URL=                  # public https URL of this service
+```
+
+## 4. External APIs
+
+Consult official docs for exact request/response shapes — do not guess fields.
+
+### 4.1 WhatsApp Cloud API
+- Inbound: `POST {BASE_URL}/webhooks/whatsapp`. Also implement the `GET` challenge handshake (`hub.verify_token` / `hub.challenge`).
+- Verify `X-Hub-Signature-256` (HMAC-SHA256 of raw body with `WA_APP_SECRET`) on every POST. Reject on mismatch.
+- Outbound: `POST https://graph.facebook.com/v21.0/{WA_PHONE_NUMBER_ID}/messages` — text messages only for Phase 1 (no templates needed inside the 24h service window).
+- Dedupe inbound by WhatsApp `message.id` (store processed IDs; webhooks retry).
+
+### 4.2 Wix Bookings (REST, https://www.wixapis.com)
+- Headers on every call: `Authorization: {WIX_API_KEY}`, `wix-site-id: {WIX_SITE_ID}`.
+- **List services** (classes): Services API — used to populate the class catalog.
+- **Query Availability**: Availability Calendar / Time Slots API — returns bookable slots; for class services each slot carries an `eventId`.
+- **Create Booking** (Bookings V2): for classes, pass `bookedEntity.slot.eventId` exactly as returned by Query Availability, plus contact details (name, phone). Set the booking as paid-offline/already-paid so Wix does not expect payment.
+- Docs root: https://dev.wix.com/docs/rest/business-solutions/bookings — verify exact endpoint paths there at build time.
+
+### 4.3 Wave Checkout API (https://docs.wave.com/checkout)
+- Create session: `POST https://api.wave.com/v1/checkout/sessions` with `Authorization: Bearer {WAVE_API_KEY}`. Body includes `amount` (string), `currency: "XOF"`, `client_reference` (our `pending_booking.id`), `success_url`, `error_url`. Response includes `wave_launch_url` → send this URL to the client in WhatsApp.
+- Webhook: `POST {BASE_URL}/webhooks/wave`. Verify HMAC signature with `WAVE_WEBHOOK_SECRET` per Wave docs. Handle `checkout.session.completed`; match on `client_reference`. Process idempotently (a session may be delivered more than once).
+- `success_url`/`error_url` can point to a minimal static "return to WhatsApp" page served by this app.
+
+## 5. Data model (Postgres)
+
+```sql
+clients(
+  id uuid pk, wa_phone text unique, name text,
+  language text,               -- 'fr' | 'en' | 'wo', last detected
+  created_at, updated_at
+)
+
+pending_bookings(
+  id uuid pk,                  -- used as Wave client_reference
+  client_id fk, service_id text, service_name text,
+  event_id text,               -- Wix class event id
+  slot_start timestamptz, slot_end timestamptz,
+  amount_xof integer,
+  status text,                 -- see state machine
+  wave_session_id text, payment_link text, link_expires_at timestamptz,
+  wix_booking_id text,         -- set after booking created
+  payer_phone text,            -- from Wave webhook, informational
+  created_at, updated_at
+)
+
+processed_webhooks(id text pk, source text, received_at)  -- idempotency
+
+conversations(
+  id uuid pk, client_id fk, role text, content text,      -- message log
+  wa_message_id text, created_at
+)
+
+handoffs(id uuid pk, client_id fk, reason text, transcript_excerpt text, created_at)
+```
+
+### State machine — `pending_bookings.status`
+
+```
+DRAFT ──payment link created──► AWAITING_PAYMENT
+AWAITING_PAYMENT ──TTL passed──────────────► EXPIRED
+AWAITING_PAYMENT ──valid Wave webhook──────► PAID
+PAID ──slot still free, Wix booking OK─────► BOOKED
+PAID ──slot gone or Wix error──────────────► REFUND_NEEDED
+```
+
+- `EXPIRED`: if the client pays after expiry and the webhook still arrives, treat as `PAID` and continue normally (money was taken; honor it if the slot exists, else `REFUND_NEEDED`).
+- `REFUND_NEEDED`: no automated refund in Phase 1. Notify the client ("we'll refund you within 24h"), record it, and expose it in the daily log for manual processing in the Wave portal.
+
+## 6. Agent design
+
+### Loop
+Inbound WhatsApp message → load last ~20 conversation turns + client record → call Claude with system prompt + tools → execute tool calls → send final text reply via WhatsApp. Persist all turns.
+
+### System prompt requirements
+- Identity: booking assistant for **Revive** — friendly, brief, WhatsApp-appropriate (short messages, no markdown headers).
+- **Language:** detect and mirror the client's language among French, English, Wolof. Default to French when ambiguous.
+- Never invent classes, prices, or slots — always use tools.
+- Never promise a booking before payment confirmation.
+- Payment flow to communicate: "I'll send you a Wave link; your spot is confirmed once paid. Link valid 20 minutes."
+- Escalate to human (tool) for: complaints, refunds, rescheduling/cancelling existing bookings, medical questions, anything off-script. Handoff message includes `RECEPTION_PHONE`.
+
+### Tools
+
+| Tool | Args | Behavior |
+|---|---|---|
+| `list_classes` | none | Wix Services API → name, description, price, duration. Cache 10 min. |
+| `check_availability` | `service_id`, `date_from`, `date_to` | Wix availability → slots with remaining spots + `event_id`. Never show full slots. |
+| `create_payment_link` | `service_id`, `event_id`, `slot_start`, `client_name` | Creates `pending_booking` (DRAFT), re-verifies slot, creates Wave session, sets AWAITING_PAYMENT, returns link + expiry to include in the reply. |
+| `get_my_bookings` | none | Client's bookings from our DB (BOOKED, upcoming). |
+| `handoff_to_human` | `reason` | Records handoff, returns the reception number for the reply. |
+
+Constraint: one active `AWAITING_PAYMENT` per client; creating a new link cancels (EXPIRED) the previous one.
+
+## 7. Wave webhook handler (critical path)
+
+1. Verify signature. 401 on failure. Log attempt.
+2. Idempotency check via `processed_webhooks`.
+3. Look up `pending_booking` by `client_reference`. Unknown ref → log warning, 200 (don't retry-loop).
+4. Set `PAID`.
+5. **Re-check slot in Wix.** If free → Create Booking → `BOOKED` → WhatsApp confirmation message (class, date/time, address, "show this message at reception"). If gone → `REFUND_NEEDED` → apologetic WhatsApp message offering alternative slots (agent picks up the conversation).
+6. Always return 200 quickly; do Wix/WhatsApp work async if needed (queue or fire-and-forget with retry).
+
+## 8. Edge cases (must handle)
+
+- Duplicate webhook deliveries (both Meta and Wave) → idempotent.
+- Client sends new messages while payment pending → agent answers normally, reminds about the link.
+- Two clients racing for the last spot → whoever's webhook lands first wins; loser → REFUND_NEEDED flow.
+- Voice notes/images/stickers inbound → polite text reply asking for text (Phase 1: no transcription).
+- Unknown/garbled language → default French.
+- Wix or Wave API down → agent apologizes, offers reception handoff; never fabricates.
+- Message from a group chat or status → ignore.
+
+## 9. Security
+
+- Verify signatures on BOTH webhooks; reject unsigned/invalid.
+- Secrets only via env vars; never logged.
+- No payment card data anywhere (Wave handles all payment UI).
+- Rate-limit inbound processing per phone (e.g. 20 msgs/min) to bound API spend.
+- Prompt-injection stance: tools are the only side effects; tool inputs validated server-side (e.g. `event_id` must come from a prior availability result stored server-side, not trusted from model output alone — keep a per-conversation slot cache and validate against it).
+
+## 10. Testing & acceptance
+
+**Test setup:** Meta test number (5 verified recipients) + mocked Wave webhook endpoint (a script that POSTs signed payloads), OR real 100 XOF payments once Wave access granted.
+
+Acceptance checklist — all must pass:
+
+1. Happy path FR: greet → list classes → pick slot → pay (simulated webhook) → Wix booking exists → confirmation received on WhatsApp.
+2. Same in EN and Wolof (language mirrored).
+3. Expired link: no booking created; client can request a fresh link.
+4. Forged Wave webhook (bad signature) → rejected, no state change.
+5. Duplicate Wave webhook → exactly one Wix booking.
+6. Slot-taken race → REFUND_NEEDED recorded, client notified, no Wix booking.
+7. "I want to cancel my class" → handoff with reception number, handoff row recorded.
+8. Restart the service mid-flow → no lost state (everything in Postgres).
+9. Unit tests: both signature verifiers, state machine transitions.
+
+## 11. Non-goals (Phase 1)
+
+Orange Money; automated refunds; rescheduling/cancellation by the agent; WhatsApp templates/reminders; receptionist dashboard (a daily plain-text summary log or email is enough); voice note transcription; migrating the reception number.
+
+## 12. Deliverables
+
+- Repo with README (setup, env, deploy steps, how to run the Wave webhook simulator).
+- Deployed staging instance connected to Meta test number.
+- The acceptance checklist above, demonstrated.
+
+
+some env info: 
+
+# Revive Booking Agent — environment config (Phase 1, Meta test number)
+# KEEP THIS FILE PRIVATE. Never commit to git (add to .gitignore).
+ 
+# Meta / WhatsApp Cloud API — test number +1 (555) 025-0918
+WA_PHONE_NUMBER_ID=1179672061897945
+WA_WABA_ID=1046903218014160
+WA_ACCESS_TOKEN=            # (retiré — voir .env)
+WA_APP_SECRET=                  # Meta app dashboard → App settings → Basic → App secret
+WA_VERIFY_TOKEN=revive-verify-2026   # arbitrary; must match what you enter in Meta webhook config
+ 
+# Wix — TODO
+WIX_API_KEY=
+WIX_SITE_ID=
+ 
+# Wave — TODO (pending API access)
+WAVE_API_KEY=
+WAVE_WEBHOOK_SECRET=
+ 
+# Anthropic — TODO
+ANTHROPIC_API_KEY=
+ 
+# App
+DATABASE_URL=
+RECEPTION_PHONE=+221784644329
+PAYMENT_LINK_TTL_MINUTES=20
+BASE_URL=

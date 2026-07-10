@@ -1,0 +1,576 @@
+import { config } from "../config.js";
+
+/**
+ * Wix Bookings REST client (SPEC §4.2).
+ *
+ * NOTE: endpoint paths and response shapes below follow the current Wix REST
+ * docs (Services V2, Availability Calendar V1, Bookings V2). The spec calls
+ * for verifying them against https://dev.wix.com/docs/rest/business-solutions/bookings
+ * at build time — if a call 404s or a field comes back empty once real
+ * credentials are in place, this file is the only place to adjust.
+ */
+
+const WIX_API = "https://www.wixapis.com";
+
+// Cap every outbound Wix call: inbound messages are serialized per client, so a
+// hung connection would otherwise stall that client's whole queue.
+const HTTP_TIMEOUT_MS = 15_000;
+
+function headers(): Record<string, string> {
+  return {
+    Authorization: config.WIX_API_KEY,
+    "wix-site-id": config.WIX_SITE_ID,
+    "Content-Type": "application/json",
+  };
+}
+
+async function wixPost(path: string, body: unknown): Promise<any> {
+  const res = await fetch(`${WIX_API}${path}`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Wix ${path} failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+// ---------- services (class catalog) ----------
+
+export interface WixService {
+  id: string;
+  name: string;
+  description: string;
+  priceXof: number | null;
+  durationMinutes: number | null;
+  /** Wix booking-policy cap — a single booking above this is REJECTED by Wix. */
+  maxParticipantsPerBooking: number;
+  /** Pricing plans connected to this service in Wix (plans that can pay for it). */
+  pricingPlanIds: string[];
+}
+
+let servicesCache: { fetchedAt: number; services: WixService[] } | null = null;
+const SERVICES_TTL_MS = 10 * 60 * 1000; // cache 10 min (SPEC §6)
+
+export async function listServices(): Promise<WixService[]> {
+  if (servicesCache && Date.now() - servicesCache.fetchedAt < SERVICES_TTL_MS) {
+    return servicesCache.services;
+  }
+  const data = await wixPost("/bookings/v2/services/query", { query: {} });
+  const services: WixService[] = (data?.services ?? [])
+    .filter((s: any) => !s?.hidden)
+    .map((s: any) => {
+      const pp = s?.bookingPolicy?.participantsPolicy;
+      return {
+        id: s.id,
+        name: s.name ?? "Unnamed class",
+        description: (s.description ?? s.tagLine ?? "").slice(0, 300),
+        priceXof: extractPrice(s),
+        durationMinutes: extractDuration(s),
+        maxParticipantsPerBooking: pp?.enabled ? Number(pp.maxParticipantsPerBooking ?? 1) : 1,
+        pricingPlanIds: Array.isArray(s?.payment?.pricingPlanIds)
+          ? s.payment.pricingPlanIds.map(String)
+          : [],
+      };
+    });
+  servicesCache = { fetchedAt: Date.now(), services };
+  return services;
+}
+
+function extractPrice(service: any): number | null {
+  const value =
+    service?.payment?.fixed?.price?.value ??
+    service?.payment?.varied?.defaultPrice?.value ??
+    service?.payment?.custom?.description ??
+    null;
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+function extractDuration(service: any): number | null {
+  const d =
+    service?.schedule?.availabilityConstraints?.sessionDurations?.[0] ??
+    service?.schedule?.availabilityConstraints?.durationInMinutes ??
+    null;
+  const n = Number(d);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export async function getService(serviceId: string): Promise<WixService | null> {
+  const services = await listServices();
+  return services.find((s) => s.id === serviceId) ?? null;
+}
+
+/**
+ * Names of the classes a pricing plan can pay for, from the service catalog's
+ * plan↔service connections. Returns null when NO service in the catalog
+ * declares any connected plan — that means the data isn't available (rather
+ * than "this plan covers nothing"), so callers must fall back to the
+ * booking-time check instead of claiming zero coverage.
+ */
+export async function planCoveredClassNames(planId: string): Promise<string[] | null> {
+  const services = await listServices();
+  if (!services.some((s) => s.pricingPlanIds.length > 0)) return null;
+  return services.filter((s) => s.pricingPlanIds.includes(planId)).map((s) => s.name);
+}
+
+// ---------- availability ----------
+
+export interface WixSlot {
+  eventId: string; // sessionId of the class event
+  serviceId: string;
+  startDate: string; // ISO
+  endDate: string; // ISO
+  openSpots: number;
+  /** Full slot object exactly as returned by Wix — passed back on Create Booking. */
+  raw: unknown;
+}
+
+export async function queryAvailability(
+  serviceId: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<WixSlot[]> {
+  // No `bookable` filter: full classes must come back too, so the agent can
+  // say "that class exists but is full" instead of "there is no class".
+  const data = await wixPost("/availability-calendar/v1/availability/query", {
+    query: {
+      filter: {
+        serviceId: [serviceId],
+        startDate: dateFrom,
+        endDate: dateTo,
+      },
+    },
+  });
+  const entries: any[] = data?.availabilityEntries ?? [];
+  return entries
+    .filter((e) => e?.slot?.sessionId)
+    .map((e) => ({
+      eventId: e.slot.sessionId as string,
+      serviceId: e.slot.serviceId ?? serviceId,
+      startDate: e.slot.startDate,
+      endDate: e.slot.endDate,
+      openSpots: Number(e.openSpots ?? 0),
+      raw: e.slot,
+    }));
+}
+
+/** Fetch the current state of one specific class event (whatever its capacity). */
+export async function findSlot(
+  serviceId: string,
+  eventId: string,
+  slotStartIso: string,
+): Promise<WixSlot | null> {
+  const start = new Date(slotStartIso);
+  const from = new Date(start.getTime() - 60 * 60 * 1000).toISOString();
+  const to = new Date(start.getTime() + 60 * 60 * 1000).toISOString();
+  const slots = await queryAvailability(serviceId, from, to);
+  return slots.find((s) => s.eventId === eventId) ?? null;
+}
+
+/** Re-check that a specific class event still has enough open spots. */
+export async function isSlotStillOpen(
+  serviceId: string,
+  eventId: string,
+  slotStartIso: string,
+  minSpots = 1,
+): Promise<WixSlot | null> {
+  const match = await findSlot(serviceId, eventId, slotStartIso);
+  return match && match.openSpots >= minSpots ? match : null;
+}
+
+/**
+ * Live status of bookings in Wix (CONFIRMED / CANCELED / ...), keyed by
+ * booking id. Used to sync cancellations made in the Wix dashboard.
+ */
+export async function getBookingStatuses(bookingIds: string[]): Promise<Record<string, string>> {
+  if (bookingIds.length === 0) return {};
+  const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+    query: { filter: { id: { $in: bookingIds } } },
+  });
+  const out: Record<string, string> = {};
+  for (const eb of data?.extendedBookings ?? []) {
+    const b = eb?.booking;
+    if (b?.id) out[b.id] = b.status ?? "UNKNOWN";
+  }
+  return out;
+}
+
+// ---------- contacts ----------
+
+/**
+ * Find an existing Wix CRM contact for this phone number, so bookings attach
+ * to the client's existing account instead of creating a duplicate contact.
+ *
+ * Deliberately conservative — linking the WRONG contact is worse than
+ * creating a new one:
+ *   - exactly one contact with this phone → link it
+ *   - several → link only if exactly one also matches the first name
+ *   - none / still ambiguous → return null (Wix default behavior applies)
+ */
+export async function findContactIdByPhone(
+  phone: string,
+  firstName?: string,
+): Promise<string | null> {
+  try {
+    const e164 = phone.startsWith("+") ? phone : `+${phone}`;
+    const data = await wixPost("/contacts/v4/contacts/query", {
+      query: { filter: { "info.phones.e164Phone": { $eq: e164 } } },
+    });
+    const contacts: any[] = data?.contacts ?? [];
+    if (contacts.length === 0) return null;
+    if (contacts.length === 1) return contacts[0].id ?? null;
+
+    const norm = (s: string) =>
+      (s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+    if (firstName) {
+      const matches = contacts.filter((c) => norm(c?.info?.name?.first) === norm(firstName));
+      if (matches.length === 1) return matches[0].id ?? null;
+    }
+    return null; // ambiguous
+  } catch (err) {
+    console.error("Wix contact lookup failed (booking will create/match contact itself):", err);
+    return null;
+  }
+}
+
+// ---------- pricing plans (memberships / abonnements) ----------
+
+export interface Membership {
+  orderId: string;
+  planId: string;
+  planName: string;
+  contactId: string;
+  expiresAt: string | null;
+}
+
+/** Active pricing-plan orders for a contact (client-side filter — studio scale). */
+export async function listActiveMemberships(contactId: string): Promise<Membership[]> {
+  const res = await fetch(`${WIX_API}/pricing-plans/v2/orders?orderStatuses=ACTIVE&limit=50`, {
+    headers: headers(),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`Wix orders list failed (${res.status}): ${await res.text()}`);
+  const data: any = await res.json();
+  return (data?.orders ?? [])
+    .filter((o: any) => o?.buyer?.contactId === contactId)
+    .map((o: any) => ({
+      orderId: o.id,
+      planId: o.planId,
+      planName: o.planName ?? o.planId,
+      contactId: o.buyer.contactId,
+      expiresAt: o.endDate ?? null,
+    }));
+}
+
+// ---------- pricing plans catalog & selling ----------
+
+export interface WixPlan {
+  id: string;
+  name: string;
+  description: string;
+  priceXof: number;
+  /** "one_time" (carnet/pack à durée) ou "recurring" (mensuel reconduit). */
+  billing: "one_time" | "recurring";
+  /** Durée/période humaine, ex "1 mois", "2 semaines", ou null si illimité. */
+  periodLabel: string | null;
+}
+
+let plansCache: { fetchedAt: number; plans: WixPlan[] } | null = null;
+
+function periodLabel(duration: any): string | null {
+  if (!duration?.count || !duration?.unit) return null;
+  const units: Record<string, [string, string]> = {
+    DAY: ["jour", "jours"],
+    WEEK: ["semaine", "semaines"],
+    MONTH: ["mois", "mois"],
+    YEAR: ["an", "ans"],
+  };
+  const u = units[duration.unit];
+  if (!u) return null;
+  return `${duration.count} ${duration.count > 1 ? u[1] : u[0]}`;
+}
+
+/**
+ * Sellable plans: visible, not archived, with a real price. Zero-priced promo
+ * plans (Invitation, Collab...) are internal — never sold by Awa.
+ */
+export async function listPlans(): Promise<WixPlan[]> {
+  if (plansCache && Date.now() - plansCache.fetchedAt < SERVICES_TTL_MS) {
+    return plansCache.plans;
+  }
+  const res = await fetch(`${WIX_API}/pricing-plans/v2/plans?limit=100`, {
+    headers: headers(),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`Wix plans list failed (${res.status}): ${await res.text()}`);
+  const data: any = await res.json();
+  const plans: WixPlan[] = (data?.plans ?? [])
+    .filter((p: any) => !p.archived && !p.hidden)
+    .map((p: any) => {
+      const price = Number(p?.pricing?.price?.value ?? 0);
+      const recurring = !!p?.pricing?.subscription;
+      const duration = recurring
+        ? p.pricing.subscription.cycleDuration
+        : p?.pricing?.singlePaymentForDuration;
+      return {
+        id: p.id,
+        name: p.name ?? "Abonnement",
+        description: (p.description ?? "").slice(0, 300),
+        priceXof: price,
+        billing: recurring ? "recurring" : "one_time",
+        periodLabel: periodLabel(duration),
+      } as WixPlan;
+    })
+    .filter((p: WixPlan) => p.priceXof > 0);
+  plansCache = { fetchedAt: Date.now(), plans };
+  return plans;
+}
+
+export async function getPlan(planId: string): Promise<WixPlan | null> {
+  const plans = await listPlans();
+  return plans.find((p) => p.id === planId) ?? null;
+}
+
+/**
+ * Activate a plan for a member after an offline (Wave) payment. Pricing-plan
+ * purchases are member-only in Wix — the caller must resolve memberId first
+ * and fall back to manual reception activation when the client has no member
+ * account.
+ */
+export async function createOfflinePlanOrder(planId: string, memberId: string): Promise<string> {
+  const data = await wixPost("/pricing-plans/v2/checkout/orders/offline", {
+    planId,
+    memberId,
+    paid: true,
+  });
+  const orderId = data?.order?.id;
+  if (!orderId) throw new Error(`Offline plan order returned no id: ${JSON.stringify(data)}`);
+  return orderId;
+}
+
+/** Contact → member GUID (plan purchases are member-only). Null if no member. */
+export async function resolveMemberIdForPlan(
+  phone: string,
+  firstName?: string,
+): Promise<string | null> {
+  const contactId = await findContactIdByPhone(phone, firstName);
+  if (!contactId) return null;
+  return findMemberIdByContactId(contactId);
+}
+
+// ---------- benefit programs (membership redemption) ----------
+
+/** Well-known Wix Bookings app id — provider of plan-covered class sessions. */
+const WIX_BOOKINGS_APP_ID = "13d21c63-b5ec-5912-8397-c3a5ddb27a97";
+/** Namespace under which the Pricing Plans app registers its benefit pools. */
+const PRICING_PLANS_NAMESPACE = "@wix/pricing-plans";
+
+/**
+ * Membership redemption uses the Benefit Programs API — the same ledger the
+ * Pricing Plans app maintains for session credits. The eCommerce-checkout
+ * route does NOT work server-side: an API-key checkout is anonymous
+ * (buyerInfo.openAccess), so Wix never lists the client's memberships as
+ * eligible. Benefit Programs accepts an explicit beneficiary instead.
+ */
+
+export interface EligibleBenefit {
+  poolId: string;
+  benefitKey: string;
+  memberId: string;
+  planName: string;
+  available: number;
+}
+
+/** Members and contacts are distinct entities; resolve via the Members API. */
+async function findMemberIdByContactId(contactId: string): Promise<string | null> {
+  try {
+    const data = await wixPost("/members/v1/members/query", {
+      query: { filter: { contactId } },
+    });
+    return data?.members?.[0]?.id ?? null;
+  } catch (err) {
+    console.error("Wix member lookup by contactId failed:", err);
+    return null;
+  }
+}
+
+/**
+ * Does one of this contact's active plans cover this service right now
+ * (with balance left)? Returns the redeemable benefit, or null.
+ */
+export async function findEligibleBenefit(
+  serviceId: string,
+  contactId: string,
+): Promise<EligibleBenefit | null> {
+  const memberId = (await findMemberIdByContactId(contactId)) ?? contactId;
+  const data = await wixPost("/benefit-programs/v1/pools/eligible-pools", {
+    itemReference: { externalId: serviceId, providerAppId: WIX_BOOKINGS_APP_ID },
+    count: 1,
+    beneficiary: { identityType: "MEMBER", memberId },
+    namespace: PRICING_PLANS_NAMESPACE,
+  });
+  const benefit = (data?.eligibleBenefits ?? [])[0];
+  if (!benefit?.poolId || !benefit?.benefitKey) return null;
+  return {
+    poolId: benefit.poolId,
+    benefitKey: benefit.benefitKey,
+    memberId,
+    planName:
+      benefit.poolInfo?.displayName ?? benefit.benefitInfo?.displayName ?? "abonnement",
+    available: Number(benefit.poolInfo?.balance?.available ?? 0),
+  };
+}
+
+/**
+ * Deduct one session credit from the plan for this booking. Idempotent per
+ * booking (idempotencyKey = booking id — Wix rejects duplicates with 409).
+ * Throws "not_eligible" when the balance ran out or the plan's policy says no.
+ */
+export async function redeemMembershipForBooking(args: {
+  wixBookingId: string;
+  serviceId: string;
+  benefit: EligibleBenefit;
+}): Promise<{ transactionId: string; membershipName: string }> {
+  try {
+    const data = await wixPost("/benefit-programs/v1/benefits/redeem", {
+      poolId: args.benefit.poolId,
+      benefitKey: args.benefit.benefitKey,
+      itemReference: { externalId: args.serviceId, providerAppId: WIX_BOOKINGS_APP_ID },
+      count: 1,
+      beneficiary: { identityType: "MEMBER", memberId: args.benefit.memberId },
+      namespace: PRICING_PLANS_NAMESPACE,
+      idempotencyKey: `awa-booking-${args.wixBookingId}`,
+    });
+    return { transactionId: data?.transactionId ?? "", membershipName: args.benefit.planName };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // 428 = NOT_ENOUGH_BALANCE / POLICY_EXPRESSION_EVALUATED_TO_FALSE / POOL_NOT_ACTIVE
+    if (msg.includes("(428)") || msg.includes("(404)")) throw new Error("not_eligible");
+    throw err;
+  }
+}
+
+/**
+ * Confirm a booking in the calendar (custom-payment flow). Exported for the
+ * membership path, which confirms only after the credit deduction succeeded.
+ */
+export async function confirmBookingPaid(bookingId: string): Promise<void> {
+  const conf = await wixPost(`/bookings/v2/confirmation/${bookingId}:confirmOrDecline`, {
+    paymentStatus: "PAID",
+  });
+  const status = conf?.booking?.status;
+  if (status !== "CONFIRMED" && status !== "PENDING") {
+    throw new Error(`confirmOrDecline returned unexpected status: ${status}`);
+  }
+}
+
+/** Decline a CREATED booking (cleanup when redemption fails after creation). */
+export async function declineBooking(bookingId: string, revision = "1"): Promise<void> {
+  await wixPost(`/_api/bookings-service/v2/bookings/${bookingId}/decline`, { revision });
+}
+
+/** Current revision of a booking — required by cancel/decline mutations. */
+async function getBookingRevision(bookingId: string): Promise<string> {
+  const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+    query: { filter: { id: { $in: [bookingId] } } },
+  });
+  return data?.extendedBookings?.[0]?.booking?.revision ?? "1";
+}
+
+/**
+ * Cancel a booking (client removed from the class session). Our own 16h rule
+ * is enforced by the caller; ignoreCancellationPolicy bypasses any stricter
+ * Wix-side policy. No Wix notification — Awa is already talking to the client.
+ */
+export async function cancelBooking(bookingId: string): Promise<void> {
+  const revision = await getBookingRevision(bookingId);
+  await wixPost(`/_api/bookings-service/v2/bookings/${bookingId}/cancel`, {
+    revision,
+    participantNotification: { notifyParticipants: false },
+    flowControlSettings: { ignoreCancellationPolicy: true },
+  });
+}
+
+/** Re-credit a plan session by reverting its redemption transaction. */
+export async function revertBenefitTransaction(transactionId: string): Promise<void> {
+  await wixPost(`/benefit-programs/v1/balances/changes/${transactionId}/revert`, {
+    idempotencyKey: `awa-revert-${transactionId}`,
+  });
+}
+
+/** Look up one booking's current status (used to verify membership confirmation). */
+export async function getBookingStatus(bookingId: string): Promise<string | null> {
+  const statuses = await getBookingStatuses([bookingId]);
+  return statuses[bookingId] ?? null;
+}
+
+// ---------- create booking ----------
+
+/**
+ * Create a class booking (Bookings V2) and confirm it as PAID.
+ *
+ * Two steps, per Wix's "custom checkout" flow (payment happens in Wave, not
+ * Wix eCommerce):
+ *   1. Create Booking → booking exists with status CREATED (NOT visible in
+ *      the business calendar yet).
+ *   2. Confirm Or Decline with paymentStatus PAID → status CONFIRMED, booking
+ *      appears in the calendar with payment marked as received.
+ */
+/** Create the booking only (status CREATED — not yet in the calendar). */
+export async function createBookingRaw(args: {
+  slot: unknown;
+  name: string;
+  phone: string;
+  participants?: number;
+  paymentOption?: "OFFLINE" | "MEMBERSHIP";
+}): Promise<string> {
+  // Attach to an existing CRM contact when we can identify one unambiguously.
+  const contactId = await findContactIdByPhone(args.phone, args.name);
+
+  const data = await wixPost("/bookings/v2/bookings", {
+    booking: {
+      bookedEntity: { slot: args.slot },
+      contactDetails: {
+        ...(contactId ? { contactId } : {}),
+        firstName: args.name,
+        phone: args.phone,
+      },
+      selectedPaymentOption: args.paymentOption ?? "OFFLINE",
+      numberOfParticipants: Math.max(1, args.participants ?? 1),
+    },
+  });
+  const id = data?.booking?.id;
+  if (!id) throw new Error(`Wix create booking returned no id: ${JSON.stringify(data)}`);
+  return id;
+}
+
+export async function createBooking(args: {
+  slot: unknown;
+  name: string;
+  phone: string;
+  participants?: number;
+}): Promise<string> {
+  const id = await createBookingRaw(args);
+
+  // Confirm as paid so the booking shows up in the business calendar (custom
+  // checkout flow — payment already verified in Wave). If this call fails we
+  // still return the id — the booking exists and the caller has already taken
+  // payment; reception can confirm manually.
+  try {
+    const conf = await wixPost(`/bookings/v2/confirmation/${id}:confirmOrDecline`, {
+      paymentStatus: "PAID",
+    });
+    const status = conf?.booking?.status;
+    if (status !== "CONFIRMED" && status !== "PENDING") {
+      console.error(`Wix confirmOrDecline returned unexpected status for ${id}: ${status}`);
+    }
+  } catch (err) {
+    console.error(`Wix confirmOrDecline failed for booking ${id} (booking still exists):`, err);
+  }
+  return id;
+}

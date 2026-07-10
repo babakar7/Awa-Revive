@@ -1,0 +1,144 @@
+/**
+ * Idempotent schema — safe to run on every boot.
+ * Matches SPEC §5 (data model), plus:
+ *   - pending_bookings.slot_json: the full slot object returned by Wix
+ *     availability, passed back verbatim on Create Booking.
+ *   - slot_cache: server-side record of slots shown to each client, so
+ *     event_ids coming from the model are validated against what we actually
+ *     served (SPEC §9 prompt-injection stance).
+ */
+export const SCHEMA_SQL = `
+create table if not exists clients (
+  id uuid primary key default gen_random_uuid(),
+  wa_phone text unique not null,
+  name text,
+  language text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists pending_bookings (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  service_id text not null,
+  service_name text not null,
+  event_id text not null,
+  slot_json jsonb,
+  slot_start timestamptz not null,
+  slot_end timestamptz,
+  amount_xof integer not null,
+  status text not null default 'DRAFT',
+  wave_session_id text,
+  payment_link text,
+  link_expires_at timestamptz,
+  wix_booking_id text,
+  payer_phone text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table pending_bookings
+  add column if not exists participants integer not null default 1;
+
+alter table pending_bookings
+  add column if not exists payment_method text not null default 'wave';
+
+-- Benefit Programs transaction of a membership redemption — needed to
+-- re-credit the plan session if the booking is later cancelled.
+alter table pending_bookings
+  add column if not exists benefit_transaction_id text;
+
+-- Café order bundled into the booking payment. extras_json is the
+-- server-resolved snapshot (names + unit prices frozen at order time);
+-- amount_xof stays the GRAND total (class + extras).
+alter table pending_bookings
+  add column if not exists extras_json jsonb;
+alter table pending_bookings
+  add column if not exists extras_amount_xof integer not null default 0;
+alter table pending_bookings
+  add column if not exists order_note text;
+
+-- Fulfillment lease: set when a worker starts turning a PAID booking into a
+-- Wix booking, so a webhook retry and the reconciliation sweep can't both
+-- fulfill the same booking (double-booking). A stale lease (>2 min) is
+-- reclaimable — it means the previous attempt crashed mid-flight.
+alter table pending_bookings
+  add column if not exists fulfilling_at timestamptz;
+
+alter table clients
+  add column if not exists email_prompted_at timestamptz;
+
+alter table clients
+  add column if not exists claimed_email text;
+
+create index if not exists idx_pending_bookings_client_status
+  on pending_bookings (client_id, status);
+create index if not exists idx_pending_bookings_status_expiry
+  on pending_bookings (status, link_expires_at);
+
+create table if not exists processed_webhooks (
+  id text primary key,
+  source text not null,
+  received_at timestamptz not null default now()
+);
+
+create table if not exists conversations (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  role text not null,
+  content text not null,
+  wa_message_id text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_conversations_client_created
+  on conversations (client_id, created_at);
+
+create table if not exists handoffs (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  reason text,
+  transcript_excerpt text,
+  created_at timestamptz not null default now()
+);
+
+-- Abonnements vendus par Awa. Même invariant que les cours : l'ordre Wix
+-- n'est créé qu'après le webhook Wave vérifié.
+-- Statuts : DRAFT → AWAITING_PAYMENT → PAID → ACTIVATED
+--           AWAITING_PAYMENT → EXPIRED → PAID (paiement tardif honoré)
+--           PAID sans ACTIVATED = activation manuelle réception (pas de membre Wix)
+create table if not exists pending_plan_orders (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  plan_id text not null,
+  plan_name text not null,
+  amount_xof integer not null,
+  status text not null default 'DRAFT',
+  wave_session_id text,
+  payment_link text,
+  link_expires_at timestamptz,
+  wix_order_id text,
+  member_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_plan_orders_client_status
+  on pending_plan_orders (client_id, status);
+
+create table if not exists slot_cache (
+  client_id uuid not null references clients(id),
+  event_id text not null,
+  service_id text not null,
+  slot_json jsonb not null,
+  choice_key text,
+  cached_at timestamptz not null default now(),
+  primary key (client_id, event_id)
+);
+
+-- Clé courte et déterministe d'un event_id (sha256 tronqué) : les ids de
+-- lignes WhatsApp interactives sont limités à 200 caractères alors que les
+-- event_ids Wix peuvent dépasser 300 — la clé courte sert d'alias cliquable.
+alter table slot_cache
+  add column if not exists choice_key text;
+`;
