@@ -379,6 +379,18 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       dynamique (comme avant pour l'abonnement) — si le client demande « c'est
       toujours valable ? » pour un lien café, Awa n'a pas l'info live. À ajouter
       si le café devient très fréquent.
+    - **Addendum (10/07 soir)** : test réel → dans le flux abonnement, le modèle
+      posait ENCORE une question texte (« tu veux quelque chose du menu ? ») au
+      lieu de montrer la liste, malgré le prompt (il imite ses vieilles tournures
+      de l'historique). Leçon : une présentation obligatoire ne se confie pas au
+      prompt. Désormais **le SERVEUR envoie la liste des incontournables dans les
+      DEUX flux** : webhook Wave après la confirmation de paiement, et agent loop
+      après un book_with_membership réussi ([index.ts](src/agent/index.ts) —
+      flags `membershipBooked`/`cafeMenuShown`, envoi post-réponse, anti-doublon
+      si le modèle a déjà montré des items café). Copy partagée dans
+      [cafeOffer.ts](src/lib/cafeOffer.ts) (`sendCafeMenuOffer`, fr/en/wo). Le
+      prompt et la note de book_with_membership disent maintenant au modèle de NE
+      PAS proposer le menu lui-même.
 
 ## 5. Chronologie condensée
 

@@ -2,18 +2,14 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { pool } from "../db/index.js";
 import { verifyWaveSignature } from "../lib/wave.js";
-import { sendText, sendInteractive } from "../lib/whatsapp.js";
+import { sendText } from "../lib/whatsapp.js";
 import * as wix from "../lib/wix.js";
 import * as repo from "../domain/repo.js";
 import { transition } from "../domain/stateMachine.js";
 import { notifyReception } from "../lib/notify.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
-import {
-  cafeFavouriteOptions,
-  extrasFromJson,
-  formatExtrasMultiline,
-  type ExtraLine,
-} from "../lib/cafeMenu.js";
+import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/cafeMenu.js";
+import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 
 /**
  * Wave webhook handler — the critical path (SPEC §7).
@@ -181,7 +177,7 @@ async function fulfillPaidBooking(bookingId: string, log: any): Promise<void> {
     // attached to this booking. Non-blocking — a proposal hiccup must never
     // break the confirmed booking.
     if (extras.length === 0) {
-      await proposeCafeMenuAfterBooking(client, booking, lang, log);
+      await sendCafeMenuOffer({ waPhone: client.wa_phone, clientId: booking.client_id, lang, log });
     }
 
     // Café order → tell the team to prepare it (email + WhatsApp reception).
@@ -362,63 +358,6 @@ export function cafeConfirmationMessage(
         `☕ Ta commande :\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? `prête après ton cours${forClass}`}\n\n` +
         `À très vite ! 💪🏾`
       );
-  }
-}
-
-/**
- * Book-first / menu-after: right after a class booking is confirmed, show the
- * café menu as a SEPARATE order (never bundled into the class payment). Shows
- * the studio "incontournables" DIRECTLY (one present_options list) rather than a
- * vague yes/no — a tapped item comes back into the agent, which builds the order
- * and creates a café-only link (create_cafe_payment_link). A decline (free text)
- * is handled by the agent too. Non-blocking and best-effort by design.
- */
-async function proposeCafeMenuAfterBooking(
-  client: any,
-  booking: any,
-  lang: string,
-  log: any,
-): Promise<void> {
-  try {
-    const options = cafeFavouriteOptions();
-    if (options.length === 0) return; // menu unavailable — show nothing
-    const { body, button } = cafeMenuOfferCopy(lang);
-    const kind = await sendInteractive(client.wa_phone, body, button, options);
-    // Log what the client saw so the rebuilt history stays coherent (same
-    // format the present_options tool uses).
-    await repo.addTurn(
-      booking.client_id,
-      "assistant",
-      `${body}\n[message interactif ${kind} — options : ${options.map((o) => o.title).join(" · ")}]`,
-    );
-  } catch (err) {
-    log.error({ err, bookingId: booking.id }, "Café menu offer after booking failed (non-blocking)");
-  }
-}
-
-function cafeMenuOfferCopy(lang: string): { body: string; button: string } {
-  switch (lang) {
-    case "en":
-      return {
-        body:
-          "Fancy something with your session? 🥤 Here are our studio favourites 👇 — tap one to add it, " +
-          "tell me if you'd like something else, or just say no thanks.",
-        button: "See the menu",
-      };
-    case "wo":
-      return {
-        body:
-          "Ndax dangaa bëgg lu mu ànd sa séance? 🥤 Ñii ñooy sunu incontournables 👇 — tann benn, " +
-          "walla waxal ma lu la neex, walla neel déedéet.",
-        button: "Xool menu bi",
-      };
-    default:
-      return {
-        body:
-          "Envie d'accompagner ta séance ? 🥤 Voici nos incontournables 👇 — tape sur un article pour " +
-          "l'ajouter, dis-moi si tu cherches autre chose, ou réponds simplement non merci.",
-        button: "Voir le menu",
-      };
   }
 }
 

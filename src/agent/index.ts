@@ -3,6 +3,8 @@ import { config } from "../config.js";
 import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
+import { CAFE_MENU } from "../lib/cafeMenu.js";
+import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { SYSTEM_PROMPT, dynamicContext } from "./systemPrompt.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
 
@@ -127,6 +129,12 @@ export async function handleInboundText(args: {
 
   let replyText: string | null = null;
   let interactiveSent = false;
+  // Book-first, menu-after (abonnement flow): a successful book_with_membership
+  // this turn means the SERVER sends the incontournables list right after the
+  // model's confirmation — deterministic, never left to the model's judgment
+  // (the Wave flow gets the same list from the webhook).
+  let membershipBooked = false;
+  let cafeMenuShown = false;
 
   try {
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
@@ -162,6 +170,15 @@ export async function handleInboundText(args: {
           result = await executeTool(client, block.name, block.input as Record<string, unknown>);
           if (block.name === "present_options" && result.includes('"sent":true')) {
             interactiveSent = true;
+            // If the model itself already showed café items, don't double-send
+            // the menu offer below.
+            const opts = (block.input as any)?.options;
+            if (Array.isArray(opts) && opts.some((o: any) => CAFE_MENU.items.has(String(o?.id)))) {
+              cafeMenuShown = true;
+            }
+          }
+          if (block.name === "book_with_membership" && result.includes('"booked":true')) {
+            membershipBooked = true;
           }
         } catch (err) {
           isError = true;
@@ -188,16 +205,24 @@ export async function handleInboundText(args: {
   // present_options already delivered (and logged) the reply — send nothing
   // more. Only honored when an interactive message actually went out, so a
   // spurious sentinel can never leave the client without an answer.
-  if (replyText?.trim() === NO_REPLY_SENTINEL) {
-    if (interactiveSent) return;
-    replyText = null;
+  if (replyText?.trim() === NO_REPLY_SENTINEL) replyText = null;
+  if (!replyText && !interactiveSent) replyText = FALLBACK_REPLY;
+
+  if (replyText) {
+    await sendText(args.waPhone, replyText);
+    await repo.addTurn(client.id, "assistant", replyText);
   }
 
-  if (!replyText) replyText = interactiveSent ? null : FALLBACK_REPLY;
-  if (!replyText) return;
-
-  await sendText(args.waPhone, replyText);
-  await repo.addTurn(client.id, "assistant", replyText);
+  // Book-first, menu-after: the class was just booked on the client's plan —
+  // show the incontournables NOW, right after the confirmation, server-side
+  // (skipped if the model already showed café items itself this turn).
+  if (membershipBooked && !cafeMenuShown) {
+    await sendCafeMenuOffer({
+      waPhone: args.waPhone,
+      clientId: client.id,
+      lang: client.language ?? lang ?? "fr",
+    });
+  }
 }
 
 /** Polite reply for voice notes / images / stickers (SPEC §8 — no transcription in Phase 1). */

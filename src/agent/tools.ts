@@ -831,7 +831,9 @@ export async function executeTool(
             "Booked and confirmed using the client's abonnement (one session deducted). " +
             "Confirm to the client with class, date/time, that it used their plan (mention remaining_sessions), " +
             "and remind them cancellation is free up to 16h before the class (after that the session is due) — no payment needed. " +
-            "If they then want something from the menu, use create_cafe_payment_link with this booking_id.",
+            "Do NOT mention or propose the café menu in your confirmation: the system automatically shows the " +
+            "menu list right after your message. When the client then picks an item, use create_cafe_payment_link " +
+            "with this booking_id.",
         });
       } catch (err) {
         const notEligible = err instanceof Error && err.message === "not_eligible";
