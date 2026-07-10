@@ -83,6 +83,11 @@ async function processPayment(clientReference: string, event: any, log: any): Pr
       await processPlanPayment(planOrder, log);
       return;
     }
+    const cafeOrder = await repo.findCafeOrderById(clientReference).catch(() => null);
+    if (cafeOrder) {
+      await processCafePayment(cafeOrder, log);
+      return;
+    }
     log.warn({ clientReference }, "Wave webhook: unknown client_reference — ignoring");
     return;
   }
@@ -270,6 +275,80 @@ async function processPlanPayment(order: any, log: any): Promise<void> {
     await repo.addTurn(order.client_id, "assistant", msg);
   } catch (err) {
     log.error({ err, planOrderId: order.id }, "Failed to send plan confirmation");
+  }
+}
+
+/**
+ * Café-only order paid via Wave (menu order alongside a membership booking —
+ * that flow has no payment link, so the café got its own). No Wix booking to
+ * create: we only mark it paid, tell reception to prepare it, and confirm to
+ * the client. Same payment-first stance — reception acts only after the
+ * verified webhook.
+ */
+async function processCafePayment(order: any, log: any): Promise<void> {
+  const paid = await repo.markCafeOrderPaid(order.id);
+  if (!paid) {
+    log.info({ cafeOrderId: order.id, status: order.status }, "Café order not payable — skipping");
+    return;
+  }
+
+  const clientRes = await pool.query(`select * from clients where id = $1`, [order.client_id]);
+  const client = clientRes.rows[0];
+  const lang: string = client?.language ?? "fr";
+  const extras = extrasFromJson(order.extras_json);
+  const slotLabel = order.slot_start
+    ? new Date(order.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })
+    : "?";
+
+  try {
+    notifyReception(
+      `☕ Commande café payée (résa abonnement) — ${order.amount_xof} FCFA`,
+      `Un client a payé une commande café qui accompagne une réservation par abonnement :\n` +
+        `  Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
+        extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
+        `\n  À servir : ${order.order_note ?? "prête après le cours"}\n` +
+        `  Cours associé : ${order.service_name ?? "?"} — ${slotLabel}\n` +
+        `  Total café : ${order.amount_xof} FCFA (payé via Wave)`,
+    );
+  } catch (err) {
+    log.error({ err, cafeOrderId: order.id }, "Café order (membership) notification failed");
+  }
+
+  const msg = cafeConfirmationMessage(lang, extras, order.order_note, order.service_name);
+  try {
+    await sendText(client.wa_phone, msg);
+    await repo.addTurn(order.client_id, "assistant", msg);
+  } catch (err) {
+    log.error({ err, cafeOrderId: order.id }, "Failed to send café confirmation");
+  }
+}
+
+export function cafeConfirmationMessage(
+  lang: string,
+  extras: ExtraLine[],
+  orderNote?: string | null,
+  serviceName?: string | null,
+): string {
+  const forClass = serviceName ? ` (${serviceName})` : "";
+  switch (lang) {
+    case "en":
+      return (
+        `✅ Payment received — your café order is confirmed!\n\n` +
+        `☕ Your order:\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? `ready after your class${forClass}`}\n\n` +
+        `See you soon! 💪🏾`
+      );
+    case "wo":
+      return (
+        `✅ Fey bi jot na — sa commande café dëgg na!\n\n` +
+        `☕ Sa commande:\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? `dina pare ginnaaw sa cours${forClass}`}\n\n` +
+        `Ba beneen yoon! 💪🏾`
+      );
+    default:
+      return (
+        `✅ Paiement reçu — ta commande café est confirmée !\n\n` +
+        `☕ Ta commande :\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? `prête après ton cours${forClass}`}\n\n` +
+        `À très vite ! 💪🏾`
+      );
   }
 }
 

@@ -155,9 +155,55 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "create_cafe_payment_link",
+    description:
+      "Create a Wave payment link for a MENU order attached to a booking the client just made with their " +
+      "abonnement (the membership flow has no payment link, so the café gets its own small one). Use ONLY " +
+      "after book_with_membership succeeded and the client chose menu items: pass linked_booking_id = the " +
+      "booking_id that book_with_membership returned, plus the extras. The server prices everything from the " +
+      "menu file and returns the link + breakdown. Never use this for a class (that's create_payment_link) " +
+      "or for a café order with no class booking.",
+    input_schema: {
+      type: "object",
+      properties: {
+        linked_booking_id: {
+          type: "string",
+          description: "booking_id of the membership booking this café order accompanies (from book_with_membership)",
+        },
+        extras: {
+          type: "array",
+          minItems: 1,
+          maxItems: 15,
+          description:
+            "The menu order. item_id values come ONLY from the ids in <cafe_menu>; the server computes all prices.",
+          items: {
+            type: "object",
+            properties: {
+              item_id: { type: "string", description: "Menu item id exactly as listed in <cafe_menu>" },
+              qty: { type: "integer", minimum: 1, maximum: 10 },
+            },
+            required: ["item_id", "qty"],
+            additionalProperties: false,
+          },
+        },
+        order_note: {
+          type: "string",
+          description:
+            "Free-text note (timing, oat vs cow milk, allergies). Default when absent: ready after the class.",
+        },
+      },
+      required: ["linked_booking_id", "extras"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_my_bookings",
     description:
-      "List this client's upcoming confirmed (paid) bookings, with the booking_id needed for cancel_booking.",
+      "List this client's upcoming confirmed bookings. Returns { bookings: [...] }: each has booked_via " +
+      "'awa' (taken through this chat — carries a booking_id usable with cancel_booking) or 'studio' " +
+      "(booked at the counter or on the website, matched by the client's WhatsApp number — NO booking_id, " +
+      "cannot be cancelled here: any change goes through reception). Use it before answering about existing " +
+      "bookings and before any cancel/reschedule.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -219,8 +265,10 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     description:
       "Send the client a native WhatsApp clickable-choice message and deliver it IMMEDIATELY (this tool sends " +
       "it, you don't). Up to 3 short options without descriptions render as tap buttons; otherwise a list " +
-      "(max 10 rows) opens behind a button. Use it whenever the client must pick among known options: café " +
-      "menu categories, items of ONE menu category (title = item name, description = price + short pitch), " +
+      "(max 10 rows TOTAL) opens behind a button. Rows can carry a `section` header so several menu " +
+      "categories show grouped in ONE list, visible by scrolling, with no need to re-open a sub-menu. " +
+      "Use it whenever the client must pick among known options: menu items grouped by section " +
+      "(title = item name, description = price + short pitch, section = e.g. '🍵 Iced Matcha'), " +
       "class slots from check_availability (option id = the slot's choice_id, NEVER the long event_id), or " +
       "quick yes/no confirmations. The client's " +
       "tap comes back as a normal message '[choix cliqué] <title> (id: <id>)'. Free text always stays possible " +
@@ -247,6 +295,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
               id: { type: "string", description: "Stable id returned when clicked (menu item id, event_id, or a short slug you choose)" },
               title: { type: "string", description: "Visible label (24 chars max on lists, 20 on buttons)" },
               description: { type: "string", description: "Optional second line (72 chars max), e.g. price" },
+              section: { type: "string", description: "Optional group header (24 chars max) — rows sharing it appear under it in one list, e.g. '🍵 Iced Matcha'" },
             },
             required: ["id", "title"],
             additionalProperties: false,
@@ -512,6 +561,84 @@ export async function executeTool(
       });
     }
 
+    case "create_cafe_payment_link": {
+      const linkedBookingId = String(input.linked_booking_id ?? "");
+      if (!linkedBookingId) return JSON.stringify({ error: "invalid_arguments" });
+
+      // The café must ride on one of THIS client's own membership bookings that
+      // is still upcoming — same ownership check as cancel_booking, so the
+      // model can't attach an order to someone else's or a stale booking.
+      const booking = await repo.findClientBooking(client.id, linkedBookingId);
+      if (
+        !booking ||
+        booking.status !== "BOOKED" ||
+        booking.payment_method !== "membership" ||
+        new Date(booking.slot_start).getTime() <= Date.now()
+      ) {
+        return JSON.stringify({
+          error: "unknown_booking",
+          message:
+            "No matching upcoming membership booking for this client. A café-only link only attaches to a " +
+            "class the client just booked with their abonnement — re-run get_my_bookings.",
+        });
+      }
+
+      // Prices come from cafe-menu.md, never from the model.
+      const resolved = computeExtras(CAFE_MENU.items, input.extras);
+      if (!resolved.ok) {
+        return JSON.stringify({
+          error: resolved.error,
+          message: resolved.message,
+          unknown_item_ids: resolved.unknownIds,
+          valid_item_ids: resolved.validIds,
+        });
+      }
+      if (resolved.totalXof <= 0) {
+        return JSON.stringify({ error: "empty_order", message: "The café order is empty." });
+      }
+      const orderNote = String(input.order_note ?? "").slice(0, 200).trim() || null;
+
+      // One active café link per client at a time.
+      await repo.expireActiveCafeOrders(client.id);
+      const draft = await repo.createDraftCafeOrder({
+        clientId: client.id,
+        linkedBookingId: booking.id,
+        serviceName: booking.service_name,
+        slotStart: booking.slot_start,
+        extrasJson: resolved.lines,
+        amountXof: resolved.totalXof,
+        orderNote,
+      });
+
+      let session;
+      try {
+        session = await wave.createCheckoutSession({
+          amountXof: resolved.totalXof,
+          clientReference: draft.id,
+        });
+      } catch (err) {
+        await repo.expireActiveCafeOrders(client.id); // clean up the DRAFT
+        throw err;
+      }
+
+      const expiresAt = new Date(Date.now() + config.PAYMENT_LINK_TTL_MINUTES * 60 * 1000);
+      await repo.setCafeOrderAwaitingPayment(draft.id, session.id, session.wave_launch_url, expiresAt);
+
+      return JSON.stringify({
+        payment_link: session.wave_launch_url,
+        amount_fcfa: resolved.totalXof,
+        extras: resolved.lines.map((l) => ({ item: l.name, qty: l.qty, line_total_fcfa: l.lineTotalXof })),
+        order_note: orderNote ?? undefined,
+        expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
+        for_class: booking.service_name,
+        slot_start_dakar: fmtDakar(String(booking.slot_start)),
+        note:
+          "Relay the link — this covers ONLY the café order (the class itself is already booked on the " +
+          "abonnement, nothing more to pay for it). State the items and total. Ready after the class unless " +
+          "the note says otherwise. Confirmation arrives automatically on WhatsApp once paid.",
+      });
+    }
+
     case "list_plans": {
       const plans = await wix.listPlans();
       return JSON.stringify(
@@ -723,7 +850,7 @@ export async function executeTool(
               `À faire : confirmer la réservation dans le dashboard Wix.`,
           );
         }
-        await repo.createMembershipBooking({
+        const membershipBooking = await repo.createMembershipBooking({
           clientId: client.id,
           serviceId,
           serviceName: service.name,
@@ -738,6 +865,7 @@ export async function executeTool(
         invalidateMembershipCache(client.id);
         return JSON.stringify({
           booked: true,
+          booking_id: membershipBooking.id,
           paid_with: redemption.membershipName,
           remaining_sessions: Math.max(0, benefit.available - 1),
           class: service.name,
@@ -745,7 +873,9 @@ export async function executeTool(
           slot_start_dakar: fmtDakar(fresh.startDate),
           note:
             "Booked and confirmed using the client's abonnement (one session deducted). " +
-            "Confirm to the client with class, date/time, that it used their plan (mention remaining_sessions) — no payment needed.",
+            "Confirm to the client with class, date/time, that it used their plan (mention remaining_sessions), " +
+            "and remind them cancellation is free up to 16h before the class (after that the session is due) — no payment needed. " +
+            "If they then want something from the menu, use create_cafe_payment_link with this booking_id.",
         });
       } catch (err) {
         const notEligible = err instanceof Error && err.message === "not_eligible";
@@ -793,26 +923,66 @@ export async function executeTool(
         }
       }
 
-      return JSON.stringify(
-        bookings.map((b) => ({
-          booking_id: b.id,
-          class: b.service_name,
-          start: b.slot_start,
-          start_dakar: fmtDakar(String(b.slot_start)),
-          participants: b.participants,
-          paid_with: b.payment_method === "membership" ? "abonnement" : "wave",
-          status: "confirmed",
-          cancellable_free_of_charge: hoursUntil(b.slot_start) >= 16 || undefined,
-          cafe_order:
-            b.extras_amount_xof > 0
-              ? {
-                  items: formatExtrasOneLine(extrasFromJson(b.extras_json)),
-                  total_fcfa: b.extras_amount_xof,
-                  note: b.order_note ?? "prête après le cours",
-                }
-              : undefined,
-        })),
-      );
+      const own = bookings.map((b) => ({
+        booking_id: b.id,
+        class: b.service_name,
+        start: b.slot_start,
+        start_dakar: fmtDakar(String(b.slot_start)),
+        participants: b.participants,
+        paid_with: b.payment_method === "membership" ? "abonnement" : "wave",
+        booked_via: "awa",
+        status: "confirmed",
+        cancellable_free_of_charge: hoursUntil(b.slot_start) >= 16 || undefined,
+        cafe_order:
+          b.extras_amount_xof > 0
+            ? {
+                items: formatExtrasOneLine(extrasFromJson(b.extras_json)),
+                total_fcfa: b.extras_amount_xof,
+                note: b.order_note ?? "prête après le cours",
+              }
+            : undefined,
+      }));
+
+      // Also surface bookings the client made at the counter or on the Wix
+      // website (identified by their WhatsApp number → CRM contact). These have
+      // no local payment/plan context, so Awa can show but not cancel them —
+      // dedupe against the Wix ids Awa already created.
+      const external: unknown[] = [];
+      try {
+        const contactId = await wix.findContactIdByPhone(
+          `+${client.wa_phone.replace(/^\+/, "")}`,
+          client.name ?? undefined,
+        );
+        if (contactId) {
+          const ownWixIds = new Set(
+            bookings.map((b) => b.wix_booking_id).filter((x): x is string => !!x),
+          );
+          const wixBookings = await wix.listContactUpcomingBookings(contactId);
+          for (const wb of wixBookings) {
+            if (ownWixIds.has(wb.id)) continue; // already in `own`
+            external.push({
+              class: wb.serviceName,
+              start: wb.startDate,
+              start_dakar: fmtDakar(wb.startDate),
+              participants: wb.participants,
+              booked_via: "studio", // counter or website
+              status: "confirmed",
+              not_cancellable_here:
+                "Booked outside Awa — to change or cancel it, the client contacts reception.",
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Wix contact bookings lookup failed (showing Awa bookings only):", err);
+      }
+
+      return JSON.stringify({
+        bookings: [...own, ...external],
+        note:
+          external.length > 0
+            ? "booked_via 'studio' bookings were made at the counter/website: show them but say any change goes through reception (no booking_id, cancel_booking won't work on them)."
+            : undefined,
+      });
     }
 
     case "cancel_booking": {
@@ -968,6 +1138,7 @@ export async function executeTool(
           id: String(o?.id ?? "").trim(),
           title: String(o?.title ?? "").trim(),
           description: o?.description ? String(o.description).trim() : undefined,
+          section: o?.section ? String(o.section).trim() : undefined,
         }))
         .filter((o) => o.id && o.title);
       const uniqueIds = new Set(options.map((o) => o.id));

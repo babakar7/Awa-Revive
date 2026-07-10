@@ -33,7 +33,7 @@ Bookings**, paiement d'abord via **Wave** (mobile money) ou décompte d'un
 
 ## Workflow
 
-- **Avant tout push : `npm run build && npm test`** (90 tests purs, sans réseau).
+- **Avant tout push : `npm run build && npm test`** (tests purs, sans réseau).
   Intégration : `npm run test:integration` (Postgres jetable Docker).
 - **Déploiement : auto-deploy** — `git push` sur `main` (`babakar7/Awa-Revive`)
   rebuild et redéploie sur Railway. Fallback manuel : `railway up --detach` (ne
@@ -42,3 +42,31 @@ Bookings**, paiement d'abord via **Wave** (mobile money) ou décompte d'un
 - Prod : `https://resabot-production.up.railway.app`. Numéro Awa : +221 78 953 66 76.
 - Après un changement produit non trivial, **mets à jour PROGRESS.md** (décision,
   piège, chronologie) — c'est ce qui permet à la session suivante de reprendre.
+
+## Git & push — PLUSIEURS AGENTS travaillent en parallèle sur le MÊME dossier
+
+Le dossier de travail est partagé : à tout moment il peut contenir des
+changements non commités d'un autre agent. `railway up` déploie tout le dossier,
+mais git ne suit que ce qui est commité — d'où un risque : **si un agent pousse
+un commit qui n'inclut pas les fichiers modifiés d'un autre agent, le prochain
+auto-deploy rebuild depuis git et fait DISPARAÎTRE ce travail de la prod.**
+Règles pour éviter ça :
+
+- **Ne commite QUE ton propre travail.** Stage les fichiers que TU as modifiés,
+  un par un (`git add <fichier>`), **jamais `git add -A` / `git add .`** — ça
+  embarquerait le travail en cours d'un autre agent (potentiellement à moitié
+  fait) sous ton commit. En cas de doute sur la paternité d'un fichier, laisse-le.
+- **Pousse après chaque update majeure** (une feature ou un fix cohérent, buildé
+  et testé), pas à la fin d'une longue série. Plus tôt tu commites+pousses ton
+  travail, moins il risque d'être écrasé par le push d'un autre agent. Un
+  `git push` = un auto-deploy : groupe donc un ensemble cohérent, pas chaque
+  micro-edit.
+- **Préfère `git push` à `railway up`** pour livrer : le push met git ET la prod
+  d'accord. `railway up` déploie sans commiter → git prend du retard sur le live
+  (c'est ce retard qui crée le risque ci-dessus). Réserve `railway up` aux tests
+  rapides que tu comptes commiter juste après.
+- **`main` est la branche de déploiement** : `origin/main` doit toujours refléter
+  ce qui tourne en prod. Avant de pousser, `npm run build && npm test` doivent
+  passer (idéalement laisser la CI verte, cf. PROGRESS.md §7).
+- Si tu vois des fichiers modifiés que tu n'as pas touchés, **ne les commite pas
+  et ne les révoque pas** : c'est le travail d'un autre agent. Signale-le plutôt.

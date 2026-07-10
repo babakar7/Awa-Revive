@@ -78,11 +78,12 @@ export async function handleInboundText(args: {
 
   // Lazy TTL sweep so the "active link" context below is accurate.
   await Promise.all([repo.expireStaleBookings(), repo.expireStalePlanOrders()]);
-  const [activeBooking, activePlanOrder, memberships, recentRefunds] = await Promise.all([
+  const [activeBooking, activePlanOrder, memberships, recentRefunds, habit] = await Promise.all([
     repo.activeAwaitingPayment(client.id),
     repo.activeAwaitingPlanOrder(client.id),
     activeMemberships(client),
     repo.recentRefunds(client.id),
+    repo.bookingHabit(client.id),
   ]);
 
   const history = await repo.lastTurns(client.id, 20);
@@ -119,6 +120,7 @@ export async function handleInboundText(args: {
         activePlanOrder,
         memberships,
         recentRefunds,
+        habit,
       }),
     },
   ];

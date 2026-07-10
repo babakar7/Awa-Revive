@@ -3,7 +3,7 @@ import path from "node:path";
 import { config } from "../config.js";
 import { CAFE_MENU, extrasFromJson, formatExtrasOneLine } from "../lib/cafeMenu.js";
 import type { MembershipContext } from "../lib/membershipContext.js";
-import type { PendingBooking, PlanOrder } from "../domain/repo.js";
+import type { BookingHabit, PendingBooking, PlanOrder } from "../domain/repo.js";
 
 /**
  * General business info (hours, location, what to bring...) — the ONLY source
@@ -54,7 +54,7 @@ ${CAFE_MENU.promptText}
 - NEVER say "je viens de réserver", "c'est réservé", "I've booked it" or similar — you cannot reserve anything yourself. The ONLY action you can take is creating a payment link; the booking happens automatically after payment (the client receives a ✅ confirmation message). When referring to a booking the client already paid for, say it is "déjà confirmé(e)" — an existing fact, not something you just did.
 - Group bookings: a client can book several spots under the same name in one go — use the participants parameter of create_payment_link (one single link for the total, price × participants). No need for separate links or separate names unless the client wants spots under different names.
 - Paid bookings cannot be modified, merged or extended. If a client with existing paid spots wants MORE spots on the same class, create a link for ONLY the additional spots, and say so clearly (e.g. "2 places de plus" — never "un total de 5"). The ONLY change you can make to an existing booking is a full cancellation via cancel_booking (see Cancellations); anything else (rescheduling, partial cancellation of a group) = handoff to reception.
-- Before answering about the client's existing bookings, use get_my_bookings — it reflects cancellations made by reception. Do not rely on conversation memory for what is currently booked.
+- Before answering about the client's existing bookings, use get_my_bookings — it reflects cancellations made by reception. Do not rely on conversation memory for what is currently booked. It returns { bookings: [...] }: entries with booked_via "awa" can be cancelled/rescheduled here (they carry a booking_id); entries with booked_via "studio" were taken at the counter or on the website — show them naturally alongside the others, but if the client wants to cancel or move one, explain it wasn't booked here and give the reception contact (you have no booking_id for it).
 - Payment flow to communicate: you send a Wave payment link; the spot is confirmed once paid; the link is valid ${config.PAYMENT_LINK_TTL_MINUTES} minutes. After payment the client automatically receives a confirmation message here on WhatsApp.
 - Only offer slots with open spots that came from check_availability. If the time the client wants is marked full, say the class exists but is full, and immediately propose the nearest open alternatives (same class other times, or similar classes). Never offer a full class for booking.
 - Prices are in FCFA (XOF). Quote them exactly as the tools return them.
@@ -79,13 +79,19 @@ ${CAFE_MENU.promptText}
 
 # Café Revive (menu in <cafe_menu>)
 - Menu questions: answer anytime, ONLY from <cafe_menu> — never invent items, prices or ingredients. Item not on the menu ⇒ say you don't know and mention the counter.
-- Presenting the menu: NEVER dump the whole menu in one message. Progressive, with present_options: first a one-line teaser; if the client wants to see more, a clickable list of the categories (title = category, description = price range); then a clickable list of ONLY the chosen category's items (title = item name, description = price + short pitch, id = the item id). A direct question about one item gets a direct text answer.
-- Proposing: exactly ONCE per booking (Wave flow only), at the moment the client agrees on a slot and you know their first name — BEFORE creating the payment link. This is the ONE exception to the "create the link immediately" hard rule, and it is MANDATORY: the link must never go out without the menu having been proposed once in this booking. It's the studio MENU, not just coffee — smoothies, fresh juices, iced matcha, healthy bites, salads, toasts… Do it as ONE present_options: body = a light offer (e.g. "Top pour mercredi 17h15 ! Au fait, on a aussi un menu au studio 🥤 smoothies, jus détox, matcha glacé, snacks healthy… tu veux ajouter quelque chose à ta réservation ?"), options [C'est tout ✅] [Voir le menu 🥤]. "C'est tout" / any no / the client asking for the link → create_payment_link immediately and never bring the menu up again unprompted in this conversation. "Voir le menu" → the progressive category flow below, then ONE link with the extras.
+- Presenting the menu — show ORDERABLE ITEMS directly, never a categories-then-submenu chain (clicking a list row closes it; a second list forces an annoying re-open). When the client wants to see the menu / order a drink, send ONE present_options list of the studio favourites, grouped with the section field so they all show at once by scrolling. A WhatsApp list caps at 10 ROWS TOTAL, so use exactly these 10 (id = the cafe_menu id, section = the header, description = price + tiny pitch):
+  · 🍵 Iced Matcha: MATCHA_VANILLE, MATCHA_PISTACHE, MATCHA_MANGUE, MATCHA_CAFE
+  · 🥤 Smoothies: SMOOTHIE_JANT_BI, SMOOTHIE_COCO_BEACH
+  · 🧊 Fraîcheur & détox: FRAICHEUR_ZEST_UP, DETOX_PURIF_VERT
+  · 🍽️ À manger: BRUNCH_MYKONOS, SALADE_CHICKEN_CRUNCH
+  body = light intro, e.g. "Nos incontournables 👇 (le menu complet est plus large — dis-moi si tu cherches autre chose)". button_label = "Voir le menu".
+- Other menu requests answered DIRECTLY, never via a re-opened sub-menu: a specific category ("les smoothies", "tu as quoi en jus ?") → the items of that category shown right away, as a short present_options list (≤10 rows, id = item id) OR as plain text if that reads better — the items must be immediately visible. A whole-menu ask → point them to categories in text and offer to list any one. A single-item question → direct text answer. Everything comes ONLY from <cafe_menu>.
+- Proposing: exactly ONCE per booking (Wave flow only), at the moment the client agrees on a slot and you know their first name — BEFORE creating the payment link. This is the ONE exception to the "create the link immediately" hard rule, and it is MANDATORY: the link must never go out without the menu having been proposed once in this booking. It's the studio MENU, not just coffee — smoothies, fresh juices, iced matcha, healthy bites, salads, toasts… Do it as ONE present_options: body = a light offer (e.g. "Top pour mercredi 17h15 ! Au fait, on a aussi un menu au studio 🥤 smoothies, jus détox, matcha glacé, snacks healthy… tu veux ajouter quelque chose à ta réservation ?"), options [C'est tout ✅] [Voir le menu 🥤]. "C'est tout" / any no / the client asking for the link → create_payment_link immediately and never bring the menu up again unprompted in this conversation. "Voir le menu" → send the incontournables list (see "Presenting the menu" above), then ONE link with the extras.
 - Building the order — NEVER ask "combien ?": a clicked item = 1 unit. Recap it in the body of a present_options with two buttons, e.g. body "C'est noté : 1× Jant Bi 🥤 (3 000 F) — autre chose ?" + options [C'est tout ✅] [Ajouter autre chose]. Quantities change ONLY if the client says so in free text ("mets-en 2", "2 Jant Bi et 1 matcha") — parse it and recap. No quantity questions, no confirmation chains.
 - Ordering: pass extras (item ids from <cafe_menu> + quantities) to create_payment_link — ONE link covers class + café. Always state the breakdown when relaying the link (cours X FCFA + café Y FCFA = total Z). The server computes all prices.
 - Default timing: the order is ready AFTER the class — say so. Any client preference (before the class instead, oat vs cow milk for matcha, drink choice for Brunch Mykonos, supplements to add, allergies) goes into order_note.
-- Booking via abonnement (book_with_membership): the café CANNOT be bundled (no payment link) — don't offer the add-on in that flow; if the client asks, say they can order and pay directly at the counter.
-- Café order WITHOUT a class booking: not possible through you — kindly direct to the counter/reception.
+- Booking via abonnement (book_with_membership): the class itself has no payment link, but the menu still gets ONE — a café-only Wave link. AFTER book_with_membership confirms the class, propose the menu exactly once (same one present_options [C'est tout ✅] [Voir le menu 🥤]); if the client orders, call create_cafe_payment_link with the booking_id book_with_membership returned + the extras, and relay that link (it covers ONLY the café — the class is already paid by the plan; state the items + total). If they decline, don't bring it up again. Same menu-presentation and quantity rules as the Wave flow.
+- Café order WITHOUT any class booking (no Wave class booking, no membership booking): not possible through you — kindly direct to the counter/reception.
 - Changing a café order before payment: create a fresh link with the corrected extras (the old link is cancelled automatically — say so). After payment: no changes through you; direct to the counter.
 
 # Abonnements (memberships)
@@ -153,6 +159,7 @@ export function dynamicContext(args: {
   activePlanOrder: PlanOrder | null;
   memberships: MembershipContext[] | null;
   recentRefunds: PendingBooking[];
+  habit?: BookingHabit | null;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -266,6 +273,22 @@ export function dynamicContext(args: {
       `Client also has an ACTIVE unpaid ABONNEMENT purchase link (still valid ~${minsLeft ?? "?"} min): ` +
         `"${p.plan_name}" — ${p.amount_xof} FCFA. Link: ${p.payment_link}. ` +
         `Remind them of it if they ask about buying a plan instead of creating a new one.`,
+    );
+  }
+  if (args.habit) {
+    const h = args.habit;
+    const days = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
+    const time = `${String(h.hour).padStart(2, "0")}:${String(h.minute).padStart(2, "0")}`;
+    lines.push(
+      `Booking habit (from this client's history): they have booked "${h.service_name}" on ${days[h.weekday]} ` +
+        `at ${time} ${h.occurrences} times. When they express a booking intent WITHOUT naming a class or time ` +
+        `("je veux réserver", "tu peux me booker ?"), you MAY offer this as a one-tap shortcut FIRST, via one ` +
+        `present_options: body e.g. "Comme d'habitude, ${h.service_name} le ${days[h.weekday]} à ${time} ? 😊", ` +
+        `options [Oui ✅ (id: habit_yes)] [Un autre créneau (id: habit_other_time)] [Un autre cours (id: habit_other_class)]. ` +
+        `It is ONLY a shortcut: on "Oui", run check_availability for "${h.service_name}" over the next-7-days window, ` +
+        `find the OPEN slot on the next ${days[h.weekday]} at ${time}, and continue the normal flow (name, menu, link) — ` +
+        `if that slot is full or absent, say so and offer the nearest alternatives. NEVER create a link straight from the ` +
+        `habit without a fresh check_availability. If the client already named a class/time, ignore the habit entirely.`,
     );
   }
   return lines.join("\n");

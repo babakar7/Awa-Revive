@@ -34,6 +34,37 @@ describe("buildInteractivePayload", () => {
     });
   });
 
+  it("groups rows into sections in ONE list (categories without re-opening)", () => {
+    const { kind, payload } = buildInteractivePayload("221771234567", "Nos incontournables 👇", "Voir le menu", [
+      { id: "MATCHA_VANILLE", title: "Iced Matcha Vanille", description: "3 500 F", section: "🍵 Iced Matcha" },
+      { id: "MATCHA_PISTACHE", title: "Iced Matcha Pistache", description: "4 000 F", section: "🍵 Iced Matcha" },
+      { id: "SMOOTHIE_JANT_BI", title: "Jant Bi", description: "3 000 F", section: "🥤 Smoothies" },
+    ]);
+    expect(kind).toBe("list");
+    const sections = (payload as any).interactive.action.sections;
+    expect(sections).toHaveLength(2);
+    expect(sections[0].title).toBe("🍵 Iced Matcha");
+    expect(sections[0].rows).toHaveLength(2);
+    expect(sections[1].title).toBe("🥤 Smoothies");
+    expect(sections[1].rows).toHaveLength(1);
+    expect(sections[1].rows[0].id).toBe("SMOOTHIE_JANT_BI");
+    // Still capped at 10 rows TOTAL across sections.
+    const total = sections.reduce((n: number, s: any) => n + s.rows.length, 0);
+    expect(total).toBeLessThanOrEqual(10);
+  });
+
+  it("a single unnamed section carries no title; sectioned options force a list even if ≤3", () => {
+    const flat = buildInteractivePayload("2217", "b", "l", [
+      { id: "a", title: "A", description: "d" },
+    ]);
+    expect(flat.payload.interactive as any).toMatchObject({ type: "list" });
+    expect((flat.payload as any).interactive.action.sections[0].title).toBeUndefined();
+    const sectioned = buildInteractivePayload("2217", "b", "l", [
+      { id: "a", title: "A", section: "Cat" },
+    ]);
+    expect((sectioned.payload as any).interactive.type).toBe("list"); // not buttons
+  });
+
   it("truncates to Meta limits (row title 24, description 72, button 20)", () => {
     const { payload } = buildInteractivePayload("2217", "corps", "un label de bouton beaucoup trop long", [
       { id: "a", title: "x".repeat(40), description: "y".repeat(100) },

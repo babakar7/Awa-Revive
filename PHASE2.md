@@ -46,9 +46,11 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
   numéro WhatsApp a échoué ; email enregistré (outil `record_email`) + entrée
   dans le registre handoffs pour fusion MANUELLE par la réception. Jamais de
   rattachement automatique par email déclaré.
-- 🔥 **`get_my_bookings` élargi** : lister aussi les réservations prises au
-  comptoir ou sur le site (lookup Wix par contactId — la brique
-  `findContactIdByPhone` existe déjà).
+- ~~🔥 **`get_my_bookings` élargi**~~ → **FAIT (10/07/2026)** : liste aussi les
+  résas prises au comptoir/site (lookup Wix `listContactUpcomingBookings` par
+  contactId), marquées `booked_via: "studio"` en lecture seule (annulation =
+  réception). ⚠️ Forme de la réponse extended-bookings à confirmer sur données
+  réelles.
 - 🔧 **Hygiène CRM préalable au lancement** : retirer les vrais numéros des
   contacts de test (test1/test2), fusionner les doublons créés pendant les
   tests, s'assurer que les fiches clients portent leur numéro WhatsApp.
@@ -84,9 +86,10 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
 > client avec le détail + "prête après la séance" ; notification réception
 > (email + WhatsApp). Restes pour plus tard :
 
-- 🔧 **Café + abonnement** : un client qui réserve via son abonnement ne peut
-  pas commander (pas de lien de paiement) — envisager un petit lien Wave café
-  seul.
+- ~~🔧 **Café + abonnement**~~ → **FAIT (10/07/2026)** : après une résa par
+  abonnement, Awa propose le menu et crée un petit lien Wave café-seul
+  (`create_cafe_payment_link`, table `pending_cafe_orders`) rattaché au booking ;
+  paiement → réception notifiée + confirmation client. Aucune création Wix.
 - 🧪 **Commande café sans réservation** via Awa (aujourd'hui : comptoir).
 - 🧪 **Menu en photos** : envoyer les pages du menu en images (sendImage +
   hébergement des visuels) au lieu du texte progressif seul.
@@ -99,6 +102,10 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
   via l'API média Meta, transcrits, et injectés comme `[note vocale] …` ; en
   cas d'échec, Awa demande poliment d'écrire. Sans `OPENAI_API_KEY`, retour au
   comportement d'avant (texte uniquement).
+- ~~🔧 **Résa en un tap**~~ → **FAIT (10/07/2026)** : détection d'habitude
+  (`computeBookingHabit`, motif cours+jour+heure ≥2×) proposée en raccourci
+  cliquable quand le client veut réserver sans préciser ; ne court-circuite
+  jamais check_availability.
 - 🧪 **A/B modèle** : tester `claude-haiku-4-5` sur la checklist d'acceptance
   (surtout wolof + respect des règles) pour réduire les coûts si concluant.
 - 🧪 **Qualité du wolof** des messages templates (confirmation, remboursement,

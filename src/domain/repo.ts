@@ -356,6 +356,68 @@ export async function recentRefunds(clientId: string): Promise<PendingBooking[]>
   return res.rows;
 }
 
+/**
+ * A recurring booking pattern for this client — same class, same weekday, same
+ * time, booked at least twice — so Awa can offer it as a one-tap shortcut ("ton
+ * Pilates Fusion du vendredi 10h, comme d'habitude ?"). Only a HINT: the real
+ * slot always comes from a fresh check_availability, prices/16h are recomputed
+ * server-side. Null when there is no clear habit.
+ */
+export interface BookingHabit {
+  service_id: string;
+  service_name: string;
+  weekday: number; // 0=Sun … 6=Sat (Dakar == UTC)
+  hour: number;
+  minute: number;
+  occurrences: number;
+}
+
+/** Pure pattern picker (tested without a DB). Most frequent (service, weekday,
+ * time) with ≥2 occurrences; ties broken by the most recent booking (rows are
+ * expected in slot_start-descending order). */
+export function computeBookingHabit(
+  rows: { service_id: string; service_name: string; slot_start: Date | string }[],
+): BookingHabit | null {
+  const groups = new Map<string, BookingHabit>();
+  for (const r of rows) {
+    const d = new Date(r.slot_start);
+    if (Number.isNaN(d.getTime())) continue;
+    const weekday = d.getUTCDay();
+    const hour = d.getUTCHours();
+    const minute = d.getUTCMinutes();
+    const key = `${r.service_id}|${weekday}|${hour}|${minute}`;
+    const g = groups.get(key);
+    if (g) g.occurrences++;
+    else
+      groups.set(key, {
+        service_id: r.service_id,
+        service_name: r.service_name,
+        weekday,
+        hour,
+        minute,
+        occurrences: 1,
+      });
+  }
+  let best: BookingHabit | null = null;
+  for (const g of groups.values()) {
+    // First qualifying group already reflects recency (rows are newest-first),
+    // so only replace on a STRICTLY higher count — keeps the most recent tie.
+    if (g.occurrences >= 2 && (!best || g.occurrences > best.occurrences)) best = g;
+  }
+  return best;
+}
+
+export async function bookingHabit(clientId: string): Promise<BookingHabit | null> {
+  const res = await pool.query(
+    `select service_id, service_name, slot_start
+       from pending_bookings
+      where client_id = $1 and status = 'BOOKED'
+      order by slot_start desc limit 60`,
+    [clientId],
+  );
+  return computeBookingHabit(res.rows);
+}
+
 export async function upcomingBooked(clientId: string): Promise<PendingBooking[]> {
   const res = await pool.query(
     `select * from pending_bookings
@@ -550,6 +612,110 @@ export async function activeAwaitingPlanOrder(clientId: string): Promise<PlanOrd
     [clientId],
   );
   return res.rows[0] ?? null;
+}
+
+// ---------- café-only orders (menu order alongside a membership booking) ----------
+
+export interface CafeOrder {
+  id: string;
+  client_id: string;
+  linked_booking_id: string | null;
+  service_name: string | null;
+  slot_start: Date | null;
+  extras_json: unknown;
+  amount_xof: number;
+  order_note: string | null;
+  status: string;
+  wave_session_id: string | null;
+  payment_link: string | null;
+  link_expires_at: Date | null;
+}
+
+async function transitionCafeOrder(
+  id: string,
+  to: string,
+  fromStates: string[],
+  extra: Record<string, unknown> = {},
+): Promise<CafeOrder | null> {
+  const extraKeys = Object.keys(extra);
+  const setClauses = ["status = $2", "updated_at = now()"];
+  const params: unknown[] = [id, to, fromStates];
+  extraKeys.forEach((k, i) => {
+    setClauses.push(`${k} = $${4 + i}`);
+    params.push(extra[k]);
+  });
+  const res = await pool.query(
+    `update pending_cafe_orders set ${setClauses.join(", ")}
+      where id = $1 and status = any($3) returning *`,
+    params,
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function createDraftCafeOrder(args: {
+  clientId: string;
+  linkedBookingId: string | null;
+  serviceName: string | null;
+  slotStart: Date | string | null;
+  extrasJson: unknown;
+  amountXof: number;
+  orderNote: string | null;
+}): Promise<CafeOrder> {
+  const res = await pool.query(
+    `insert into pending_cafe_orders
+       (client_id, linked_booking_id, service_name, slot_start, extras_json, amount_xof, order_note, status)
+     values ($1, $2, $3, $4, $5, $6, $7, 'DRAFT') returning *`,
+    [
+      args.clientId,
+      args.linkedBookingId,
+      args.serviceName,
+      args.slotStart ?? null,
+      JSON.stringify(args.extrasJson),
+      args.amountXof,
+      args.orderNote,
+    ],
+  );
+  return res.rows[0];
+}
+
+export async function setCafeOrderAwaitingPayment(
+  id: string,
+  waveSessionId: string,
+  paymentLink: string,
+  expiresAt: Date,
+): Promise<CafeOrder | null> {
+  return transitionCafeOrder(id, "AWAITING_PAYMENT", ["DRAFT"], {
+    wave_session_id: waveSessionId,
+    payment_link: paymentLink,
+    link_expires_at: expiresAt,
+  });
+}
+
+export async function markCafeOrderPaid(id: string): Promise<CafeOrder | null> {
+  return transitionCafeOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED"]);
+}
+
+export async function findCafeOrderById(id: string): Promise<CafeOrder | null> {
+  const res = await pool.query(`select * from pending_cafe_orders where id = $1`, [id]);
+  return res.rows[0] ?? null;
+}
+
+/** One active café link per client — expire any previous one. */
+export async function expireActiveCafeOrders(clientId: string): Promise<void> {
+  await pool.query(
+    `update pending_cafe_orders set status = 'EXPIRED', updated_at = now()
+      where client_id = $1 and status in ('DRAFT', 'AWAITING_PAYMENT')`,
+    [clientId],
+  );
+}
+
+/** TTL sweep — café links past expiry → EXPIRED. */
+export async function expireStaleCafeOrders(): Promise<number> {
+  const res = await pool.query(
+    `update pending_cafe_orders set status = 'EXPIRED', updated_at = now()
+      where status = 'AWAITING_PAYMENT' and link_expires_at < now()`,
+  );
+  return res.rowCount ?? 0;
 }
 
 // ---------- slot cache (server-side validation of model-provided event_ids) ----------

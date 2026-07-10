@@ -131,6 +131,32 @@ create table if not exists pending_plan_orders (
 create index if not exists idx_plan_orders_client_status
   on pending_plan_orders (client_id, status);
 
+-- Café-only Wave orders: a menu order attached to a booking the client paid
+-- with their abonnement (that flow has no payment link, so the café can't ride
+-- along — this is its own small Wave link). No Wix booking is ever created
+-- here; on payment we only notify reception to prepare it. Prices come from
+-- cafe-menu.md server-side, exactly like the bundled café path.
+-- Statuts : DRAFT → AWAITING_PAYMENT → PAID ; AWAITING_PAYMENT → EXPIRED → PAID.
+create table if not exists pending_cafe_orders (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  linked_booking_id uuid references pending_bookings(id),
+  service_name text,
+  slot_start timestamptz,
+  extras_json jsonb not null,
+  amount_xof integer not null,
+  order_note text,
+  status text not null default 'DRAFT',
+  wave_session_id text,
+  payment_link text,
+  link_expires_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_cafe_orders_client_status
+  on pending_cafe_orders (client_id, status);
+
 create table if not exists slot_cache (
   client_id uuid not null references clients(id),
   event_id text not null,

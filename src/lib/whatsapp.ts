@@ -97,6 +97,8 @@ export interface InteractiveOption {
   id: string;
   title: string;
   description?: string;
+  /** Optional group header — rows sharing a section render under it in ONE list. */
+  section?: string;
 }
 
 const truncate = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, max - 1)}…`);
@@ -104,10 +106,12 @@ const truncate = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0
 /**
  * Build the Cloud API payload for a clickable choice message. Pure (unit
  * tested). Picks the native format for the option count:
- *  - ≤3 options, none with a description → reply buttons (tap directly);
- *  - otherwise → list message (a button opens up to 10 rows).
- * Meta hard limits are enforced by truncation (button title 20, row title 24,
- * row description 72, body 1024) and by rejecting >10 options.
+ *  - ≤3 options, none with a description or section → reply buttons (tap directly);
+ *  - otherwise → list message (a button opens up to 10 rows, optionally grouped
+ *    into sections so several categories show at once without re-opening).
+ * Meta hard limits are enforced by truncation (button title 20, row/section
+ * title 24, row description 72, body 1024) and by rejecting >10 rows total
+ * (WhatsApp caps a list at 10 rows across ALL sections combined).
  */
 export function buildInteractivePayload(
   to: string,
@@ -127,7 +131,7 @@ export function buildInteractivePayload(
     type: "interactive",
   };
 
-  if (options.length <= 3 && options.every((o) => !o.description)) {
+  if (options.length <= 3 && options.every((o) => !o.description && !o.section)) {
     return {
       kind: "buttons",
       payload: {
@@ -146,6 +150,30 @@ export function buildInteractivePayload(
     };
   }
 
+  const row = (o: InteractiveOption) => ({
+    id: o.id.slice(0, 200),
+    title: truncate(o.title, 24),
+    description: o.description ? truncate(o.description, 72) : undefined,
+  });
+
+  // Group rows by section, preserving first-seen order. When there are several
+  // sections, WhatsApp requires each to carry a title (fallback "Autres").
+  const order: string[] = [];
+  const grouped = new Map<string, InteractiveOption[]>();
+  for (const o of options) {
+    const key = o.section ?? "";
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+      order.push(key);
+    }
+    grouped.get(key)!.push(o);
+  }
+  const multi = order.length > 1;
+  const sections = order.map((key) => ({
+    ...(key || multi ? { title: truncate(key || "Autres", 24) } : {}),
+    rows: grouped.get(key)!.map(row),
+  }));
+
   return {
     kind: "list",
     payload: {
@@ -153,18 +181,7 @@ export function buildInteractivePayload(
       interactive: {
         type: "list",
         body: { text: truncate(body, 1024) },
-        action: {
-          button: truncate(buttonLabel || "Choisir", 20),
-          sections: [
-            {
-              rows: options.map((o) => ({
-                id: o.id.slice(0, 200),
-                title: truncate(o.title, 24),
-                description: o.description ? truncate(o.description, 72) : undefined,
-              })),
-            },
-          ],
-        },
+        action: { button: truncate(buttonLabel || "Choisir", 20), sections },
       },
     },
   };

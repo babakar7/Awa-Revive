@@ -78,8 +78,9 @@ src/
                       invalidé quand le solde change — voir §4.18
   agent/
     systemPrompt.ts   prompt stable caché + dynamicContext (date, langue, lien actif, abonnements)
-    tools.ts          list_classes, check_availability, create_payment_link, check_membership,
-                      book_with_membership, get_my_bookings, cancel_booking, record_email, handoff_to_human
+    tools.ts          list_classes, check_availability, create_payment_link, create_cafe_payment_link,
+                      list_plans, create_plan_payment_link, check_membership, book_with_membership,
+                      get_my_bookings, cancel_booking, record_email, handoff_to_human, present_options
     index.ts          boucle d'outils (max 8), détection de langue fr/en/wo (stopwords), cache abonnements 10 min
   webhooks/
     whatsapp.ts       GET handshake + POST signé → dedupe → rate limit → file par client
@@ -298,6 +299,53 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       activation de plan. Un solde null = « vérifié à la résa », JAMAIS 0 ni un
       chiffre inventé (consignes prompt + note d'outil).
 
+19. **get_my_bookings élargi + menu aux abonnés + rappel 16h abonnement (10/07 nuit)**.
+    - **get_my_bookings élargi** : en plus des résas prises via Awa (table locale),
+      liste aussi celles prises au comptoir ou sur le site, via
+      `listContactUpcomingBookings(contactId)` ([wix.ts](src/lib/wix.ts),
+      extended-bookings query filtrée par `booking.contactDetails.contactId`).
+      Sortie changée en `{ bookings: [...] }`, chaque entrée porte `booked_via`
+      « awa » (annulable/reportable ici, avec booking_id) ou « studio » (lecture
+      seule → « pour la modifier, contacte la réception »). Dédup par
+      `wix_booking_id` (les résas Awa apparaissent aussi dans Wix). ⚠️ La forme
+      exacte de la réponse extended-bookings (`bookedEntity.slot.startDate`,
+      `.title`) est à VÉRIFIER sur une vraie réponse Wix — code défensif : toute
+      forme inattendue → liste vide, jamais d'exception (get_my_bookings retombe
+      sur les seules résas Awa).
+    - **Menu aux abonnés** (nouveau tool `create_cafe_payment_link` + table
+      `pending_cafe_orders`) : une résa par abonnement n'a pas de lien de
+      paiement, donc le café voyage désormais dans SON PROPRE petit lien Wave
+      (café seul). Awa propose le menu APRÈS book_with_membership (qui renvoie
+      maintenant `booking_id`), et si le client commande, crée le lien café —
+      prix 100 % serveur via `computeExtras`, rattaché au booking par
+      `linked_booking_id` (même contrôle de propriété que cancel_booking : résa
+      du client, BOOKED, membership, à venir). AUCUNE création Wix : le webhook
+      Wave route booking → plan → café order ([wave.ts](src/webhooks/wave.ts)
+      `processCafePayment`), marque PAID, notifie la réception « ☕ commande café
+      payée (résa abonnement) » et envoie la confirmation client
+      (`cafeConfirmationMessage`, fr/en/wo). TTL/expiration : un lien café actif
+      par client (`expireActiveCafeOrders`), sweep TTL dans le sweeper 60 s.
+      Toujours pas de café sans AUCUNE résa (comptoir).
+    - **Rappel 16h abonnement** : les confirmations Wave l'affichaient déjà
+      (`confirmationMessage`), pas les résas par abonnement (rédigées par le
+      modèle). La note de succès de book_with_membership demande maintenant à
+      Awa de rappeler « annulation gratuite jusqu'à 16h avant le cours ». Pas de
+      template Meta : c'est un message dans la fenêtre 24h.
+
+20. **Résa en un tap (10/07 nuit)** — pour les habitués. `computeBookingHabit`
+    ([repo.ts](src/domain/repo.ts), fonction PURE testée) détecte, dans les
+    résas `BOOKED` passées, le motif (cours + jour de semaine + heure) répété
+    ≥ 2 fois le plus fréquent ; `bookingHabit(clientId)` l'expose. Injecté dans
+    le contexte dynamique : quand le client exprime une intention de résa SANS
+    nommer cours ni heure, Awa peut proposer d'abord un raccourci
+    present_options (« Comme d'habitude, Pilates Fusion le vendredi à 10:00 ? »
+    → [Oui ✅] [Un autre créneau] [Un autre cours]). Garde-fou strict : ce n'est
+    qu'un raccourci — sur « Oui », Awa relance TOUJOURS check_availability
+    (fenêtre 7 j) pour trouver le créneau ouvert correspondant, jamais de lien
+    créé directement depuis l'habitude ; prix/16h/dispo recalculés serveur comme
+    d'habitude. Si le client a déjà nommé un cours/une heure, l'habitude est
+    ignorée. 5 tests unitaires (106 au total).
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -380,6 +428,16 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   (contexte dynamique + check_membership, cache extrait dans
   `membershipContext.ts` et invalidé à chaque variation). 4 tests unitaires
   ajoutés (94 au total) ; intégration 14/14 verte.
+- **10/07 (nuit, suite)** : **get_my_bookings élargi** (résas comptoir/site via
+  contactId Wix, dédup, lecture seule), **menu proposé aux abonnés** (lien Wave
+  café-seul `create_cafe_payment_link` + table `pending_cafe_orders`, route
+  webhook café, confirmation client), **rappel 16h ajouté aux résas abonnement**
+  (§4.19). 7 tests unitaires ajoutés (101 au total) ; intégration 14/14 verte.
+  ⚠️ La forme de la réponse extended-bookings (get_my_bookings élargi) reste à
+  confirmer sur de vraies données Wix.
+- **10/07 (nuit, fin)** : **résa en un tap** (§4.20) — détection d'habitude
+  (cours + jour + heure récurrents) proposée en raccourci cliquable, sans jamais
+  court-circuiter check_availability. 5 tests unitaires (106 au total).
 
 ## 6. Reste à faire
 
@@ -401,6 +459,16 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   même tour) et une résa Wave (OK explicite avant annulation).
 - [ ] Solde d'abonnement : « il me reste combien de séances ? » → chiffre
   cohérent avec Wix, décrémenté après une résa, re-crédité après annulation.
+- [ ] get_my_bookings élargi : réserver une place au comptoir/site avec le
+  numéro du testeur, puis « mes cours ? » → la résa studio apparaît en lecture
+  seule. **Vérifier la forme réelle de la réponse extended-bookings** (nom du
+  cours + heure) et ajuster `listContactUpcomingBookings` si besoin.
+- [ ] Menu aux abonnés : réserver par abonnement puis commander un smoothie →
+  lien Wave café-seul, paiement, confirmation client + email réception «☕ résa
+  abonnement».
+- [ ] Résa en un tap : après ≥2 résas d'un même cours/jour/heure, un nouveau
+  « je veux réserver » doit proposer le raccourci « comme d'habitude ? » ; sur
+  « oui », vérifier qu'Awa relance bien check_availability (pas de lien direct).
 
 **Avant lancement (essentiellement côté Babakar, dans Wix) :**
 - [ ] **Remettre `ADMIN_USERS` en prod** — le dashboard `/admin` est

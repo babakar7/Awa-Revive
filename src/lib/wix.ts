@@ -200,6 +200,58 @@ export async function getBookingStatuses(bookingIds: string[]): Promise<Record<s
   return out;
 }
 
+/**
+ * All of a contact's upcoming CONFIRMED bookings straight from Wix — so
+ * get_my_bookings can also show classes booked at the counter or on the
+ * website, not just the ones taken through Awa. Read-only: Awa can't cancel
+ * these (no local payment/plan context), it just surfaces them.
+ *
+ * Shapes here (bookedEntity.slot start/title) follow the Bookings V2 docs and
+ * MUST be verified against a live extended-bookings response once real data
+ * exists — this is the "adjust wix.ts" caveat from the README. Everything is
+ * defensive: an unexpected shape yields an empty list, never a throw that
+ * would break get_my_bookings.
+ */
+export interface WixContactBooking {
+  id: string;
+  serviceName: string;
+  startDate: string; // ISO
+  participants: number;
+}
+
+export async function listContactUpcomingBookings(
+  contactId: string,
+): Promise<WixContactBooking[]> {
+  const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+    query: {
+      filter: { "booking.contactDetails.contactId": contactId },
+      // Cheap client-side date/status filtering below — studio scale is small.
+    },
+  });
+  const services = await listServices().catch(() => [] as WixService[]);
+  const serviceName = (id: string | undefined) =>
+    services.find((s) => s.id === id)?.name ?? "Cours";
+
+  const now = Date.now();
+  const out: WixContactBooking[] = [];
+  for (const eb of data?.extendedBookings ?? []) {
+    const b = eb?.booking;
+    if (!b?.id) continue;
+    const status = b.status ?? "UNKNOWN";
+    if (status !== "CONFIRMED" && status !== "PENDING") continue;
+    const slot = b?.bookedEntity?.slot ?? b?.bookedEntity?.schedule ?? {};
+    const startDate: string | undefined = slot.startDate ?? slot.firstSessionStart;
+    if (!startDate || Number.isNaN(Date.parse(startDate)) || Date.parse(startDate) <= now) continue;
+    out.push({
+      id: b.id,
+      serviceName: b?.bookedEntity?.title ?? serviceName(slot.serviceId),
+      startDate,
+      participants: Math.max(1, Number(b.numberOfParticipants ?? 1)),
+    });
+  }
+  return out.sort((a, b) => Date.parse(a.startDate) - Date.parse(b.startDate));
+}
+
 // ---------- contacts ----------
 
 /**

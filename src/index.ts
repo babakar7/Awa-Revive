@@ -1,6 +1,6 @@
 import { assertConfig, config } from "./config.js";
 import { migrate, closeDb } from "./db/index.js";
-import { expireStaleBookings, expireStalePlanOrders } from "./domain/repo.js";
+import { expireStaleBookings, expireStalePlanOrders, expireStaleCafeOrders } from "./domain/repo.js";
 import { nudgeExpiredLinks } from "./domain/expiryNudge.js";
 import { syncCancellations } from "./domain/cancellationSync.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
@@ -15,7 +15,10 @@ async function main() {
   // Periodic TTL sweep: AWAITING_PAYMENT past link_expires_at → EXPIRED.
   const sweeper = setInterval(async () => {
     try {
-      const n = (await expireStaleBookings()) + (await expireStalePlanOrders());
+      const n =
+        (await expireStaleBookings()) +
+        (await expireStalePlanOrders()) +
+        (await expireStaleCafeOrders());
       if (n > 0) app.log.info({ expired: n }, "Expired stale payment links");
       // One-shot "want a fresh link?" follow-up for links that just expired.
       await nudgeExpiredLinks(app.log);
