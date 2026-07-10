@@ -412,6 +412,43 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     séances pour ses invités ; on ne débite jamais l'abonnement d'un tiers (prompt).
     Build + 109 tests unitaires OK. Intégration (webhook Wave) non touchée.
 
+23. **Planning des cours en image (10/07)** — « je veux le planning » a maintenant
+    un vrai chemin : nouvel outil `get_class_schedule` qui envoie au client la
+    **grille hebdo lundi → dimanche SANS dates** (décision produit Babakar : le
+    client veut l'emploi du temps du studio, pas des dispos datées) en **image
+    PNG générée à la volée depuis Wix** — jamais d'image statique qui périme
+    (même famille de piège que « Reformer Women Only »).
+    - **Données** : `queryAvailabilityMulti` ([wix.ts](src/lib/wix.ts)) — le
+      filtre availability accepte nativement un tableau de service ids, donc
+      UN seul appel Wix pour tous les cours sur 7 jours ; les créneaux sont
+      projetés sur les jours de semaine et dédupliqués
+      (`buildWeeklyGrid`, pure et testée). Piège évité : l'ancienne
+      `queryAvailability` tolérait un `slot.serviceId` absent (repli sur l'arg) ;
+      le comportement est préservé en mono-service, en multi une entrée sans
+      serviceId est inattribuable → ignorée.
+    - **Rendu** : [scheduleImage.ts](src/lib/scheduleImage.ts), `@napi-rs/canvas`
+      (pas de Puppeteer — trop lourd pour Railway) + polices DejaVu embarquées
+      dans `assets/fonts/` (rendu identique local/CI/Railway, indépendant des
+      polices du conteneur ; police absente = throw explicite, jamais un rendu
+      au texte invisible). Layout vertical téléphone : bandeau par jour,
+      lignes heure — cours — durée. Le rendu est 100 % serveur : le modèle ne
+      touche jamais aux données de la grille (posture anti-injection habituelle).
+    - **Envoi** : `sendImage` ([whatsapp.ts](src/lib/whatsapp.ts)) — upload
+      `POST /{phone}/media` puis message `type:"image"` par media id (pas d'URL
+      publique à héberger). L'outil délivre lui-même (comme present_options),
+      logge le tour, et demande au modèle UN court suivi « lequel te tente ? ».
+    - **Cache 30 min** (grille + PNG, partagés entre clients — la grille est
+      sans dates donc sans info par-client). **Repli texte** à chaque étape
+      (rendu raté OU envoi raté → le tool renvoie la version texte groupée par
+      jour, jamais de client sans réponse).
+    - **Prompt** : nouvelle règle 1a (planning global → get_class_schedule) ;
+      1b reste le chemin « créneaux d'UN cours ». La grille n'ayant ni dates ni
+      places restantes, toute résa repasse par check_availability (les
+      event_ids réservables restent ceux servis par check_availability, rien
+      ne change côté slot_cache).
+    - 9 tests unitaires (118 au total). E2E à faire : demander « le planning »
+      en réel et vérifier image + suivi (et le rendu des polices sur Railway).
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement

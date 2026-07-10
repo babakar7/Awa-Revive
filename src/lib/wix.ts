@@ -135,23 +135,40 @@ export async function queryAvailability(
   dateFrom: string,
   dateTo: string,
 ): Promise<WixSlot[]> {
+  return queryAvailabilityMulti([serviceId], dateFrom, dateTo);
+}
+
+/**
+ * Same availability query for SEVERAL services at once (the filter natively
+ * takes an array) — one Wix call for the whole weekly schedule.
+ */
+export async function queryAvailabilityMulti(
+  serviceIds: string[],
+  dateFrom: string,
+  dateTo: string,
+): Promise<WixSlot[]> {
+  if (serviceIds.length === 0) return [];
   // No `bookable` filter: full classes must come back too, so the agent can
   // say "that class exists but is full" instead of "there is no class".
   const data = await wixPost("/availability-calendar/v1/availability/query", {
     query: {
       filter: {
-        serviceId: [serviceId],
+        serviceId: serviceIds,
         startDate: dateFrom,
         endDate: dateTo,
       },
     },
   });
+  // Single-service calls keep the historical fallback (slot.serviceId missing
+  // → the requested id); with several ids an entry without serviceId is
+  // unattributable and dropped.
+  const fallbackId = serviceIds.length === 1 ? serviceIds[0] : undefined;
   const entries: any[] = data?.availabilityEntries ?? [];
   return entries
-    .filter((e) => e?.slot?.sessionId)
+    .filter((e) => e?.slot?.sessionId && (e?.slot?.serviceId || fallbackId))
     .map((e) => ({
       eventId: e.slot.sessionId as string,
-      serviceId: e.slot.serviceId ?? serviceId,
+      serviceId: (e.slot.serviceId ?? fallbackId) as string,
       startDate: e.slot.startDate,
       endDate: e.slot.endDate,
       openSpots: Number(e.openSpots ?? 0),

@@ -1,7 +1,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import { notifyReception } from "../lib/notify.js";
-import { sendInteractive } from "../lib/whatsapp.js";
+import { sendInteractive, sendImage } from "../lib/whatsapp.js";
+import {
+  buildWeeklyGrid,
+  renderScheduleImage,
+  scheduleText,
+  type ScheduleEntry,
+} from "../lib/scheduleImage.js";
 import {
   CAFE_MENU,
   computeExtras,
@@ -295,6 +301,17 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "get_class_schedule",
+    description:
+      "Send the client the studio's WEEKLY class schedule (Monday→Sunday grid, no dates) as an image, generated " +
+      "live from the Wix catalog — this tool renders AND delivers it itself. Use it when the client asks for the " +
+      "overall planning/schedule/timetable of the studio ('le planning des cours', 'vos horaires', 'the schedule') " +
+      "WITHOUT naming one class. For the slots of ONE specific class (or to actually book), keep using " +
+      "check_availability — the weekly grid carries no dates and no open-spot counts. If the image cannot be sent, " +
+      "the tool returns the schedule as text for you to relay.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
 ];
 
 /**
@@ -302,6 +319,11 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
  * nothing: a present_options call already delivered the reply.
  */
 export const NO_REPLY_SENTINEL = "<NO_REPLY>";
+
+// Weekly schedule (grid + rendered PNG) — dateless Mon→Sun timetable, safe to
+// share across clients and cache briefly. png null = render failed, use text.
+let scheduleCache: { at: number; entries: ScheduleEntry[]; png: Buffer | null } | null = null;
+const SCHEDULE_TTL_MS = 30 * 60 * 1000;
 
 /**
  * Human-readable time in Dakar local time (GMT+0). Injected into every tool
@@ -1136,6 +1158,66 @@ export async function executeTool(
         note:
           "Handoff recorded in the reception register (email notification is best-effort — never claim " +
           "an email was sent). Give the client this number and tell them the team will help.",
+      });
+    }
+
+    case "get_class_schedule": {
+      // Build (or reuse) the weekly grid + PNG. The grid is the standing
+      // Mon→Sun timetable — dateless by design — so a 30 min cache is safe
+      // and turns the heaviest render in the bot into a no-op for most calls.
+      let cached = scheduleCache && Date.now() - scheduleCache.at < SCHEDULE_TTL_MS ? scheduleCache : null;
+      if (!cached) {
+        const services = await wix.listServices();
+        const now = new Date();
+        const weekAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        const slots = await wix.queryAvailabilityMulti(
+          services.map((s) => s.id),
+          now.toISOString(),
+          weekAhead.toISOString(),
+        );
+        const entries = buildWeeklyGrid(slots, services);
+        if (entries.length === 0) {
+          return JSON.stringify({
+            error: "no_classes_scheduled",
+            message:
+              "No class sessions found in the coming week, so there is no schedule to show. " +
+              "Say the planning is unavailable right now and offer the reception contact.",
+          });
+        }
+        let png: Buffer | null = null;
+        try {
+          png = renderScheduleImage(entries);
+        } catch (err) {
+          console.error("Schedule image render failed (falling back to text):", err);
+        }
+        cached = { at: Date.now(), entries, png };
+        scheduleCache = cached;
+      }
+
+      const text = scheduleText(cached.entries);
+      if (cached.png) {
+        try {
+          await sendImage(client.wa_phone, cached.png, "Planning des cours — Revive 🗓️");
+          await repo.addTurn(client.id, "assistant", `[image envoyée : planning hebdomadaire des cours]\n${text}`);
+          return JSON.stringify({
+            sent: true,
+            schedule: text,
+            note:
+              "The weekly schedule image was already delivered to the client. Do NOT repeat the schedule in text. " +
+              "Follow up with ONE short message in the client's language asking which class (and day) they want, " +
+              "then use check_availability as usual — the image shows no dates or open spots.",
+          });
+        } catch (err) {
+          console.error("Schedule image send failed (falling back to text):", err);
+        }
+      }
+      // Render or delivery failed — never leave the client unanswered.
+      return JSON.stringify({
+        sent: false,
+        schedule: text,
+        note:
+          "The image could not be sent. Relay this schedule as a short, readable text message (keep the day " +
+          "grouping), then ask which class they want and use check_availability as usual.",
       });
     }
 

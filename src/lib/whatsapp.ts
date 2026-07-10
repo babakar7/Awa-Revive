@@ -91,6 +91,35 @@ export async function sendTemplate(
   });
 }
 
+/**
+ * Send an image: upload the PNG to Meta's media endpoint, then send it by
+ * media id (no public URL to host or protect). Throws on failure — callers
+ * are expected to fall back to a text version.
+ */
+export async function sendImage(to: string, png: Buffer, caption?: string): Promise<void> {
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("file", new Blob([new Uint8Array(png)], { type: "image/png" }), "planning.png");
+  const res = await fetch(`${GRAPH_BASE}/${config.WA_PHONE_NUMBER_ID}/media`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.WA_ACCESS_TOKEN}` },
+    body: form,
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`WhatsApp media upload failed (${res.status}): ${await res.text()}`);
+  }
+  const mediaId = ((await res.json()) as { id?: string })?.id;
+  if (!mediaId) throw new Error("WhatsApp media upload returned no id");
+  await postMessage({
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "image",
+    image: { id: mediaId, ...(caption ? { caption: caption.slice(0, 1024) } : {}) },
+  });
+}
+
 // ---------- interactive messages (reply buttons / lists) ----------
 
 export interface InteractiveOption {
