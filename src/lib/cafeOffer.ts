@@ -42,22 +42,19 @@ function cafeMenuOfferCopy(lang: string): { body: string; button: string } {
     case "en":
       return {
         body:
-          "Fancy something with your session? 🥤 Here are our studio favourites 👇 — tap one to add it, " +
-          "tell me if you'd like something else, or just say no thanks.",
+          "Fancy something with your session? 🥤 Here are our studio favourites 👇 (scroll to see them all)",
         button: "See the menu",
       };
     case "wo":
       return {
         body:
-          "Ndax dangaa bëgg lu mu ànd sa séance? 🥤 Ñii ñooy sunu incontournables 👇 — tann benn, " +
-          "walla waxal ma lu la neex, walla neel déedéet.",
+          "Ndax dangaa bëgg lu mu ànd sa séance? 🥤 Ñii ñooy sunu incontournables 👇 (scroll ngir gis lépp)",
         button: "Xool menu bi",
       };
     default:
       return {
         body:
-          "Envie d'accompagner ta séance ? 🥤 Voici nos incontournables 👇 — tape sur un article pour " +
-          "l'ajouter, dis-moi si tu cherches autre chose, ou réponds simplement non merci.",
+          "Envie d'accompagner ta séance ? 🥤 Voici nos incontournables 👇 (scrolle pour voir le reste)",
         button: "Voir le menu",
       };
   }
