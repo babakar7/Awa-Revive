@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { notifyReception } from "../lib/notify.js";
 import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
+import { emailAskMessage } from "../lib/linkAsk.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
 import { CAFE_MENU } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
@@ -125,18 +126,20 @@ export async function handleInboundText(args: {
   // isn't on their Wix fiche is invisible to Awa and would be pushed to Wave
   // for a class their abonnement covers. When the live lookup says the number
   // matches NO unique contact, this is their first conversation ever, and the
-  // one-shot email prompt hasn't fired yet, Awa appends ONE ignorable "do you
-  // already have an account?" line (see dynamicContext). We arm the SAME
-  // one-shot flag the post-payment ask uses (wave.ts), so the question is
-  // asked at most once across both paths. memberships === null means the
-  // lookup failed → treat as unknown, never ask.
+  // one-shot email prompt hasn't fired yet, the SERVER appends ONE ignorable
+  // "do you already have an account?" message right after Awa's reply (below).
+  // Deterministic, never left to the model — a prod test (11/07) showed the
+  // model dropping a prompt-injected version when the client's message routed
+  // it elsewhere. The one-shot flag (email_prompted_at, shared with the
+  // post-payment ask in wave.ts) is armed only AFTER the message is actually
+  // sent, so a skipped delivery never burns the single chance.
+  // memberships === null = lookup failed → unknown → never ask.
   const firstContactUnlinked =
     memberships !== null &&
     !memberships.linked &&
     !client.email_prompted_at &&
     !client.claimed_email &&
     !history.some((t) => t.role === "assistant");
-  if (firstContactUnlinked) await repo.markEmailPrompted(client.id);
 
   const messages: Anthropic.MessageParam[] = [];
   for (const turn of history) {
@@ -268,6 +271,22 @@ export async function handleInboundText(args: {
   if (replyText) {
     await sendText(args.waPhone, replyText);
     await repo.addTurn(client.id, "assistant", replyText);
+  }
+
+  // First-contact account matching: the client's actual request was just
+  // answered — NOW append the one-time, ignorable "do you already have a Revive
+  // account?" message, server-side (see the firstContactUnlinked comment
+  // above). Only when a reply actually went out, and the flag is armed only
+  // after a successful send so a failed delivery keeps the single chance.
+  if (firstContactUnlinked && (replyText || interactiveSent)) {
+    try {
+      const ask = emailAskMessage(client.language ?? lang ?? "fr");
+      await sendText(args.waPhone, ask);
+      await repo.addTurn(client.id, "assistant", ask);
+      await repo.markEmailPrompted(client.id);
+    } catch (err) {
+      console.error("First-contact linking ask failed (will retry next msg):", err);
+    }
   }
 
   // Book-first, menu-after: the class was just booked on the client's plan —

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dynamicContext } from "../src/agent/systemPrompt.js";
+import { emailAskMessage } from "../src/lib/linkAsk.js";
 
 const base = {
   clientName: null,
@@ -12,30 +13,42 @@ const base = {
   habit: null,
 };
 
-const FIRST_CONTACT_MARKER = "FIRST CONTACT and this WhatsApp number matches no Revive account";
+const FIRST_CONTACT_MARKER = "FIRST CONTACT";
 
-describe("dynamicContext — first-contact account linking invitation", () => {
-  it("injects the ignorable email invitation when firstContactUnlinked is true", () => {
-    const ctx = dynamicContext({ ...base, firstContactUnlinked: true });
-    expect(ctx).toContain(FIRST_CONTACT_MARKER);
-    // It must be framed as ignorable / at-most-once, and route replies to verification.
-    expect(ctx).toContain("request_email_verification");
-    expect(ctx.toLowerCase()).toContain("ignore");
+describe("emailAskMessage — the one-time ignorable linking invitation", () => {
+  it("is ignorable and asks for the account email, in each language", () => {
+    for (const lang of ["fr", "en", "wo"]) {
+      const msg = emailAskMessage(lang);
+      expect(msg.toLowerCase()).toMatch(/ignore|topp/); // "ignore" / wolof "bul ci topp"
+      expect(msg.toLowerCase()).toMatch(/email|compte/);
+    }
   });
 
-  it("does NOT inject it when firstContactUnlinked is false/absent", () => {
+  it("defaults to French for an unknown language", () => {
+    expect(emailAskMessage("es")).toBe(emailAskMessage("fr"));
+  });
+});
+
+describe("dynamicContext — first-contact note (server sends the ask, not Awa)", () => {
+  it("flags first contact and tells the model NOT to write the invitation itself", () => {
+    const ctx = dynamicContext({ ...base, firstContactUnlinked: true });
+    expect(ctx).toContain(FIRST_CONTACT_MARKER);
+    // The invitation is server-sent; the model must not write it.
+    expect(ctx).toMatch(/do NOT write|not by you|automatically/i);
+    expect(ctx).toContain("request_email_verification");
+  });
+
+  it("does NOT add the note when firstContactUnlinked is false/absent", () => {
     expect(dynamicContext({ ...base, firstContactUnlinked: false })).not.toContain(
       FIRST_CONTACT_MARKER,
     );
     expect(dynamicContext({ ...base })).not.toContain(FIRST_CONTACT_MARKER);
   });
 
-  it("never invites when the client already has an active abonnement (matched account)", () => {
+  it("never flags first contact when the client already has an active abonnement", () => {
     const ctx = dynamicContext({
       ...base,
       memberships: [{ plan: "Illimité", covers: null, remaining: 5 }] as never,
-      // Even if the flag were somehow set, an active plan means they're matched;
-      // the caller (index.ts) only sets the flag when !linked, so this is belt-and-braces.
       firstContactUnlinked: false,
     });
     expect(ctx).not.toContain(FIRST_CONTACT_MARKER);

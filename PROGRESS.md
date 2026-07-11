@@ -833,20 +833,36 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       premier. `memberships === null` (lookup en échec) = statut inconnu → on
       NE demande JAMAIS (ne jamais dire à une abonnée reliée qu'elle n'a pas de
       compte à cause d'une erreur Wix).
-    - **Livraison** : prompt-injectée ([systemPrompt.ts](src/agent/systemPrompt.ts),
-      `dynamicContext`), le modèle tisse la phrase après avoir répondu à la
-      demande (jamais bloquer/retarder) ; règle §Linking amendée pour autoriser
-      ce cas précis (« out of the blue » interdit sauf flag first-contact).
-      L'invariant reste : jamais proposer si le contexte montre déjà un
-      abonnement/des résas (compte déjà matché).
-    - **Compromis assumé** : armer le flag à l'injection signifie que si le
-      modèle rate exceptionnellement la phrase, elle n'est pas re-posée (le
-      filet post-paiement est consommé). Acceptable vu la fiabilité du prompt ;
-      alternative écartée = colonne/flag séparé.
-    - Reproduction : le numéro de test 774982711 a été RESET (fiche Wix
-      supprimée + purge Postgres complète de la ligne `clients` et enfants) pour
-      rejouer le flux « numéro non relié ». Nouveau test `firstContactLink.test.ts`
-      (3), checklist `first-contact-link` ajoutée. 182 tests.
+    - **Livraison DÉTERMINISTE (v2, corrigée en prod)** : la v1 était
+      prompt-injectée (le modèle devait tisser la phrase). **Test réel raté
+      (11/07, Babakar) : « j'aurais bloqué pour Fusion lundi » a routé le modèle
+      vers la règle « résa introuvable ≠ non relié → pas d'email talk » (§141) +
+      l'offre de re-booker vite (§108), et le hedge « si ça colle » l'a fait
+      SAUTER l'invitation — one-shot pourtant consommé à l'injection.** Fix : le
+      message est désormais envoyé PAR LE SERVEUR juste après la réponse d'Awa
+      ([agent/index.ts](src/agent/index.ts)), même pattern « le serveur envoie,
+      jamais le modèle » que le café post-résa. Le flag `email_prompted_at`
+      n'est armé qu'APRÈS un envoi réussi (un `sendText` en échec ne brûle pas
+      la chance unique). Le message vit dans [lib/linkAsk.ts](src/lib/linkAsk.ts)
+      (`emailAskMessage`, FR/EN/WO), partagé avec la proposition post-paiement
+      ([wave.ts](src/webhooks/wave.ts)). Le contexte first-contact devient une
+      NOTE (« le système envoie l'invitation, ne l'écris pas toi-même »), plus
+      une instruction.
+    - **Règle §141 corrigée** : « pas d'email talk » ne vaut que si le compte
+      est DÉJÀ matché ; si un résultat d'outil / le contexte signale
+      explicitement que le numéro ne matche aucune fiche, une résa manquante
+      peut vouloir dire « compte sous un autre numéro » → Awa PEUT proposer la
+      liaison. `get_my_bookings` renvoie un `account_note` dans ce cas précis
+      (contact introuvable + aucune résa) — filet qui marche même après le
+      one-shot consommé (c'est exactement le scénario Fusion raté). L'invariant
+      tient : jamais proposer si le contexte montre déjà un abonnement/des résas.
+    - **Compromis** : one-shot armé seulement après envoi réussi → au pire un
+      échec réseau reporte la question au message suivant (jamais perdue).
+    - Reproduction : le numéro de test 774982711 a été RESET plusieurs fois
+      (fiche Wix supprimée + purge Postgres complète de la ligne `clients` et
+      enfants) pour rejouer le flux « numéro non relié ». Tests
+      `firstContactLink.test.ts` (emailAskMessage 3 langues + note contexte) et
+      checklist `first-contact-link`. 184 tests.
 
 ## 5. Chronologie condensée
 

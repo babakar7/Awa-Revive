@@ -1103,11 +1103,18 @@ export async function executeTool(
       // no local payment context, so any refund/re-credit goes through
       // reception. Dedupe against the Wix ids Awa already created.
       const external: unknown[] = [];
+      // Track whether this number resolves to a unique Wix contact. When it
+      // does NOT and we found nothing to show, the client may well have an
+      // account (and its bookings) under another number → surface a hint so
+      // Awa can propose email linking instead of a bare "not found". null =
+      // lookup failed (unknown), don't assert either way.
+      let contactMatched: boolean | null = null;
       try {
         const contactId = await wix.findContactIdByPhone(
           `+${client.wa_phone.replace(/^\+/, "")}`,
           client.name ?? undefined,
         );
+        contactMatched = contactId !== null;
         if (contactId) {
           const ownWixIds = new Set(
             bookings.map((b) => b.wix_booking_id).filter((x): x is string => !!x),
@@ -1138,6 +1145,15 @@ export async function executeTool(
               "(same 16h rule) via their studio: booking_id, but Awa does not know how they were paid — after " +
               "cancelling, any refund or session re-credit is handled by reception (the client contacts them; " +
               "reception is also notified automatically)."
+            : undefined,
+        // No bookings AND this number is on no Wix account: their account (and
+        // its bookings/abonnement) may be under another number. Invite linking
+        // by email rather than a flat "not found".
+        account_note:
+          own.length === 0 && external.length === 0 && contactMatched === false
+            ? "This WhatsApp number matches no Revive account, so any account this client already has is under a " +
+              "different number. If they believe they have a booking or an abonnement, invite them to link their " +
+              "account by email (request_email_verification) — otherwise just say the slot isn't booked and offer to book it."
             : undefined,
       });
     }

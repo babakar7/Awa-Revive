@@ -10,6 +10,7 @@ import { notifyReception } from "../lib/notify.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
+import { emailAskMessage } from "../lib/linkAsk.js";
 
 /**
  * Wave webhook handler — the critical path (SPEC §7).
@@ -459,27 +460,6 @@ async function maybeHandleUnlinkedClient(
     log.info({ clientId: client.id }, "Unlinked client: asked for email in chat + reception notified");
   } catch (err) {
     log.error({ err, clientId: client?.id }, "Unlinked-client handling failed (non-blocking)");
-  }
-}
-
-function emailAskMessage(lang: string): string {
-  switch (lang) {
-    case "en":
-      return (
-        `By the way 😊 if you already had a Revive account (website or studio), just reply here ` +
-        `with the email you used and the team will link your booking history. If not, you can ignore this!`
-      );
-    case "wo":
-      return (
-        `Benn laaj 😊 su fekkee am nga woon compte ci Revive (site web walla studio bi), ` +
-        `bindal ma fii sa email, ekib bi dina takk sa réservations yépp. Su amul, bul ci topp!`
-      );
-    default:
-      return (
-        `Au fait 😊 si tu avais déjà un compte chez Revive (site web ou au studio), ` +
-        `réponds-moi juste ici avec l'email que tu utilisais et l'équipe reliera ton historique. ` +
-        `Sinon, ignore ce message !`
-      );
   }
 }
 
