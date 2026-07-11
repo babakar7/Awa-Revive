@@ -27,6 +27,7 @@ import {
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import { sendText } from "../lib/whatsapp.js";
 import * as links from "../domain/linkRequests.js";
+import { renderTestChecklist } from "./testChecklist.js";
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
 async function activePlansByContact(): Promise<Map<string, string[]>> {
@@ -96,6 +97,7 @@ function layout(title: string, active: string, body: string): string {
     ["/admin/orders", "Commandes ☕"],
     ["/admin/handoffs", "Handoffs"],
     ["/admin/crm", "CRM 🗂"],
+    ["/admin/tests", "À tester 🧪"],
   ]
     .map(
       ([href, label]) =>
@@ -164,6 +166,17 @@ export function registerAdmin(app: FastifyInstance): void {
   app.register(
     async (admin) => {
       admin.addHook("onRequest", adminAuthHook);
+
+      // ---------- À tester (checklist de recette) ----------
+      admin.get("/tests", async (_req, reply) => {
+        const pendingLinks = await links
+          .receptionQueue()
+          .then((q2) => q2.length)
+          .catch(() => 0);
+        reply
+          .type("text/html")
+          .send(layout("À tester", "/admin/tests", renderTestChecklist(pendingLinks)));
+      });
 
       // ---------- Vue d'ensemble ----------
       admin.get("/", async (req, reply) => {
