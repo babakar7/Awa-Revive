@@ -103,3 +103,26 @@ export function auditContacts(rawContacts: any[]): CrmAudit {
 export async function runCrmAudit(): Promise<CrmAudit> {
   return auditContacts(await fetchAllContacts());
 }
+
+/**
+ * Which fiche of a duplicate group survives a merge — same rule for display
+ * (GET /admin/crm) and enforcement (POST, recomputed server-side):
+ *   1. the fiche holding an active abonnement (Wix doesn't guarantee a plan
+ *      survives being merged INTO another fiche — so the plan holder stays),
+ *   2. else a fiche whose number is stored in e164 (matchable as-is),
+ *   3. else the oldest fiche (longest history).
+ * Returns null when SEVERAL fiches hold plans — that merge is blocked.
+ */
+export function pickMergeTarget(
+  contacts: Pick<AuditContact, "id" | "hasE164" | "createdDate">[],
+  planHolderIds: Set<string>,
+): string | null {
+  const holders = contacts.filter((c) => planHolderIds.has(c.id));
+  if (holders.length > 1) return null;
+  if (holders.length === 1) return holders[0].id;
+  const byAge = (a: (typeof contacts)[number], b: (typeof contacts)[number]) =>
+    Date.parse(a.createdDate ?? "9999-12-31") - Date.parse(b.createdDate ?? "9999-12-31");
+  const e164 = contacts.filter((c) => c.hasE164).sort(byAge);
+  if (e164.length > 0) return e164[0].id;
+  return [...contacts].sort(byAge)[0]?.id ?? null;
+}

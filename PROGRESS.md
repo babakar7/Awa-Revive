@@ -628,11 +628,17 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
 
 29. **Page /admin/crm — nettoyage des doublons en un clic (11/07)**. Suite de
     l'audit §4.27 : nouvel onglet « CRM 🗂 » dans le dashboard.
-    - **Doublons** : un card par numéro en doublon (52 au 11/07), avec pour
-      chaque fiche nom, email, orthographes du numéro, date de création, et un
-      bouton « Garder celle-ci » → les AUTRES fiches du groupe sont fusionnées
-      dedans via l'API Merge de Wix (résas et abonnements suivent, les fiches
-      sources sont supprimées par Wix — irréversible, confirm() explicite).
+    - **Doublons** : un card par numéro en doublon (52 au 11/07), un SEUL
+      bouton « Fusionner ces N fiches » par groupe (même geste que dans Wix —
+      demande produit Babakar). La fiche conservée est choisie par le SERVEUR
+      (`pickMergeTarget`, pure et testée) et affichée « ✓ conservée » avant le
+      clic : 1) la fiche qui porte un abonnement actif 🎫 (Wix ne garantit pas
+      qu'un plan survive à une fusion côté source, et refuse les
+      contacts-membres comme sources — donc la porteuse du plan reste
+      TOUJOURS), 2) sinon la fiche au numéro e164, 3) sinon la plus ancienne.
+      Plusieurs fiches à abonnement dans un même groupe = fusion bloquée
+      (à trancher dans Wix). Fusion via l'API Merge (fiches sources
+      supprimées — irréversible, confirm() explicite).
     - **API Merge vérifiée E2E** sur deux contacts jetables créés/supprimés
       pour l'occasion : le corps réel est `sourceContactIds` +
       `targetContactRevision` (la révision de la cible est OBLIGATOIRE —
@@ -641,10 +647,11 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       orthographes différentes d'un même numéro (brut vs e164), qui échappent
       au contrôle d'unicité.
     - **Garde-fous serveur** (une fusion est irréversible, on ne fait jamais
-      confiance au formulaire) : chaque fiche du groupe est re-fetchée par id
-      et la fusion est REFUSÉE si toutes ne partagent pas le même numéro
-      normalisé ; échec Wix → bannière d'erreur, action loggée avec
-      l'admin user.
+      confiance au formulaire) : le POST ne reçoit QUE le groupe — la fiche
+      conservée est recalculée côté serveur avec la même règle que l'affichage ;
+      chaque fiche est re-fetchée par id et la fusion est REFUSÉE si toutes ne
+      partagent pas le même numéro normalisé ; échec Wix → bannière d'erreur,
+      action loggée avec l'admin user.
     - **Fiches sans téléphone** : listées sur la même page (repliées), à
       compléter dans Wix. Logique partagée script/page extraite dans
       [crmAudit.ts](src/lib/crmAudit.ts) (`auditContacts` pure + testée,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditContacts, phoneKey } from "../src/lib/crmAudit.js";
+import { auditContacts, phoneKey, pickMergeTarget } from "../src/lib/crmAudit.js";
 
 const contact = (id: string, first: string, phones: any[], email?: string) => ({
   id,
@@ -47,5 +47,45 @@ describe("auditContacts", () => {
       contact("a", "Double", [{ e164Phone: "+221774446666" }, { phone: "77 444 66 66" }]),
     ]);
     expect(audit.duplicates).toHaveLength(0);
+  });
+});
+
+describe("pickMergeTarget", () => {
+  const c = (id: string, hasE164: boolean, createdDate: string | null) => ({
+    id,
+    hasE164,
+    createdDate,
+  });
+
+  it("the plan holder always survives, even without e164 and younger", () => {
+    const target = pickMergeTarget(
+      [c("old-e164", true, "2024-01-01"), c("young-plan", false, "2026-01-01")],
+      new Set(["young-plan"]),
+    );
+    expect(target).toBe("young-plan");
+  });
+
+  it("without plans, prefers the oldest e164 fiche", () => {
+    const target = pickMergeTarget(
+      [c("raw-old", false, "2024-01-01"), c("e164-new", true, "2026-01-01"), c("e164-old", true, "2025-01-01")],
+      new Set(),
+    );
+    expect(target).toBe("e164-old");
+  });
+
+  it("without plans nor e164, prefers the oldest fiche", () => {
+    const target = pickMergeTarget(
+      [c("young", false, "2026-01-01"), c("old", false, "2024-01-01")],
+      new Set(),
+    );
+    expect(target).toBe("old");
+  });
+
+  it("several plan holders → null (merge blocked)", () => {
+    const target = pickMergeTarget(
+      [c("a", true, "2024-01-01"), c("b", true, "2025-01-01")],
+      new Set(["a", "b"]),
+    );
+    expect(target).toBeNull();
   });
 });

@@ -395,7 +395,7 @@ export interface Membership {
  * WITHOUT pagination, clients beyond the first page would silently lose
  * their abonnement in Awa's eyes. Paged until hasNext=false (cap 1000).
  */
-export async function listActiveMemberships(contactId: string): Promise<Membership[]> {
+export async function listAllActiveOrders(): Promise<any[]> {
   const orders: any[] = [];
   for (let offset = 0; offset < 1000; offset += 50) {
     const res = await fetch(
@@ -407,6 +407,11 @@ export async function listActiveMemberships(contactId: string): Promise<Membersh
     orders.push(...(data?.orders ?? []));
     if (!data?.pagingMetadata?.hasNext) break;
   }
+  return orders;
+}
+
+export async function listActiveMemberships(contactId: string): Promise<Membership[]> {
+  const orders = await listAllActiveOrders();
   return orders
     .filter((o: any) => o?.buyer?.contactId === contactId)
     .map((o: any) => ({

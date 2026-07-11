@@ -6,8 +6,19 @@ import * as repo from "../domain/repo.js";
 import { extrasFromJson } from "../lib/cafeMenu.js";
 import { adminAuthHook } from "./auth.js";
 import * as q from "./queries.js";
-import { runCrmAudit, phoneKey } from "../lib/crmAudit.js";
-import { mergeContacts, getContactById } from "../lib/wix.js";
+import { runCrmAudit, phoneKey, pickMergeTarget } from "../lib/crmAudit.js";
+import { mergeContacts, getContactById, listAllActiveOrders } from "../lib/wix.js";
+
+/** contactId → active plan names, for the CRM duplicates page & merge guard. */
+async function activePlansByContact(): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  for (const o of await listAllActiveOrders()) {
+    const cid = o?.buyer?.contactId;
+    if (!cid) continue;
+    map.set(cid, [...(map.get(cid) ?? []), o.planName ?? "abonnement"]);
+  }
+  return map;
+}
 
 /**
  * Admin dashboard — server-rendered HTML, no dependencies, no build step.
@@ -383,7 +394,10 @@ ${
       admin.get("/crm", async (req, reply) => {
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
-        const audit = await runCrmAudit();
+        const [audit, plansByContact] = await Promise.all([
+          runCrmAudit(),
+          activePlansByContact().catch(() => new Map<string, string[]>()),
+        ]);
 
         const banner = done
           ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ Fusion effectuée (${escapeHtml(done)} fiche(s) absorbée(s)).</span></div>`
@@ -394,24 +408,40 @@ ${
         const groupCards = audit.duplicates
           .map((g) => {
             const ids = g.contacts.map((c) => c.id).join(",");
+            const planHolders = new Set(
+              g.contacts.filter((c) => plansByContact.has(c.id)).map((c) => c.id),
+            );
+            // Same rule as the POST enforcement — what you see is what merges.
+            const keeperId = pickMergeTarget(g.contacts, planHolders);
+            const keeper = g.contacts.find((c) => c.id === keeperId);
             const rows = g.contacts
               .map((c) => {
-                const others = g.contacts.length - 1;
+                const plans = plansByContact.get(c.id) ?? [];
+                const planBadge = plans.length
+                  ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml(plans.join(" · "))}</span>`
+                  : "";
+                const fate =
+                  c.id === keeperId
+                    ? `<span class="ok">✓ conservée</span>`
+                    : `<span class="muted">fusionnée puis supprimée</span>`;
                 return `<tr>
-<td><b>${escapeHtml(c.name)}</b>${c.email ? `<div class="muted">${escapeHtml(c.email)}</div>` : ""}</td>
+<td><b>${escapeHtml(c.name)}</b>${planBadge}${c.email ? `<div class="muted">${escapeHtml(c.email)}</div>` : ""}</td>
 <td>${c.phones.map((p) => escapeHtml(p)).join("<br>")}${c.hasE164 ? ` <span class="muted">✓ intl</span>` : ""}</td>
 <td class="hide-sm">${c.createdDate ? fmtDate(c.createdDate) : "—"}</td>
-<td><form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ${others} fiche(s) dans « ${escapeHtml(c.name).replaceAll("'", "\\'")} » ?\\n\\nLes autres fiches du groupe seront SUPPRIMÉES (irréversible) ; leurs infos, réservations et abonnements sont rattachés à la fiche conservée.')">
-<input type="hidden" name="target" value="${c.id}">
-<input type="hidden" name="group" value="${ids}">
-<button class="act">Garder celle-ci</button>
-</form></td>
+<td>${fate}</td>
 </tr>`;
               })
               .join("");
+            const action = keeperId
+              ? `<form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ces ${g.contacts.length} fiches ?\\n\\n« ${escapeHtml(keeper?.name ?? "?").replaceAll("'", "\\'")} » est conservée ; les autres y sont fusionnées puis SUPPRIMÉES (irréversible).')">
+<input type="hidden" name="group" value="${ids}">
+<button class="act">Fusionner ces ${g.contacts.length} fiches</button>
+</form>`
+              : `<span class="muted">⚠️ Plusieurs fiches de ce groupe portent un abonnement actif — fusion bloquée ici, à traiter dans Wix avec la réception.</span>`;
             return `<div class="card">
 <b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro
-<table><tr><th>Fiche</th><th>Numéro(s) enregistré(s)</th><th class="hide-sm">Créée</th><th></th></tr>${rows}</table>
+<table><tr><th>Fiche</th><th>Numéro(s) enregistré(s)</th><th class="hide-sm">Créée</th><th>Sort</th></tr>${rows}</table>
+<div style="margin-top:.5rem">${action}</div>
 </div>`;
           })
           .join("");
@@ -432,8 +462,9 @@ ${banner}
 </div>
 <h2>👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
 <p class="muted">Awa refuse (prudemment) de choisir quand un numéro correspond à plusieurs fiches :
-ces clientes ne sont pas reconnues. Choisis la fiche à GARDER dans chaque groupe — les autres y sont
-fusionnées puis supprimées par Wix (réservations et abonnements suivent la fusion).</p>
+ces clientes ne sont pas reconnues. Un clic fusionne le groupe — la fiche conservée (✓) est choisie
+automatiquement : celle qui porte un abonnement actif 🎫, sinon celle au numéro international, sinon
+la plus ancienne. Les autres y sont fusionnées puis supprimées par Wix.</p>
 ${groupCards || `<div class="card"><span class="ok">✓ Aucun doublon — rien à nettoyer.</span></div>`}
 <h2>📵 Fiches sans téléphone ${audit.noPhone.length ? `(${audit.noPhone.length})` : ""}</h2>
 <p class="muted">Invisibles pour Awa (elle reconnaît les clientes par leur numéro WhatsApp).
@@ -446,20 +477,16 @@ ${audit.noPhone.length ? `<details><summary>Voir la liste (${audit.noPhone.lengt
 
       admin.post("/crm/merge", async (req, reply) => {
         const bodyIn = (req.body ?? {}) as Record<string, string>;
-        const target = String(bodyIn.target ?? "").trim();
         const group = String(bodyIn.group ?? "")
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean);
-        const sources = group.filter((id) => id !== target);
         const fail = (msg: string) =>
           reply.redirect(`/admin/crm?err=${encodeURIComponent(msg)}`, 303);
 
-        if (!target || sources.length === 0 || !group.includes(target)) {
-          return fail("cible ou groupe invalide");
-        }
-        // Re-verify server-side that every fiche involved still shares a phone
-        // — the merge is irreversible, never trust the form alone.
+        if (group.length < 2) return fail("groupe invalide");
+        // Re-verify server-side — the merge is irreversible, never trust the
+        // form alone: the fiches must still exist AND share the same number.
         const contacts = await Promise.all(group.map((id) => getContactById(id)));
         if (contacts.some((c) => !c)) {
           return fail("une fiche du groupe n'existe plus — recharge la page");
@@ -472,11 +499,35 @@ ${audit.noPhone.length ? `<details><summary>Voir la liste (${audit.noPhone.lengt
                 .filter(Boolean),
             ),
         );
-        const targetKeys = keys[group.indexOf(target)];
-        const allShare = keys.every((set) => [...set].some((k) => targetKeys.has(k)));
+        const first = keys[0];
+        const allShare = keys.every((set) => [...set].some((k) => first.has(k)));
         if (!allShare) {
           return fail("les fiches ne partagent pas le même numéro — fusion refusée");
         }
+        // The kept fiche is recomputed HERE with the same rule as the page:
+        // the plan holder survives (Wix doesn't guarantee a plan follows a
+        // merge, and refuses member-contacts as sources), else e164, else
+        // the oldest. Several plan holders → blocked.
+        const plansByContact = await activePlansByContact().catch(() => null);
+        if (plansByContact === null) {
+          return fail("impossible de vérifier les abonnements — réessaie");
+        }
+        const target = pickMergeTarget(
+          contacts.map((c, i) => ({
+            id: group[i],
+            hasE164: (c.info?.phones?.items ?? []).some(
+              (p: any) => typeof p?.e164Phone === "string" && p.e164Phone.length > 5,
+            ),
+            createdDate: c.createdDate ?? null,
+          })),
+          new Set(group.filter((id) => plansByContact.has(id))),
+        );
+        if (!target) {
+          return fail(
+            "plusieurs fiches de ce groupe portent un abonnement actif — fusion bloquée, à voir dans Wix avec la réception",
+          );
+        }
+        const sources = group.filter((id) => id !== target);
 
         try {
           await mergeContacts(target, sources);
