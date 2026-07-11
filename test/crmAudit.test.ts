@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditContacts, phoneKey, pickMergeTarget } from "../src/lib/crmAudit.js";
+import { auditContacts, phoneKey, planMerge } from "../src/lib/crmAudit.js";
 
 const contact = (id: string, first: string, phones: any[], email?: string) => ({
   id,
@@ -50,42 +50,70 @@ describe("auditContacts", () => {
   });
 });
 
-describe("pickMergeTarget", () => {
+describe("planMerge", () => {
   const c = (id: string, hasE164: boolean, createdDate: string | null) => ({
     id,
     hasE164,
     createdDate,
   });
+  const none = new Set<string>();
 
-  it("the plan holder always survives, even without e164 and younger", () => {
-    const target = pickMergeTarget(
+  it("plan holder survives; plain fiches are sources", () => {
+    const plan = planMerge(
       [c("old-e164", true, "2024-01-01"), c("young-plan", false, "2026-01-01")],
       new Set(["young-plan"]),
+      none,
     );
-    expect(target).toBe("young-plan");
+    expect(plan).toEqual({ targetId: "young-plan", sourceIds: ["old-e164"], leftoverIds: [] });
   });
 
-  it("without plans, prefers the oldest e164 fiche", () => {
-    const target = pickMergeTarget(
-      [c("raw-old", false, "2024-01-01"), c("e164-new", true, "2026-01-01"), c("e164-old", true, "2025-01-01")],
-      new Set(),
+  it("member beats plan holder as target; the plan holder is protected, not merged", () => {
+    const plan = planMerge(
+      [c("member", false, "2026-01-01"), c("plan", false, "2024-01-01"), c("plain", true, "2025-01-01")],
+      new Set(["plan"]),
+      new Set(["member"]),
     );
-    expect(target).toBe("e164-old");
+    expect(plan).toEqual({ targetId: "member", sourceIds: ["plain"], leftoverIds: ["plan"] });
   });
 
-  it("without plans nor e164, prefers the oldest fiche", () => {
-    const target = pickMergeTarget(
-      [c("young", false, "2026-01-01"), c("old", false, "2024-01-01")],
-      new Set(),
+  it("Dieynaba case: two members + one plain fiche → plain merges into a member, other member stays", () => {
+    const plan = planMerge(
+      [c("member-a", false, "2024-01-01"), c("plain", false, "2025-01-01"), c("member-b", false, "2026-01-01")],
+      none,
+      new Set(["member-a", "member-b"]),
     );
-    expect(target).toBe("old");
+    expect(plan?.targetId).toBe("member-a"); // oldest member
+    expect(plan?.sourceIds).toEqual(["plain"]);
+    expect(plan?.leftoverIds).toEqual(["member-b"]);
   });
 
-  it("several plan holders → null (merge blocked)", () => {
-    const target = pickMergeTarget(
+  it("all fiches are members → nothing mergeable (null)", () => {
+    const plan = planMerge(
       [c("a", true, "2024-01-01"), c("b", true, "2025-01-01")],
+      none,
       new Set(["a", "b"]),
     );
-    expect(target).toBeNull();
+    expect(plan).toBeNull();
+  });
+
+  it("without plans/members, keeps the oldest e164 fiche", () => {
+    const plan = planMerge(
+      [c("raw-old", false, "2024-01-01"), c("e164-new", true, "2026-01-01"), c("e164-old", true, "2025-01-01")],
+      none,
+      none,
+    );
+    expect(plan?.targetId).toBe("e164-old");
+    expect(plan?.sourceIds?.sort()).toEqual(["e164-new", "raw-old"]);
+  });
+
+  it("member holding the plan wins over a plain member", () => {
+    const plan = planMerge(
+      [c("member-plain", false, "2024-01-01"), c("member-plan", false, "2026-01-01"), c("plain", false, "2025-01-01")],
+      new Set(["member-plan"]),
+      new Set(["member-plain", "member-plan"]),
+    );
+    expect(plan?.targetId).toBe("member-plan");
+    expect(plan?.sourceIds).toEqual(["plain"]);
+    expect(plan?.leftoverIds).toEqual(["member-plain"]);
   });
 });

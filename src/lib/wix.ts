@@ -367,6 +367,25 @@ export async function mergeContacts(targetId: string, sourceIds: string[]): Prom
   });
 }
 
+/**
+ * Which of these contacts are SITE MEMBERS (login accounts). Wix refuses to
+ * merge a member contact as a merge SOURCE (428 FAILED_PRECONDITION, seen
+ * live 11/07 on Dieynaba's duplicates) — the CRM page needs to know upfront.
+ * One query for the whole batch ($in verified live).
+ */
+export async function findMemberContactIds(contactIds: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (let i = 0; i < contactIds.length; i += 100) {
+    const data = await wixPost("/members/v1/members/query", {
+      query: { filter: { contactId: { $in: contactIds.slice(i, i + 100) } } },
+    });
+    for (const m of data?.members ?? []) {
+      if (m?.contactId) out.add(m.contactId);
+    }
+  }
+  return out;
+}
+
 /** One contact by id (used to re-verify a merge server-side). */
 export async function getContactById(contactId: string): Promise<any | null> {
   const res = await fetch(`${WIX_API}/contacts/v4/contacts/${contactId}`, {

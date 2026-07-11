@@ -6,8 +6,13 @@ import * as repo from "../domain/repo.js";
 import { extrasFromJson } from "../lib/cafeMenu.js";
 import { adminAuthHook } from "./auth.js";
 import * as q from "./queries.js";
-import { runCrmAudit, phoneKey, pickMergeTarget } from "../lib/crmAudit.js";
-import { mergeContacts, getContactById, listAllActiveOrders } from "../lib/wix.js";
+import { runCrmAudit, phoneKey, planMerge } from "../lib/crmAudit.js";
+import {
+  mergeContacts,
+  getContactById,
+  listAllActiveOrders,
+  findMemberContactIds,
+} from "../lib/wix.js";
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
 async function activePlansByContact(): Promise<Map<string, string[]>> {
@@ -398,6 +403,8 @@ ${
           runCrmAudit(),
           activePlansByContact().catch(() => new Map<string, string[]>()),
         ]);
+        const allDupIds = audit.duplicates.flatMap((g) => g.contacts.map((c) => c.id));
+        const memberIds = await findMemberContactIds(allDupIds).catch(() => new Set<string>());
 
         const banner = done
           ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ Fusion effectuée (${escapeHtml(done)} fiche(s) absorbée(s)).</span></div>`
@@ -412,32 +419,42 @@ ${
               g.contacts.filter((c) => plansByContact.has(c.id)).map((c) => c.id),
             );
             // Same rule as the POST enforcement — what you see is what merges.
-            const keeperId = pickMergeTarget(g.contacts, planHolders);
-            const keeper = g.contacts.find((c) => c.id === keeperId);
+            const plan = planMerge(g.contacts, planHolders, memberIds);
+            const keeper = g.contacts.find((c) => c.id === plan?.targetId);
             const rows = g.contacts
               .map((c) => {
                 const plans = plansByContact.get(c.id) ?? [];
-                const planBadge = plans.length
-                  ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml(plans.join(" · "))}</span>`
-                  : "";
-                const fate =
-                  c.id === keeperId
+                const badges =
+                  (memberIds.has(c.id)
+                    ? ` <span class="badge" style="background:#0969da">👤 compte membre</span>`
+                    : "") +
+                  (plans.length
+                    ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml(plans.join(" · "))}</span>`
+                    : "");
+                const fate = !plan
+                  ? `<span class="muted">—</span>`
+                  : c.id === plan.targetId
                     ? `<span class="ok">✓ conservée</span>`
-                    : `<span class="muted">fusionnée puis supprimée</span>`;
+                    : plan.sourceIds.includes(c.id)
+                      ? `<span class="muted">fusionnée puis supprimée</span>`
+                      : `<span class="muted">reste telle quelle (protégée)</span>`;
                 return `<tr>
-<td><b>${escapeHtml(c.name)}</b>${planBadge}${c.email ? `<div class="muted">${escapeHtml(c.email)}</div>` : ""}</td>
+<td><b>${escapeHtml(c.name)}</b>${badges}${c.email ? `<div class="muted">${escapeHtml(c.email)}</div>` : ""}</td>
 <td>${c.phones.map((p) => escapeHtml(p)).join("<br>")}${c.hasE164 ? ` <span class="muted">✓ intl</span>` : ""}</td>
 <td class="hide-sm">${c.createdDate ? fmtDate(c.createdDate) : "—"}</td>
 <td>${fate}</td>
 </tr>`;
               })
               .join("");
-            const action = keeperId
-              ? `<form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ces ${g.contacts.length} fiches ?\\n\\n« ${escapeHtml(keeper?.name ?? "?").replaceAll("'", "\\'")} » est conservée ; les autres y sont fusionnées puis SUPPRIMÉES (irréversible).')">
+            const leftoverNote = plan?.leftoverIds.length
+              ? ` <span class="muted">(${plan.leftoverIds.length} fiche(s) protégée(s) — compte membre ou abonnement — resteront : Wix interdit de les fusionner ; à traiter avec la réception si besoin.)</span>`
+              : "";
+            const action = plan
+              ? `<form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ${plan.sourceIds.length} fiche(s) dans « ${escapeHtml(keeper?.name ?? "?").replaceAll("'", "\\'")} » ?\\n\\nLes fiches fusionnées sont SUPPRIMÉES (irréversible).')">
 <input type="hidden" name="group" value="${ids}">
-<button class="act">Fusionner ces ${g.contacts.length} fiches</button>
-</form>`
-              : `<span class="muted">⚠️ Plusieurs fiches de ce groupe portent un abonnement actif — fusion bloquée ici, à traiter dans Wix avec la réception.</span>`;
+<button class="act">Fusionner ${plan.sourceIds.length} fiche(s)</button>
+</form>${leftoverNote}`
+              : `<span class="muted">⚠️ Rien à fusionner automatiquement : ces fiches sont des comptes membres (Wix interdit de fusionner deux membres). À traiter dans Wix avec la réception.</span>`;
             return `<div class="card">
 <b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro
 <table><tr><th>Fiche</th><th>Numéro(s) enregistré(s)</th><th class="hide-sm">Créée</th><th>Sort</th></tr>${rows}</table>
@@ -463,8 +480,9 @@ ${banner}
 <h2>👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
 <p class="muted">Awa refuse (prudemment) de choisir quand un numéro correspond à plusieurs fiches :
 ces clientes ne sont pas reconnues. Un clic fusionne le groupe — la fiche conservée (✓) est choisie
-automatiquement : celle qui porte un abonnement actif 🎫, sinon celle au numéro international, sinon
-la plus ancienne. Les autres y sont fusionnées puis supprimées par Wix.</p>
+automatiquement : compte membre 👤 et abonnement 🎫 d'abord (Wix interdit de les fusionner comme
+sources), sinon numéro international, sinon la plus ancienne. Les fiches fusionnées sont supprimées
+par Wix ; les fiches protégées restent telles quelles.</p>
 ${groupCards || `<div class="card"><span class="ok">✓ Aucun doublon — rien à nettoyer.</span></div>`}
 <h2>📵 Fiches sans téléphone ${audit.noPhone.length ? `(${audit.noPhone.length})` : ""}</h2>
 <p class="muted">Invisibles pour Awa (elle reconnaît les clientes par leur numéro WhatsApp).
@@ -504,15 +522,17 @@ ${audit.noPhone.length ? `<details><summary>Voir la liste (${audit.noPhone.lengt
         if (!allShare) {
           return fail("les fiches ne partagent pas le même numéro — fusion refusée");
         }
-        // The kept fiche is recomputed HERE with the same rule as the page:
-        // the plan holder survives (Wix doesn't guarantee a plan follows a
-        // merge, and refuses member-contacts as sources), else e164, else
-        // the oldest. Several plan holders → blocked.
-        const plansByContact = await activePlansByContact().catch(() => null);
-        if (plansByContact === null) {
-          return fail("impossible de vérifier les abonnements — réessaie");
+        // The merge plan is recomputed HERE with the same rule as the page:
+        // member accounts and plan holders are never merge sources (Wix 428 /
+        // plan-survival risk) — they survive or stay aside.
+        const [plansByContact, memberIds] = await Promise.all([
+          activePlansByContact().catch(() => null),
+          findMemberContactIds(group).catch(() => null),
+        ]);
+        if (plansByContact === null || memberIds === null) {
+          return fail("impossible de vérifier abonnements/comptes membres — réessaie");
         }
-        const target = pickMergeTarget(
+        const plan = planMerge(
           contacts.map((c, i) => ({
             id: group[i],
             hasE164: (c.info?.phones?.items ?? []).some(
@@ -521,23 +541,23 @@ ${audit.noPhone.length ? `<details><summary>Voir la liste (${audit.noPhone.lengt
             createdDate: c.createdDate ?? null,
           })),
           new Set(group.filter((id) => plansByContact.has(id))),
+          memberIds,
         );
-        if (!target) {
+        if (!plan) {
           return fail(
-            "plusieurs fiches de ce groupe portent un abonnement actif — fusion bloquée, à voir dans Wix avec la réception",
+            "rien à fusionner automatiquement dans ce groupe (comptes membres) — à traiter dans Wix",
           );
         }
-        const sources = group.filter((id) => id !== target);
 
         try {
-          await mergeContacts(target, sources);
+          await mergeContacts(plan.targetId, plan.sourceIds);
           req.log.info(
-            { target, sources, by: req.adminUser },
+            { target: plan.targetId, sources: plan.sourceIds, by: req.adminUser },
             "CRM duplicate contacts merged from admin dashboard",
           );
-          return reply.redirect(`/admin/crm?done=${sources.length}`, 303);
+          return reply.redirect(`/admin/crm?done=${plan.sourceIds.length}`, 303);
         } catch (e) {
-          req.log.error({ e, target, sources }, "CRM merge failed");
+          req.log.error({ err: e, target: plan.targetId, sources: plan.sourceIds }, "CRM merge failed");
           return fail("erreur Wix pendant la fusion — réessaie");
         }
       });

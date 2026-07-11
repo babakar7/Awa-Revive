@@ -659,6 +659,22 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       pointe maintenant vers la page. Smoke-test local : page 200, 52 groupes
       rendus, merge vide/numéros différents → refus propre. 8 tests ajoutés
       (139 au total).
+    - **⚠️ Contrainte Wix découverte au premier clic réel (Dieynaba Anna Dia,
+      11/07)** : Wix répond **428 « Cannot merge contact with membership
+      status »** quand une fiche source est un **compte membre** (login site) —
+      impossible de fusionner deux membres entre eux, par l'API comme dans le
+      dashboard. Refonte `planMerge` ([crmAudit.ts](src/lib/crmAudit.ts), pure,
+      testée) : les comptes membres 👤 et porteurs d'abonnement 🎫 ne sont
+      JAMAIS des sources — priorité de cible membre+plan > membre > plan >
+      e164 > plus ancienne ; le bouton ne fusionne que les fiches fusionnables
+      et affiche « reste telle quelle (protégée) » pour les autres ; groupes
+      100 % membres = fusion impossible, signalé (9 groupes sur 51 au 11/07 —
+      44 fiches membres parmi les doublons !). Détection membres en 1 requête
+      batch (`findMemberContactIds`, filtre `contactId $in` vérifié live).
+      Fusion Dieynaba rejouée avec succès (fiche WIX_FORMS absorbée, les 2
+      comptes membres subsistent — leur fusion est un chantier Wix support/
+      manuel). Fix bonus : le log d'échec de fusion loggait `{e}` (objet vide
+      en pino) → `{err}`. 145 tests.
 
 ## 5. Chronologie condensée
 

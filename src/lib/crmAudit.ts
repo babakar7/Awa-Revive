@@ -104,25 +104,61 @@ export async function runCrmAudit(): Promise<CrmAudit> {
   return auditContacts(await fetchAllContacts());
 }
 
+export interface MergePlan {
+  /** Fiche that survives. */
+  targetId: string;
+  /** Fiches absorbed into the target (never a member, never a plan holder). */
+  sourceIds: string[];
+  /** Fiches that CANNOT be merged (member accounts / other plan holders) and stay. */
+  leftoverIds: string[];
+}
+
 /**
- * Which fiche of a duplicate group survives a merge — same rule for display
- * (GET /admin/crm) and enforcement (POST, recomputed server-side):
- *   1. the fiche holding an active abonnement (Wix doesn't guarantee a plan
- *      survives being merged INTO another fiche — so the plan holder stays),
- *   2. else a fiche whose number is stored in e164 (matchable as-is),
- *   3. else the oldest fiche (longest history).
- * Returns null when SEVERAL fiches hold plans — that merge is blocked.
+ * What a one-click merge of a duplicate group does — same rule for display
+ * (GET /admin/crm) and enforcement (POST, recomputed server-side).
+ *
+ * Constraints (both verified live 11/07):
+ *  - a SITE MEMBER contact can never be a merge source (Wix 428) — two member
+ *    fiches can therefore never be merged together, they stay side by side;
+ *  - a fiche holding an active abonnement is never risked as a source either
+ *    (Wix doesn't guarantee the plan follows the merge).
+ *
+ * Target priority: member holding a plan > member > plan holder > e164 >
+ * oldest. Everything that is neither the target nor protected is a source.
+ * Returns null when nothing can be merged (e.g. every fiche is a member).
  */
-export function pickMergeTarget(
+export function planMerge(
   contacts: Pick<AuditContact, "id" | "hasE164" | "createdDate">[],
   planHolderIds: Set<string>,
-): string | null {
-  const holders = contacts.filter((c) => planHolderIds.has(c.id));
-  if (holders.length > 1) return null;
-  if (holders.length === 1) return holders[0].id;
+  memberIds: Set<string>,
+): MergePlan | null {
   const byAge = (a: (typeof contacts)[number], b: (typeof contacts)[number]) =>
     Date.parse(a.createdDate ?? "9999-12-31") - Date.parse(b.createdDate ?? "9999-12-31");
-  const e164 = contacts.filter((c) => c.hasE164).sort(byAge);
-  if (e164.length > 0) return e164[0].id;
-  return [...contacts].sort(byAge)[0]?.id ?? null;
+  const pick = (...pools: (typeof contacts)[]) => {
+    for (const pool of pools) {
+      if (pool.length > 0) return [...pool].sort(byAge)[0].id;
+    }
+    return null;
+  };
+  const members = contacts.filter((c) => memberIds.has(c.id));
+  const holders = contacts.filter((c) => planHolderIds.has(c.id));
+  const targetId = pick(
+    members.filter((c) => planHolderIds.has(c.id)),
+    members,
+    holders,
+    contacts.filter((c) => c.hasE164),
+    contacts,
+  );
+  if (!targetId) return null;
+  const protectedIds = new Set(
+    contacts.filter((c) => memberIds.has(c.id) || planHolderIds.has(c.id)).map((c) => c.id),
+  );
+  const sourceIds = contacts
+    .filter((c) => c.id !== targetId && !protectedIds.has(c.id))
+    .map((c) => c.id);
+  const leftoverIds = contacts
+    .filter((c) => c.id !== targetId && protectedIds.has(c.id))
+    .map((c) => c.id);
+  if (sourceIds.length === 0) return null;
+  return { targetId, sourceIds, leftoverIds };
 }
