@@ -235,9 +235,10 @@ ${
 }
 </div>
 
-<h2>🙋🏾 Handoffs des 7 derniers jours</h2>
-<div class="card">
+<h2>🙋🏾 Handoffs des 7 derniers jours ${s.handoffsOpen ? `<span class="badge" style="background:#cf222e">${s.handoffsOpen} ouvert(s)</span>` : ""}</h2>
+<div class="card ${s.handoffsOpen ? "warn" : ""}">
 ${actions.recentHandoffs.length ? `<table><tr><th>Quand</th><th>Client</th><th>Motif</th></tr>${handoffRows}</table>` : `<span class="muted">Aucun handoff récent.</span>`}
+${s.handoffsOpen ? `<p class="muted" style="margin-bottom:0">Marquer les handoffs traités : <a href="/admin/handoffs">onglet Handoffs</a>.</p>` : ""}
 </div>
 
 <h2>📊 Activité</h2>
@@ -409,17 +410,34 @@ ${
       // ---------- Handoffs ----------
       admin.get("/handoffs", async (_req, reply) => {
         const handoffs = await q.listHandoffs();
+        const open = handoffs.filter((h) => h.status === "OPEN").length;
         const rows = handoffs
           .map(
-            (h) => `<tr>
+            (h) => `<tr${h.status === "DONE" ? ` style="opacity:.55"` : ""}>
 <td>${fmtDate(h.created_at)}</td>
 <td><a href="/admin/conversations/${h.client_id}">${escapeHtml(h.client_name ?? "?")}</a><div class="muted">+${escapeHtml(h.wa_phone)}</div></td>
 <td>${escapeHtml(h.reason ?? "")}</td>
+<td>${
+              h.status === "OPEN"
+                ? `<form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act">✅ Traité</button></form>`
+                : `<span class="muted">✓ ${escapeHtml(h.done_by ?? "")}</span>`
+            }</td>
 </tr>`,
           )
           .join("");
-        const body = `<div class="card"><table><tr><th>Quand</th><th>Client</th><th>Motif</th></tr>${rows || `<tr><td colspan="3" class="muted">Aucun handoff.</td></tr>`}</table></div>`;
+        const body = `<div class="card ${open ? "warn" : ""}">
+${open ? `<p class="muted">${open} handoff(s) à traiter — un handoff = un client dont le besoin attend un humain. « Traité » = le client a été recontacté (ou son cas réglé).</p>` : `<p class="muted"><span class="ok">✓ Tous les handoffs sont traités.</span></p>`}
+<table><tr><th>Quand</th><th>Client</th><th>Motif</th><th></th></tr>${rows || `<tr><td colspan="4" class="muted">Aucun handoff.</td></tr>`}</table></div>`;
         reply.type("text/html").send(layout("Handoffs", "/admin/handoffs", body));
+      });
+
+      admin.post("/handoffs/:id/done", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const updated = await q.markHandoffDone(id, req.adminUser ?? "?");
+        if (updated) {
+          req.log.info({ handoffId: id, by: req.adminUser }, "Handoff marked done");
+        }
+        reply.redirect("/admin/handoffs", 303);
       });
 
       // ---------- Hygiène CRM (fiches sans téléphone, doublons à fusionner) ----------

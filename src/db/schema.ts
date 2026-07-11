@@ -107,6 +107,21 @@ create table if not exists handoffs (
   created_at timestamptz not null default now()
 );
 
+-- Cycle de vie d'un handoff : avant, une ligne était écrite puis oubliée —
+-- rien ne disait si quelqu'un avait agi. OPEN → DONE via le bouton « Traité »
+-- du dashboard (boucle de résultat, PROGRESS §4.31).
+alter table handoffs
+  add column if not exists status text not null default 'OPEN';
+alter table handoffs
+  add column if not exists done_by text;
+alter table handoffs
+  add column if not exists done_at timestamptz;
+
+-- Backfill one-shot (borne FIXE = idempotent) : l'historique d'avant la
+-- feature est considéré traité — seuls les handoffs neufs vivent le cycle.
+update handoffs set status = 'DONE', done_by = 'backfill'
+  where status = 'OPEN' and created_at < '2026-07-12';
+
 -- Abonnements vendus par Awa. Même invariant que les cours : l'ordre Wix
 -- n'est créé qu'après le webhook Wave vérifié.
 -- Statuts : DRAFT → AWAITING_PAYMENT → PAID → ACTIVATED

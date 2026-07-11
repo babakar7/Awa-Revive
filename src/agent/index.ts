@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
+import { notifyReception } from "../lib/notify.js";
 import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
@@ -15,6 +16,30 @@ const MAX_TOOL_ITERATIONS = 8;
 const FALLBACK_REPLY =
   "Désolé, j'ai un souci technique 🙏🏾 Réessaie dans un instant, ou contacte la réception : " +
   config.RECEPTION_PHONE;
+
+const TECH_FAILURE_HANDOFF_PREFIX = "Échec technique — le client a reçu le message d'erreur";
+
+/**
+ * The client just received FALLBACK_REPLY: the agent loop crashed or produced
+ * nothing. Record it in the handoffs register and tell reception (fire and
+ * forget — this must never delay or break the reply path). Deduped 24h per
+ * client so a retry-spam doesn't flood anyone.
+ */
+async function notifyTechnicalFailure(client: repo.Client): Promise<void> {
+  try {
+    if (await repo.recentHandoffExists(client.id, TECH_FAILURE_HANDOFF_PREFIX, 24)) return;
+    await repo.recordHandoff(client.id, TECH_FAILURE_HANDOFF_PREFIX);
+    notifyReception(
+      "⚠️ Échec technique — un client est planté",
+      `Awa n'a pas réussi à répondre à ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")}) ` +
+        `et lui a envoyé le message d'erreur (« souci technique, réessaie ou contacte la réception »).\n\n` +
+        `À faire : jeter un œil à sa conversation (${config.BASE_URL}/admin/conversations) et le ` +
+        `recontacter si son besoin est visible. Si ça se répète, prévenir le support technique.`,
+    );
+  } catch (err) {
+    console.error(`Technical-failure notification failed for client ${client.id}:`, err);
+  }
+}
 
 /**
  * Language detection (fr | en | wo) by stopword scoring. Drives the language
@@ -213,7 +238,13 @@ export async function handleInboundText(args: {
   // more. Only honored when an interactive message actually went out, so a
   // spurious sentinel can never leave the client without an answer.
   if (replyText?.trim() === NO_REPLY_SENTINEL) replyText = null;
-  if (!replyText && !interactiveSent) replyText = FALLBACK_REPLY;
+  if (!replyText && !interactiveSent) {
+    replyText = FALLBACK_REPLY;
+    // Boucle de résultat (§4.31) : le client vient de recevoir « souci
+    // technique » — la réception DOIT le savoir (avant : un console.error que
+    // personne ne lit, client planté en silence). Dédup 24h par client.
+    void notifyTechnicalFailure(client);
+  }
 
   if (replyText) {
     await sendText(args.waPhone, replyText);

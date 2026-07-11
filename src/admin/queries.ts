@@ -127,10 +127,20 @@ export async function listHandoffs(limit = 50): Promise<any[]> {
   const res = await pool.query(
     `select h.*, c.name as client_name, c.wa_phone
        from handoffs h join clients c on c.id = h.client_id
-      order by h.created_at desc limit $1`,
+      order by (h.status = 'OPEN') desc, h.created_at desc limit $1`,
     [limit],
   );
   return res.rows;
+}
+
+/** Marque un handoff traité (bouton « ✅ Traité »). Renvoie false si déjà fait. */
+export async function markHandoffDone(id: string, adminUser: string): Promise<boolean> {
+  const res = await pool.query(
+    `update handoffs set status = 'DONE', done_by = $2, done_at = now()
+      where id = $1 and status = 'OPEN'`,
+    [id, adminUser],
+  );
+  return (res.rowCount ?? 0) > 0;
 }
 
 /** Open items surfaced on the overview page. */
@@ -164,6 +174,7 @@ export interface AdminStats {
   revenueToday: number;
   revenue7d: number;
   refundsPending: number;
+  handoffsOpen: number;
 }
 
 export async function stats(): Promise<AdminStats> {
@@ -184,7 +195,8 @@ export async function stats(): Promise<AdminStats> {
          where status = 'BOOKED' and payment_method = 'wave' and updated_at > now() - interval '7 days'), 0)
        + coalesce((select sum(amount_xof) from pending_plan_orders
          where status in ('PAID','ACTIVATED') and updated_at > now() - interval '7 days'), 0))::int as revenue_7d,
-      (select count(*) from pending_bookings where status = 'REFUND_NEEDED')::int as refunds_pending
+      (select count(*) from pending_bookings where status = 'REFUND_NEEDED')::int as refunds_pending,
+      (select count(*) from handoffs where status = 'OPEN')::int as handoffs_open
   `);
   const r = res.rows[0];
   return {
@@ -197,6 +209,7 @@ export async function stats(): Promise<AdminStats> {
     revenueToday: r.revenue_today,
     revenue7d: r.revenue_7d,
     refundsPending: r.refunds_pending,
+    handoffsOpen: r.handoffs_open,
   };
 }
 
