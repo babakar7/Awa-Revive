@@ -253,4 +253,40 @@ create table if not exists crm_dismissed_duplicates (
   dismissed_at timestamptz not null default now(),
   primary key (phone_key, group_signature)
 );
+
+-- Boucle de résultat (§4.31) : chaque conversation retombée au silence (>45
+-- min) est classée par un appel LLM — le client a-t-il obtenu ce qu'il
+-- voulait ? Les impasses/échecs alimentent la file « À reprendre » du
+-- dashboard ; les dropoff (départ volontaire) ne servent qu'aux statistiques
+-- (status DONE d'office). Une review par point de conversation (unique).
+-- outcome : resolved | handed_off | dropoff | deadend | technical_failure
+-- severity : normal | severe (frustration explicite, abonnée bloquée, plainte)
+create table if not exists conversation_reviews (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  last_message_at timestamptz not null,
+  outcome text not null,
+  need_category text not null,
+  severity text not null default 'normal',
+  summary text,
+  suggested_action text,
+  status text not null default 'OPEN',
+  done_by text,
+  done_at timestamptz,
+  reception_notified_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_conversation_reviews_status
+  on conversation_reviews (status, outcome, created_at);
+create unique index if not exists idx_conversation_reviews_point
+  on conversation_reviews (client_id, last_message_at);
+
+-- Petit registre clé/valeur applicatif (ex : date du dernier digest quotidien
+-- envoyé — la garde vit en DB pour survivre aux restarts/redéploiements).
+create table if not exists app_state (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz not null default now()
+);
 `;
