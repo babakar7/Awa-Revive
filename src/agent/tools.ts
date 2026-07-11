@@ -18,8 +18,37 @@ import * as wix from "../lib/wix.js";
 import * as wave from "../lib/wave.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import * as links from "../domain/linkRequests.js";
+import type { LinkRequest } from "../domain/linkRequests.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
+
+/**
+ * A Wave payment link must NOT be sold while an email verification is mid-flight
+ * (a code was just sent but not yet typed): the account being linked may hold an
+ * abonnement that covers this class/plan, so selling now risks charging a
+ * subscriber for nothing. This sequencing is a SERVER decision, never left to
+ * the model (it dropped the prompt-level rule under booking momentum, 11/07).
+ * Blocks ONLY the narrow window where a code is live:
+ *  - AWAITING_CODE (email accepted, code emailed) AND not yet expired.
+ * Does NOT block AWAITING_EMAIL (a claimer who ignored the offer can still buy)
+ * nor an expired code (a >10-min silence shouldn't hold the sale; the >30-min
+ * sweep escalates to reception separately).
+ */
+export function verificationBlocksPayment(request: LinkRequest | null, now: Date): boolean {
+  if (!request || request.status !== "AWAITING_CODE") return false;
+  if (!request.code_expires_at) return false;
+  return new Date(request.code_expires_at).getTime() > now.getTime();
+}
+
+const VERIFICATION_PENDING_RESULT = JSON.stringify({
+  error: "verification_pending",
+  message:
+    "A 6-digit code was just emailed to this client's claimed Revive account — their abonnement may cover " +
+    "this, so do NOT sell a Wave link yet. Your next message must tell them the code is in their inbox (check " +
+    "spam) and ask them to type it HERE; once they do, resume the booking (check_membership → book_with_membership " +
+    "if covered, otherwise the link). ONLY if the client says they can't access that email or explicitly prefers " +
+    "to pay now, call this tool again with client_declined_verification:true.",
+});
 
 /**
  * Tool definitions (SPEC §6). Kept in a stable order so the prompt cache
@@ -76,6 +105,14 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             "Number of spots to book under this name (default 1). One payment link covers all of them. " +
             "Each class has a max spots per booking (Wix policy) — the tool rejects amounts above it with the allowed max.",
         },
+        client_declined_verification: {
+          type: "boolean",
+          description:
+            "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly " +
+            "says they can't access that inbox or prefers to pay by Wave now. Otherwise leave absent: if a code " +
+            "is pending, the server refuses the link so the client can type the code first (their abonnement may " +
+            "cover this class).",
+        },
       },
       required: ["service_id", "event_id", "slot_start", "client_name"],
       additionalProperties: false,
@@ -102,6 +139,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       properties: {
         plan_id: { type: "string", description: "Plan id from list_plans" },
         client_name: { type: "string", description: "Client's first name" },
+        client_declined_verification: {
+          type: "boolean",
+          description:
+            "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly " +
+            "says they can't access that inbox or prefers to pay now. Otherwise leave absent: if a code is " +
+            "pending, the server refuses the link so the client can type the code first (they may already own a plan).",
+        },
       },
       required: ["plan_id", "client_name"],
       additionalProperties: false,
@@ -534,6 +578,13 @@ export async function executeTool(
         return JSON.stringify({ error: "invalid_arguments" });
       }
 
+      // 0. Code-before-payment: refuse while an email verification is live,
+      //    unless the client explicitly declined it (see verificationBlocksPayment).
+      if (input.client_declined_verification !== true) {
+        const pending = await links.getOpen(client.id);
+        if (verificationBlocksPayment(pending, new Date())) return VERIFICATION_PENDING_RESULT;
+      }
+
       // 1. The event_id must be one we served this client (prompt-injection
       //    stance). Accepts the short choice_id alias too (interactive clicks).
       const cached = await repo.getCachedSlot(client.id, eventId);
@@ -765,6 +816,13 @@ export async function executeTool(
       const planId = String(input.plan_id ?? "");
       const clientName = String(input.client_name ?? "").slice(0, 80).trim();
       if (!planId || !clientName) return JSON.stringify({ error: "invalid_arguments" });
+
+      // Code-before-payment: don't sell a plan while an email verification is
+      // live — the client may already own a plan under another number.
+      if (input.client_declined_verification !== true) {
+        const pending = await links.getOpen(client.id);
+        if (verificationBlocksPayment(pending, new Date())) return VERIFICATION_PENDING_RESULT;
+      }
 
       // Price and existence come from the Wix catalog — never from the model.
       const plan = await wix.getPlan(planId);

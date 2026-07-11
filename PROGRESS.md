@@ -858,11 +858,31 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       tient : jamais proposer si le contexte montre déjà un abonnement/des résas.
     - **Compromis** : one-shot armé seulement après envoi réussi → au pire un
       échec réseau reporte la question au message suivant (jamais perdue).
+    - **Code AVANT paiement — séquencement côté SERVEUR (v3, 2e leçon prod
+      11/07)** : test réel — le client donne son email, `request_email_verification`
+      renvoie `code_sent`, MAIS Awa (en pleine lancée de résa) a enchaîné sur
+      `create_payment_link` et n'a **jamais demandé le code** — le client reçoit
+      un code par mail et se retrouve avec un lien Wave à la place. Double faute :
+      UX cassée ET risque de faire payer plein tarif une abonnée dont le compte
+      (en cours de liaison) couvre peut-être le cours. Décision (invariant « le
+      serveur décide ») : `create_payment_link` ET `create_plan_payment_link`
+      REFUSENT tant qu'une vérif est vivante — helper pur
+      `verificationBlocksPayment(request, now)` = `AWAITING_CODE` && code non
+      expiré ([tools.ts](src/agent/tools.ts)). Renvoie `verification_pending`
+      qui dit à Awa de demander le code. Override explicite
+      `client_declined_verification:true` (le client n'a pas accès au mail /
+      préfère payer). Ne bloque PAS `AWAITING_EMAIL` (un claimer qui ignore
+      l'offre peut acheter) ni un code expiré (silence >10 min ne gèle pas la
+      vente ; sweep >30 min escalade réception). Prompt §Linking : après
+      `code_sent`, le message suivant demande le code (aucun lien) ; après
+      `verified`, reprendre la résa (check_membership → book_with_membership si
+      couvert, sinon lien). Tests `verificationGuard.test.ts` (6). 190 tests.
     - Reproduction : le numéro de test 774982711 a été RESET plusieurs fois
       (fiche Wix supprimée + purge Postgres complète de la ligne `clients` et
       enfants) pour rejouer le flux « numéro non relié ». Tests
-      `firstContactLink.test.ts` (emailAskMessage 3 langues + note contexte) et
-      checklist `first-contact-link`. 184 tests.
+      `firstContactLink.test.ts` (emailAskMessage 3 langues + note contexte),
+      `verificationGuard.test.ts` (code-avant-paiement) et checklist
+      `first-contact-link`. 190 tests.
 
 ## 5. Chronologie condensée
 
