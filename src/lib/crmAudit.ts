@@ -282,3 +282,28 @@ export function planMerge(
   if (sourceIds.length === 0) return null;
   return { targetId, sourceIds, leftoverIds };
 }
+
+/**
+ * Merge plan for the POST-EMAIL-VERIFICATION auto-merge: the target is FORCED
+ * to the fiche the client just proved they own (email code), never chosen by
+ * priority. Every OTHER fiche carrying the number is absorbed into it, EXCEPT
+ * a fiche that is itself a site member or holds an active abonnement — those
+ * can't be merged as sources (Wix 428 / plan-survival risk), so they become
+ * leftovers and the caller falls back to the reception "fusion" path rather
+ * than guessing.
+ *
+ * `otherIds` = all fiches on the number MINUS the proven one. Returns null when
+ * there is nothing safe to merge (no others, or every other fiche is
+ * protected) — the caller then does NOT auto-merge.
+ */
+export function planVerifiedMerge(
+  provenId: string,
+  otherIds: string[],
+  planHolderIds: Set<string>,
+  memberIds: Set<string>,
+): MergePlan | null {
+  const protectedIds = otherIds.filter((id) => memberIds.has(id) || planHolderIds.has(id));
+  const sourceIds = otherIds.filter((id) => !memberIds.has(id) && !planHolderIds.has(id));
+  if (sourceIds.length === 0) return null;
+  return { targetId: provenId, sourceIds, leftoverIds: protectedIds };
+}

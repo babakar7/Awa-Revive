@@ -891,10 +891,40 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       le fingerprint UA par défaut) : numéro retiré des 2 fiches test → il ne
       résout plus que vers `db80edb8`. La notif « fusion 1 clic » reçue par la
       réception pour ce test est à REJETER dans /admin/crm.
-    - **Décision auto-merge (Babakar) : NON.** La fusion de doublons reste un
-      clic humain (/admin/crm « Doublons ») — irréversible, fiches à comptes
-      membres/numéros partagés non fusionnables à l'aveugle, volume faible. Awa
-      relie (ajoute le numéro) mais ne fusionne jamais.
+    - **~~Décision auto-merge : NON~~ → INVERSÉE le 11/07 (Babakar) : OUI,
+      post-vérification.** Après un 2e test montrant encore une « fusion
+      technique » demandée à tort (voir race condition ci-dessous), décision :
+      Awa fusionne AUTOMATIQUEMENT les doublons — mais UNIQUEMENT après preuve
+      d'identité par code email, jamais à l'aveugle. Le sweep périodique de tous
+      les doublons reste écarté (risque de fusionner deux vraies personnes qui
+      partagent un numéro).
+    - **Bug « fausse fusion » #2 = RACE CONDITION (fix)** : `submit_verification_code`
+      ajoutait le numéro à la fiche prouvée (PATCH OK) puis, ~340 ms plus tard,
+      re-vérifiait via `findContactIdByPhone` → l'index de recherche Wix n'avait
+      PAS encore vu l'écriture → 0 résultat → `resolved (null) !== fiche prouvée`
+      → faux `verified_pending_merge`. Cause profonde : `findContactIdByPhone`
+      renvoie `null` pour DEUX cas opposés (0 fiche = index en retard ; ≥2 fiches
+      = vrai doublon). Fix : nouveau `wix.findContactsByPhone(phone)` (liste
+      BRUTE de toutes les fiches). Si 0 autre fiche que la prouvée → `verified`
+      direct (l'index rattrapera). Si une autre fiche existe → AUTO-MERGE :
+      `planVerifiedMerge(provenId, otherIds, planHolders, memberIds)` (cible
+      FORCÉE = fiche prouvée ; sources = fiches ni membre ni porteuse
+      d'abonnement) → `mergeContacts` → caches invalidés → le client reçoit
+      `verified` avec ses plans, sans attendre l'équipe. Fiche protégée restante
+      / échec → fallback `verified_pending_merge` + notif réception. Tests
+      `verifiedMerge.test.ts` (5).
+    - **Nettoyage en masse des doublons historiques (11/07)** :
+      `scripts/merge-duplicates.ts` (`npm run crm:merge -- --dry|--go`) réutilise
+      exactement le pipeline admin (`auditContacts` + `planMerge` + `mergeContacts`,
+      mêmes garde-fous membres/abonnés). Passe unique en prod : **734 → 699
+      fiches, 43 groupes → 8** (35 groupes fusionnés, 0 échec ; 8 restants
+      protégés = vraies personnes distinctes partageant un numéro ou comptes
+      membres, laissés au jugement humain /admin/crm).
+    - **⚠️ Piège fetch Node vs Wix/Cloudflare** : les appels Wix depuis Node
+      (fetch/undici) sont bloqués 403 (corps vide) sur le fingerprint du
+      User-Agent par défaut ; `curl` passe. Fix : header `User-Agent: resabot/1.0`
+      ajouté à `wix.ts headers()` — indispensable pour les scripts ET rend les
+      appels serveur robustes.
     - Reproduction : le numéro de test 774982711 a été RESET plusieurs fois
       (fiche Wix supprimée + purge Postgres complète de la ligne `clients` et
       enfants) pour rejouer le flux « numéro non relié ». Tests

@@ -22,6 +22,10 @@ function headers(): Record<string, string> {
     Authorization: config.WIX_API_KEY,
     "wix-site-id": config.WIX_SITE_ID,
     "Content-Type": "application/json",
+    // Wix/Cloudflare fingerprint-blocks Node's default undici User-Agent (403
+    // with an empty body, verified 11/07 — curl works, Node fetch doesn't).
+    // Setting an explicit UA makes server-side and script calls behave.
+    "User-Agent": "resabot/1.0",
   };
 }
 
@@ -407,6 +411,34 @@ export async function findContactIdByPhone(
   } catch (err) {
     console.error("Wix contact lookup failed (booking will create/match contact itself):", err);
     return null;
+  }
+}
+
+/**
+ * ALL contacts carrying this phone (e164 first, raw spellings as fallback) —
+ * the raw list, not the "unique or null" collapse of findContactIdByPhone.
+ * Needed by the post-verification step: that step must tell "index lag / 0
+ * result" apart from "a real second fiche" (both make findContactIdByPhone
+ * return null), and, when there IS a real duplicate, get every fiche id to
+ * auto-merge. Returns [] on error (caller then falls back to no-merge).
+ */
+export async function findContactsByPhone(phone: string): Promise<any[]> {
+  try {
+    const e164 = phone.startsWith("+") ? phone : `+${phone}`;
+    const data = await wixPost("/contacts/v4/contacts/query", {
+      query: { filter: { "info.phones.e164Phone": { $eq: e164 } } },
+    });
+    let contacts: any[] = data?.contacts ?? [];
+    if (contacts.length === 0) {
+      const fallback = await wixPost("/contacts/v4/contacts/query", {
+        query: { filter: { "info.phones.phone": { $in: phoneMatchVariants(phone) } } },
+      });
+      contacts = fallback?.contacts ?? [];
+    }
+    return contacts;
+  } catch (err) {
+    console.error("findContactsByPhone failed:", err);
+    return [];
   }
 }
 

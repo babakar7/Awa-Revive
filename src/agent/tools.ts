@@ -15,6 +15,7 @@ import {
   formatExtrasOneLine,
 } from "../lib/cafeMenu.js";
 import * as wix from "../lib/wix.js";
+import { planVerifiedMerge } from "../lib/crmAudit.js";
 import * as wave from "../lib/wave.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import * as links from "../domain/linkRequests.js";
@@ -1603,31 +1604,86 @@ export async function executeTool(
       }
       await links.markVerified(request.id, request.wix_contact_id!);
       invalidateMembershipCache(client.id);
-      // A Wave payment made BEFORE the linking may have created a duplicate
-      // fiche under this WhatsApp number: the number now sits on TWO fiches
-      // and the phone lookup refuses to pick (deliberate caution). The plan
-      // only becomes visible after reception merges them (/admin/crm shows
-      // the pair in "Doublons", one click).
-      const resolved = await wix.findContactIdByPhone(wa, client.name ?? undefined);
-      if (resolved !== request.wix_contact_id) {
-        notifyReception(
-          "🔀 Compte vérifié par email — fusion de doublons requise",
-          `Le client ${client.name ?? "?"} (${wa}) a PROUVÉ (code email) que son compte est la fiche ` +
-            `${request.wix_contact_id}, mais son numéro WhatsApp figure aussi sur une autre fiche ` +
-            `(doublon créé par un paiement passé).\n\n` +
-            `À faire (1 clic) : ${config.BASE_URL}/admin/crm → section « Doublons » → garder la fiche ` +
-            `qui porte l'abonnement. Tant que ce n'est pas fait, Awa ne voit pas son abonnement.`,
-        );
-        return JSON.stringify({
-          status: "verified_pending_merge",
-          message:
-            "Code correct — the account is verified and the number was added to their fiche. BUT this " +
-            "number also sits on a duplicate fiche (created by a past payment), so their plan will show " +
-            "up only after the team merges the two — reception has been notified with a one-click fix. " +
-            "Tell the client it's verified and the team finishes the merge shortly (no need to call); " +
-            "offer normal Wave payment for bookings that truly can't wait.",
-        });
+
+      // Post-verification duplicate handling. The number was JUST added to the
+      // proven fiche, so we list ALL fiches carrying it (not the "unique-or-
+      // null" collapse of findContactIdByPhone — that returns null both when
+      // the Wix search index simply lags the write we just made, AND when a
+      // real second fiche exists; conflating them produced a FALSE
+      // "verified_pending_merge", cf. the 340 ms race seen 11/07).
+      const provenId = request.wix_contact_id!;
+      const allFiches = await wix.findContactsByPhone(wa);
+      const otherIds = allFiches
+        .map((c: any) => c.id as string)
+        .filter((id) => id && id !== provenId);
+
+      if (otherIds.length > 0) {
+        // A genuine second fiche (typically created by a past Wave payment).
+        // Auto-merge it into the proven fiche when safe: never merge a fiche
+        // that is itself a member or holds an active plan as a source.
+        try {
+          const [memberIds, planHolders] = await Promise.all([
+            wix.findMemberContactIds(otherIds),
+            (async () => {
+              const holders = new Set<string>();
+              for (const id of otherIds) {
+                const plans = await wix.listActiveMemberships(id);
+                if (plans.length > 0) holders.add(id);
+              }
+              return holders;
+            })(),
+          ]);
+          const plan = planVerifiedMerge(provenId, otherIds, planHolders, memberIds);
+          if (plan) {
+            await wix.mergeContacts(plan.targetId, plan.sourceIds);
+            invalidateMembershipCache(client.id);
+            if (plan.leftoverIds.length > 0) {
+              // Some fiches couldn't be absorbed (member/plan holder) — escalate
+              // just those, but the mergeable ones are already cleaned up.
+              notifyReception(
+                "🔀 Compte relié — fiche(s) protégée(s) restantes",
+                `Le client ${client.name ?? "?"} (${wa}) a prouvé son compte (fiche ${provenId}). ` +
+                  `J'ai fusionné automatiquement ${plan.sourceIds.length} doublon(s), mais ` +
+                  `${plan.leftoverIds.length} fiche(s) protégée(s) (compte membre / abonnement) subsiste(nt) : ` +
+                  `${plan.leftoverIds.join(", ")}.\n\nVérifier dans ${config.BASE_URL}/admin/crm → « Doublons ».`,
+              );
+            }
+          } else {
+            // Nothing safe to merge (the other fiche is a member/plan holder) —
+            // fall back to the reception one-click path.
+            notifyReception(
+              "🔀 Compte vérifié par email — fusion de doublons requise",
+              `Le client ${client.name ?? "?"} (${wa}) a PROUVÉ (code email) que son compte est la fiche ` +
+                `${provenId}, mais son numéro figure aussi sur une autre fiche protégée ` +
+                `(compte membre / abonnement) : ${otherIds.join(", ")}.\n\n` +
+                `À faire (1 clic) : ${config.BASE_URL}/admin/crm → section « Doublons ».`,
+            );
+            return JSON.stringify({
+              status: "verified_pending_merge",
+              message:
+                "Code correct — the account is verified. Another fiche on this number can't be auto-merged " +
+                "(member/plan holder), so their plan may show only after the team merges — reception was " +
+                "notified. Tell the client it's verified and the team finishes shortly (no need to call); " +
+                "offer normal Wave payment for bookings that truly can't wait.",
+            });
+          }
+        } catch (err) {
+          console.error("Auto-merge after verification failed:", err);
+          notifyReception(
+            "🔀 Compte vérifié — auto-fusion en échec",
+            `Le client ${client.name ?? "?"} (${wa}) a prouvé son compte (fiche ${provenId}) mais ` +
+              `l'auto-fusion des doublons a échoué. À faire (1 clic) : ${config.BASE_URL}/admin/crm → « Doublons ».`,
+          );
+          return JSON.stringify({
+            status: "verified_pending_merge",
+            message:
+              "Code correct — the account is verified, but merging a duplicate fiche failed; reception was " +
+              "notified. Tell the client it's verified and the team finishes shortly (no need to call); offer " +
+              "normal Wave payment for bookings that truly can't wait.",
+          });
+        }
       }
+
       const memberships = await wix.listActiveMemberships(request.wix_contact_id!);
       return JSON.stringify({
         status: "verified",

@@ -18,7 +18,8 @@
     "summary": "tsx scripts/daily-summary.ts",
     "email:test": "tsx scripts/test-email.ts",
     "whatsapp:test": "tsx scripts/test-whatsapp-notify.ts",
-    "crm:audit": "tsx scripts/crm-audit.ts"
+    "crm:audit": "tsx scripts/crm-audit.ts",
+    "crm:merge": "tsx scripts/merge-duplicates.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
