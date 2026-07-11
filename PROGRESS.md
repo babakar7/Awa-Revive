@@ -760,6 +760,54 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     - **⚠️ À faire au prochain déploiement** : remettre `ADMIN_USERS` en prod —
       le POST /admin/crm/link écrit dans Wix, la page ne doit plus être ouverte.
 
+31. **Boucle de résultat — aucun client ne repart les mains vides en silence
+    (12/07, demande Babakar : « comment améliorer Awa pour que les clients
+    obtiennent toujours ce dont ils ont besoin ? »)**. Diagnostic : aucune
+    boucle de résultat — une conversation se terminait et personne ne savait si
+    le client avait obtenu satisfaction. Quatre fuites : impasse non tracée,
+    abandon, échec technique invisible (console.error), demandes hors périmètre
+    non agrégées. Décisions produit : PAS de relance client automatique (la
+    récupération passe par la réception) ; un abandon après une réponse
+    correcte est un choix libre du client — statistique, pas un problème à
+    chasser ; alertes = digest quotidien + notification immédiate des cas
+    graves seulement.
+    - **Étage 1, filets déterministes** : `FALLBACK_REPLY` → handoff +
+      notification réception automatique dédup 24 h
+      ([agent/index.ts](src/agent/index.ts) `notifyTechnicalFailure`) ; prompt
+      §Escalate : appel `handoff_to_human` OBLIGATOIRE quand Awa ne peut pas
+      aider (dire « contacte la réception » sans le tool = personne n'est
+      prévenu) ; handoffs avec cycle OPEN→DONE (backfill borné au 12/07),
+      bouton « ✅ Traité », badge des ouverts sur la vue d'ensemble.
+    - **Étage 2, classificateur** ([conversationReview.ts](src/domain/conversationReview.ts),
+      table `conversation_reviews`) : toute conversation silencieuse depuis
+      45 min (fenêtre 24 h) est classée par UN appel LLM (tool `report_outcome`
+      forcé via tool_choice — jamais de parsing fragile) : `resolved |
+      handed_off | dropoff | deadend | technical_failure` + catégorie de besoin
+      + gravité + résumé + action suggérée. Les tours `tool` sont dans le
+      transcript (l'issue se lit dans les résultats, ex. booked:true). dropoff
+      → DONE d'office (stats seulement). Sweep 5 min (index.ts), cas grave non
+      résolu → notif réception immédiate avec lien conversation.
+    - **Étage 3, file « À reprendre 🔁 »** (/admin/reviews) : uniquement
+      impasses + échecs techniques, graves en tête, boutons Traité/Ignorer,
+      dernières classifications repliées (contrôle qualité du classement).
+      **Digest quotidien 19h** (Dakar=UTC) envoyé par le sweep, garde atomique
+      en DB (table `app_state`, survit aux restarts) : classement du jour, file
+      à reprendre, handoffs ouverts, top besoins non servis 7 j.
+    - **Étage 4, apprentissage** : taux de « clients servis » 7/30 j (resolved
+      + handed_off + dropoff, `satisfactionRate` — null si rien de classé,
+      jamais un faux 100 %) et top `need_category` des conversations perdues
+      sur 30 j — c'est la boussole du backlog : la catégorie qui domine dit
+      quelle capacité construire ensuite.
+    - **Piège attrapé par l'E2E local** (Postgres jetable + LLM réel, scénario
+      « report refusé 16h + motif médical » → deadend/severe, résumé exact) :
+      `max(created_at)` passé par un `Date` JS perd les microsecondes → la
+      review stockée était « plus vieille » que le dernier message → la même
+      conversation se reclassait à CHAQUE sweep (coût LLM infini, dédup notif
+      heureusement OK). Fix : le timestamp voyage en `::text` de la sélection à
+      l'insertion. Un `reviewed: 1 / second sweep: 0` fait foi. 179 tests.
+    - NB : l'E2E a envoyé 2 notifications de test réelles à la réception
+      (« TestRokhaya », 12/07 vers 19h40) — à ignorer.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
