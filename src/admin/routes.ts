@@ -6,6 +6,8 @@ import * as repo from "../domain/repo.js";
 import { extrasFromJson } from "../lib/cafeMenu.js";
 import { adminAuthHook } from "./auth.js";
 import * as q from "./queries.js";
+import { runCrmAudit, phoneKey } from "../lib/crmAudit.js";
+import { mergeContacts, getContactById } from "../lib/wix.js";
 
 /**
  * Admin dashboard — server-rendered HTML, no dependencies, no build step.
@@ -63,6 +65,7 @@ function layout(title: string, active: string, body: string): string {
     ["/admin/bookings", "Réservations"],
     ["/admin/orders", "Commandes ☕"],
     ["/admin/handoffs", "Handoffs"],
+    ["/admin/crm", "CRM 🗂"],
   ]
     .map(
       ([href, label]) =>
@@ -374,6 +377,118 @@ ${
           .join("");
         const body = `<div class="card"><table><tr><th>Quand</th><th>Client</th><th>Motif</th></tr>${rows || `<tr><td colspan="3" class="muted">Aucun handoff.</td></tr>`}</table></div>`;
         reply.type("text/html").send(layout("Handoffs", "/admin/handoffs", body));
+      });
+
+      // ---------- Hygiène CRM (fiches sans téléphone, doublons à fusionner) ----------
+      admin.get("/crm", async (req, reply) => {
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const audit = await runCrmAudit();
+
+        const banner = done
+          ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ Fusion effectuée (${escapeHtml(done)} fiche(s) absorbée(s)).</span></div>`
+          : err
+            ? `<div class="card warn">⚠️ Fusion refusée : ${escapeHtml(err)}</div>`
+            : "";
+
+        const groupCards = audit.duplicates
+          .map((g) => {
+            const ids = g.contacts.map((c) => c.id).join(",");
+            const rows = g.contacts
+              .map((c) => {
+                const others = g.contacts.length - 1;
+                return `<tr>
+<td><b>${escapeHtml(c.name)}</b>${c.email ? `<div class="muted">${escapeHtml(c.email)}</div>` : ""}</td>
+<td>${c.phones.map((p) => escapeHtml(p)).join("<br>")}${c.hasE164 ? ` <span class="muted">✓ intl</span>` : ""}</td>
+<td class="hide-sm">${c.createdDate ? fmtDate(c.createdDate) : "—"}</td>
+<td><form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ${others} fiche(s) dans « ${escapeHtml(c.name).replaceAll("'", "\\'")} » ?\\n\\nLes autres fiches du groupe seront SUPPRIMÉES (irréversible) ; leurs infos, réservations et abonnements sont rattachés à la fiche conservée.')">
+<input type="hidden" name="target" value="${c.id}">
+<input type="hidden" name="group" value="${ids}">
+<button class="act">Garder celle-ci</button>
+</form></td>
+</tr>`;
+              })
+              .join("");
+            return `<div class="card">
+<b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro
+<table><tr><th>Fiche</th><th>Numéro(s) enregistré(s)</th><th class="hide-sm">Créée</th><th></th></tr>${rows}</table>
+</div>`;
+          })
+          .join("");
+
+        const noPhoneRows = audit.noPhone
+          .map(
+            (c) =>
+              `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.email ?? "—")}</td></tr>`,
+          )
+          .join("");
+
+        const body = `
+${banner}
+<div class="stat-grid">
+<div class="stat"><span class="muted">Fiches contact Wix</span><b>${audit.total}</b></div>
+<div class="stat"><span class="muted">Numéros en doublon</span><b>${audit.duplicates.length}</b></div>
+<div class="stat"><span class="muted">Fiches sans téléphone</span><b>${audit.noPhone.length}</b></div>
+</div>
+<h2>👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
+<p class="muted">Awa refuse (prudemment) de choisir quand un numéro correspond à plusieurs fiches :
+ces clientes ne sont pas reconnues. Choisis la fiche à GARDER dans chaque groupe — les autres y sont
+fusionnées puis supprimées par Wix (réservations et abonnements suivent la fusion).</p>
+${groupCards || `<div class="card"><span class="ok">✓ Aucun doublon — rien à nettoyer.</span></div>`}
+<h2>📵 Fiches sans téléphone ${audit.noPhone.length ? `(${audit.noPhone.length})` : ""}</h2>
+<p class="muted">Invisibles pour Awa (elle reconnaît les clientes par leur numéro WhatsApp).
+À compléter directement dans Wix → Contacts, avec le numéro WhatsApp de la cliente.</p>
+<div class="card">
+${audit.noPhone.length ? `<details><summary>Voir la liste (${audit.noPhone.length})</summary><table><tr><th>Nom</th><th>Email</th></tr>${noPhoneRows}</table></details>` : `<span class="ok">✓ Toutes les fiches ont un téléphone.</span>`}
+</div>`;
+        reply.type("text/html").send(layout("Hygiène CRM", "/admin/crm", body));
+      });
+
+      admin.post("/crm/merge", async (req, reply) => {
+        const bodyIn = (req.body ?? {}) as Record<string, string>;
+        const target = String(bodyIn.target ?? "").trim();
+        const group = String(bodyIn.group ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const sources = group.filter((id) => id !== target);
+        const fail = (msg: string) =>
+          reply.redirect(`/admin/crm?err=${encodeURIComponent(msg)}`, 303);
+
+        if (!target || sources.length === 0 || !group.includes(target)) {
+          return fail("cible ou groupe invalide");
+        }
+        // Re-verify server-side that every fiche involved still shares a phone
+        // — the merge is irreversible, never trust the form alone.
+        const contacts = await Promise.all(group.map((id) => getContactById(id)));
+        if (contacts.some((c) => !c)) {
+          return fail("une fiche du groupe n'existe plus — recharge la page");
+        }
+        const keys = contacts.map(
+          (c) =>
+            new Set(
+              (c.info?.phones?.items ?? [])
+                .map((p: any) => phoneKey(String(p?.e164Phone ?? p?.phone ?? "")))
+                .filter(Boolean),
+            ),
+        );
+        const targetKeys = keys[group.indexOf(target)];
+        const allShare = keys.every((set) => [...set].some((k) => targetKeys.has(k)));
+        if (!allShare) {
+          return fail("les fiches ne partagent pas le même numéro — fusion refusée");
+        }
+
+        try {
+          await mergeContacts(target, sources);
+          req.log.info(
+            { target, sources, by: req.adminUser },
+            "CRM duplicate contacts merged from admin dashboard",
+          );
+          return reply.redirect(`/admin/crm?done=${sources.length}`, 303);
+        } catch (e) {
+          req.log.error({ e, target, sources }, "CRM merge failed");
+          return fail("erreur Wix pendant la fusion — réessaie");
+        }
       });
 
       // ---------- Actions de pointage (aucune action monétaire) ----------

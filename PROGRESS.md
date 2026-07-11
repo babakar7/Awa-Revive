@@ -626,6 +626,33 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       les résas urgentes. Prompt §Abonnements aligné.
     - L'entrée handoffs alimente aussi `npm run summary` (registre quotidien).
 
+29. **Page /admin/crm — nettoyage des doublons en un clic (11/07)**. Suite de
+    l'audit §4.27 : nouvel onglet « CRM 🗂 » dans le dashboard.
+    - **Doublons** : un card par numéro en doublon (52 au 11/07), avec pour
+      chaque fiche nom, email, orthographes du numéro, date de création, et un
+      bouton « Garder celle-ci » → les AUTRES fiches du groupe sont fusionnées
+      dedans via l'API Merge de Wix (résas et abonnements suivent, les fiches
+      sources sont supprimées par Wix — irréversible, confirm() explicite).
+    - **API Merge vérifiée E2E** sur deux contacts jetables créés/supprimés
+      pour l'occasion : le corps réel est `sourceContactIds` +
+      `targetContactRevision` (la révision de la cible est OBLIGATOIRE —
+      concurrence optimiste). Découverte au passage : Wix REFUSE de créer un
+      doublon exact par l'API (409) — les doublons prod viennent des
+      orthographes différentes d'un même numéro (brut vs e164), qui échappent
+      au contrôle d'unicité.
+    - **Garde-fous serveur** (une fusion est irréversible, on ne fait jamais
+      confiance au formulaire) : chaque fiche du groupe est re-fetchée par id
+      et la fusion est REFUSÉE si toutes ne partagent pas le même numéro
+      normalisé ; échec Wix → bannière d'erreur, action loggée avec
+      l'admin user.
+    - **Fiches sans téléphone** : listées sur la même page (repliées), à
+      compléter dans Wix. Logique partagée script/page extraite dans
+      [crmAudit.ts](src/lib/crmAudit.ts) (`auditContacts` pure + testée,
+      `phoneKey` = 9 derniers chiffres) ; `npm run crm:audit` (email réception)
+      pointe maintenant vers la page. Smoke-test local : page 200, 52 groupes
+      rendus, merge vide/numéros différents → refus propre. 8 tests ajoutés
+      (139 au total).
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement

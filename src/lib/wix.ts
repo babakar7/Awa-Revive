@@ -350,6 +350,35 @@ export async function findContactIdByPhone(
   }
 }
 
+/**
+ * Merge duplicate contacts: `sourceIds` are absorbed into `targetId` (Wix
+ * DELETES the sources — irreversible). Used by the /admin/crm cleanup page;
+ * the route re-verifies that every contact involved shares the same phone
+ * before calling this.
+ */
+export async function mergeContacts(targetId: string, sourceIds: string[]): Promise<void> {
+  // Field names + required revision verified live (11/07) — the endpoint
+  // wants the target's current revision (optimistic concurrency).
+  const target = await getContactById(targetId);
+  if (!target) throw new Error(`merge target ${targetId} not found`);
+  await wixPost(`/contacts/v4/contacts/${targetId}/merge`, {
+    sourceContactIds: sourceIds,
+    targetContactRevision: target.revision,
+  });
+}
+
+/** One contact by id (used to re-verify a merge server-side). */
+export async function getContactById(contactId: string): Promise<any | null> {
+  const res = await fetch(`${WIX_API}/contacts/v4/contacts/${contactId}`, {
+    headers: headers(),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Wix get contact failed (${res.status}): ${await res.text()}`);
+  const data: any = await res.json();
+  return data?.contact ?? null;
+}
+
 // ---------- pricing plans (memberships / abonnements) ----------
 
 export interface Membership {
