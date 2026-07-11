@@ -14,18 +14,19 @@ export function emailAskMessage(lang: string): string {
     case "en":
       return (
         `By the way 😊 if you already had a Revive account (website or studio), just reply here ` +
-        `with the email you used and the team will link your booking history. If not, you can ignore this!`
+        `with the email you used: I'll send you a verification code and link your account right away. ` +
+        `If not, you can ignore this!`
       );
     case "wo":
       return (
         `Benn laaj 😊 su fekkee am nga woon compte ci Revive (site web walla studio bi), ` +
-        `bindal ma fii sa email, ekib bi dina takk sa réservations yépp. Su amul, bul ci topp!`
+        `bindal ma fii sa email: dinaa la yónnee benn code, takk sa compte ci saa si. Su amul, bul ci topp!`
       );
     default:
       return (
         `Au fait 😊 si tu avais déjà un compte chez Revive (site web ou au studio), ` +
-        `réponds-moi juste ici avec l'email que tu utilisais et l'équipe reliera ton historique. ` +
-        `Sinon, ignore ce message !`
+        `réponds-moi juste ici avec l'email que tu utilisais : je t'envoie un code de vérification ` +
+        `et je relie ton compte tout de suite. Sinon, ignore ce message !`
       );
   }
 }

@@ -877,6 +877,24 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       `code_sent`, le message suivant demande le code (aucun lien) ; après
       `verified`, reprendre la résa (check_membership → book_with_membership si
       couvert, sinon lien). Tests `verificationGuard.test.ts` (6). 190 tests.
+    - **Message d'invitation corrigé (bug UX, test 11/07)** : disait « l'équipe
+      reliera ton historique » — FAUX. Awa relie ELLE-MÊME via le code
+      (`submit_verification_code` ajoute le numéro à la fiche, tout seul) ;
+      l'équipe n'intervient QUE sur les doublons. `emailAskMessage` (FR/EN/WO)
+      reformulé : « donne l'email, je t'envoie un code et je relie ton compte
+      tout de suite ».
+    - **« Fausse fusion » démasquée** : le `verified_pending_merge` du test ne
+      venait PAS d'un vrai doublon de paiement mais de **2 fiches de TEST**
+      (test1 `40c382e7`, test2 `fc76f17e`) qui portaient encore `774982711` en
+      plus de la vraie fiche `db80edb8`. Nettoyage (PATCH contacts/v4, UA
+      `curl/8` obligatoire — le fetch Node est bloqué 403 par Wix/Cloudflare sur
+      le fingerprint UA par défaut) : numéro retiré des 2 fiches test → il ne
+      résout plus que vers `db80edb8`. La notif « fusion 1 clic » reçue par la
+      réception pour ce test est à REJETER dans /admin/crm.
+    - **Décision auto-merge (Babakar) : NON.** La fusion de doublons reste un
+      clic humain (/admin/crm « Doublons ») — irréversible, fiches à comptes
+      membres/numéros partagés non fusionnables à l'aveugle, volume faible. Awa
+      relie (ajoute le numéro) mais ne fusionne jamais.
     - Reproduction : le numéro de test 774982711 a été RESET plusieurs fois
       (fiche Wix supprimée + purge Postgres complète de la ligne `clients` et
       enfants) pour rejouer le flux « numéro non relié ». Tests
