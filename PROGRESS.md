@@ -602,6 +602,30 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       fusionner dans Wix). Envoyé le 11/07 (Brevo). À relancer après une passe
       de nettoyage, ou périodiquement.
 
+28. **Abonnement revendiqué mais introuvable → réception notifiée automatiquement
+    (11/07, cas Dieynaba)**. Cas réel : Dieynaba Ba écrit du 77 638 30 88, sa
+    fiche Wix porte 78 638 30 88 (un chiffre d'écart) → `check_membership` =
+    `no_matching_contact` (comportement VOULU : l'identité, c'est le numéro
+    vérifié ; jamais de match par prénom déclaré, sinon n'importe qui consomme
+    les séances d'autrui). Awa a bien proposé « contacte la réception »… mais
+    personne n'a été prévenu : la cliente a dit merci et a disparu — **cliente à
+    abonnement perdue en silence** (le flux email ne se déclenche qu'après un
+    paiement, jamais arrivé). Correctif, même philosophie que le menu (#21) :
+    **ce qui est obligatoire est fait par le serveur, pas laissé au modèle**.
+    - `check_membership` accepte `claim: true` (le client AFFIRME avoir un
+      abonnement). Sur claim + échec (`no_matching_contact` OU fiche sans plan
+      actif), l'exécuteur notifie la réception automatiquement
+      ([tools.ts](src/agent/tools.ts) `notifyUnverifiedPlanClaim`) : email +
+      WhatsApp avec nom, numéro, et le mode d'emploi (chercher la fiche par NOM,
+      AJOUTER le numéro WhatsApp au format +221 sans écraser l'ancien). Dédup
+      24 h par client via le registre handoffs (`repo.recentHandoffExists`) —
+      un client qui insiste ne spamme pas la réception.
+    - Le résultat de l'outil dit à Awa quoi répondre : l'équipe est DÉJÀ
+      prévenue (pas besoin d'appeler), demander sous quel numéro/email
+      l'abonnement est enregistré (email → `record_email`), proposer Wave pour
+      les résas urgentes. Prompt §Abonnements aligné.
+    - L'entrée handoffs alimente aussi `npm run summary` (registre quotidien).
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement

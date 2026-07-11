@@ -899,3 +899,24 @@ export async function recordHandoff(clientId: string, reason: string): Promise<v
     [clientId, reason, excerpt],
   );
 }
+
+/**
+ * True if a handoff whose reason starts with `reasonPrefix` was recorded for
+ * this client in the last `hours` hours — dedupe guard so automatic handoffs
+ * (e.g. "abonnement introuvable") don't spam reception when the client
+ * repeats their claim in the same conversation.
+ */
+export async function recentHandoffExists(
+  clientId: string,
+  reasonPrefix: string,
+  hours: number,
+): Promise<boolean> {
+  const res = await pool.query(
+    `select 1 from handoffs
+      where client_id = $1 and reason like $2 || '%'
+        and created_at > now() - ($3 || ' hours')::interval
+      limit 1`,
+    [clientId, reasonPrefix, String(hours)],
+  );
+  return (res.rowCount ?? 0) > 0;
+}

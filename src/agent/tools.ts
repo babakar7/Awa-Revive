@@ -113,8 +113,22 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "server-side via their WhatsApp number. Call this when the client mentions having an abonnement, " +
       "pack or credits, asks how many sessions they have left, or BEFORE creating any payment link. " +
       "Returns their active plans with covers_classes (which classes each plan can pay for) and " +
-      "remaining_sessions (current balance), or why verification failed.",
-    input_schema: { type: "object", properties: {}, additionalProperties: false },
+      "remaining_sessions (current balance), or why verification failed. Set claim:true when the CLIENT " +
+      "ASSERTS having an abonnement/prepaid plan (\"j'ai un abonnement\", \"c'est prépayé\") — if the plan " +
+      "then can't be found under their number, the server automatically notifies reception to link their " +
+      "account (the result tells you what to say).",
+    input_schema: {
+      type: "object",
+      properties: {
+        claim: {
+          type: "boolean",
+          description:
+            "true ONLY when the client explicitly claims to have an abonnement/prepaid plan. " +
+            "Leave absent for routine checks (balance questions, pre-link verification).",
+        },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "book_with_membership",
@@ -384,6 +398,38 @@ function fmtDakar(iso: string): string {
 /** Hours from now until a timestamp (fractional; negative if past). */
 function hoursUntil(ts: Date | string): number {
   return (new Date(ts).getTime() - Date.now()) / 3_600_000;
+}
+
+const PLAN_CLAIM_HANDOFF_PREFIX = "Abonnement introuvable — client affirme en avoir un";
+
+/**
+ * A client claims an abonnement that check_membership can't verify (their Wix
+ * card probably carries another phone number — real case: Dieynaba, 11/07,
+ * card under 78 638 30 88 while she wrote from 77 638 30 88). Silence here
+ * loses the client: notify reception AUTOMATICALLY (deterministic, server-side)
+ * so they fix the linkage without waiting for the client to call. Deduped over
+ * 24h per client via the handoffs register. Returns true if a notification
+ * went out (false = deduped or failed — never blocks the tool result).
+ */
+async function notifyUnverifiedPlanClaim(client: Client, detail: string): Promise<boolean> {
+  try {
+    if (await repo.recentHandoffExists(client.id, PLAN_CLAIM_HANDOFF_PREFIX, 24)) return false;
+    await repo.recordHandoff(client.id, `${PLAN_CLAIM_HANDOFF_PREFIX} (${detail})`);
+    notifyReception(
+      "🔎 Abonnement à relier — un client dit en avoir un",
+      `Un client affirme avoir un abonnement, mais Awa ne peut pas le vérifier : ${detail}.\n` +
+        `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n\n` +
+        `À faire dans le dashboard Wix : Contacts → chercher la fiche par NOM, vérifier son abonnement, ` +
+        `puis AJOUTER le numéro WhatsApp ci-dessus à la fiche (au format +221..., sans remplacer ` +
+        `l'ancien numéro). Dès que c'est fait, Awa reconnaîtra son abonnement automatiquement.\n\n` +
+        `Awa a prévenu le client que l'équipe s'en occupe, et lui a demandé sous quel numéro/email ` +
+        `son abonnement est enregistré (si réponse : second email/entrée registre).`,
+    );
+    return true;
+  } catch (err) {
+    console.error(`Plan-claim notification failed for client ${client.id} (non-blocking):`, err);
+    return false;
+  }
 }
 
 /**
@@ -761,26 +807,51 @@ export async function executeTool(
     }
 
     case "check_membership": {
+      const claim = input.claim === true;
       // Identity = verified WhatsApp number → unambiguous CRM contact.
       const contactId = await wix.findContactIdByPhone(
         `+${client.wa_phone.replace(/^\+/, "")}`,
         client.name ?? undefined,
       );
       if (!contactId) {
+        const notified = claim
+          ? await notifyUnverifiedPlanClaim(client, "aucune fiche Wix ne porte ce numéro WhatsApp")
+          : false;
         return JSON.stringify({
           verified: false,
           reason: "no_matching_contact",
+          reception_notified: notified || undefined,
           message:
             "Could not match this WhatsApp number to a unique client account. The client may have an " +
-            "abonnement under another number — hand off to reception to verify, or offer normal Wave payment.",
+            "abonnement under another number." +
+            (claim
+              ? " Reception has ALREADY been notified automatically and will link their account — tell the " +
+                "client this (no need for them to call), and ask under which phone number or email their " +
+                "abonnement is registered; if they give an email, record it with record_email. Meanwhile " +
+                "offer normal Wave payment for bookings that can't wait."
+              : " Hand off to reception to verify, or offer normal Wave payment."),
         });
       }
       const memberships = await wix.listActiveMemberships(contactId);
       if (memberships.length === 0) {
+        const notified = claim
+          ? await notifyUnverifiedPlanClaim(
+              client,
+              "sa fiche Wix est reliée à ce numéro mais ne porte AUCUN abonnement actif",
+            )
+          : false;
         return JSON.stringify({
           verified: true,
           active_plans: [],
-          message: "No active abonnement for this client. Use the normal Wave payment flow.",
+          reception_notified: notified || undefined,
+          message:
+            "No active abonnement for this client." +
+            (claim
+              ? " The client claims one, so reception has ALREADY been notified automatically and will " +
+                "check — tell the client this (no need for them to call), and ask under which phone number " +
+                "or email their abonnement is registered; if they give an email, record it with record_email. " +
+                "Meanwhile offer normal Wave payment for bookings that can't wait."
+              : " Use the normal Wave payment flow."),
         });
       }
       const activePlans = await Promise.all(
