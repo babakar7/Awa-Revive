@@ -3,6 +3,7 @@ import { migrate, closeDb } from "./db/index.js";
 import { expireStaleBookings, expireStalePlanOrders, expireStaleCafeOrders } from "./domain/repo.js";
 import { nudgeExpiredLinks } from "./domain/expiryNudge.js";
 import { escalateStaleLinkRequests } from "./domain/linkRequests.js";
+import { runReviewSweep, maybeSendDailyDigest } from "./domain/conversationReview.js";
 import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
@@ -53,6 +54,16 @@ async function main() {
       if (nudged > 0) app.log.info({ nudged }, "Waitlist nudges sent");
     } catch (err) {
       app.log.error({ err }, "Waitlist sweep failed");
+    }
+    try {
+      // Boucle de résultat : classifier les conversations retombées au
+      // silence (>45 min) — impasses/échecs → file « À reprendre » + notif
+      // des cas graves. Puis le digest quotidien (une fois/jour après 19h).
+      const reviewed = await runReviewSweep();
+      if (reviewed > 0) app.log.info({ reviewed }, "Conversations classified");
+      if (await maybeSendDailyDigest()) app.log.info("Daily digest sent to reception");
+    } catch (err) {
+      app.log.error({ err }, "Conversation-review sweep failed");
     }
   }, 5 * 60 * 1000);
   cancellationSweeper.unref();
