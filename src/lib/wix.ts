@@ -223,14 +223,17 @@ export async function getBookingStatuses(bookingIds: string[]): Promise<Record<s
 /**
  * All of a contact's upcoming CONFIRMED bookings straight from Wix — so
  * get_my_bookings can also show classes booked at the counter or on the
- * website, not just the ones taken through Awa. Read-only: Awa can't cancel
- * these (no local payment/plan context), it just surfaces them.
+ * website, not just the ones taken through Awa (money side of a cancellation
+ * still goes through reception — no local payment context).
  *
- * Shapes here (bookedEntity.slot start/title) follow the Bookings V2 docs and
- * MUST be verified against a live extended-bookings response once real data
- * exists — this is the "adjust wix.ts" caveat from the README. Everything is
- * defensive: an unexpected shape yields an empty list, never a throw that
- * would break get_my_bookings.
+ * Shape and filter paths VERIFIED on live data (11/07, Marie's contact):
+ * the filter field is `contactDetails.contactId` — `booking.contactDetails.*`
+ * is rejected with a 400 (that bug silently emptied get_my_bookings until
+ * today). `status` filters fine server-side; date filters return 200 with 0
+ * rows (unreliable) → the future-only cut stays client-side, with paging
+ * (default page is 50, unsorted — old rows come first, so paging is a MUST
+ * for regulars with history). Still defensive: an unexpected shape yields an
+ * empty list, never a throw that would break get_my_bookings.
  */
 export interface WixContactBooking {
   id: string;
@@ -242,19 +245,25 @@ export interface WixContactBooking {
 export async function listContactUpcomingBookings(
   contactId: string,
 ): Promise<WixContactBooking[]> {
-  const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
-    query: {
-      filter: { "booking.contactDetails.contactId": contactId },
-      // Cheap client-side date/status filtering below — studio scale is small.
-    },
-  });
+  const extendedBookings: any[] = [];
+  for (let offset = 0; offset < 500; offset += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: {
+        filter: { "contactDetails.contactId": contactId, status: { $in: ["CONFIRMED", "PENDING"] } },
+        paging: { limit: 100, offset },
+      },
+    });
+    const batch: any[] = data?.extendedBookings ?? [];
+    extendedBookings.push(...batch);
+    if (batch.length < 100) break;
+  }
   const services = await listServices().catch(() => [] as WixService[]);
   const serviceName = (id: string | undefined) =>
     services.find((s) => s.id === id)?.name ?? "Cours";
 
   const now = Date.now();
   const out: WixContactBooking[] = [];
-  for (const eb of data?.extendedBookings ?? []) {
+  for (const eb of extendedBookings) {
     const b = eb?.booking;
     if (!b?.id) continue;
     const status = b.status ?? "UNKNOWN";

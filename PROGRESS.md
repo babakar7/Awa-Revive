@@ -532,6 +532,32 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       maintenant une réponse sûre.
     - 4 tests unitaires ajoutés (131 au total) ; intégration 14/14 verte.
 
+26. **Cas Marie (11/07) — bug réel get_my_bookings élargi + leçons.** Marie
+    (abonnée, résas Reformer récurrentes prises en réception) a écrit à Awa :
+    get_my_bookings a répondu « aucune réservation » et Awa a proposé de lier
+    son compte par email alors qu'il était DÉJÀ rattaché. Diagnostic en live :
+    - **Bug confirmé et corrigé** (le ⚠️ de §4.19) : le filtre extended-bookings
+      `booking.contactDetails.contactId` n'existe pas → 400 Wix, avalé par le
+      code défensif → liste toujours vide. Le bon chemin est
+      **`contactDetails.contactId`** (sans préfixe booking.). Vérifié aussi :
+      `status` filtrable côté serveur ($in CONFIRMED/PENDING), les filtres de
+      DATE renvoient 200 avec 0 ligne (silencieusement inutilisables) → le tri
+      « à venir » reste client-side ; la page par défaut fait 50, NON triée
+      (vieilles résas d'abord) → **pagination obligatoire** (limit 100, offset,
+      cap 500) pour les habituées à gros historique (Marie : 81 résas).
+    - **Le rapprochement compte/abonnement, lui, MARCHAIT** : contact trouvé
+      par e164 (+221774446666 → « Marie KA CISSE »), plan « 1x reformer
+      1x yoga » détecté, et « l'Aquabike n'est pas couvert » était factuellement
+      juste. Fix prompt : ne JAMAIS proposer la liaison email quand le contexte
+      montre déjà un abonnement/des résas (compte forcément rattaché) ; une résa
+      introuvable ≠ compte non lié.
+    - **Constat ops (à traiter côté studio)** : Marie n'a AUCUNE résa à venir
+      dans Wix — ses créneaux récurrents lun/jeu 11h15 ne sont pas réservés
+      dans Wix par la réception. Tant que c'est le cas, ni Awa ni le site ne
+      peuvent voir/déplacer ces cours, et les places semblent libres pour les
+      autres clientes. → Brief réception : matérialiser les récurrences en
+      vraies résas Wix.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -682,9 +708,10 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
 - [ ] Solde d'abonnement : « il me reste combien de séances ? » → chiffre
   cohérent avec Wix, décrémenté après une résa, re-crédité après annulation.
 - [ ] get_my_bookings élargi : réserver une place au comptoir/site avec le
-  numéro du testeur, puis « mes cours ? » → la résa studio apparaît en lecture
-  seule. **Vérifier la forme réelle de la réponse extended-bookings** (nom du
-  cours + heure) et ajuster `listContactUpcomingBookings` si besoin.
+  numéro du testeur, puis « mes cours ? » → la résa studio apparaît (annulable
+  ≥16h via l'id studio:). ~~Vérifier la forme extended-bookings~~ → **FAIT
+  (11/07, cas Marie §4.26)** : filtre corrigé (`contactDetails.contactId`),
+  pagination ajoutée ; reste à voir une résa studio À VENIR s'afficher en réel.
 - [ ] Menu aux abonnés : réserver par abonnement puis commander un smoothie →
   lien Wave café-seul, paiement, confirmation client + email réception «☕ résa
   abonnement».
