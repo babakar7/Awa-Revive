@@ -126,6 +126,8 @@ export interface WixSlot {
   startDate: string; // ISO
   endDate: string; // ISO
   openSpots: number;
+  /** Coach assigned to this session (slot.resource.name) — verified live 11/07. */
+  coach: string | null;
   /** Full slot object exactly as returned by Wix — passed back on Create Booking. */
   raw: unknown;
 }
@@ -172,6 +174,7 @@ export async function queryAvailabilityMulti(
       startDate: e.slot.startDate,
       endDate: e.slot.endDate,
       openSpots: Number(e.openSpots ?? 0),
+      coach: typeof e.slot.resource?.name === "string" ? e.slot.resource.name : null,
       raw: e.slot,
     }));
 }

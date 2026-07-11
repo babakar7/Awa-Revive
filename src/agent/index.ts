@@ -79,14 +79,20 @@ export async function handleInboundText(args: {
   await repo.addTurn(client.id, "user", args.text, args.waMessageId);
 
   // Lazy TTL sweep so the "active link" context below is accurate.
-  await Promise.all([repo.expireStaleBookings(), repo.expireStalePlanOrders()]);
-  const [activeBooking, activePlanOrder, memberships, recentRefunds, habit] = await Promise.all([
-    repo.activeAwaitingPayment(client.id),
-    repo.activeAwaitingPlanOrder(client.id),
-    activeMemberships(client),
-    repo.recentRefunds(client.id),
-    repo.bookingHabit(client.id),
+  await Promise.all([
+    repo.expireStaleBookings(),
+    repo.expireStalePlanOrders(),
+    repo.expireStaleCafeOrders(),
   ]);
+  const [activeBooking, activePlanOrder, activeCafeOrder, memberships, recentRefunds, habit] =
+    await Promise.all([
+      repo.activeAwaitingPayment(client.id),
+      repo.activeAwaitingPlanOrder(client.id),
+      repo.activeAwaitingCafeOrder(client.id),
+      activeMemberships(client),
+      repo.recentRefunds(client.id),
+      repo.bookingHabit(client.id),
+    ]);
 
   const history = await repo.lastTurns(client.id, 20);
   const messages: Anthropic.MessageParam[] = [];
@@ -120,6 +126,7 @@ export async function handleInboundText(args: {
         clientLanguage: client.language ?? lang,
         activeBooking,
         activePlanOrder,
+        activeCafeOrder,
         memberships,
         recentRefunds,
         habit,

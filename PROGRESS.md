@@ -491,6 +491,47 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       14/14 verte. E2E à faire : envoyer une vraie capture Wave à Awa, et une
       commande café sans résa payée en réel.
 
+25. **Quatuor UX bis (11/07)** — liste d'attente, annulation des résas studio,
+    coachs visibles, lien café dans le contexte.
+    - **Liste d'attente sur cours complet** ([waitlistSweep.ts](src/domain/waitlistSweep.ts),
+      table `waitlist_entries`) : sur un créneau plein que le client veut quand
+      même, Awa propose la liste d'attente (outils `join_waitlist` /
+      `leave_waitlist`). Le sweep 5 min re-vérifie la dispo (UN appel
+      `queryAvailabilityMulti` groupé pour toutes les entrées) et envoie UNE
+      relance WhatsApp par entrée quand une place se libère (claim atomique
+      WAITING→NOTIFIED AVANT envoi, comme la relance lien expiré ; tous les
+      inscrits du créneau sont prévenus, premier arrivé premier servi — AUCUNE
+      place n'est retenue, le flux paiement-d'abord reprend normalement).
+      **Compromis assumé (décision Babakar 11/07) : pas de template Meta** —
+      hors fenêtre 24h l'envoi échoue (131047) → statut NOTIFY_FAILED, loggé,
+      jamais retenté. Server-authoritative : join_waitlist re-vérifie le slot
+      en live (`findSlot`) — slot inconnu = erreur, slot en fait OUVERT = « pas
+      besoin de liste, réserve-le ». Pour ça, check_availability expose
+      désormais l'event_id AUSSI sur les créneaux pleins (toujours pas de
+      choice_id ni de slot_cache → toujours impayables). Entrées expirées en
+      silence quand le cours démarre.
+    - **Annulation des résas studio** (décision produit Babakar 11/07) :
+      get_my_bookings donne aux résas comptoir/site un `booking_id`
+      `studio:<wix id>` et cancel_booking les accepte — propriété re-vérifiée
+      en live (l'id doit figurer dans `listContactUpcomingBookings` du contact
+      du client), règle 16h identique, annulation Wix, puis **l'argent reste
+      humain** : Awa ne connaît pas le mode de paiement (cash ? OM ? plan ?)
+      → le client est invité à contacter la réception ET la réception reçoit
+      un email « vérifier remboursement/re-crédit ». Jamais de promesse de
+      montant ni de délai.
+    - **Coachs visibles** : l'availability Wix porte le coach dans
+      `slot.resource.name` (VÉRIFIÉ en live le 11/07 — ex. « yves SAGNA » sur
+      Aquabike). `WixSlot.coach` extrait dans queryAvailabilityMulti, exposé
+      champ `coach` dans check_availability, règle prompt : le nom du coach ne
+      vient QUE de là (jamais inventé), coachs différents par créneau = le dire,
+      « je veux le cours de X » = filtrer les slots par ce champ.
+    - **Lien café dans le contexte dynamique** (le ⚠️ de §4.21 soldé) :
+      `activeAwaitingCafeOrder` injecté à chaque message (articles, total,
+      minutes restantes, lien, résa liée ou commande comptoir) + sweep TTL café
+      dans le lazy sweep de l'agent. « Mon lien smoothie est encore bon ? » a
+      maintenant une réponse sûre.
+    - 4 tests unitaires ajoutés (131 au total) ; intégration 14/14 verte.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -593,6 +634,13 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   comptoir), **dates explicites** (7 jours nommés + règle date littérale dans
   le contexte dynamique), **reçu/facture → handoff**. 9 tests ajoutés (127 au
   total) ; intégration 14/14 verte.
+- **11/07 (suite)** : **quatuor UX bis** (§4.25) — **liste d'attente** sur
+  cours complet (join/leave_waitlist, sweep 5 min, relance one-shot, pas de
+  template = fenêtre 24h assumée), **annulation des résas studio** par Awa
+  (id `studio:`, 16h, argent via réception), **coachs visibles** dans
+  check_availability (slot.resource.name, vérifié live), **lien café dans le
+  contexte dynamique**. 4 tests ajoutés (131 au total) ; intégration 14/14
+  verte.
 
 ## 6. Reste à faire
 
@@ -619,6 +667,16 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   réservation ».
 - [ ] Date explicite lointaine : demander « et le [date à +3 semaines] ? » →
   fenêtre correcte (bonne date, bonne année), pas d'arithmétique inventée.
+- [ ] Liste d'attente : s'inscrire sur un cours plein, libérer une place dans
+  Wix → UNE relance dans les ~5 min, puis « oui » → lien direct. Vérifier
+  aussi leave_waitlist et le cas « le slot est en fait ouvert ».
+- [ ] Annulation résa studio : réserver au comptoir avec le numéro du testeur,
+  annuler via Awa (≥16h) → annulée dans Wix + email réception
+  « vérifier remboursement/re-crédit » + message client vers la réception.
+- [ ] Coach : « c'est qui le coach d'Aquabike ? » → nom réel depuis les
+  créneaux (yves SAGNA attendu), jamais inventé.
+- [ ] Lien café en attente : créer un lien café, demander « il est encore
+  valable ? » → réponse ferme avec les minutes restantes.
 - [ ] Report en un geste : déplacer une résa abonnement (re-crédit + re-résa
   même tour) et une résa Wave (OK explicite avant annulation).
 - [ ] Solde d'abonnement : « il me reste combien de séances ? » → chiffre

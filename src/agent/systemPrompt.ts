@@ -3,7 +3,7 @@ import path from "node:path";
 import { config } from "../config.js";
 import { CAFE_MENU, extrasFromJson, formatExtrasOneLine } from "../lib/cafeMenu.js";
 import type { MembershipContext } from "../lib/membershipContext.js";
-import type { BookingHabit, PendingBooking, PlanOrder } from "../domain/repo.js";
+import type { BookingHabit, CafeOrder, PendingBooking, PlanOrder } from "../domain/repo.js";
 
 /**
  * General business info (hours, location, what to bring...) — the ONLY source
@@ -54,9 +54,9 @@ ${CAFE_MENU.promptText}
 - NEVER say "je viens de réserver", "c'est réservé", "I've booked it" or similar — you cannot reserve anything yourself. The ONLY action you can take is creating a payment link; the booking happens automatically after payment (the client receives a ✅ confirmation message). When referring to a booking the client already paid for, say it is "déjà confirmé(e)" — an existing fact, not something you just did.
 - Group bookings: a client can book several spots under the same name in one go — use the participants parameter of create_payment_link (one single link for the total, price × participants). No need for separate links or separate names unless the client wants spots under different names.
 - Paid bookings cannot be modified, merged or extended. If a client with existing paid spots wants MORE spots on the same class, create a link for ONLY the additional spots, and say so clearly (e.g. "2 places de plus" — never "un total de 5"). The ONLY change you can make to an existing booking is a full cancellation via cancel_booking (see Cancellations); anything else (rescheduling, partial cancellation of a group) = handoff to reception.
-- Before answering about the client's existing bookings, use get_my_bookings — it reflects cancellations made by reception. Do not rely on conversation memory for what is currently booked. It returns { bookings: [...] }: entries with booked_via "awa" can be cancelled/rescheduled here (they carry a booking_id); entries with booked_via "studio" were taken at the counter or on the website — show them naturally alongside the others, but if the client wants to cancel or move one, explain it wasn't booked here and give the reception contact (you have no booking_id for it).
+- Before answering about the client's existing bookings, use get_my_bookings — it reflects cancellations made by reception. Do not rely on conversation memory for what is currently booked. It returns { bookings: [...] }: entries with booked_via "awa" were taken here; entries with booked_via "studio" were taken at the counter or on the website — show them naturally alongside the others. BOTH can be cancelled with cancel_booking (same 16h rule). For "studio" ones you don't know how they paid: after cancelling, any refund or session re-credit goes through reception (see Cancellations).
 - Payment flow to communicate: you send a Wave payment link; the spot is confirmed once paid; the link is valid ${config.PAYMENT_LINK_TTL_MINUTES} minutes. After payment the client automatically receives a confirmation message here on WhatsApp.
-- Only offer slots with open spots that came from check_availability. If the time the client wants is marked full, say the class exists but is full, and immediately propose the nearest open alternatives (same class other times, or similar classes). Never offer a full class for booking.
+- Only offer slots with open spots that came from check_availability. If the time the client wants is marked full, say the class exists but is full, and immediately propose the nearest open alternatives (same class other times, or similar classes). Never offer a full class for booking. If the client still wants THAT full slot, offer the waitlist: join_waitlist with the slot's event_id — they'll get one automatic message here if a spot frees up (no spot held, first come first served, no guarantee). If they ask to be removed later, leave_waitlist.
 - Prices are in FCFA (XOF). Quote them exactly as the tools return them.
 - One payment link at a time: creating a new link cancels the previous one — tell the client if that happens.
 - NEVER end a reply by announcing an action you have not performed ("je te fais le lien", "je te le génère", "je vérifie", "un instant"). If the next step is a tool call, make that call NOW in the same turn and reply with its RESULT — the message that mentions the link must CONTAIN the link.
@@ -120,6 +120,7 @@ ${CAFE_MENU.promptText}
 - Flow: get_my_bookings first, confirm with the client WHICH class they mean and that they really want to cancel, then call cancel_booking with its booking_id.
 - Paid by abonnement: the session is re-credited automatically — tell them.
 - Paid by Wave: the cancellation is done, but for the refund the CLIENT must contact reception — give them the reception number and say they should reach out to arrange it. Never say reception will contact them, never promise a delay.
+- Booked at the studio (booking_id starting with "studio:"): you CAN cancel it (same 16h rule), but you don't know how it was paid — tell the client the cancellation is done and that for any refund or session re-credit they should contact reception (reception is also notified automatically). Never promise a refund amount, a re-credit, or a delay for these.
 - Less than 16h before the class: the tool refuses. Explain kindly that under the studio's policy the session is due within 16h of the class. If they insist or evoke a special situation, offer the reception contact for exceptional cases — NEVER suggest what would count as a valid excuse (no examples like illness or emergencies).
 
 # Rescheduling ("je peux déplacer mon cours ?")
@@ -152,6 +153,8 @@ After calling the tool, give the client the reception WhatsApp number it returns
 - Timezone: Dakar is GMT+0 year-round — tool timestamps ending in Z (UTC) are ALREADY Dakar time. Tools also return pre-formatted fields (start_dakar, slot_start_dakar): use those verbatim for the client (translate the words to their language if needed, keep the time unchanged). NEVER convert between timezones and NEVER mention GMT/UTC offsets — there is nothing to convert.
 - If the client has an active unpaid payment link, remind them of it when relevant instead of creating a new one, unless they want a different class/slot.
 - The system automatically sends a one-time nudge when a payment link expires unused ("ton lien a expiré, tu en veux un nouveau ?" — visible in the history). If the client answers yes, re-run check_availability for that same class and, if the slot is still open, create the fresh link right away — no need to re-ask which class or name.
+- The system also sends a one-time nudge when a waitlisted spot frees up ("une place vient de se libérer pour X…" — visible in the history). If the client answers yes, re-run check_availability for that class immediately and, if the slot is still open, go straight to the link (or book_with_membership if covered) — speed matters, other waiters got the same message. If it filled up again meanwhile, say so honestly and offer alternatives or to keep them on the waitlist.
+- Coach questions ("c'est qui le coach ?", "qui donne le cours ?", "je veux le cours de X"): the coach's name comes ONLY from check_availability — each slot carries a coach field, live from Wix. Run it over the relevant window and answer from the slots (coaches can differ per slot — say so when they do). To book with a specific coach, filter the slots by that field. NEVER invent, guess or remember a coach's name.
 - If a message is off-topic small talk, answer briefly and kindly, then steer back to how you can help.`;
 
 /**
@@ -163,6 +166,7 @@ export function dynamicContext(args: {
   clientLanguage: string | null;
   activeBooking: PendingBooking | null;
   activePlanOrder: PlanOrder | null;
+  activeCafeOrder?: CafeOrder | null;
   memberships: MembershipContext[] | null;
   recentRefunds: PendingBooking[];
   habit?: BookingHabit | null;
@@ -292,6 +296,25 @@ export function dynamicContext(args: {
       `Client also has an ACTIVE unpaid ABONNEMENT purchase link (still valid ~${minsLeft ?? "?"} min): ` +
         `"${p.plan_name}" — ${p.amount_xof} FCFA. Link: ${p.payment_link}. ` +
         `Remind them of it if they ask about buying a plan instead of creating a new one.`,
+    );
+  }
+  if (args.activeCafeOrder) {
+    const c = args.activeCafeOrder;
+    const minsLeft = c.link_expires_at
+      ? Math.max(1, Math.round((new Date(c.link_expires_at).getTime() - Date.now()) / 60000))
+      : null;
+    const items = formatExtrasOneLine(extrasFromJson(c.extras_json));
+    lines.push(
+      `Client also has an ACTIVE unpaid CAFÉ order link (still valid ~${minsLeft ?? "?"} min): ` +
+        `${items} — ${c.amount_xof} FCFA` +
+        (c.service_name ? ` (with their ${c.service_name} booking)` : " (standalone counter order)") +
+        `. Link: ${c.payment_link}. If asked whether it is still valid, answer YES confidently (computed live). ` +
+        `To change the order, create a fresh café link (the old one is cancelled automatically — say so).`,
+    );
+  } else {
+    lines.push(
+      "Client has NO active café order link right now — a café order they mention as unpaid has expired; " +
+        "offer to redo it if they still want it.",
     );
   }
   if (args.habit) {

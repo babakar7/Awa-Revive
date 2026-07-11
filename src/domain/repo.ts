@@ -715,6 +715,17 @@ export async function markCafeOrderPaid(id: string): Promise<CafeOrder | null> {
   return transitionCafeOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED"]);
 }
 
+/** The client's live unpaid café link, for the per-message dynamic context. */
+export async function activeAwaitingCafeOrder(clientId: string): Promise<CafeOrder | null> {
+  const res = await pool.query(
+    `select * from pending_cafe_orders
+      where client_id = $1 and status = 'AWAITING_PAYMENT' and link_expires_at > now()
+      order by created_at desc limit 1`,
+    [clientId],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function findCafeOrderById(id: string): Promise<CafeOrder | null> {
   const res = await pool.query(`select * from pending_cafe_orders where id = $1`, [id]);
   return res.rows[0] ?? null;
@@ -736,6 +747,105 @@ export async function expireStaleCafeOrders(): Promise<number> {
       where status = 'AWAITING_PAYMENT' and link_expires_at < now()`,
   );
   return res.rowCount ?? 0;
+}
+
+// ---------- waitlist (full slots the client asked to be pinged about) ----------
+
+export interface WaitlistEntry {
+  id: string;
+  client_id: string;
+  service_id: string;
+  service_name: string;
+  event_id: string;
+  slot_start: Date;
+  status: string;
+  notified_at: Date | null;
+}
+
+/** Idempotent join: one WAITING entry per client+event (unique partial index). */
+export async function joinWaitlist(args: {
+  clientId: string;
+  serviceId: string;
+  serviceName: string;
+  eventId: string;
+  slotStart: string;
+}): Promise<{ entry: WaitlistEntry; already: boolean }> {
+  const existing = await pool.query(
+    `select * from waitlist_entries where client_id = $1 and event_id = $2 and status = 'WAITING'`,
+    [args.clientId, args.eventId],
+  );
+  if (existing.rows[0]) return { entry: existing.rows[0], already: true };
+  const res = await pool.query(
+    `insert into waitlist_entries (client_id, service_id, service_name, event_id, slot_start)
+     values ($1, $2, $3, $4, $5) returning *`,
+    [args.clientId, args.serviceId, args.serviceName, args.eventId, args.slotStart],
+  );
+  return { entry: res.rows[0], already: false };
+}
+
+/** Cancel this client's WAITING entries (all of them, or one class's). */
+export async function leaveWaitlist(clientId: string, serviceId?: string): Promise<number> {
+  const res = serviceId
+    ? await pool.query(
+        `update waitlist_entries set status = 'CANCELLED'
+          where client_id = $1 and service_id = $2 and status = 'WAITING'`,
+        [clientId, serviceId],
+      )
+    : await pool.query(
+        `update waitlist_entries set status = 'CANCELLED' where client_id = $1 and status = 'WAITING'`,
+        [clientId],
+      );
+  return res.rowCount ?? 0;
+}
+
+export async function listClientWaitlist(clientId: string): Promise<WaitlistEntry[]> {
+  const res = await pool.query(
+    `select * from waitlist_entries
+      where client_id = $1 and status = 'WAITING' and slot_start > now()
+      order by slot_start asc`,
+    [clientId],
+  );
+  return res.rows;
+}
+
+/** All WAITING entries for future slots — the sweep's work list. */
+export async function pendingWaitlistEntries(): Promise<
+  (WaitlistEntry & { wa_phone: string; language: string | null })[]
+> {
+  const res = await pool.query(
+    `select w.*, c.wa_phone, c.language from waitlist_entries w
+      join clients c on c.id = w.client_id
+      where w.status = 'WAITING' and w.slot_start > now()
+      order by w.slot_start asc limit 200`,
+  );
+  return res.rows;
+}
+
+/** Entries whose class started without a spot freeing up → EXPIRED (silent). */
+export async function expirePastWaitlistEntries(): Promise<number> {
+  const res = await pool.query(
+    `update waitlist_entries set status = 'EXPIRED'
+      where status = 'WAITING' and slot_start <= now()`,
+  );
+  return res.rowCount ?? 0;
+}
+
+/**
+ * One-shot claim BEFORE sending the nudge (same stance as the expiry nudge):
+ * only the caller that flips WAITING→NOTIFIED sends the message.
+ */
+export async function claimWaitlistNotify(id: string): Promise<boolean> {
+  const res = await pool.query(
+    `update waitlist_entries set status = 'NOTIFIED', notified_at = now()
+      where id = $1 and status = 'WAITING'`,
+    [id],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** The send failed after the claim — recorded for the logs, never retried. */
+export async function markWaitlistNotifyFailed(id: string): Promise<void> {
+  await pool.query(`update waitlist_entries set status = 'NOTIFY_FAILED' where id = $1`, [id]);
 }
 
 // ---------- slot cache (server-side validation of model-provided event_ids) ----------

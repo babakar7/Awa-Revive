@@ -157,6 +157,29 @@ create table if not exists pending_cafe_orders (
 create index if not exists idx_cafe_orders_client_status
   on pending_cafe_orders (client_id, status);
 
+-- Waitlist for full class slots: the client explicitly asked to be pinged if
+-- a spot frees up. The 5-min sweep re-checks availability; a freed spot sends
+-- ONE WhatsApp nudge (claim WAITING→NOTIFIED before sending, one-shot). No
+-- booking is ever created from here — the client answers and the normal
+-- payment-first flow applies (first come, first served).
+-- Statuts : WAITING → NOTIFIED | NOTIFY_FAILED | CANCELLED | EXPIRED.
+create table if not exists waitlist_entries (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  service_id text not null,
+  service_name text not null,
+  event_id text not null,
+  slot_start timestamptz not null,
+  status text not null default 'WAITING',
+  created_at timestamptz not null default now(),
+  notified_at timestamptz
+);
+
+create index if not exists idx_waitlist_status_start
+  on waitlist_entries (status, slot_start);
+create unique index if not exists idx_waitlist_one_waiting
+  on waitlist_entries (client_id, event_id) where status = 'WAITING';
+
 create table if not exists slot_cache (
   client_id uuid not null references clients(id),
   event_id text not null,

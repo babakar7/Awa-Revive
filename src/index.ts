@@ -3,6 +3,7 @@ import { migrate, closeDb } from "./db/index.js";
 import { expireStaleBookings, expireStalePlanOrders, expireStaleCafeOrders } from "./domain/repo.js";
 import { nudgeExpiredLinks } from "./domain/expiryNudge.js";
 import { syncCancellations } from "./domain/cancellationSync.js";
+import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import { buildServer } from "./server.js";
 
@@ -40,6 +41,13 @@ async function main() {
       if (n > 0) app.log.info({ cancelled: n }, "Synced Wix cancellations");
     } catch (err) {
       app.log.error({ err }, "Cancellation sweep failed");
+    }
+    try {
+      // Freed spots → one-shot nudges to the clients waiting on them.
+      const nudged = await sweepWaitlist(app.log);
+      if (nudged > 0) app.log.info({ nudged }, "Waitlist nudges sent");
+    } catch (err) {
+      app.log.error({ err }, "Waitlist sweep failed");
     }
   }, 5 * 60 * 1000);
   cancellationSweeper.unref();

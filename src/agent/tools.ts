@@ -37,7 +37,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     description:
       "Get time slots for a class between two dates, including full ones. Open slots carry an event_id " +
       "needed to create a payment link; slots marked full:true exist but cannot be booked — mention they " +
-      "are full and propose open alternatives instead. Call this whenever the client asks about times/days for a class.",
+      "are full and propose open alternatives instead. Each slot includes the coach's name — the ONLY valid " +
+      "source to answer who teaches a class. Call this whenever the client asks about times/days for a class.",
     input_schema: {
       type: "object",
       properties: {
@@ -197,10 +198,10 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "get_my_bookings",
     description:
       "List this client's upcoming confirmed bookings. Returns { bookings: [...] }: each has booked_via " +
-      "'awa' (taken through this chat — carries a booking_id usable with cancel_booking) or 'studio' " +
-      "(booked at the counter or on the website, matched by the client's WhatsApp number — NO booking_id, " +
-      "cannot be cancelled here: any change goes through reception). Use it before answering about existing " +
-      "bookings and before any cancel/reschedule.",
+      "'awa' (taken through this chat) or 'studio' (booked at the counter or on the website, matched by the " +
+      "client's WhatsApp number). Both carry a booking_id usable with cancel_booking (16h rule for all) — " +
+      "for 'studio' ones Awa doesn't know the payment method, so refunds/re-credits go through reception. " +
+      "Use it before answering about existing bookings and before any cancel/reschedule.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -209,9 +210,11 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Cancel one of THIS client's upcoming bookings (all its spots). Only allowed 16 hours or more " +
       "before the class start — the server enforces this and refuses otherwise. Membership-paid bookings: " +
       "the plan session is automatically re-credited. Wave-paid bookings: the client will be refunded " +
-      "manually by reception (they are notified automatically). Also the first step of a reschedule " +
-      "(cancel, then book the new slot in the same turn). Call ONLY after get_my_bookings gave you " +
-      "the booking_id AND the client explicitly confirmed they want to cancel that specific class.",
+      "manually by reception (they are notified automatically). Studio bookings (booking_id starting with " +
+      "'studio:'): cancelled in Wix, but any refund/re-credit goes through reception (payment method unknown " +
+      "to Awa). Also the first step of a reschedule (cancel, then book the new slot in the same turn). Call " +
+      "ONLY after get_my_bookings gave you the booking_id AND the client explicitly confirmed they want to " +
+      "cancel that specific class.",
     input_schema: {
       type: "object",
       properties: {
@@ -221,6 +224,41 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         },
       },
       required: ["booking_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "join_waitlist",
+    description:
+      "Put the client on the waitlist for a FULL slot they explicitly want (offer it only after saying the slot " +
+      "is full and proposing open alternatives). The system re-checks availability every few minutes and sends " +
+      "them ONE WhatsApp message if a spot frees up — no spot is ever held: first come, first served, and booking " +
+      "then follows the normal payment flow. The server re-verifies the slot live: if it is actually open, the " +
+      "result says so and you should just book it normally instead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service_id: { type: "string", description: "Class id from list_classes" },
+        event_id: { type: "string", description: "event_id of the FULL slot, from check_availability" },
+        slot_start: { type: "string", description: "ISO start of that slot (the `start` field from check_availability)" },
+      },
+      required: ["service_id", "event_id", "slot_start"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "leave_waitlist",
+    description:
+      "Remove the client from the waitlist when they ask (all their pending waitlist spots, or one class's " +
+      "with service_id). Waitlist entries also expire silently on their own when the class starts.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service_id: {
+          type: "string",
+          description: "Optional class id — remove only this class's waitlist entries",
+        },
+      },
       additionalProperties: false,
     },
   },
@@ -405,7 +443,10 @@ export async function executeTool(
         timezone_note:
           "start_dakar is the class time in Dakar local time — relay it verbatim. NEVER convert timezones or mention GMT/UTC.",
         slots: slots.map((s) => ({
-          event_id: s.openSpots > 0 ? s.eventId : undefined,
+          // Full slots expose their event_id too — join_waitlist needs it. They
+          // stay unbookable: only OPEN slots go in slot_cache, and the payment
+          // tools re-verify open spots live anyway.
+          event_id: s.eventId,
           // Short alias usable as a clickable row id in present_options
           // (event_ids can exceed WhatsApp's 200-char row id limit).
           choice_id: s.openSpots > 0 ? repo.slotChoiceKey(s.eventId) : undefined,
@@ -416,10 +457,13 @@ export async function executeTool(
             : undefined,
           open_spots: s.openSpots,
           full: s.openSpots <= 0 || undefined,
+          coach: s.coach ?? undefined,
         })),
         note:
           slots.some((s) => s.openSpots <= 0)
-            ? "Slots marked full:true exist but cannot be booked — if the client asked for one of them, say it's full and suggest open alternatives."
+            ? "Slots marked full:true exist but cannot be booked — if the client asked for one of them, say it's " +
+              "full and suggest open alternatives; if they still want THAT slot, offer the waitlist (join_waitlist " +
+              "with its event_id)."
             : undefined,
       });
     }
@@ -979,9 +1023,10 @@ export async function executeTool(
       }));
 
       // Also surface bookings the client made at the counter or on the Wix
-      // website (identified by their WhatsApp number → CRM contact). These have
-      // no local payment/plan context, so Awa can show but not cancel them —
-      // dedupe against the Wix ids Awa already created.
+      // website (identified by their WhatsApp number → CRM contact). Awa can
+      // cancel these too (16h rule) via the "studio:" booking_id — but she has
+      // no local payment context, so any refund/re-credit goes through
+      // reception. Dedupe against the Wix ids Awa already created.
       const external: unknown[] = [];
       try {
         const contactId = await wix.findContactIdByPhone(
@@ -996,14 +1041,13 @@ export async function executeTool(
           for (const wb of wixBookings) {
             if (ownWixIds.has(wb.id)) continue; // already in `own`
             external.push({
+              booking_id: `studio:${wb.id}`,
               class: wb.serviceName,
               start: wb.startDate,
               start_dakar: fmtDakar(wb.startDate),
               participants: wb.participants,
               booked_via: "studio", // counter or website
               status: "confirmed",
-              not_cancellable_here:
-                "Booked outside Awa — to change or cancel it, the client contacts reception.",
             });
           }
         }
@@ -1015,7 +1059,10 @@ export async function executeTool(
         bookings: [...own, ...external],
         note:
           external.length > 0
-            ? "booked_via 'studio' bookings were made at the counter/website: show them but say any change goes through reception (no booking_id, cancel_booking won't work on them)."
+            ? "booked_via 'studio' bookings were made at the counter/website. cancel_booking works on them " +
+              "(same 16h rule) via their studio: booking_id, but Awa does not know how they were paid — after " +
+              "cancelling, any refund or session re-credit is handled by reception (the client contacts them; " +
+              "reception is also notified automatically)."
             : undefined,
       });
     }
@@ -1023,6 +1070,62 @@ export async function executeTool(
     case "cancel_booking": {
       const bookingId = String(input.booking_id ?? "");
       if (!bookingId) return JSON.stringify({ error: "invalid_arguments" });
+
+      // Bookings made at the counter/website ("studio:<wix id>" from
+      // get_my_bookings): Awa can cancel them in Wix (same 16h rule), but she
+      // has no payment context (cash? OM? plan via the site?), so the money
+      // side is ALWAYS reception's — client is told to contact them, reception
+      // gets an email to check refund/re-credit.
+      if (bookingId.startsWith("studio:")) {
+        const wixId = bookingId.slice("studio:".length);
+        // Ownership check server-side: the id must be among THIS client's own
+        // upcoming Wix bookings (re-fetched live — never trust the model's id).
+        const contactId = await wix.findContactIdByPhone(
+          `+${client.wa_phone.replace(/^\+/, "")}`,
+          client.name ?? undefined,
+        );
+        const theirs = contactId ? await wix.listContactUpcomingBookings(contactId) : [];
+        const wb = theirs.find((b) => b.id === wixId);
+        if (!wb) {
+          return JSON.stringify({
+            error: "unknown_booking",
+            message: "No such upcoming studio booking for this client. Re-run get_my_bookings.",
+          });
+        }
+        const hoursLeftStudio = hoursUntil(wb.startDate);
+        if (hoursLeftStudio < 16) {
+          return JSON.stringify({
+            error: "too_late_16h_policy",
+            hours_before_class: Math.max(0, Math.round(hoursLeftStudio * 10) / 10),
+            message:
+              "Cancellation refused: less than 16 hours before the class, the session is due (studio policy). " +
+              "Politely explain the 16h rule and say that for exceptional situations they can contact reception. " +
+              "Do NOT suggest examples of valid excuses.",
+          });
+        }
+        await wix.cancelBooking(wixId);
+        notifyReception(
+          "ℹ️ Annulation d'une résa studio via Awa — vérifier remboursement/re-crédit",
+          `Awa a annulé (≥ 16h avant le cours) une réservation prise au comptoir ou sur le site :\n` +
+            `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
+            `  Cours : ${wb.serviceName} — ${fmtDakar(wb.startDate)} (${wb.participants} place(s))\n` +
+            `  Booking Wix : ${wixId}\n\n` +
+            `Awa ne connaît pas le mode de paiement de cette résa : vérifier dans Wix s'il y a un ` +
+            `remboursement ou un re-crédit de séance à faire. Le client a été invité à vous contacter.`,
+        );
+        return JSON.stringify({
+          cancelled: true,
+          class: wb.serviceName,
+          slot_start_dakar: fmtDakar(wb.startDate),
+          booked_via: "studio",
+          reception_whatsapp: config.RECEPTION_PHONE,
+          note:
+            "Cancelled in Wix. This booking was made at the counter/website, so Awa does not know how it was " +
+            "paid: tell the client the cancellation is done and that for any refund or session re-credit they " +
+            "should CONTACT RECEPTION (give this number) — reception has also been notified. Do not promise " +
+            "a refund amount, a re-credit, or a delay.",
+        });
+      }
 
       // The booking must belong to THIS client (never trust a model-provided
       // id beyond that check) and still be upcoming + confirmed.
@@ -1121,6 +1224,68 @@ export async function executeTool(
         note:
           "Cancelled. Tell the client to CONTACT RECEPTION themselves (give this number) to arrange " +
           "the refund — do not say reception will contact them, and do not promise a delay.",
+      });
+    }
+
+    case "join_waitlist": {
+      const serviceId = String(input.service_id ?? "");
+      const eventId = String(input.event_id ?? "");
+      const slotStart = String(input.slot_start ?? "");
+      if (!serviceId || !eventId || Number.isNaN(Date.parse(slotStart))) {
+        return JSON.stringify({ error: "invalid_arguments" });
+      }
+      const service = await wix.getService(serviceId);
+      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+
+      // Server-authoritative: the slot must exist in Wix right now. The model
+      // can't invent waitlist entries for slots it was never shown either —
+      // the event_id has to match a real session of that service.
+      const slot = await wix.findSlot(serviceId, eventId, slotStart);
+      if (!slot) {
+        return JSON.stringify({
+          error: "unknown_slot",
+          message: "No such slot in Wix. Re-run check_availability and use a full slot's event_id.",
+        });
+      }
+      if (Date.parse(slot.startDate) <= Date.now()) {
+        return JSON.stringify({ error: "slot_already_started" });
+      }
+      if (slot.openSpots > 0) {
+        return JSON.stringify({
+          slot_open: true,
+          open_spots: slot.openSpots,
+          message:
+            "This slot has open spots right now — no waitlist needed. Book it normally " +
+            "(re-run check_availability, then payment link or membership).",
+        });
+      }
+      const { already } = await repo.joinWaitlist({
+        clientId: client.id,
+        serviceId,
+        serviceName: service.name,
+        eventId,
+        slotStart: slot.startDate,
+      });
+      return JSON.stringify({
+        joined: true,
+        already_on_waitlist: already || undefined,
+        class: service.name,
+        slot_start_dakar: fmtDakar(slot.startDate),
+        note:
+          "Tell the client: they'll get ONE WhatsApp message here if a spot frees up — no spot is held " +
+          "(first come, first served) and no guarantee one will free. They can ask to be removed anytime.",
+      });
+    }
+
+    case "leave_waitlist": {
+      const serviceId = String(input.service_id ?? "").trim() || undefined;
+      const removed = await repo.leaveWaitlist(client.id, serviceId);
+      return JSON.stringify({
+        removed,
+        note:
+          removed > 0
+            ? "Confirm to the client they're off the waitlist."
+            : "The client had no pending waitlist entry (maybe it already expired) — reassure them.",
       });
     }
 
