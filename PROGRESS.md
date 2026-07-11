@@ -557,6 +557,13 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       peuvent voir/déplacer ces cours, et les places semblent libres pour les
       autres clientes. → Brief réception : matérialiser les récurrences en
       vraies résas Wix.
+    - **Fix prompt (2e passe, même jour)** : l'intention réelle de Marie était
+      d'ÊTRE réservée pour lundi (pas encore bookée). Nouvelle règle : quand un
+      client évoque un cours qu'il croit avoir et que get_my_bookings ne trouve
+      rien, ne pas s'arrêter à « introuvable » ni renvoyer vers la réception —
+      dire que le créneau n'est pas encore réservé et proposer IMMÉDIATEMENT de
+      le réserver (check_availability puis book_with_membership si le plan
+      couvre, sinon lien Wave).
 
 ## 5. Chronologie condensée
 
