@@ -675,6 +675,13 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       comptes membres subsistent — leur fusion est un chantier Wix support/
       manuel). Fix bonus : le log d'échec de fusion loggait `{e}` (objet vide
       en pino) → `{err}`. 145 tests.
+    - **Priorisation (11/07, demande Babakar)** : les groupes de doublons
+      impliquant un **abonnement actif** sont remontés en tête dans une section
+      « 🔴 Prioritaires — une abonnée active n'est pas reconnue » (card orangé,
+      badge rouge) : ces clientes paient un plan qu'Awa ne voit pas tant que le
+      doublon existe (match ambigu → « pas d'abonnement » → Wave proposé à
+      tort). 4 groupes concernés au 11/07. Tri secondaire : les groupes
+      fusionnables en un clic avant les groupes 100 % membres.
 
 ## 5. Chronologie condensée
 

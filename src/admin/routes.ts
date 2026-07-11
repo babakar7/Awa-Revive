@@ -412,56 +412,76 @@ ${
             ? `<div class="card warn">⚠️ Fusion refusée : ${escapeHtml(err)}</div>`
             : "";
 
-        const groupCards = audit.duplicates
-          .map((g) => {
-            const ids = g.contacts.map((c) => c.id).join(",");
-            const planHolders = new Set(
-              g.contacts.filter((c) => plansByContact.has(c.id)).map((c) => c.id),
-            );
-            // Same rule as the POST enforcement — what you see is what merges.
-            const plan = planMerge(g.contacts, planHolders, memberIds);
-            const keeper = g.contacts.find((c) => c.id === plan?.targetId);
-            const rows = g.contacts
-              .map((c) => {
-                const plans = plansByContact.get(c.id) ?? [];
-                const badges =
-                  (memberIds.has(c.id)
-                    ? ` <span class="badge" style="background:#0969da">👤 compte membre</span>`
-                    : "") +
-                  (plans.length
-                    ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml(plans.join(" · "))}</span>`
-                    : "");
-                const fate = !plan
-                  ? `<span class="muted">—</span>`
-                  : c.id === plan.targetId
-                    ? `<span class="ok">✓ conservée</span>`
-                    : plan.sourceIds.includes(c.id)
-                      ? `<span class="muted">fusionnée puis supprimée</span>`
-                      : `<span class="muted">reste telle quelle (protégée)</span>`;
-                return `<tr>
+        const groupInfos = audit.duplicates.map((g) => {
+          const ids = g.contacts.map((c) => c.id).join(",");
+          const planHolders = new Set(
+            g.contacts.filter((c) => plansByContact.has(c.id)).map((c) => c.id),
+          );
+          // Same rule as the POST enforcement — what you see is what merges.
+          const plan = planMerge(g.contacts, planHolders, memberIds);
+          const keeper = g.contacts.find((c) => c.id === plan?.targetId);
+          const hasPlan = planHolders.size > 0;
+          const rows = g.contacts
+            .map((c) => {
+              const plans = plansByContact.get(c.id) ?? [];
+              const badges =
+                (memberIds.has(c.id)
+                  ? ` <span class="badge" style="background:#0969da">👤 compte membre</span>`
+                  : "") +
+                (plans.length
+                  ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml(plans.join(" · "))}</span>`
+                  : "");
+              const fate = !plan
+                ? `<span class="muted">—</span>`
+                : c.id === plan.targetId
+                  ? `<span class="ok">✓ conservée</span>`
+                  : plan.sourceIds.includes(c.id)
+                    ? `<span class="muted">fusionnée puis supprimée</span>`
+                    : `<span class="muted">reste telle quelle (protégée)</span>`;
+              return `<tr>
 <td><b>${escapeHtml(c.name)}</b>${badges}${c.email ? `<div class="muted">${escapeHtml(c.email)}</div>` : ""}</td>
 <td>${c.phones.map((p) => escapeHtml(p)).join("<br>")}${c.hasE164 ? ` <span class="muted">✓ intl</span>` : ""}</td>
 <td class="hide-sm">${c.createdDate ? fmtDate(c.createdDate) : "—"}</td>
 <td>${fate}</td>
 </tr>`;
-              })
-              .join("");
-            const leftoverNote = plan?.leftoverIds.length
-              ? ` <span class="muted">(${plan.leftoverIds.length} fiche(s) protégée(s) — compte membre ou abonnement — resteront : Wix interdit de les fusionner ; à traiter avec la réception si besoin.)</span>`
-              : "";
-            const action = plan
-              ? `<form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ${plan.sourceIds.length} fiche(s) dans « ${escapeHtml(keeper?.name ?? "?").replaceAll("'", "\\'")} » ?\\n\\nLes fiches fusionnées sont SUPPRIMÉES (irréversible).')">
+            })
+            .join("");
+          const leftoverNote = plan?.leftoverIds.length
+            ? ` <span class="muted">(${plan.leftoverIds.length} fiche(s) protégée(s) — compte membre ou abonnement — resteront : Wix interdit de les fusionner ; à traiter avec la réception si besoin.)</span>`
+            : "";
+          const action = plan
+            ? `<form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ${plan.sourceIds.length} fiche(s) dans « ${escapeHtml(keeper?.name ?? "?").replaceAll("'", "\\'")} » ?\\n\\nLes fiches fusionnées sont SUPPRIMÉES (irréversible).')">
 <input type="hidden" name="group" value="${ids}">
 <button class="act">Fusionner ${plan.sourceIds.length} fiche(s)</button>
 </form>${leftoverNote}`
-              : `<span class="muted">⚠️ Rien à fusionner automatiquement : ces fiches sont des comptes membres (Wix interdit de fusionner deux membres). À traiter dans Wix avec la réception.</span>`;
-            return `<div class="card">
-<b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro
+            : `<span class="muted">⚠️ Rien à fusionner automatiquement : ces fiches sont des comptes membres (Wix interdit de fusionner deux membres). À traiter dans Wix avec la réception.</span>`;
+          const html = `<div class="card ${hasPlan ? "warn" : ""}">
+<b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro${hasPlan ? ` <span class="badge" style="background:#cf222e">abonnée non reconnue</span>` : ""}
 <table><tr><th>Fiche</th><th>Numéro(s) enregistré(s)</th><th class="hide-sm">Créée</th><th>Sort</th></tr>${rows}</table>
 <div style="margin-top:.5rem">${action}</div>
 </div>`;
-          })
-          .join("");
+          return { html, hasPlan, actionable: plan !== null };
+        });
+
+        // A duplicate involving an active abonnement is CRITICAL: the client
+        // pays a plan Awa cannot see (ambiguous match → no plan found → asked
+        // to pay Wave again). Those groups come first, actionable ones next.
+        const priority = groupInfos.filter((g) => g.hasPlan);
+        const rest = groupInfos.filter((g) => !g.hasPlan);
+        const byActionable = (a: (typeof groupInfos)[number], b: (typeof groupInfos)[number]) =>
+          Number(b.actionable) - Number(a.actionable);
+        const prioritySection = priority.length
+          ? `<h2>🔴 Prioritaires — une abonnée active n'est pas reconnue (${priority.length})</h2>
+<p class="muted">Ces clientes paient un abonnement mais Awa ne peut pas les identifier tant que le
+doublon existe : à leur prochain message, Awa leur proposera de payer par Wave. À traiter en premier.</p>
+${priority.sort(byActionable).map((g) => g.html).join("")}`
+          : "";
+        const groupCards =
+          prioritySection +
+          (rest.length
+            ? `<h2>Autres doublons (${rest.length})</h2>
+${rest.sort(byActionable).map((g) => g.html).join("")}`
+            : "");
 
         const noPhoneRows = audit.noPhone
           .map(
