@@ -360,15 +360,25 @@ export interface Membership {
   expiresAt: string | null;
 }
 
-/** Active pricing-plan orders for a contact (client-side filter — studio scale). */
+/**
+ * Active pricing-plan orders for a contact (client-side filter). The orders
+ * endpoint caps limit at 50 and prod already has 46 ACTIVE orders (11/07) —
+ * WITHOUT pagination, clients beyond the first page would silently lose
+ * their abonnement in Awa's eyes. Paged until hasNext=false (cap 1000).
+ */
 export async function listActiveMemberships(contactId: string): Promise<Membership[]> {
-  const res = await fetch(`${WIX_API}/pricing-plans/v2/orders?orderStatuses=ACTIVE&limit=50`, {
-    headers: headers(),
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`Wix orders list failed (${res.status}): ${await res.text()}`);
-  const data: any = await res.json();
-  return (data?.orders ?? [])
+  const orders: any[] = [];
+  for (let offset = 0; offset < 1000; offset += 50) {
+    const res = await fetch(
+      `${WIX_API}/pricing-plans/v2/orders?orderStatuses=ACTIVE&limit=50&offset=${offset}`,
+      { headers: headers(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) },
+    );
+    if (!res.ok) throw new Error(`Wix orders list failed (${res.status}): ${await res.text()}`);
+    const data: any = await res.json();
+    orders.push(...(data?.orders ?? []));
+    if (!data?.pagingMetadata?.hasNext) break;
+  }
+  return orders
     .filter((o: any) => o?.buyer?.contactId === contactId)
     .map((o: any) => ({
       orderId: o.id,

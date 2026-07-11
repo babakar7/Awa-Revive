@@ -579,6 +579,29 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       inchangée. Même prudence qu'avant sur les doublons (tiebreak prénom,
       sinon null). 4 tests (135 au total).
 
+27. **Chasse aux pannes silencieuses + hygiène CRM (11/07)** — suite du cas
+    Marie, audit des autres endroits où une API Wix peut échouer/tronquer sans
+    bruit.
+    - **BOMBE DÉSAMORCÉE — listActiveMemberships sans pagination** : l'endpoint
+      orders plafonne limit à 50 (au-delà = erreur) et la prod compte DÉJÀ
+      46 commandes de plans ACTIVE → à 4 ventes près, les abonnées au-delà de
+      la 1re page devenaient invisibles (« tu n'as pas d'abonnement » à tort,
+      paiement Wave demandé en double). Corrigé : boucle offset jusqu'à
+      `pagingMetadata.hasNext=false` (cap 1000).
+    - **Vérifiés sains** : members query (`filter:{contactId}` — ma sonde avec
+      `profile.contactId` 400ait, le code réel est bon, prouvé E2E par Marie) ;
+      getBookingStatuses (`id $in`, exercé par le sweep annulations en prod) ;
+      chemin Benefit Programs (E2E). **Risque théorique noté** : listServices
+      et listPlans sans pagination (~15 services, < 100 plans — inoffensif à
+      l'échelle actuelle, à paginer si le catalogue explose).
+    - **Audit CRM → alerte réception** (`npm run crm:audit`, `--dry` pour
+      stdout ; [scripts/crm-audit.ts](scripts/crm-audit.ts)) : parcourt les
+      743 fiches Wix, email à la réception listant **155 fiches sans téléphone**
+      (à jamais inmatchables par Awa → ajouter le numéro WhatsApp) et
+      **52 numéros portés par plusieurs fiches** (tiebreak prudent d'Awa →
+      fusionner dans Wix). Envoyé le 11/07 (Brevo). À relancer après une passe
+      de nettoyage, ou périodiquement.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
