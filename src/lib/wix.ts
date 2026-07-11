@@ -258,15 +258,20 @@ export interface WixContactBooking {
 }
 
 /**
- * Which of these contacts have at least one UPCOMING confirmed booking —
- * batched ($in verified live 11/07) for the /admin/crm activity ranking.
- * Same caveats as above: date filter unusable server-side → future cut here.
+ * Booking activity of these contacts, for the /admin/crm activity ranking —
+ * batched ($in verified live 11/07). Returns two sets: `upcoming` (a confirmed
+ * booking still in the future) and `recent` (a booking whose class ran within
+ * the last `recentDays`, default 30). Same caveats as above: the date filter is
+ * unusable server-side → the past/future cut is done here.
  */
-export async function contactIdsWithUpcomingBookings(
+export async function contactBookingActivity(
   contactIds: string[],
-): Promise<Set<string>> {
-  const out = new Set<string>();
+  recentDays = 30,
+): Promise<{ upcoming: Set<string>; recent: Set<string> }> {
+  const upcoming = new Set<string>();
+  const recent = new Set<string>();
   const now = Date.now();
+  const recentFloor = now - recentDays * 86_400_000;
   for (let i = 0; i < contactIds.length; i += 50) {
     const batch = contactIds.slice(i, i + 50);
     for (let offset = 0; offset < 500; offset += 100) {
@@ -285,12 +290,16 @@ export async function contactIdsWithUpcomingBookings(
         const cid = b?.contactDetails?.contactId;
         const slot = b?.bookedEntity?.slot ?? b?.bookedEntity?.schedule ?? {};
         const start: string | undefined = slot.startDate ?? slot.firstSessionStart;
-        if (cid && start && Date.parse(start) > now) out.add(cid);
+        if (!cid || !start) continue;
+        const t = Date.parse(start);
+        if (Number.isNaN(t)) continue;
+        if (t > now) upcoming.add(cid);
+        else if (t >= recentFloor) recent.add(cid);
       }
       if (ebs.length < 100) break;
     }
   }
-  return out;
+  return { upcoming, recent };
 }
 
 export async function listContactUpcomingBookings(

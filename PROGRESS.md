@@ -692,10 +692,14 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       RÉAPPARAÎT tout seul — un « traité » ne peut pas masquer un problème
       nouveau. Action loggée avec l'admin user, non destructive.
     - **Fiches sans téléphone priorisées par activité (11/07, demande
-      Babakar)** : bloc « 🔴 Actives — à compléter en premier » (résa à venir
-      📅 via `contactIdsWithUpcomingBookings` — extended-bookings batch
-      `contactId $in`, vérifié live — ou abonnement 🎫) au-dessus des fiches
-      dormantes repliées. Au 11/07 : 9 actives / 146 dormantes sur 155.
+      Babakar)** : bloc « 🔴 Actives — à compléter en premier » au-dessus des
+      fiches dormantes repliées. « Active » = résa à venir 📅, **résa dans les
+      30 derniers jours** (badge « résa < 30 j ») OU abonnement 🎫.
+      `contactBookingActivity` ([wix.ts](src/lib/wix.ts), ex
+      `contactIdsWithUpcomingBookings`) renvoie deux sets `upcoming`/`recent`
+      depuis le MÊME batch extended-bookings (`contactId $in`, vérifié live) —
+      le cut passé/futur est fait côté serveur (filtre date Wix inutilisable).
+      L'ajout des 30 j fait passer les actives de 9 à 33 / 122 dormantes.
 
 30. **Liaison de compte par email vérifié — le client se relie TOUT SEUL (11/07,
     cas Rokhaya)**. Suite du §28 : la notification réception marchait, mais la

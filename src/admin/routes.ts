@@ -16,7 +16,7 @@ import {
 } from "../lib/crmAudit.js";
 import {
   addPhoneToContact,
-  contactIdsWithUpcomingBookings,
+  contactBookingActivity,
   findContactIdByPhone,
   mergeContacts,
   getContactById,
@@ -430,12 +430,13 @@ ${
         const unreachable = auditActiveSubscribers(orders, rawContacts, phoneMatchVariants);
         const audit = auditContacts(rawContacts);
         const allDupIds = audit.duplicates.flatMap((g) => g.contacts.map((c) => c.id));
-        const [memberIds, dismissedSet, noPhoneWithBookings] = await Promise.all([
+        const [memberIds, dismissedSet, noPhoneActivity] = await Promise.all([
           findMemberContactIds(allDupIds).catch(() => new Set<string>()),
           q.dismissedDuplicateGroups().catch(() => new Set<string>()),
-          contactIdsWithUpcomingBookings(audit.noPhone.map((c) => c.id)).catch(
-            () => new Set<string>(),
-          ),
+          contactBookingActivity(audit.noPhone.map((c) => c.id)).catch(() => ({
+            upcoming: new Set<string>(),
+            recent: new Set<string>(),
+          })),
         ]);
 
         const banner = done
@@ -610,16 +611,22 @@ ${rest.sort(byActionable).map((g) => g.html).join("")}`
             : "") +
           treatedSection;
 
-        // Active clients first: an upcoming booking or a live plan means Awa
-        // will fail on them SOON — the dormant rest can wait.
-        const noPhoneActive = audit.noPhone.filter(
-          (c) => noPhoneWithBookings.has(c.id) || plansByContact.has(c.id),
-        );
-        const noPhoneDormant = audit.noPhone.filter((c) => !noPhoneActive.includes(c));
+        // Active clients first: an upcoming booking, a booking in the last
+        // 30 days, or a live plan means Awa will fail on them SOON — the
+        // dormant rest can wait.
+        const isActive = (id: string) =>
+          noPhoneActivity.upcoming.has(id) ||
+          noPhoneActivity.recent.has(id) ||
+          plansByContact.has(id);
+        const noPhoneActive = audit.noPhone.filter((c) => isActive(c.id));
+        const noPhoneDormant = audit.noPhone.filter((c) => !isActive(c.id));
         const noPhoneRow = (c: (typeof audit.noPhone)[number]) => {
           const badges =
-            (noPhoneWithBookings.has(c.id)
+            (noPhoneActivity.upcoming.has(c.id)
               ? ` <span class="badge" style="background:#1a7f37">📅 résa à venir</span>`
+              : "") +
+            (noPhoneActivity.recent.has(c.id)
+              ? ` <span class="badge" style="background:#57606a">📅 résa &lt; 30 j</span>`
               : "") +
             ((plansByContact.get(c.id) ?? []).length
               ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml((plansByContact.get(c.id) ?? []).join(" · "))}</span>`
@@ -628,8 +635,8 @@ ${rest.sort(byActionable).map((g) => g.html).join("")}`
         };
         const noPhoneActiveBlock = noPhoneActive.length
           ? `<div class="card warn"><b>🔴 Actives — à compléter en premier (${noPhoneActive.length})</b>
-<p class="muted">Elles ont une résa à venir ou un abonnement en cours : Awa échouera sur elles à leur
-prochain message.</p>
+<p class="muted">Elles ont une résa à venir, une résa dans les 30 derniers jours, ou un abonnement en
+cours : Awa échouera sur elles à leur prochain message.</p>
 <table><tr><th>Nom</th><th>Email</th></tr>${noPhoneActive.map(noPhoneRow).join("")}</table></div>`
           : "";
         const noPhoneRows = noPhoneDormant.map(noPhoneRow).join("");
