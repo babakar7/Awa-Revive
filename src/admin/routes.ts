@@ -744,7 +744,13 @@ ${rest.sort(byActionable).map((g) => g.html).join("")}`
           noPhoneActivity.upcoming.has(id) ||
           noPhoneActivity.recent.has(id) ||
           plansByContact.has(id);
-        const noPhoneActive = audit.noPhone.filter((c) => isActive(c.id));
+        const noPhoneActive = audit.noPhone
+          .filter((c) => isActive(c.id))
+          .sort(
+            (a, b) =>
+              Number(noPhoneActivity.upcoming.has(b.id)) -
+              Number(noPhoneActivity.upcoming.has(a.id)),
+          );
         const noPhoneDormant = audit.noPhone.filter((c) => !isActive(c.id));
         const noPhoneRow = (c: (typeof audit.noPhone)[number]) => {
           const badges =
