@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
-import { notifyReception } from "../lib/notify.js";
+import { notifyReception, sendVerificationCodeEmail } from "../lib/notify.js";
 import { sendInteractive, sendImage } from "../lib/whatsapp.js";
 import {
   buildWeeklyGrid,
@@ -17,6 +17,7 @@ import {
 import * as wix from "../lib/wix.js";
 import * as wave from "../lib/wave.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
+import * as links from "../domain/linkRequests.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
 
@@ -115,8 +116,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Returns their active plans with covers_classes (which classes each plan can pay for) and " +
       "remaining_sessions (current balance), or why verification failed. Set claim:true when the CLIENT " +
       "ASSERTS having an abonnement/prepaid plan (\"j'ai un abonnement\", \"c'est prépayé\") — if the plan " +
-      "then can't be found under their number, the server automatically notifies reception to link their " +
-      "account (the result tells you what to say).",
+      "then can't be found under their number, the server opens a link request and the result tells you " +
+      "to propose the email verification (request_email_verification).",
     input_schema: {
       type: "object",
       properties: {
@@ -277,18 +278,42 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
-    name: "record_email",
+    name: "request_email_verification",
     description:
-      "Record the email address a client provides to link their WhatsApp bookings to their existing Revive " +
-      "account. This only STORES the email for the reception team, who will verify and merge the accounts " +
-      "manually — never tell the client the linking is done, say the team will handle it. Use whenever a " +
-      "client shares an email in the context of their account/history.",
+      "Start linking this WhatsApp number to the client's existing Revive account via their email: the " +
+      "server finds the Wix account carrying that email and sends a 6-digit code TO THAT INBOX; the client " +
+      "then reads the code from their email and types it here (submit_verification_code). Use whenever a " +
+      "client shares the email of their existing account — after a failed check_membership claim, after the " +
+      "post-payment linking question, or any account/history context. If the client says they have no email " +
+      "or can't access it, call with client_has_no_email:true instead — reception takes over (the client " +
+      "does NOT need to call). You never see the code: it only exists in the client's inbox.",
     input_schema: {
       type: "object",
       properties: {
-        email: { type: "string", description: "The email address the client provided" },
+        email: { type: "string", description: "The email of the client's existing Revive account" },
+        client_has_no_email: {
+          type: "boolean",
+          description:
+            "true when the client says they have no email or cannot access it — hands over to reception",
+        },
       },
-      required: ["email"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "submit_verification_code",
+    description:
+      "Verify the 6-digit code the client received by email (after request_email_verification) and, when " +
+      "correct, link their WhatsApp number to their Wix account — their abonnement and history become " +
+      "visible immediately. Call this when the client types a 6-digit number while an email verification " +
+      "is in progress. Never guess, invent or confirm a code yourself: only the client can read it from " +
+      "their inbox.",
+    input_schema: {
+      type: "object",
+      properties: {
+        code: { type: "string", description: "The 6-digit code exactly as the client typed it" },
+      },
+      required: ["code"],
       additionalProperties: false,
     },
   },
@@ -400,36 +425,22 @@ function hoursUntil(ts: Date | string): number {
   return (new Date(ts).getTime() - Date.now()) / 3_600_000;
 }
 
-const PLAN_CLAIM_HANDOFF_PREFIX = "Abonnement introuvable — client affirme en avoir un";
-
 /**
  * A client claims an abonnement that check_membership can't verify (their Wix
- * card probably carries another phone number — real case: Dieynaba, 11/07,
- * card under 78 638 30 88 while she wrote from 77 638 30 88). Silence here
- * loses the client: notify reception AUTOMATICALLY (deterministic, server-side)
- * so they fix the linkage without waiting for the client to call. Deduped over
- * 24h per client via the handoffs register. Returns true if a notification
- * went out (false = deduped or failed — never blocks the tool result).
+ * card probably carries another phone number — real cases: Dieynaba and
+ * Rokhaya, 07/2026). The fix is a LINK REQUEST: Awa proposes the email
+ * verification (self-service, request_email_verification); if that path dies
+ * — no email, not found, wrong codes, or silence >30 min (sweep in index.ts)
+ * — the request lands in the /admin/crm one-click queue and reception is
+ * notified by linkRequests.notifyLinkNeedsReception.
  */
-async function notifyUnverifiedPlanClaim(client: Client, detail: string): Promise<boolean> {
-  try {
-    if (await repo.recentHandoffExists(client.id, PLAN_CLAIM_HANDOFF_PREFIX, 24)) return false;
-    await repo.recordHandoff(client.id, `${PLAN_CLAIM_HANDOFF_PREFIX} (${detail})`);
-    notifyReception(
-      "🔎 Abonnement à relier — un client dit en avoir un",
-      `Un client affirme avoir un abonnement, mais Awa ne peut pas le vérifier : ${detail}.\n` +
-        `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n\n` +
-        `À faire dans le dashboard Wix : Contacts → chercher la fiche par NOM, vérifier son abonnement, ` +
-        `puis AJOUTER le numéro WhatsApp ci-dessus à la fiche (au format +221..., sans remplacer ` +
-        `l'ancien numéro). Dès que c'est fait, Awa reconnaîtra son abonnement automatiquement.\n\n` +
-        `Awa a prévenu le client que l'équipe s'en occupe, et lui a demandé sous quel numéro/email ` +
-        `son abonnement est enregistré (si réponse : second email/entrée registre).`,
-    );
-    return true;
-  } catch (err) {
-    console.error(`Plan-claim notification failed for client ${client.id} (non-blocking):`, err);
-    return false;
-  }
+async function escalateLinkRequest(
+  request: Pick<links.LinkRequest, "id" | "client_id" | "reception_notified_at">,
+  client: Client,
+  detail: string,
+): Promise<void> {
+  await links.markNeedsReception(request.id, detail);
+  await links.notifyLinkNeedsReception(request, client, detail);
 }
 
 /**
@@ -814,43 +825,36 @@ export async function executeTool(
         client.name ?? undefined,
       );
       if (!contactId) {
-        const notified = claim
-          ? await notifyUnverifiedPlanClaim(client, "aucune fiche Wix ne porte ce numéro WhatsApp")
-          : false;
+        if (claim) await links.getOrOpen(client.id); // silence >30 min → reception (sweep)
         return JSON.stringify({
           verified: false,
           reason: "no_matching_contact",
-          reception_notified: notified || undefined,
           message:
             "Could not match this WhatsApp number to a unique client account. The client may have an " +
             "abonnement under another number." +
             (claim
-              ? " Reception has ALREADY been notified automatically and will link their account — tell the " +
-                "client this (no need for them to call), and ask under which phone number or email their " +
-                "abonnement is registered; if they give an email, record it with record_email. Meanwhile " +
-                "offer normal Wave payment for bookings that can't wait."
+              ? " PROPOSE the email verification NOW: ask for the email of their Revive account, then " +
+                "call request_email_verification — a code sent to that inbox links this number " +
+                "automatically, in this conversation. If they have no email or no access to it, call " +
+                "request_email_verification with client_has_no_email:true (reception takes over — they " +
+                "do NOT need to call). Meanwhile offer normal Wave payment for bookings that can't wait."
               : " Hand off to reception to verify, or offer normal Wave payment."),
         });
       }
       const memberships = await wix.listActiveMemberships(contactId);
       if (memberships.length === 0) {
-        const notified = claim
-          ? await notifyUnverifiedPlanClaim(
-              client,
-              "sa fiche Wix est reliée à ce numéro mais ne porte AUCUN abonnement actif",
-            )
-          : false;
+        if (claim) await links.getOrOpen(client.id); // silence >30 min → reception (sweep)
         return JSON.stringify({
           verified: true,
           active_plans: [],
-          reception_notified: notified || undefined,
           message:
             "No active abonnement for this client." +
             (claim
-              ? " The client claims one, so reception has ALREADY been notified automatically and will " +
-                "check — tell the client this (no need for them to call), and ask under which phone number " +
-                "or email their abonnement is registered; if they give an email, record it with record_email. " +
-                "Meanwhile offer normal Wave payment for bookings that can't wait."
+              ? " The client claims one — it is probably on ANOTHER fiche (registered under a different " +
+                "number or email). PROPOSE the email verification NOW: ask for the email of their Revive " +
+                "account, then call request_email_verification. If they have no email or no access, call " +
+                "request_email_verification with client_has_no_email:true (reception takes over — they do " +
+                "NOT need to call). Meanwhile offer normal Wave payment for bookings that can't wait."
               : " Use the normal Wave payment flow."),
         });
       }
@@ -1360,7 +1364,18 @@ export async function executeTool(
       });
     }
 
-    case "record_email": {
+    case "request_email_verification": {
+      const request = await links.getOrOpen(client.id);
+      if (input.client_has_no_email === true) {
+        const detail = "le client n'a pas d'email (ou n'y a pas accès)";
+        await escalateLinkRequest(request, client, detail);
+        return JSON.stringify({
+          status: "reception_notified",
+          message:
+            "Reception has been notified and will link the account from the dashboard — tell the client " +
+            "the team is on it (no need to call). Offer normal Wave payment for bookings that can't wait.",
+        });
+      }
       const email = String(input.email ?? "").trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) || email.length > 254) {
         return JSON.stringify({
@@ -1368,21 +1383,185 @@ export async function executeTool(
           message: "This doesn't look like a valid email — ask the client to re-send it.",
         });
       }
-      await repo.saveClaimedEmail(client.id, email);
-      // Surfaces in the handoffs register + daily summary for reception.
-      await repo.recordHandoff(client.id, `Compte à lier — email déclaré : ${email}`);
-      notifyReception(
-        "🔗 Compte à lier — email déclaré par un client",
-        `Le client ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")}) déclare que son compte ` +
-          `Revive existant utilise l'email : ${email}\n\n` +
-          `À faire : vérifier dans Wix qu'un compte existe avec cet email, puis fusionner les fiches ` +
-          `et ajouter le numéro WhatsApp ci-dessus à la fiche.`,
-      );
+      if (!links.canSendCode(request)) {
+        return JSON.stringify({
+          status: "too_many_requests",
+          message:
+            "Verification-email limit reached for today (anti-abuse). Tell the client to try again " +
+            "tomorrow, or offer reception / normal Wave payment meanwhile.",
+        });
+      }
+      await repo.saveClaimedEmail(client.id, email); // surfaces in the daily summary
+      let candidate: wix.EmailCandidate;
+      try {
+        const contacts = await wix.findContactsByEmail(email);
+        const planHolderIds = new Set<string>(
+          (await wix.listAllActiveOrders())
+            .map((o: any) => o?.buyer?.contactId)
+            .filter(Boolean),
+        );
+        candidate = wix.resolveEmailCandidate(contacts, planHolderIds, client.wa_phone);
+      } catch (err) {
+        console.error("Email-candidate lookup failed:", err);
+        await escalateLinkRequest(request, client, `recherche Wix en erreur (email ${email})`);
+        return JSON.stringify({
+          status: "lookup_failed",
+          message:
+            "Technical hiccup while checking this email — reception has been notified and will link the " +
+            "account manually. Tell the client the team is on it (no need to call).",
+        });
+      }
+      switch (candidate.kind) {
+        case "already_linked":
+          invalidateMembershipCache(client.id);
+          return JSON.stringify({
+            status: "already_linked",
+            message:
+              "The account carrying this email ALREADY has this WhatsApp number — no verification " +
+              "needed. Run check_membership again to see their plans.",
+          });
+        case "none":
+          await escalateLinkRequest(request, client, `aucune fiche Wix ne porte l'email déclaré (${email})`);
+          return JSON.stringify({
+            status: "email_not_found",
+            message:
+              "No Revive account carries this email. Reception has been notified and will link the " +
+              "account manually — tell the client the team is on it (no need to call). They can also " +
+              "re-try with another email address. Offer normal Wave payment for bookings that can't wait.",
+          });
+        case "ambiguous":
+          await escalateLinkRequest(
+            request,
+            client,
+            `email partagé par ${candidate.count} fiches Wix (${email}) — choix humain requis`,
+          );
+          return JSON.stringify({
+            status: "needs_reception",
+            message:
+              "Several Revive accounts share this email — a human has to pick the right one. Reception " +
+              "has been notified and will link the account — tell the client the team is on it (no need " +
+              "to call). Offer normal Wave payment for bookings that can't wait.",
+          });
+        case "one": {
+          const code = links.generateCode();
+          await links.setAwaitingCode(request.id, email, candidate.contact.id, links.hashCode(code, request.id));
+          try {
+            await sendVerificationCodeEmail(email, code);
+          } catch (err) {
+            console.error("Verification-code email failed:", err);
+            await escalateLinkRequest(request, client, `envoi du code impossible (email ${email})`);
+            return JSON.stringify({
+              status: "send_failed",
+              message:
+                "The verification email could not be sent — reception has been notified and will link " +
+                "the account manually. Tell the client the team is on it (no need to call).",
+            });
+          }
+          return JSON.stringify({
+            status: "code_sent",
+            expires_in_minutes: links.CODE_TTL_MINUTES,
+            message:
+              "A 6-digit code was just emailed to that address. Ask the client to read it in their inbox " +
+              "(spam folder too) and type it HERE — then call submit_verification_code. The code is valid " +
+              `${links.CODE_TTL_MINUTES} minutes. You do NOT know the code and can never confirm or ` +
+              "repeat it — it only exists in the client's inbox.",
+          });
+        }
+      }
+      break;
+    }
+
+    case "submit_verification_code": {
+      const code = String(input.code ?? "").trim();
+      const request = await links.getOpen(client.id);
+      if (!request || request.status !== "AWAITING_CODE" || !request.code_hash) {
+        return JSON.stringify({
+          status: "no_pending_verification",
+          message:
+            "No verification is in progress for this client — start one with " +
+            "request_email_verification (ask for their account email first).",
+        });
+      }
+      if (!links.looksLikeCode(code)) {
+        return JSON.stringify({
+          status: "wrong_format",
+          message: "The code is exactly 6 digits — ask the client to re-send just the code.",
+        });
+      }
+      if (request.code_expires_at && new Date(request.code_expires_at) < new Date()) {
+        return JSON.stringify({
+          status: "expired",
+          can_resend: true,
+          message:
+            `This code expired (${links.CODE_TTL_MINUTES} min). Offer to send a fresh one with ` +
+            "request_email_verification (same email).",
+        });
+      }
+      if (!links.verifyCode(code, request.id, request.code_hash)) {
+        const attempts = await links.registerFailedAttempt(request.id);
+        if (attempts >= links.MAX_CODE_ATTEMPTS) {
+          await escalateLinkRequest(request, client, `${attempts} codes erronés — vérification bloquée`);
+          return JSON.stringify({
+            status: "too_many_attempts",
+            message:
+              "Too many wrong codes — this verification is closed (anti-abuse). Reception has been " +
+              "notified and will link the account manually; tell the client the team is on it.",
+          });
+        }
+        return JSON.stringify({
+          status: "wrong_code",
+          attempts_left: links.MAX_CODE_ATTEMPTS - attempts,
+          message: "Wrong code. Ask the client to double-check the LATEST email and try again.",
+        });
+      }
+      const wa = `+${client.wa_phone.replace(/^\+/, "")}`;
+      try {
+        await wix.addPhoneToContact(request.wix_contact_id!, wa);
+      } catch (err) {
+        console.error("addPhoneToContact failed after verified code:", err);
+        await escalateLinkRequest(request, client, "code vérifié mais écriture Wix en échec");
+        return JSON.stringify({
+          status: "link_failed",
+          message:
+            "The code was right but the account update failed — reception has been notified and will " +
+            "finish the linking manually. Tell the client the team is on it (no need to call).",
+        });
+      }
+      await links.markVerified(request.id, request.wix_contact_id!);
+      invalidateMembershipCache(client.id);
+      // A Wave payment made BEFORE the linking may have created a duplicate
+      // fiche under this WhatsApp number: the number now sits on TWO fiches
+      // and the phone lookup refuses to pick (deliberate caution). The plan
+      // only becomes visible after reception merges them (/admin/crm shows
+      // the pair in "Doublons", one click).
+      const resolved = await wix.findContactIdByPhone(wa, client.name ?? undefined);
+      if (resolved !== request.wix_contact_id) {
+        notifyReception(
+          "🔀 Compte vérifié par email — fusion de doublons requise",
+          `Le client ${client.name ?? "?"} (${wa}) a PROUVÉ (code email) que son compte est la fiche ` +
+            `${request.wix_contact_id}, mais son numéro WhatsApp figure aussi sur une autre fiche ` +
+            `(doublon créé par un paiement passé).\n\n` +
+            `À faire (1 clic) : ${config.BASE_URL}/admin/crm → section « Doublons » → garder la fiche ` +
+            `qui porte l'abonnement. Tant que ce n'est pas fait, Awa ne voit pas son abonnement.`,
+        );
+        return JSON.stringify({
+          status: "verified_pending_merge",
+          message:
+            "Code correct — the account is verified and the number was added to their fiche. BUT this " +
+            "number also sits on a duplicate fiche (created by a past payment), so their plan will show " +
+            "up only after the team merges the two — reception has been notified with a one-click fix. " +
+            "Tell the client it's verified and the team finishes the merge shortly (no need to call); " +
+            "offer normal Wave payment for bookings that truly can't wait.",
+        });
+      }
+      const memberships = await wix.listActiveMemberships(request.wix_contact_id!);
       return JSON.stringify({
-        recorded: true,
-        note:
-          "Email stored for the reception team, who will verify it and merge the client's account manually. " +
-          "Thank the client and say the team will link their history soon — do NOT claim it is already linked.",
+        status: "verified",
+        active_plans: memberships.map((m) => ({ plan: m.planName, expires: m.expiresAt })),
+        message:
+          "Account linked! You CAN now tell the client their account is connected to this WhatsApp " +
+          "number. Their active plans are listed above (details/balance via check_membership) — offer " +
+          "to book their next class right away, on the plan when it covers the class.",
       });
     }
 

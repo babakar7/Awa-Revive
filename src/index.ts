@@ -2,6 +2,7 @@ import { assertConfig, config } from "./config.js";
 import { migrate, closeDb } from "./db/index.js";
 import { expireStaleBookings, expireStalePlanOrders, expireStaleCafeOrders } from "./domain/repo.js";
 import { nudgeExpiredLinks } from "./domain/expiryNudge.js";
+import { escalateStaleLinkRequests } from "./domain/linkRequests.js";
 import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
@@ -27,6 +28,10 @@ async function main() {
       // (a crash between the PAID transition and fulfillment).
       const reconciled = await reconcileStuckBookings(app.log);
       if (reconciled > 0) app.log.info({ reconciled }, "Reconciled stuck PAID bookings");
+      // Account-link request the client never completed (no email given, code
+      // never typed) → hand it to reception so no plan-holder is lost silently.
+      const escalated = await escalateStaleLinkRequests();
+      if (escalated > 0) app.log.info({ escalated }, "Stale link requests handed to reception");
     } catch (err) {
       app.log.error({ err }, "Expiry/reconciliation sweep failed");
     }
