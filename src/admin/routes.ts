@@ -27,6 +27,7 @@ import {
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import { sendText } from "../lib/whatsapp.js";
 import * as links from "../domain/linkRequests.js";
+import * as reviews from "../domain/conversationReview.js";
 import { renderTestChecklist } from "./testChecklist.js";
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
@@ -96,6 +97,7 @@ function layout(title: string, active: string, body: string): string {
     ["/admin/bookings", "Réservations"],
     ["/admin/orders", "Commandes ☕"],
     ["/admin/handoffs", "Handoffs"],
+    ["/admin/reviews", "À reprendre 🔁"],
     ["/admin/crm", "CRM 🗂"],
     ["/admin/tests", "À tester 🧪"],
   ]
@@ -439,6 +441,99 @@ ${open ? `<p class="muted">${open} handoff(s) à traiter — un handoff = un cli
         }
         reply.redirect("/admin/handoffs", 303);
       });
+
+      // ---------- À reprendre (boucle de résultat, §4.31) ----------
+      const OUTCOME_BADGES: Record<string, [string, string]> = {
+        resolved: ["#1a7f37", "résolue"],
+        handed_off: ["#0969da", "transmise"],
+        dropoff: ["#6e7781", "abandon libre"],
+        deadend: ["#cf222e", "impasse"],
+        technical_failure: ["#9a6700", "échec technique"],
+      };
+      const outcomeBadge = (outcome: string) => {
+        const [color, label] = OUTCOME_BADGES[outcome] ?? ["#6e7781", outcome];
+        return `<span class="badge" style="background:${color}">${escapeHtml(label)}</span>`;
+      };
+
+      admin.get("/reviews", async (_req, reply) => {
+        const [open, recent, stats7, stats30] = await Promise.all([
+          reviews.openReviews(),
+          reviews.recentReviews(30),
+          reviews.reviewStats(7),
+          reviews.reviewStats(30),
+        ]);
+        const rate7 = reviews.satisfactionRate(stats7.byOutcome);
+        const rate30 = reviews.satisfactionRate(stats30.byOutcome);
+
+        const openCards = open
+          .map(
+            (r) => `<div class="card ${r.severity === "severe" ? "warn" : ""}">
+${r.severity === "severe" ? `<span class="badge" style="background:#cf222e">🔴 grave</span> ` : ""}${outcomeBadge(r.outcome)} <span class="badge" style="background:#6e7781">${escapeHtml(r.need_category)}</span>
+<div style="margin:.45rem 0"><a href="/admin/conversations/${r.client_id}"><b>${escapeHtml(r.client_name ?? "?")}</b></a> <span class="muted">+${escapeHtml(r.wa_phone)} · ${ago(r.created_at)}</span></div>
+<div>${escapeHtml(r.summary ?? "")}</div>
+${r.suggested_action ? `<div class="muted" style="margin-top:.25rem">→ ${escapeHtml(r.suggested_action)}</div>` : ""}
+<div style="margin-top:.55rem">
+<form class="inline" method="post" action="/admin/reviews/${r.id}/done"><button class="act">✅ Traité</button></form>
+<form class="inline" method="post" action="/admin/reviews/${r.id}/ignore" style="margin-left:.4rem"><button class="act" style="background:#6e7781">Ignorer</button></form>
+</div>
+</div>`,
+          )
+          .join("");
+
+        const statLine = (label: string, s: reviews.ReviewStats, rate: number | null) => {
+          const parts = s.byOutcome
+            .map((o) => `${o.n} ${(OUTCOME_BADGES[o.outcome] ?? ["", o.outcome])[1]}`)
+            .join(" · ");
+          return `<div class="stat"><span class="muted">${label}</span><b>${rate === null ? "—" : `${rate} %`}</b><span class="muted">${s.total ? parts : "rien de classé"}</span></div>`;
+        };
+        const topUnserved = stats30.topUnserved
+          .map((t) => `<li><b>${escapeHtml(t.need_category)}</b> — ${t.n} conversation(s) perdue(s)</li>`)
+          .join("");
+
+        const recentRows = recent
+          .map(
+            (r) => `<tr>
+<td>${ago(r.created_at)}</td>
+<td><a href="/admin/conversations/${r.client_id}">${escapeHtml(r.client_name ?? "?")}</a></td>
+<td>${outcomeBadge(r.outcome)}</td>
+<td>${escapeHtml((r.summary ?? "").slice(0, 110))}</td>
+</tr>`,
+          )
+          .join("");
+
+        const body = `
+<div class="stat-grid">
+${statLine("Clients servis (7 j)", stats7, rate7)}
+${statLine("Clients servis (30 j)", stats30, rate30)}
+<div class="stat"><span class="muted">À reprendre</span><b>${open.length}</b></div>
+</div>
+${
+  stats30.topUnserved.length
+    ? `<div class="card"><b>Top besoins non servis (30 j)</b> — la matière pour améliorer Awa :<ul style="margin:.4rem 0 0">${topUnserved}</ul></div>`
+    : ""
+}
+<h2>🔁 À reprendre (${open.length})</h2>
+<p class="muted">Ces clients sont repartis sans obtenir ce qu'ils voulaient à cause d'une impasse ou
+d'un échec technique (les abandons volontaires ne sont PAS listés). À recontacter par la réception —
+« Traité » quand c'est fait. Les cas graves ont déjà déclenché une notification.</p>
+${openCards || `<div class="card"><span class="ok">✓ Personne à reprendre — toutes les conversations classées se sont bien terminées.</span></div>`}
+<h2>Dernières classifications (${recent.length})</h2>
+<div class="card"><details><summary>Voir (contrôle qualité du classement)</summary>
+<table><tr><th>Quand</th><th>Client</th><th>Issue</th><th>Résumé</th></tr>${recentRows || `<tr><td colspan="4" class="muted">Rien de classé encore — le classement tourne toutes les 5 min sur les conversations silencieuses depuis 45 min.</td></tr>`}</table>
+</details></div>`;
+        reply.type("text/html").send(layout("À reprendre", "/admin/reviews", body));
+      });
+
+      const closeReviewRoute = (ignored: boolean) => async (req: any, reply: any) => {
+        const { id } = req.params as { id: string };
+        const updated = await reviews.closeReview(id, req.adminUser ?? "?", ignored);
+        if (updated) {
+          req.log.info({ reviewId: id, by: req.adminUser, ignored }, "Review closed");
+        }
+        reply.redirect("/admin/reviews", 303);
+      };
+      admin.post("/reviews/:id/done", closeReviewRoute(false));
+      admin.post("/reviews/:id/ignore", closeReviewRoute(true));
 
       // ---------- Hygiène CRM (fiches sans téléphone, doublons à fusionner) ----------
       admin.get("/crm", async (req, reply) => {

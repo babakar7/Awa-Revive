@@ -4,8 +4,26 @@ import {
   buildDigestBody,
   buildTranscript,
   parseVerdict,
+  satisfactionRate,
   type DigestData,
 } from "../src/domain/conversationReview.js";
+
+describe("satisfactionRate", () => {
+  it("counts resolved + handed_off + dropoff as served, rounds to a percent", () => {
+    expect(
+      satisfactionRate([
+        { outcome: "resolved", n: 6 },
+        { outcome: "dropoff", n: 2 },
+        { outcome: "handed_off", n: 1 },
+        { outcome: "deadend", n: 1 },
+      ]),
+    ).toBe(90);
+  });
+
+  it("null when nothing was classified (never fake a 100%)", () => {
+    expect(satisfactionRate([])).toBeNull();
+  });
+});
 
 describe("buildTranscript", () => {
   const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });

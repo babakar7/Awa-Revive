@@ -169,7 +169,10 @@ export interface PendingReview {
   client_id: string;
   client_name: string | null;
   wa_phone: string;
-  last_message_at: Date;
+  /** ::text pour garder les microsecondes — un Date JS tronque à la ms, et la
+   *  review stockée « plus vieille » que le dernier message serait re-classée
+   *  à chaque sweep, pour toujours (bug attrapé par l'E2E du 12/07). */
+  last_message_at: string;
 }
 
 /**
@@ -180,7 +183,7 @@ export interface PendingReview {
 export async function conversationsToReview(): Promise<PendingReview[]> {
   const res = await pool.query(
     `select c.id as client_id, c.name as client_name, c.wa_phone,
-            max(conv.created_at) as last_message_at
+            max(conv.created_at)::text as last_message_at
        from clients c
        join conversations conv on conv.client_id = c.id
       group by c.id, c.name, c.wa_phone
@@ -223,7 +226,7 @@ export async function saveReview(
     `insert into conversation_reviews
        (client_id, last_message_at, outcome, need_category, severity, summary,
         suggested_action, status, done_by)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     values ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9)
      on conflict (client_id, last_message_at) do nothing
      returning id`,
     [
@@ -278,6 +281,107 @@ export async function runReviewSweep(): Promise<number> {
     }
   }
   return reviewed;
+}
+
+// ---------- vues & actions du dashboard ----------
+
+export interface AdminReview {
+  id: string;
+  client_id: string;
+  client_name: string | null;
+  wa_phone: string;
+  outcome: Outcome;
+  need_category: string;
+  severity: string;
+  summary: string | null;
+  suggested_action: string | null;
+  status: string;
+  done_by: string | null;
+  created_at: Date;
+}
+
+/** File « À reprendre » : impasses/échecs ouverts, cas graves en tête. */
+export async function openReviews(): Promise<AdminReview[]> {
+  const res = await pool.query(
+    `select r.*, c.name as client_name, c.wa_phone
+       from conversation_reviews r join clients c on c.id = r.client_id
+      where r.status = 'OPEN'
+      order by (r.severity = 'severe') desc, r.created_at asc`,
+  );
+  return res.rows;
+}
+
+/** Dernières classifications, toutes issues (transparence/contrôle qualité). */
+export async function recentReviews(limit = 30): Promise<AdminReview[]> {
+  const res = await pool.query(
+    `select r.*, c.name as client_name, c.wa_phone
+       from conversation_reviews r join clients c on c.id = r.client_id
+      order by r.created_at desc limit $1`,
+    [limit],
+  );
+  return res.rows;
+}
+
+/** Bouton « Traité » / « Ignorer » — renvoie false si déjà fermé. */
+export async function closeReview(
+  id: string,
+  adminUser: string,
+  ignored: boolean,
+): Promise<boolean> {
+  const res = await pool.query(
+    `update conversation_reviews
+        set status = 'DONE', done_by = $2, done_at = now()
+      where id = $1 and status = 'OPEN'`,
+    [id, ignored ? `ignored:${adminUser}` : adminUser],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export interface ReviewStats {
+  total: number;
+  byOutcome: { outcome: string; n: number }[];
+  topUnserved: { need_category: string; n: number }[];
+}
+
+/** Agrégats sur `days` jours — le taux de résolution et les besoins non servis. */
+export async function reviewStats(days: number): Promise<ReviewStats> {
+  const [byOutcome, topUnserved] = await Promise.all([
+    pool
+      .query(
+        `select outcome, count(*)::int as n from conversation_reviews
+          where created_at > now() - ($1 || ' days')::interval
+          group by outcome order by n desc`,
+        [String(days)],
+      )
+      .then((r) => r.rows),
+    pool
+      .query(
+        `select need_category, count(*)::int as n from conversation_reviews
+          where created_at > now() - ($1 || ' days')::interval
+            and outcome in ('deadend','technical_failure')
+          group by need_category order by n desc limit 5`,
+        [String(days)],
+      )
+      .then((r) => r.rows),
+  ]);
+  return {
+    total: byOutcome.reduce((n: number, o: any) => n + o.n, 0),
+    byOutcome,
+    topUnserved,
+  };
+}
+
+/**
+ * Part des conversations où le client n'est PAS reparti par notre faute
+ * (resolved + handed_off + dropoff). null quand rien n'a été classé (pur, testé).
+ */
+export function satisfactionRate(byOutcome: { outcome: string; n: number }[]): number | null {
+  const total = byOutcome.reduce((n, o) => n + o.n, 0);
+  if (total === 0) return null;
+  const good = byOutcome
+    .filter((o) => ["resolved", "handed_off", "dropoff"].includes(o.outcome))
+    .reduce((n, o) => n + o.n, 0);
+  return Math.round((good / total) * 100);
 }
 
 // ---------- digest quotidien ----------
