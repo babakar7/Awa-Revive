@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { auditContacts, linkCandidates, phoneKey, planMerge } from "../src/lib/crmAudit.js";
+import {
+  auditActiveSubscribers,
+  auditContacts,
+  linkCandidates,
+  phoneKey,
+  phoneSpellingMatchable,
+  planMerge,
+} from "../src/lib/crmAudit.js";
+import { phoneMatchVariants } from "../src/lib/wix.js";
 
 const contact = (id: string, first: string, phones: any[], email?: string) => ({
   id,
@@ -152,5 +160,62 @@ describe("linkCandidates", () => {
     );
     expect(out[0].id).toBe("a");
     expect(out[0].matchedBy).toEqual(["email", "nom"]);
+  });
+});
+
+describe("phoneSpellingMatchable", () => {
+  it("raw senegalese spellings covered by phoneMatchVariants are matchable", () => {
+    expect(phoneSpellingMatchable("774396392", phoneMatchVariants)).toBe(true);
+    expect(phoneSpellingMatchable("77 444 66 66", phoneMatchVariants)).toBe(true);
+    expect(phoneSpellingMatchable("+221774446666", phoneMatchVariants)).toBe(true);
+    expect(phoneSpellingMatchable("00221774446666", phoneMatchVariants)).toBe(true);
+  });
+
+  it("exotic spellings and truncated numbers are NOT matchable", () => {
+    expect(phoneSpellingMatchable("77-444-66-66", phoneMatchVariants)).toBe(false);
+    expect(phoneSpellingMatchable("4446666", phoneMatchVariants)).toBe(false);
+    expect(phoneSpellingMatchable("abc", phoneMatchVariants)).toBe(false);
+  });
+});
+
+describe("auditActiveSubscribers", () => {
+  const order = (contactId: string, planName = "Pack 10") => ({
+    buyer: { contactId },
+    planName,
+    endDate: "2026-08-01T00:00:00Z",
+  });
+
+  it("flags plan holders whose fiche is missing, phoneless or unmatchable", () => {
+    const contacts = [
+      contact("ok", "Marie", [{ e164Phone: "+221774446666", phone: "77 444 66 66" }]),
+      contact("raw-ok", "Adja", [{ phone: "774396392" }]),
+      contact("nophone", "SansTel", []),
+      contact("weird", "Tirets", [{ phone: "77-444-66-66" }]),
+    ];
+    const orders = [
+      order("ok"),
+      order("raw-ok"),
+      order("nophone"),
+      order("weird"),
+      order("ghost"),
+    ];
+    const out = auditActiveSubscribers(orders, contacts, phoneMatchVariants);
+    const byId = new Map(out.map((u) => [u.contactId, u]));
+    expect(byId.has("ok")).toBe(false);
+    expect(byId.has("raw-ok")).toBe(false);
+    expect(byId.get("nophone")?.issue).toBe("no_phone");
+    expect(byId.get("weird")?.issue).toBe("phone_unmatchable");
+    expect(byId.get("ghost")?.issue).toBe("contact_missing");
+    expect(byId.get("ghost")?.plans[0].planName).toBe("Pack 10");
+  });
+
+  it("one fiche with several plans is reported once with all its plans", () => {
+    const out = auditActiveSubscribers(
+      [order("nophone", "Pack 10"), order("nophone", "Mensuel")],
+      [contact("nophone", "SansTel", [])],
+      phoneMatchVariants,
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].plans.map((p) => p.planName)).toEqual(["Pack 10", "Mensuel"]);
   });
 });

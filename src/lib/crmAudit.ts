@@ -104,6 +104,81 @@ export async function runCrmAudit(): Promise<CrmAudit> {
   return auditContacts(await fetchAllContacts());
 }
 
+/**
+ * Would a client writing from the number this spelling MEANS be matched by
+ * findContactIdByPhone? A stored e164Phone always matches (first filter); a
+ * raw spelling only matches when it is one of the spellings the fallback
+ * generates (`variantsOf` = wix.phoneMatchVariants, injected to avoid a
+ * module cycle). "77-444-66-66" or a truncated number → unreachable fiche.
+ */
+export function phoneSpellingMatchable(
+  spelling: string,
+  variantsOf: (phone: string) => string[],
+): boolean {
+  const digits = spelling.replace(/\D/g, "");
+  let e164: string | null = null;
+  if (spelling.trim().startsWith("+") && digits.length >= 10) e164 = `+${digits}`;
+  else if (digits.length === 9 && digits.startsWith("7")) e164 = `+221${digits}`;
+  else if (digits.length === 12 && digits.startsWith("221")) e164 = `+${digits}`;
+  else if (digits.startsWith("00") && digits.length >= 12) e164 = `+${digits.slice(2)}`;
+  if (!e164) return false;
+  return variantsOf(e164).includes(spelling);
+}
+
+export type SubscriberIssue = "contact_missing" | "no_phone" | "phone_unmatchable";
+
+export interface UnreachableSubscriber {
+  contactId: string;
+  /** null when the fiche itself is gone (contact_missing). */
+  contact: AuditContact | null;
+  issue: SubscriberIssue;
+  plans: { planName: string; endDate: string | null }[];
+}
+
+/**
+ * Active plan holders Awa can NEVER recognize: their fiche has no phone, only
+ * unmatchable spellings, or is missing altogether. Exactly the population the
+ * Rokhaya/Dieynaba case comes from — reception completes these fiches FIRST.
+ * Pure: takes raw pricing-plan orders + raw contacts.
+ */
+export function auditActiveSubscribers(
+  orders: any[],
+  rawContacts: any[],
+  variantsOf: (phone: string) => string[],
+): UnreachableSubscriber[] {
+  const byContact = new Map<string, { planName: string; endDate: string | null }[]>();
+  for (const o of orders) {
+    const cid = o?.buyer?.contactId;
+    if (!cid) continue;
+    const list = byContact.get(cid) ?? [];
+    list.push({ planName: o?.planName ?? "abonnement", endDate: o?.endDate ?? null });
+    byContact.set(cid, list);
+  }
+  const contactsById = new Map<string, any>(rawContacts.map((c) => [c.id, c]));
+  const out: UnreachableSubscriber[] = [];
+  for (const [contactId, plans] of byContact) {
+    const raw = contactsById.get(contactId);
+    if (!raw) {
+      out.push({ contactId, contact: null, issue: "contact_missing", plans });
+      continue;
+    }
+    const items: any[] = raw?.info?.phones?.items ?? [];
+    if (items.length === 0) {
+      out.push({ contactId, contact: toAuditContact(raw), issue: "no_phone", plans });
+      continue;
+    }
+    const reachable = items.some(
+      (p) =>
+        (typeof p?.e164Phone === "string" && p.e164Phone.length > 5) ||
+        phoneSpellingMatchable(String(p?.phone ?? ""), variantsOf),
+    );
+    if (!reachable) {
+      out.push({ contactId, contact: toAuditContact(raw), issue: "phone_unmatchable", plans });
+    }
+  }
+  return out;
+}
+
 export interface LinkCandidate extends AuditContact {
   /** Why this fiche is proposed: declared email and/or matching name. */
   matchedBy: ("email" | "nom")[];
