@@ -6,13 +6,24 @@ import * as repo from "../domain/repo.js";
 import { extrasFromJson } from "../lib/cafeMenu.js";
 import { adminAuthHook } from "./auth.js";
 import * as q from "./queries.js";
-import { runCrmAudit, phoneKey, planMerge } from "../lib/crmAudit.js";
 import {
+  auditContacts,
+  fetchAllContacts,
+  linkCandidates,
+  phoneKey,
+  planMerge,
+} from "../lib/crmAudit.js";
+import {
+  addPhoneToContact,
+  findContactIdByPhone,
   mergeContacts,
   getContactById,
   listAllActiveOrders,
   findMemberContactIds,
 } from "../lib/wix.js";
+import { invalidateMembershipCache } from "../lib/membershipContext.js";
+import { sendText } from "../lib/whatsapp.js";
+import * as links from "../domain/linkRequests.js";
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
 async function activePlansByContact(): Promise<Map<string, string[]>> {
@@ -399,18 +410,89 @@ ${
       admin.get("/crm", async (req, reply) => {
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
-        const [audit, plansByContact] = await Promise.all([
-          runCrmAudit(),
+        // One contacts fetch feeds everything: the audit (duplicates/no-phone)
+        // AND the link-queue candidates.
+        const [rawContacts, plansByContact, linkQueue] = await Promise.all([
+          fetchAllContacts(),
           activePlansByContact().catch(() => new Map<string, string[]>()),
+          links.receptionQueue().catch(() => []),
         ]);
+        const audit = auditContacts(rawContacts);
         const allDupIds = audit.duplicates.flatMap((g) => g.contacts.map((c) => c.id));
-        const memberIds = await findMemberContactIds(allDupIds).catch(() => new Set<string>());
+        const [memberIds, dismissedSet] = await Promise.all([
+          findMemberContactIds(allDupIds).catch(() => new Set<string>()),
+          q.dismissedDuplicateGroups().catch(() => new Set<string>()),
+        ]);
 
         const banner = done
-          ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ Fusion effectuée (${escapeHtml(done)} fiche(s) absorbée(s)).</span></div>`
+          ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${
+              done === "link"
+                ? "Fiche liée — Awa reconnaît maintenant ce client."
+                : done === "link-nowa"
+                  ? "Fiche liée. Le client n'a PAS pu être prévenu sur WhatsApp (fenêtre 24h fermée) — il verra son abonnement à son prochain message."
+                  : done === "dismissed"
+                    ? "Demande ignorée."
+                    : done === "traite"
+                      ? "Groupe marqué traité — il n'apparaîtra plus (sauf si ses fiches changent). Restaurable en bas de la section doublons."
+                      : done === "restaure"
+                        ? "Groupe ré-affiché dans la liste."
+                        : `Fusion effectuée (${escapeHtml(done)} fiche(s) absorbée(s)).`
+            }</span></div>`
           : err
-            ? `<div class="card warn">⚠️ Fusion refusée : ${escapeHtml(err)}</div>`
+            ? `<div class="card warn">⚠️ Action refusée : ${escapeHtml(err)}</div>`
             : "";
+
+        // ---------- Liaisons en attente (1 clic) ----------
+        const linkCards = linkQueue
+          .map((r) => {
+            const claimedEmail = r.claimed_email ?? r.client_claimed_email;
+            const candidates = linkCandidates(
+              { claimedEmail, clientName: r.client_name },
+              rawContacts,
+            );
+            const candRows = candidates
+              .slice(0, 6)
+              .map((c) => {
+                const plans = plansByContact.get(c.id) ?? [];
+                const badges =
+                  (plans.length
+                    ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml(plans.join(" · "))}</span>`
+                    : "") +
+                  ` <span class="muted">(match : ${c.matchedBy.join(" + ")})</span>`;
+                return `<tr>
+<td><b>${escapeHtml(c.name)}</b>${badges}${c.email ? `<div class="muted">${escapeHtml(c.email)}</div>` : ""}</td>
+<td>${c.phones.map((p) => escapeHtml(p)).join("<br>") || `<span class="muted">sans téléphone</span>`}</td>
+<td><form class="inline" method="post" action="/admin/crm/link" onsubmit="return confirm('Ajouter le numéro WhatsApp +${escapeHtml(r.wa_phone)} à la fiche « ${escapeHtml(c.name).replaceAll("'", "\\'")} » ?')">
+<input type="hidden" name="request" value="${escapeHtml(r.id)}">
+<input type="hidden" name="contact" value="${escapeHtml(c.id)}">
+<button class="act">Lier cette fiche</button>
+</form></td>
+</tr>`;
+              })
+              .join("");
+            return `<div class="card warn">
+<b>${escapeHtml(r.client_name ?? "?")}</b> — +${escapeHtml(r.wa_phone)}
+${claimedEmail ? ` · email déclaré : <b>${escapeHtml(claimedEmail)}</b>` : ""}
+<div class="muted">${escapeHtml(r.detail ?? "")} — demandé le ${fmtDate(r.created_at)}</div>
+${
+  candidates.length
+    ? `<table><tr><th>Fiche candidate</th><th>Numéro(s)</th><th></th></tr>${candRows}</table>`
+    : `<p class="muted">Aucune fiche candidate trouvée (ni par email ni par nom) — chercher manuellement dans Wix → Contacts, ajouter le numéro WhatsApp à la bonne fiche, puis ignorer cette demande.</p>`
+}
+<form class="inline" method="post" action="/admin/crm/link-dismiss" style="margin-top:.5rem" onsubmit="return confirm('Ignorer cette demande de liaison ?')">
+<input type="hidden" name="request" value="${escapeHtml(r.id)}">
+<button class="act" style="background:#6e7781">Ignorer</button>
+</form>
+</div>`;
+          })
+          .join("");
+        const linkSection = linkQueue.length
+          ? `<h2>🔗 Liaisons en attente (${linkQueue.length})</h2>
+<p class="muted">Ces clients affirment avoir un compte/abonnement mais la vérification par email n'a
+pas abouti. Un clic sur « Lier cette fiche » AJOUTE leur numéro WhatsApp à la fiche choisie (sans
+toucher à l'ancien numéro) — Awa les reconnaît immédiatement et le client est prévenu sur WhatsApp.</p>
+${linkCards}`
+          : "";
 
         const groupInfos = audit.duplicates.map((g) => {
           const ids = g.contacts.map((c) => c.id).join(",");
@@ -494,9 +576,11 @@ ${rest.sort(byActionable).map((g) => g.html).join("")}`
 ${banner}
 <div class="stat-grid">
 <div class="stat"><span class="muted">Fiches contact Wix</span><b>${audit.total}</b></div>
+<div class="stat"><span class="muted">Liaisons en attente</span><b>${linkQueue.length}</b></div>
 <div class="stat"><span class="muted">Numéros en doublon</span><b>${audit.duplicates.length}</b></div>
 <div class="stat"><span class="muted">Fiches sans téléphone</span><b>${audit.noPhone.length}</b></div>
 </div>
+${linkSection}
 <h2>👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
 <p class="muted">Awa refuse (prudemment) de choisir quand un numéro correspond à plusieurs fiches :
 ces clientes ne sont pas reconnues. Un clic fusionne le groupe — la fiche conservée (✓) est choisie
@@ -580,6 +664,75 @@ ${audit.noPhone.length ? `<details><summary>Voir la liste (${audit.noPhone.lengt
           req.log.error({ err: e, target: plan.targetId, sources: plan.sourceIds }, "CRM merge failed");
           return fail("erreur Wix pendant la fusion — réessaie");
         }
+      });
+
+      // ---------- Liaison 1 clic : numéro WhatsApp → fiche Wix choisie ----------
+      admin.post("/crm/link", async (req, reply) => {
+        const bodyIn = (req.body ?? {}) as Record<string, string>;
+        const fail = (msg: string) =>
+          reply.redirect(`/admin/crm?err=${encodeURIComponent(msg)}`, 303);
+
+        // Server-side re-verification, pattern merge: the request must still
+        // be open, the fiche must still exist, and the number must not
+        // already resolve to another fiche (that would be a MERGE, not a
+        // link — the duplicates section handles it).
+        const request = await links.getByIdForAdmin(String(bodyIn.request ?? ""));
+        if (!request) return fail("demande introuvable — recharge la page");
+        if (!["NEEDS_RECEPTION", "AWAITING_EMAIL", "AWAITING_CODE"].includes(request.status)) {
+          return fail("cette demande est déjà traitée — recharge la page");
+        }
+        const contactId = String(bodyIn.contact ?? "");
+        const contact = await getContactById(contactId).catch(() => null);
+        if (!contact) return fail("cette fiche n'existe plus — recharge la page");
+        const wa = `+${request.wa_phone.replace(/^\+/, "")}`;
+        const resolved = await findContactIdByPhone(wa, request.client_name ?? undefined).catch(
+          () => null,
+        );
+        if (resolved && resolved !== contactId) {
+          return fail(
+            "ce numéro WhatsApp est déjà porté par une AUTRE fiche — c'est une fusion, pas une " +
+              "liaison : traite-le dans la section Doublons",
+          );
+        }
+
+        try {
+          await addPhoneToContact(contactId, wa);
+        } catch (e) {
+          req.log.error({ err: e, contactId, request: request.id }, "CRM link failed");
+          return fail("erreur Wix pendant l'ajout du numéro — réessaie");
+        }
+        await links.markLinked(request.id, contactId, req.adminUser ?? "?");
+        invalidateMembershipCache(request.client_id);
+        req.log.info(
+          { contactId, request: request.id, wa, by: req.adminUser },
+          "WhatsApp number linked to Wix contact from admin dashboard",
+        );
+        // Tell the client — best-effort: outside WhatsApp's 24h window Meta
+        // rejects free-form sends (131047); the linking itself stays done.
+        try {
+          await sendText(
+            request.wa_phone,
+            "✅ C'est bon ! Ton compte Revive est maintenant relié à ce numéro WhatsApp — " +
+              "je reconnais ton abonnement et ton historique. Dis-moi si tu veux réserver un cours 🙂",
+          );
+        } catch {
+          return reply.redirect(`/admin/crm?done=link-nowa`, 303);
+        }
+        return reply.redirect(`/admin/crm?done=link`, 303);
+      });
+
+      admin.post("/crm/link-dismiss", async (req, reply) => {
+        const bodyIn = (req.body ?? {}) as Record<string, string>;
+        const request = await links.getByIdForAdmin(String(bodyIn.request ?? ""));
+        if (!request) {
+          return reply.redirect(
+            `/admin/crm?err=${encodeURIComponent("demande introuvable — recharge la page")}`,
+            303,
+          );
+        }
+        await links.dismiss(request.id, req.adminUser ?? "?");
+        req.log.info({ request: request.id, by: req.adminUser }, "Link request dismissed");
+        return reply.redirect(`/admin/crm?done=dismissed`, 303);
       });
 
       // ---------- Actions de pointage (aucune action monétaire) ----------

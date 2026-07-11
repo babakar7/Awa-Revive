@@ -104,6 +104,51 @@ export async function runCrmAudit(): Promise<CrmAudit> {
   return auditContacts(await fetchAllContacts());
 }
 
+export interface LinkCandidate extends AuditContact {
+  /** Why this fiche is proposed: declared email and/or matching name. */
+  matchedBy: ("email" | "nom")[];
+}
+
+/**
+ * Candidate fiches for a pending link request, for the /admin/crm one-click
+ * queue. Matches by declared email (case/accents-insensitive) or by name
+ * (full name, or first name when it is distinctive enough) — display-only:
+ * the human picks, the POST re-verifies. Email matches rank first.
+ */
+export function linkCandidates(
+  request: { claimedEmail: string | null; clientName: string | null },
+  rawContacts: any[],
+): LinkCandidate[] {
+  const norm = (s: unknown) =>
+    String(s ?? "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .trim();
+  const email = norm(request.claimedEmail);
+  const name = norm(request.clientName);
+  const first = name.split(/\s+/)[0] ?? "";
+  const out: LinkCandidate[] = [];
+  for (const raw of rawContacts) {
+    const matchedBy: ("email" | "nom")[] = [];
+    const emails: any[] = raw?.info?.emails?.items ?? [];
+    if (email && emails.some((e) => norm(e?.email) === email)) matchedBy.push("email");
+    const cFirst = norm(raw?.info?.name?.first);
+    const cFull = norm(
+      [raw?.info?.name?.first, raw?.info?.name?.last].filter(Boolean).join(" "),
+    );
+    if (name && (cFull === name || (first.length >= 3 && cFirst === first))) {
+      matchedBy.push("nom");
+    }
+    if (matchedBy.length > 0) out.push({ ...toAuditContact(raw), matchedBy });
+  }
+  return out.sort(
+    (a, b) =>
+      Number(b.matchedBy.includes("email")) - Number(a.matchedBy.includes("email")) ||
+      b.matchedBy.length - a.matchedBy.length,
+  );
+}
+
 export interface MergePlan {
   /** Fiche that survives. */
   targetId: string;

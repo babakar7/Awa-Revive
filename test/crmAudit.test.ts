@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auditContacts, phoneKey, planMerge } from "../src/lib/crmAudit.js";
+import { auditContacts, linkCandidates, phoneKey, planMerge } from "../src/lib/crmAudit.js";
 
 const contact = (id: string, first: string, phones: any[], email?: string) => ({
   id,
@@ -115,5 +115,42 @@ describe("planMerge", () => {
     expect(plan?.targetId).toBe("member-plan");
     expect(plan?.sourceIds).toEqual(["plain"]);
     expect(plan?.leftoverIds).toEqual(["member-plain"]);
+  });
+});
+
+describe("linkCandidates", () => {
+  const contacts = [
+    contact("a", "Rokhaya", [{ e164Phone: "+221786383088" }], "rokhaya@gmail.com"),
+    contact("b", "Awa", [{ phone: "77 000 11 22" }], "awa@gmail.com"),
+    contact("c", "Rokhaya", [], "autre@gmail.com"),
+  ];
+
+  it("matches by declared email regardless of case, ranked first", () => {
+    const out = linkCandidates(
+      { claimedEmail: "Rokhaya@Gmail.com", clientName: "R. Diop" },
+      contacts,
+    );
+    expect(out[0].id).toBe("a");
+    expect(out[0].matchedBy).toContain("email");
+  });
+
+  it("matches by first name (accent-insensitive) when no email matches", () => {
+    const out = linkCandidates({ claimedEmail: null, clientName: "Rokhayá Ndiaye" }, contacts);
+    expect(out.map((c) => c.id).sort()).toEqual(["a", "c"]);
+    expect(out.every((c) => c.matchedBy.includes("nom"))).toBe(true);
+  });
+
+  it("short first names don't match alone (too many false positives)", () => {
+    const out = linkCandidates({ claimedEmail: null, clientName: "Bo" }, contacts);
+    expect(out).toEqual([]);
+  });
+
+  it("email + name double match outranks email-only", () => {
+    const out = linkCandidates(
+      { claimedEmail: "rokhaya@gmail.com", clientName: "Rokhaya" },
+      contacts,
+    );
+    expect(out[0].id).toBe("a");
+    expect(out[0].matchedBy).toEqual(["email", "nom"]);
   });
 });
