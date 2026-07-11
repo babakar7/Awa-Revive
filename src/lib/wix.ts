@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { phoneKey } from "./crmAudit.js";
 
 /**
  * Wix Bookings REST client (SPEC §4.2).
@@ -27,6 +28,20 @@ function headers(): Record<string, string> {
 async function wixPost(path: string, body: unknown): Promise<any> {
   const res = await fetch(`${WIX_API}${path}`, {
     method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Wix ${path} failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+async function wixPatch(path: string, body: unknown): Promise<any> {
+  const res = await fetch(`${WIX_API}${path}`, {
+    method: "PATCH",
     headers: headers(),
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
@@ -396,6 +411,115 @@ export async function getContactById(contactId: string): Promise<any | null> {
   if (!res.ok) throw new Error(`Wix get contact failed (${res.status}): ${await res.text()}`);
   const data: any = await res.json();
   return data?.contact ?? null;
+}
+
+// ---------- email-based account linking (liaison par email vérifié) ----------
+
+/**
+ * Contacts whose stored email equals `email`. Filterability AND case-
+ * insensitivity of the filter verified live (sonde 11/07: $eq matches the
+ * stored address regardless of case), so one $eq on the trimmed input is
+ * enough.
+ */
+export async function findContactsByEmail(email: string): Promise<any[]> {
+  const data = await wixPost("/contacts/v4/contacts/query", {
+    query: { filter: { "info.emails.email": { $eq: email.trim() } } },
+  });
+  return data?.contacts ?? [];
+}
+
+export type EmailCandidate =
+  | { kind: "none" }
+  | { kind: "already_linked"; contactId: string }
+  | { kind: "one"; contact: any }
+  | { kind: "ambiguous"; count: number };
+
+/**
+ * Which fiche (if any) an email verification should link to. Several fiches
+ * can share one email (family plans, reception-created cards): linking is
+ * only safe when the choice is unambiguous — exactly one fiche, or exactly
+ * one holding an active abonnement (the whole point of the flow). A fiche
+ * already carrying the client's WhatsApp number means there is nothing to
+ * link.
+ */
+export function resolveEmailCandidate(
+  contacts: any[],
+  planHolderIds: Set<string>,
+  waPhone: string,
+): EmailCandidate {
+  if (contacts.length === 0) return { kind: "none" };
+  const waKey = phoneKey(waPhone);
+  for (const c of contacts) {
+    const phones: any[] = c?.info?.phones?.items ?? [];
+    if (
+      waKey &&
+      phones.some((p) => phoneKey(String(p?.e164Phone ?? p?.phone ?? "")) === waKey)
+    ) {
+      return { kind: "already_linked", contactId: c.id };
+    }
+  }
+  if (contacts.length === 1) return { kind: "one", contact: contacts[0] };
+  const holders = contacts.filter((c) => planHolderIds.has(c?.id));
+  if (holders.length === 1) return { kind: "one", contact: holders[0] };
+  return { kind: "ambiguous", count: contacts.length };
+}
+
+/**
+ * Phone items to PATCH so `phone` is ADDED to a contact. Wix replaces the
+ * WHOLE phones array on update (verified live 11/07 on a disposable contact),
+ * so the existing items must always be resent. Senegalese numbers are sent as
+ * countryCode SN + local digits — Wix then computes e164Phone itself (the
+ * field findContactIdByPhone matches first). Returns null when the number is
+ * already on the fiche (no-op).
+ */
+export function appendPhoneItems(existingItems: any[], phone: string): any[] | null {
+  const e164 = phone.startsWith("+") ? phone : `+${phone}`;
+  const key = phoneKey(e164);
+  if (!key) return null;
+  if (existingItems.some((p) => phoneKey(String(p?.e164Phone ?? p?.phone ?? "")) === key)) {
+    return null;
+  }
+  // Resend only the input fields — e164Phone/formattedPhone are computed by
+  // Wix and rejected as input.
+  const kept = existingItems.map((p) => ({
+    ...(p?.tag ? { tag: p.tag } : {}),
+    phone: String(p?.phone ?? p?.e164Phone ?? ""),
+    ...(p?.countryCode ? { countryCode: p.countryCode } : {}),
+    ...(p?.primary !== undefined ? { primary: p.primary } : {}),
+  }));
+  const digits = e164.replace(/\D/g, "");
+  const added =
+    digits.startsWith("2217") && digits.length === 12
+      ? { tag: "MOBILE", countryCode: "SN", phone: digits.slice(3) }
+      : { tag: "MOBILE", phone: e164 };
+  return [...kept, added];
+}
+
+/**
+ * Add a phone number to an existing contact WITHOUT touching its other
+ * phones. Revision is mandatory (400 without, 409 when stale — both verified
+ * live); a stale revision is retried once with a fresh fetch.
+ */
+export async function addPhoneToContact(
+  contactId: string,
+  phone: string,
+): Promise<"added" | "already_present"> {
+  for (let attempt = 0; ; attempt++) {
+    const contact = await getContactById(contactId);
+    if (!contact) throw new Error(`contact ${contactId} not found`);
+    const items = appendPhoneItems(contact?.info?.phones?.items ?? [], phone);
+    if (items === null) return "already_present";
+    try {
+      await wixPatch(`/contacts/v4/contacts/${contactId}`, {
+        revision: contact.revision,
+        info: { phones: { items } },
+      });
+      return "added";
+    } catch (err) {
+      if (attempt === 0 && String(err).includes("(409)")) continue; // stale revision — refetch once
+      throw err;
+    }
+  }
 }
 
 // ---------- pricing plans (memberships / abonnements) ----------
