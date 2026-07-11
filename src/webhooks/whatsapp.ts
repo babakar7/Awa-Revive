@@ -1,8 +1,14 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { verifyWhatsAppSignature, parseInboundMessages, sendText } from "../lib/whatsapp.js";
-import { handleInboundText, handleUnsupportedMedia, handleFailedVoiceNote } from "../agent/index.js";
+import {
+  handleInboundText,
+  handleUnsupportedMedia,
+  handleFailedVoiceNote,
+  handleFailedImage,
+} from "../agent/index.js";
 import { transcribeWhatsAppAudio, transcriptionEnabled } from "../lib/transcribe.js";
+import { describeWhatsAppImage, imageTurnText } from "../lib/imageInput.js";
 import { alreadyProcessed } from "../domain/repo.js";
 import { allowMessage } from "../lib/rateLimit.js";
 import { enqueue } from "../lib/serialize.js";
@@ -83,6 +89,23 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
             } catch (err) {
               req.log.error({ err, from: msg.from }, "Voice note transcription failed");
               await handleFailedVoiceNote(msg.from, msg.id);
+            }
+          } else if (msg.type === "image" && msg.mediaId) {
+            // Image (often a Wave payment screenshot) → describe it with the
+            // model, then treat the description as a normal user message. The
+            // prompt makes Awa treat screenshots as claims, never as proof.
+            try {
+              const description = await describeWhatsAppImage(msg.mediaId);
+              req.log.info({ from: msg.from, chars: description.length }, "Inbound image described");
+              await handleInboundText({
+                waPhone: msg.from,
+                text: imageTurnText(description, msg.caption),
+                waMessageId: msg.id,
+                profileName: msg.profileName,
+              });
+            } catch (err) {
+              req.log.error({ err, from: msg.from }, "Inbound image description failed");
+              await handleFailedImage(msg.from, msg.id);
             }
           } else {
             await handleUnsupportedMedia(msg.from, msg.id);

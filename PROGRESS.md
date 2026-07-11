@@ -449,6 +449,48 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     - 9 tests unitaires (118 au total). E2E à faire : demander « le planning »
       en réel et vérifier image + suivi (et le rendu des polices sur Railway).
 
+24. **Quatuor UX (11/07)** — images entrantes lisibles, café sans résa, dates
+    explicites, reçu/facture.
+    - **Awa lit les images** ([imageInput.ts](src/lib/imageInput.ts)) : un message
+      `image` est téléchargé via l'API média Meta (réutilise
+      `downloadWhatsAppMedia` de transcribe.ts) puis DÉCRIT par le modèle
+      (appel Anthropic dédié, prompt de description factuelle qui retranscrit
+      le texte visible : montants, dates, ids de transaction) ; la description
+      est injectée comme tour user `[image reçue] …` (+ `[légende du client] …`
+      si le client a mis une légende) — même patron que `[note vocale]`,
+      l'historique reste 100 % texte. Échec de lecture → `handleFailedImage`
+      (repli poli, fr/en). Le message « média non supporté » ne dit plus « je
+      ne lis que le texte » (faux depuis les vocaux).
+      **Règle prompt CRITIQUE ajoutée : une capture d'écran de paiement Wave
+      est une AFFIRMATION, jamais une preuve** — le cas d'usage n°1 attendu est
+      « j'ai payé, regarde 📷 » ; Awa reconnaît la capture, explique que la
+      confirmation est automatique, ne confirme JAMAIS une résa sur capture
+      (seul le webhook signé compte — invariant paiement-d'abord inchangé).
+    - **Commande café SANS résa, sur demande explicite** (décision produit
+      Babakar 11/07) : `create_cafe_payment_link` sans résa à venir crée
+      désormais une commande autonome (`linked_booking_id` null — la colonne
+      était déjà nullable) au lieu de refuser ; retrait au comptoir, « prête
+      dès que possible » par défaut (confirmation client + note réception
+      adaptées, sujet « ☕ sans réservation »). Un `linked_booking_id` explicite
+      qui ne matche pas reste une erreur (pas de repli silencieux). Côté
+      prompt : Awa ne PROPOSE jamais le menu à un client qui ne réserve pas —
+      elle répond seulement à une demande explicite.
+    - **Dates explicites hors fenêtres** (suite du fix « semaine prochaine »
+      §4.17) : le bloc Date windows du contexte dynamique liste maintenant
+      AUSSI les 7 prochains jours nommés (« vendredi 12 juillet: … ») et une
+      règle pour les dates calendaires explicites (« le 3 août ») : recopier la
+      date littérale en fenêtre T00:00:00Z → T23:59:59Z, année courante (ou
+      suivante si passée), SANS aucune arithmétique ; les expressions relatives
+      restent cantonnées aux fenêtres pré-calculées, sinon demander la date
+      concrète au client.
+    - **Reçu / facture** : ajouté à la liste handoff du prompt (l'appli Wave
+      montre au client son propre historique ; toute facture formelle vient de
+      la réception).
+    - 9 tests unitaires ajoutés (127 au total : parsing image + légende,
+      `imageTurnText`, confirmations café standalone fr/en/wo) ; intégration
+      14/14 verte. E2E à faire : envoyer une vraie capture Wave à Awa, et une
+      commande café sans résa payée en réel.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -541,6 +583,16 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
 - **10/07 (nuit, fin)** : **résa en un tap** (§4.20) — détection d'habitude
   (cours + jour + heure récurrents) proposée en raccourci cliquable, sans jamais
   court-circuiter check_availability. 5 tests unitaires (106 au total).
+- **11/07 (via GitHub mobile)** : **résa abonnement multi-personnes** (§4.22,
+  participants sur book_with_membership, all-or-nothing) et **planning des
+  cours en image** (§4.23, get_class_schedule, PNG @napi-rs/canvas, cache
+  30 min, repli texte). 12 tests ajoutés (118 au total).
+- **11/07** : **quatuor UX** (§4.24) — **Awa lit les images** (description par
+  le modèle injectée `[image reçue]`, règle « capture ≠ preuve de paiement »),
+  **café sans résa** sur demande explicite (commande autonome, retrait
+  comptoir), **dates explicites** (7 jours nommés + règle date littérale dans
+  le contexte dynamique), **reçu/facture → handoff**. 9 tests ajoutés (127 au
+  total) ; intégration 14/14 verte.
 
 ## 6. Reste à faire
 
@@ -558,6 +610,15 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
 - [ ] Relance lien expiré : laisser expirer un lien de 10 FCFA sans payer →
   UNE relance ~1 min après le TTL, puis répondre « oui » et vérifier qu'Awa
   refait le lien directement.
+- [ ] Images entrantes : envoyer une capture de paiement Wave à Awa → elle
+  décrit ce qu'elle voit SANS confirmer la résa (la confirmation reste le
+  webhook) ; envoyer une photo quelconque → réponse naturelle ; vérifier le
+  repli poli sur une image illisible.
+- [ ] Café sans résa : demander un smoothie sans réserver de cours → lien Wave
+  café seul, confirmation « à récupérer au comptoir », email réception « sans
+  réservation ».
+- [ ] Date explicite lointaine : demander « et le [date à +3 semaines] ? » →
+  fenêtre correcte (bonne date, bonne année), pas d'arithmétique inventée.
 - [ ] Report en un geste : déplacer une résa abonnement (re-crédit + re-résa
   même tour) et une résa Wave (OK explicite avant annulation).
 - [ ] Solde d'abonnement : « il me reste combien de séances ? » → chiffre

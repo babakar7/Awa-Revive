@@ -164,6 +164,35 @@ describe("parseInboundMessages — interactive replies", () => {
     );
     expect(msg).toMatchObject({ type: "audio", mediaId: "media_123", text: undefined });
   });
+
+  it("extracts the media id and caption from image messages", () => {
+    const [msg] = parseInboundMessages(
+      envelope({
+        from: "221771234567",
+        id: "wamid.5",
+        type: "image",
+        image: { id: "media_456", mime_type: "image/jpeg", caption: "j'ai payé, regarde" },
+      }),
+    );
+    expect(msg).toMatchObject({
+      type: "image",
+      mediaId: "media_456",
+      caption: "j'ai payé, regarde",
+      text: undefined,
+    });
+  });
+
+  it("leaves caption undefined on an image without one", () => {
+    const [msg] = parseInboundMessages(
+      envelope({
+        from: "221771234567",
+        id: "wamid.6",
+        type: "image",
+        image: { id: "media_789", mime_type: "image/jpeg" },
+      }),
+    );
+    expect(msg).toMatchObject({ type: "image", mediaId: "media_789", caption: undefined });
+  });
 });
 
 describe("slotChoiceKey", () => {

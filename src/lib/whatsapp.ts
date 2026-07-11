@@ -263,7 +263,8 @@ export interface InboundMessage {
   type: string; // 'text' | 'interactive' | 'audio' | 'image' | 'sticker' | ...
   text?: string; // body text, or the clicked option's title for interactive replies
   interactiveId?: string; // clicked option id (list_reply / button_reply)
-  mediaId?: string; // Meta media id for audio messages (voice notes)
+  mediaId?: string; // Meta media id for audio (voice notes) and image messages
+  caption?: string; // client-typed caption on an image message
   profileName?: string;
 }
 
@@ -295,7 +296,9 @@ export function parseInboundMessages(payload: any): InboundMessage[] {
           type: msg.type,
           text: msg.type === "text" ? msg.text?.body : reply?.title,
           interactiveId: reply?.id,
-          mediaId: msg.type === "audio" ? msg.audio?.id : undefined,
+          mediaId:
+            msg.type === "audio" ? msg.audio?.id : msg.type === "image" ? msg.image?.id : undefined,
+          caption: msg.type === "image" ? msg.image?.caption : undefined,
           profileName: contact?.profile?.name,
         });
       }

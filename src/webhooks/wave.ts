@@ -309,18 +309,23 @@ async function processCafePayment(order: any, log: any): Promise<void> {
     ? new Date(order.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })
     : "?";
 
+  const standalone = !order.linked_booking_id;
   try {
     notifyReception(
-      `☕ Commande café payée (résa abonnement) — ${order.amount_xof} FCFA`,
-      `Un client a payé une commande café qui accompagne une réservation par abonnement :\n` +
+      standalone
+        ? `☕ Commande café payée (sans réservation) — ${order.amount_xof} FCFA`
+        : `☕ Commande café payée (résa existante) — ${order.amount_xof} FCFA`,
+      (standalone
+        ? `Un client a payé une commande café seule (aucun cours associé — retrait au comptoir) :\n`
+        : `Un client a payé une commande café qui accompagne une réservation existante :\n`) +
         `  Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
         extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
-        `\n  À servir : ${order.order_note ?? "prête après le cours"}\n` +
-        `  Cours associé : ${order.service_name ?? "?"} — ${slotLabel}\n` +
+        `\n  À servir : ${order.order_note ?? (standalone ? "dès que possible" : "prête après le cours")}\n` +
+        (standalone ? "" : `  Cours associé : ${order.service_name ?? "?"} — ${slotLabel}\n`) +
         `  Total café : ${order.amount_xof} FCFA (payé via Wave)`,
     );
   } catch (err) {
-    log.error({ err, cafeOrderId: order.id }, "Café order (membership) notification failed");
+    log.error({ err, cafeOrderId: order.id }, "Café order notification failed");
   }
 
   const msg = cafeConfirmationMessage(lang, extras, order.order_note, order.service_name);
@@ -338,24 +343,29 @@ export function cafeConfirmationMessage(
   orderNote?: string | null,
   serviceName?: string | null,
 ): string {
-  const forClass = serviceName ? ` (${serviceName})` : "";
+  // No attached class = standalone counter order → default timing differs.
+  const defaultNote = {
+    en: serviceName ? `ready after your class (${serviceName})` : "ready as soon as possible — pick it up at the counter",
+    wo: serviceName ? `dina pare ginnaaw sa cours (${serviceName})` : "dina pare léegi léegi — jëlal ko ci comptoir bi",
+    fr: serviceName ? `prête après ton cours (${serviceName})` : "prête dès que possible — à récupérer au comptoir",
+  };
   switch (lang) {
     case "en":
       return (
         `✅ Payment received — your café order is confirmed!\n\n` +
-        `☕ Your order:\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? `ready after your class${forClass}`}\n\n` +
+        `☕ Your order:\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? defaultNote.en}\n\n` +
         `See you soon! 💪🏾`
       );
     case "wo":
       return (
         `✅ Fey bi jot na — sa commande café dëgg na!\n\n` +
-        `☕ Sa commande:\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? `dina pare ginnaaw sa cours${forClass}`}\n\n` +
+        `☕ Sa commande:\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? defaultNote.wo}\n\n` +
         `Ba beneen yoon! 💪🏾`
       );
     default:
       return (
         `✅ Paiement reçu — ta commande café est confirmée !\n\n` +
-        `☕ Ta commande :\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? `prête après ton cours${forClass}`}\n\n` +
+        `☕ Ta commande :\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? defaultNote.fr}\n\n` +
         `À très vite ! 💪🏾`
       );
   }

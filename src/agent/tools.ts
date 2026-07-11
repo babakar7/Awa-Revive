@@ -155,7 +155,9 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "café-only link. Leave linked_booking_id empty to attach to the class they just booked (the default), or " +
       "pass a specific booking_id from get_my_bookings / book_with_membership if the client has several upcoming " +
       "bookings and you must disambiguate. The server prices everything from the menu file and returns the link + " +
-      "breakdown. Never use this for a class (that's create_payment_link) or for a café order with no class booking.",
+      "breakdown. Also works with NO class booking at all when the client explicitly asks to order from the menu " +
+      "(standalone order, picked up at the counter) — the result tells you which case applied. Never use this for " +
+      "a class (that's create_payment_link).",
     input_schema: {
       type: "object",
       properties: {
@@ -550,24 +552,26 @@ export async function executeTool(
     case "create_cafe_payment_link": {
       const linkedBookingId = String(input.linked_booking_id ?? "").trim();
 
-      // The café rides on one of THIS client's own confirmed, still-upcoming
-      // bookings (Wave- OR membership-paid). An explicit id is checked for
-      // ownership (same stance as cancel_booking); with no id we default to the
-      // class they most recently booked — the Wave flow books server-side, so
-      // the model never sees that booking_id.
-      const booking = linkedBookingId
+      // The café preferably rides on one of THIS client's own confirmed,
+      // still-upcoming bookings (Wave- OR membership-paid). An explicit id is
+      // checked for ownership (same stance as cancel_booking); with no id we
+      // default to the class they most recently booked — the Wave flow books
+      // server-side, so the model never sees that booking_id. An explicit id
+      // that doesn't match is an error; NO booking at all falls back to a
+      // standalone counter order (client explicitly ordering from the menu).
+      const linked = linkedBookingId
         ? await repo.findClientBooking(client.id, linkedBookingId)
         : await repo.latestUpcomingBooking(client.id);
-      if (
-        !booking ||
-        booking.status !== "BOOKED" ||
-        new Date(booking.slot_start).getTime() <= Date.now()
-      ) {
+      const booking =
+        linked && linked.status === "BOOKED" && new Date(linked.slot_start).getTime() > Date.now()
+          ? linked
+          : null;
+      if (linkedBookingId && !booking) {
         return JSON.stringify({
           error: "unknown_booking",
           message:
-            "No matching upcoming confirmed booking for this client. A café-only link attaches to a class the " +
-            "client has already booked (Wave or abonnement) — re-run get_my_bookings, or the client books a class first.",
+            "No upcoming confirmed booking matches this booking_id for this client — re-run get_my_bookings, " +
+            "or omit linked_booking_id (standalone counter order).",
         });
       }
 
@@ -590,9 +594,9 @@ export async function executeTool(
       await repo.expireActiveCafeOrders(client.id);
       const draft = await repo.createDraftCafeOrder({
         clientId: client.id,
-        linkedBookingId: booking.id,
-        serviceName: booking.service_name,
-        slotStart: booking.slot_start,
+        linkedBookingId: booking?.id ?? null,
+        serviceName: booking?.service_name ?? null,
+        slotStart: booking?.slot_start ?? null,
         extrasJson: resolved.lines,
         amountXof: resolved.totalXof,
         orderNote,
@@ -618,12 +622,16 @@ export async function executeTool(
         extras: resolved.lines.map((l) => ({ item: l.name, qty: l.qty, line_total_fcfa: l.lineTotalXof })),
         order_note: orderNote ?? undefined,
         expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
-        for_class: booking.service_name,
-        slot_start_dakar: fmtDakar(String(booking.slot_start)),
-        note:
-          "Relay the link — this covers ONLY the café order (the class itself is already booked and paid, " +
-          "nothing more to pay for it). State the items and total. Ready after the class unless the note says " +
-          "otherwise. Confirmation arrives automatically on WhatsApp once paid.",
+        for_class: booking?.service_name ?? undefined,
+        slot_start_dakar: booking ? fmtDakar(String(booking.slot_start)) : undefined,
+        standalone_order: booking ? undefined : true,
+        note: booking
+          ? "Relay the link — this covers ONLY the café order (the class itself is already booked and paid, " +
+            "nothing more to pay for it). State the items and total. Ready after the class unless the note says " +
+            "otherwise. Confirmation arrives automatically on WhatsApp once paid."
+          : "Relay the link — standalone café order, no class attached. State the items and total, and say the " +
+            "order is picked up at the counter (ready as soon as possible unless the note says otherwise). " +
+            "Confirmation arrives automatically on WhatsApp once paid.",
       });
     }
 

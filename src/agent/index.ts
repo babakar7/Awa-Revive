@@ -225,14 +225,26 @@ export async function handleInboundText(args: {
   }
 }
 
-/** Polite reply for voice notes / images / stickers (SPEC §8 — no transcription in Phase 1). */
+/** Image received but the description failed — ask kindly for text. */
+export async function handleFailedImage(waPhone: string, waMessageId: string): Promise<void> {
+  void sendTypingIndicator(waMessageId);
+  const client = await repo.upsertClient(waPhone);
+  await repo.addTurn(client.id, "user", "[image reçue — lecture échouée]", waMessageId);
+  const reply =
+    "Désolée, je n'ai pas réussi à lire ton image 🙏🏾 Tu peux m'écrire ce qu'elle montre ?\n" +
+    "(Sorry, I couldn't read your image — could you tell me what it shows?)";
+  await sendText(waPhone, reply);
+  await repo.addTurn(client.id, "assistant", reply);
+}
+
+/** Polite reply for stickers / documents / other unreadable media (SPEC §8). */
 export async function handleUnsupportedMedia(waPhone: string, waMessageId: string): Promise<void> {
   void sendTypingIndicator(waMessageId);
   const client = await repo.upsertClient(waPhone);
   await repo.addTurn(client.id, "user", "[non-text message]", waMessageId);
   const reply =
-    "Je ne peux lire que les messages texte pour l'instant 🙏🏾 Écris-moi ce que tu veux réserver !\n" +
-    "(I can only read text messages for now — please type your request.)";
+    "Je ne peux pas lire ce type de message 🙏🏾 Écris-moi (ou envoie une note vocale) ce que tu veux réserver !\n" +
+    "(I can't read this kind of message — please type or voice-note your request.)";
   await sendText(waPhone, reply);
   await repo.addTurn(client.id, "assistant", reply);
 }

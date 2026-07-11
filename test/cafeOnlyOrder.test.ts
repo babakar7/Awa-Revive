@@ -29,4 +29,20 @@ describe("cafeConfirmationMessage (café-only order, membership booking)", () =>
   it("falls back to French for an unknown language", () => {
     expect(cafeConfirmationMessage("de", EXTRAS, null, null)).toContain("Paiement reçu");
   });
+
+  it.each([
+    ["fr", "prête dès que possible — à récupérer au comptoir"],
+    ["en", "ready as soon as possible — pick it up at the counter"],
+    ["wo", "jëlal ko ci comptoir bi"],
+  ])("%s: a standalone order (no class) defaults to counter pickup", (lang, note) => {
+    const msg = cafeConfirmationMessage(lang, EXTRAS, null, null);
+    expect(msg).toContain(note);
+    expect(msg).not.toContain("cours (");
+  });
+
+  it("still honors the client's own note on a standalone order", () => {
+    const msg = cafeConfirmationMessage("fr", EXTRAS, "pour 17h", null);
+    expect(msg).toContain("pour 17h");
+    expect(msg).not.toContain("comptoir");
+  });
 });
