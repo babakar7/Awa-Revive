@@ -697,6 +697,65 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       `contactId $in`, vérifié live — ou abonnement 🎫) au-dessus des fiches
       dormantes repliées. Au 11/07 : 9 actives / 146 dormantes sur 155.
 
+30. **Liaison de compte par email vérifié — le client se relie TOUT SEUL (11/07,
+    cas Rokhaya)**. Suite du §28 : la notification réception marchait, mais la
+    résolution restait manuelle (chercher la fiche dans Wix, éditer le numéro)
+    — lent, faillible, cliente bloquée entre-temps, et chaque paiement Wave
+    dans cet état crée une fiche doublon. Décision produit (Babakar) : liaison
+    self-service par email + code, repli réception en 1 clic.
+    - **Flux self-service** : claim d'abonnement introuvable → Awa propose
+      « donne-moi l'email de ton compte Revive » (ignorable — un nouveau client
+      continue normalement) → `request_email_verification` trouve la fiche par
+      email et envoie un **code 6 chiffres à CET email** (Brevo,
+      `sendVerificationCodeEmail`) → le client le recopie sur WhatsApp →
+      `submit_verification_code` AJOUTE le numéro WhatsApp à la fiche Wix →
+      abonnement visible immédiatement (cache membership invalidé). La preuve
+      d'identité = l'accès à la boîte mail (équivalent de ce que ferait la
+      réception). `record_email` absorbé par le nouveau flux.
+    - **Sécurité anti-injection** : le code n'existe qu'en `sha256(code:id)`
+      en DB et ne transite QUE par l'email — jamais dans un résultat d'outil ni
+      un message d'Awa (un prompt-injecté n'a rien à extraire). Comparaison
+      serveur `timingSafeEqual`, TTL 10 min, 5 essais max, 3 emails/24 h par
+      client, jamais le nom de la fiche dans un résultat (anti-énumération
+      d'emails). Le contact_id est résolu serveur, jamais fourni par le modèle.
+    - **Sondes live (contact jetable créé/supprimé)** : le filtre
+      `info.emails.email` est filtrable et **insensible à la casse** ($eq
+      suffit) ; **PATCH contacts/v4 remplace le tableau `phones` ENTIER**
+      (toujours renvoyer les items existants — `appendPhoneItems` pure) ;
+      `revision` obligatoire (400 sans, 409 périmée → retry 1×) ; un numéro SN
+      envoyé en `countryCode:"SN"` + 9 chiffres locaux → Wix calcule
+      `e164Phone` lui-même.
+    - **Replis vers la réception** (file `link_requests`, une demande ouverte
+      par client via index partiel) : pas d'email, email introuvable ou partagé
+      par plusieurs fiches, 5 codes faux, échec technique, ou **silence >30 min**
+      (sweep 60 s, `escalateStaleLinkRequests` — le « merci puis disparaît » du
+      §28 reste couvert, résistant aux restarts). Dédup notif :
+      `reception_notified_at` + registre handoffs 24 h.
+    - **Liaison 1 clic** (/admin/crm, section « 🔗 Liaisons en attente ») :
+      fiches candidates calculées serveur (`linkCandidates` — email déclaré
+      insensible casse/accents OU prénom ≥3 lettres, badge 🎫), bouton « Lier
+      cette fiche » avec garde-fous pattern merge (demande re-lue, fiche
+      re-fetchée, **refus si le numéro vit déjà sur une AUTRE fiche** = c'est
+      une fusion) ; après liaison : cache invalidé + WhatsApp au client
+      (best-effort, 131047 → bannière « non prévenu »).
+    - **Piège doublon post-paiement** : si un paiement Wave a déjà créé une
+      fiche doublon sous le numéro WhatsApp, la vérification réussit mais le
+      lookup devient ambigu → statut `verified_pending_merge`, notif réception
+      « fusion 1 clic » (section Doublons) — ne JAMAIS dire au client que
+      l'abonnement est visible tant que la fusion n'est pas faite.
+    - **Audit abonnées injoignables** (`auditActiveSubscribers` pure) : croise
+      les orders ACTIVE avec les fiches — fiche manquante, sans téléphone, ou
+      numéro illisible pour le matching (`phoneSpellingMatchable`, variantes
+      injectées pour éviter un cycle wix↔crmAudit). Section « 🎫 Abonnés
+      injoignables » sur /admin/crm + priorité 1 de `npm run crm:audit` :
+      exactement la population d'où sortent les cas Rokhaya/Dieynaba, à
+      compléter AVANT qu'elles écrivent.
+    - Prompt §Abonnements et §Linking réécrits : Awa ne connaît jamais le code
+      et ne peut ni l'envoyer ni le confirmer ; après `verified` elle PEUT dire
+      que le compte est relié (avant, jamais). 169 tests.
+    - **⚠️ À faire au prochain déploiement** : remettre `ADMIN_USERS` en prod —
+      le POST /admin/crm/link écrit dans Wix, la page ne doit plus être ouverte.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
