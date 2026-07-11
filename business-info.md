@@ -15,6 +15,9 @@
 - Nom : Revive
 - Adresse / localisation : Revive Studio, Dakar — plan Google Maps : https://maps.app.goo.gl/jJS8rS3sV5j41SGc9
 - Téléphone réception (WhatsApp + appels) : +221 78 464 43 29
+- Awa (réservations sur WhatsApp) : +221 78 953 66 76 — lien direct :
+  https://wa.me/221789536676 . Si un client veut partager Awa avec un proche ou
+  demande "comment on te contacte ?", donne ce lien.
 
 ## Horaires d'ouverture
 
