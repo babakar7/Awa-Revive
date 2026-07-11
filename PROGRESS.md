@@ -564,6 +564,20 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       dire que le créneau n'est pas encore réservé et proposer IMMÉDIATEMENT de
       le réserver (check_availability puis book_with_membership si le plan
       couvre, sinon lien Wave).
+    - **Matching des numéros sans e164 (3e passe, même jour)** : audit prod =
+      sur 100 contacts, 19 sans téléphone, 13 avec un numéro stocké BRUT sans
+      e164 (« 774396392 », « 71 013 62 46 ») → invisibles pour le filtre
+      e164Phone $eq. Décision Babakar : un numéro commençant par 7 = sénégalais
+      la plupart du temps, il faut matcher aussi sans format international.
+      `phoneMatchVariants` ([wix.ts](src/lib/wix.ts), pure, testée) génère les
+      écritures possibles (e164, chiffres nus, 00-préfixe ; + local 9 chiffres
+      et groupé « 77 444 66 66 » UNIQUEMENT pour +2217…, un local nu serait
+      ambigu pour les autres pays) ; findContactIdByPhone retombe sur un
+      `info.phones.phone $in variantes` quand l'e164 ne matche pas (champ
+      vérifié live : matche la chaîne stockée, espaces compris). Vérifié en
+      réel : Adja (brut) et Pelny (espacé) matchent désormais, Marie (e164)
+      inchangée. Même prudence qu'avant sur les doublons (tiebreak prénom,
+      sinon null). 4 tests (135 au total).
 
 ## 5. Chronologie condensée
 

@@ -293,6 +293,29 @@ export async function listContactUpcomingBookings(
  *   - several → link only if exactly one also matches the first name
  *   - none / still ambiguous → return null (Wix default behavior applies)
  */
+/**
+ * Every spelling under which this client's number may be stored in Wix.
+ * ~1 contact in 7 (prod audit, 11/07) has a phone saved RAW by reception,
+ * without e164 — "774446666" or "77 444 66 66". For Senegalese numbers
+ * (+221 7XXXXXXXX, where WhatsApp lives) we therefore also match the local
+ * spellings; other countries only get the international forms (a bare local
+ * number would be ambiguous across countries).
+ */
+export function phoneMatchVariants(phone: string): string[] {
+  const e164 = phone.startsWith("+") ? phone : `+${phone}`;
+  const digits = e164.replace(/\D/g, ""); // 221774446666
+  const variants = new Set<string>([e164, digits, `00${digits}`]);
+  if (digits.startsWith("2217") && digits.length === 12) {
+    const local = digits.slice(3); // 774446666
+    variants.add(local);
+    // Common Senegalese display grouping: 77 444 66 66
+    variants.add(
+      `${local.slice(0, 2)} ${local.slice(2, 5)} ${local.slice(5, 7)} ${local.slice(7, 9)}`,
+    );
+  }
+  return [...variants];
+}
+
 export async function findContactIdByPhone(
   phone: string,
   firstName?: string,
@@ -302,7 +325,15 @@ export async function findContactIdByPhone(
     const data = await wixPost("/contacts/v4/contacts/query", {
       query: { filter: { "info.phones.e164Phone": { $eq: e164 } } },
     });
-    const contacts: any[] = data?.contacts ?? [];
+    let contacts: any[] = data?.contacts ?? [];
+    if (contacts.length === 0) {
+      // No e164 match → try the raw spellings (field verified live 11/07:
+      // info.phones.phone matches the stored string, spaces included).
+      const fallback = await wixPost("/contacts/v4/contacts/query", {
+        query: { filter: { "info.phones.phone": { $in: phoneMatchVariants(phone) } } },
+      });
+      contacts = fallback?.contacts ?? [];
+    }
     if (contacts.length === 0) return null;
     if (contacts.length === 1) return contacts[0].id ?? null;
 
