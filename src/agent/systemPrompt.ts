@@ -137,7 +137,7 @@ You CAN reschedule, as a guided cancel + rebook in ONE conversation — never pr
 - After a first payment, the system may automatically ask the client (in this chat) for the email of their existing account. When the client replies with an email — then or in any account/history context — start the verification with request_email_verification.
 - The email is given HERE in the conversation, to you. NEVER tell the client to send their email to the reception number or anywhere else.
 - When the tool says reception took over (no email, email not found, shared email, failures), tell the client the team is already on it — they do NOT need to call.
-- Don't ask for the email out of the blue — only when a claimed abonnement/account can't be found, when the system prompted for it, or when the client brings up their existing account/history.
+- Don't ask for the email out of the blue — only when a claimed abonnement/account can't be found, when the system prompted for it (including the one-time first-contact "do you already have an account?" invitation the context may flag for an unmatched number), or when the client brings up their existing account/history.
 - If the context shows the client's active abonnement or their bookings, their account IS already matched to this WhatsApp number — never offer email linking to such a client. Not finding an upcoming booking does NOT mean the account isn't linked: it usually means the class simply isn't booked in Wix (e.g. recurring spots managed informally by reception) — say that and direct them to reception for that class, without any email talk.
 
 # Escalate to a human (use handoff_to_human) for
@@ -173,6 +173,9 @@ export function dynamicContext(args: {
   activePlanOrder: PlanOrder | null;
   activeCafeOrder?: CafeOrder | null;
   memberships: MembershipContext[] | null;
+  /** First conversation ever AND the number matches no unique Wix contact:
+   *  invite them (once, ignorably) to link an existing account by email. */
+  firstContactUnlinked?: boolean;
   recentRefunds: PendingBooking[];
   habit?: BookingHabit | null;
 }): string {
@@ -252,6 +255,17 @@ export function dynamicContext(args: {
   } else {
     lines.push(
       "Client has no active abonnement on file (checked live via their WhatsApp number). Use the normal Wave payment flow.",
+    );
+  }
+  if (args.firstContactUnlinked) {
+    lines.push(
+      "FIRST CONTACT and this WhatsApp number matches no Revive account in Wix. First, fully answer whatever they " +
+        "asked (greeting + their actual request — never block or delay it). THEN, if it fits naturally, append ONE " +
+        "short, clearly ignorable line: if they ALREADY have a Revive account (website or at the studio), they can " +
+        "reply here with the email of that account and their abonnement/history will be linked to this number " +
+        "instantly; otherwise they just ignore it. Ask this AT MOST ONCE and keep it light — most people are genuinely " +
+        "new. When they reply with an email (now or later), start request_email_verification. If they ignore it or say " +
+        "they're new, never bring it up again — continue the normal Wave flow.",
     );
   }
   if (args.activeBooking) {

@@ -808,6 +808,46 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     - NB : l'E2E a envoyé 2 notifications de test réelles à la réception
       (« TestRokhaya », 12/07 vers 19h40) — à ignorer.
 
+32. **Proposition de liaison dès le 1er contact d'un numéro inconnu (12/07,
+    demande Babakar)**. Problème : une abonnée qui écrit depuis un numéro
+    ABSENT de sa fiche Wix est invisible pour Awa (`findContactIdByPhone` →
+    null → contexte « pas d'abonnement ») et se fait pousser au paiement Wave
+    pour un cours que son abonnement couvre. Avant, l'invitation à relier
+    n'existait qu'APRÈS un paiement ([wave.ts](src/webhooks/wave.ts)
+    `maybeHandleUnlinkedClient`) ou quand la cliente REVENDIQUAIT un abonnement
+    (`check_membership claim:true`) — trop tard, ou dépendant de sa prise de
+    parole. Décision produit : au TOUT PREMIER message d'un numéro qui ne
+    matche aucune fiche unique, Awa glisse UNE ligne facultative « si tu as
+    déjà un compte Revive, donne l'email et je relie ton abonnement » — un
+    vrai nouveau client l'ignore et continue normalement.
+    - **Détection** ([agent/index.ts](src/agent/index.ts)) : `firstContactUnlinked`
+      = lookup membership réussi ET `!linked` ET première conversation (aucun
+      tour `assistant` dans l'historique) ET one-shot pas encore armé
+      (`!email_prompted_at && !claimed_email`). Le lookup live est celui déjà
+      fait à chaque message ([membershipContext.ts](src/lib/membershipContext.ts),
+      étendu pour renvoyer `{ linked, plans }` — AUCUN appel Wix
+      supplémentaire, même cache 10 min).
+    - **One-shot PARTAGÉ avec la proposition post-paiement** : on arme le même
+      flag `email_prompted_at` (`repo.markEmailPrompted`) à l'injection — la
+      question est posée au plus une fois, quel que soit le chemin qui tire en
+      premier. `memberships === null` (lookup en échec) = statut inconnu → on
+      NE demande JAMAIS (ne jamais dire à une abonnée reliée qu'elle n'a pas de
+      compte à cause d'une erreur Wix).
+    - **Livraison** : prompt-injectée ([systemPrompt.ts](src/agent/systemPrompt.ts),
+      `dynamicContext`), le modèle tisse la phrase après avoir répondu à la
+      demande (jamais bloquer/retarder) ; règle §Linking amendée pour autoriser
+      ce cas précis (« out of the blue » interdit sauf flag first-contact).
+      L'invariant reste : jamais proposer si le contexte montre déjà un
+      abonnement/des résas (compte déjà matché).
+    - **Compromis assumé** : armer le flag à l'injection signifie que si le
+      modèle rate exceptionnellement la phrase, elle n'est pas re-posée (le
+      filet post-paiement est consommé). Acceptable vu la fiabilité du prompt ;
+      alternative écartée = colonne/flag séparé.
+    - Reproduction : le numéro de test 774982711 a été RESET (fiche Wix
+      supprimée + purge Postgres complète de la ligne `clients` et enfants) pour
+      rejouer le flux « numéro non relié ». Nouveau test `firstContactLink.test.ts`
+      (3), checklist `first-contact-link` ajoutée. 182 tests.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -917,6 +957,12 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   check_availability (slot.resource.name, vérifié live), **lien café dans le
   contexte dynamique**. 4 tests ajoutés (131 au total) ; intégration 14/14
   verte.
+- **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
+  filets déterministes + classificateur LLM + files admin + digest quotidien),
+  puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —
+  une abonnée sur un numéro non relié n'est plus poussée au paiement Wave sans
+  qu'Awa lui propose d'abord, une fois, de relier son compte par email). 182
+  tests.
 
 ## 6. Reste à faire
 

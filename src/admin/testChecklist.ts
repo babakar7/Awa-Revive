@@ -168,16 +168,30 @@ const SECTIONS: Section[] = [
           "pas encore visible). Réception notifiée « fusion 1 clic » → /admin/crm section Doublons.",
       },
       {
+        id: "first-contact-link",
+        prio: "P1",
+        title: "1er contact d'un numéro inconnu : Awa propose de relier un compte",
+        steps: [
+          "Depuis un numéro JAMAIS vu (aucun historique) et absent de Wix, envoyer un premier message",
+          "Vérifier que, après avoir répondu à la demande, Awa glisse UNE ligne facultative : " +
+            "« si tu as déjà un compte Revive, donne l'email et je relie ton abonnement »",
+          "Répondre avec l'email d'un compte Wix existant (abonnement) → recopier le code reçu par email",
+        ],
+        expect:
+          "L'invitation apparaît une seule fois, sans bloquer la demande initiale. Après le code, " +
+          "l'abonnement devient visible. Un 2e message du même numéro ne re-pose JAMAIS la question " +
+          "(garde-fou one-shot partagé avec la proposition post-paiement).",
+      },
+      {
         id: "edge-new-client",
         prio: "P1",
         title: "Un vrai nouveau client peut ignorer la proposition d'email",
         steps: [
-          "Depuis un numéro inconnu, réserver un cours normalement",
-          "Si Awa propose de relier un compte par email, l'ignorer",
+          "Depuis un numéro inconnu, ignorer la proposition d'email au 1er contact et réserver normalement",
         ],
         expect:
           "Awa continue le flux normal (création de fiche à la réservation) sans bloquer ni " +
-          "insister. La proposition d'email est facultative.",
+          "insister, et ne re-propose pas l'email. La proposition est facultative.",
       },
       {
         id: "edge-code-secret",

@@ -17,7 +17,21 @@ export interface MembershipContext {
   remaining: number | null;
 }
 
-const membershipCache = new Map<string, { fetchedAt: number; plans: MembershipContext[] }>();
+/**
+ * Result of the per-message membership lookup.
+ *  - `linked`: the WhatsApp number matches EXACTLY ONE Wix contact (live).
+ *    false = unknown number OR ambiguous duplicates (findContactIdByPhone
+ *    deliberately returns null for both). Drives the first-contact "do you
+ *    already have an account?" ask.
+ *  - `plans`: active abonnements on that contact ([] when linked-but-no-plan
+ *    or unlinked).
+ */
+export interface MembershipLookup {
+  linked: boolean;
+  plans: MembershipContext[];
+}
+
+const membershipCache = new Map<string, { fetchedAt: number; result: MembershipLookup }>();
 const MEMBERSHIP_CACHE_TTL_MS = 10 * 60 * 1000;
 
 /**
@@ -31,10 +45,15 @@ export function invalidateMembershipCache(clientId: string): void {
   membershipCache.delete(clientId);
 }
 
-/** Returns null when the lookup fails (context then says "unknown"). */
-export async function activeMemberships(client: Client): Promise<MembershipContext[] | null> {
+/**
+ * Returns null when the lookup FAILS (context then says "unknown" — we must
+ * never tell a client they have no account just because Wix errored). On
+ * success, reports whether the number is linked to a unique contact and the
+ * active plans on it.
+ */
+export async function activeMemberships(client: Client): Promise<MembershipLookup | null> {
   const hit = membershipCache.get(client.id);
-  if (hit && Date.now() - hit.fetchedAt < MEMBERSHIP_CACHE_TTL_MS) return hit.plans;
+  if (hit && Date.now() - hit.fetchedAt < MEMBERSHIP_CACHE_TTL_MS) return hit.result;
   try {
     const contactId = await wix.findContactIdByPhone(
       `+${client.wa_phone.replace(/^\+/, "")}`,
@@ -50,8 +69,9 @@ export async function activeMemberships(client: Client): Promise<MembershipConte
           : null,
       })),
     );
-    membershipCache.set(client.id, { fetchedAt: Date.now(), plans });
-    return plans;
+    const result: MembershipLookup = { linked: contactId !== null, plans };
+    membershipCache.set(client.id, { fetchedAt: Date.now(), result });
+    return result;
   } catch (err) {
     console.error("Membership lookup failed (context will say unknown):", err);
     return null;

@@ -120,6 +120,24 @@ export async function handleInboundText(args: {
     ]);
 
   const history = await repo.lastTurns(client.id, 20);
+
+  // First-contact account matching: a subscriber messaging from a number that
+  // isn't on their Wix fiche is invisible to Awa and would be pushed to Wave
+  // for a class their abonnement covers. When the live lookup says the number
+  // matches NO unique contact, this is their first conversation ever, and the
+  // one-shot email prompt hasn't fired yet, Awa appends ONE ignorable "do you
+  // already have an account?" line (see dynamicContext). We arm the SAME
+  // one-shot flag the post-payment ask uses (wave.ts), so the question is
+  // asked at most once across both paths. memberships === null means the
+  // lookup failed → treat as unknown, never ask.
+  const firstContactUnlinked =
+    memberships !== null &&
+    !memberships.linked &&
+    !client.email_prompted_at &&
+    !client.claimed_email &&
+    !history.some((t) => t.role === "assistant");
+  if (firstContactUnlinked) await repo.markEmailPrompted(client.id);
+
   const messages: Anthropic.MessageParam[] = [];
   for (const turn of history) {
     const role = turn.role as "user" | "assistant";
@@ -152,7 +170,8 @@ export async function handleInboundText(args: {
         activeBooking,
         activePlanOrder,
         activeCafeOrder,
-        memberships,
+        memberships: memberships === null ? null : memberships.plans,
+        firstContactUnlinked,
         recentRefunds,
         habit,
       }),
