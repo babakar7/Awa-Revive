@@ -7,6 +7,7 @@ import { extrasFromJson } from "../lib/cafeMenu.js";
 import { adminAuthHook } from "./auth.js";
 import * as q from "./queries.js";
 import {
+  auditActiveSubscribers,
   auditContacts,
   fetchAllContacts,
   linkCandidates,
@@ -15,11 +16,13 @@ import {
 } from "../lib/crmAudit.js";
 import {
   addPhoneToContact,
+  contactIdsWithUpcomingBookings,
   findContactIdByPhone,
   mergeContacts,
   getContactById,
   listAllActiveOrders,
   findMemberContactIds,
+  phoneMatchVariants,
 } from "../lib/wix.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import { sendText } from "../lib/whatsapp.js";
@@ -410,18 +413,29 @@ ${
       admin.get("/crm", async (req, reply) => {
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
-        // One contacts fetch feeds everything: the audit (duplicates/no-phone)
-        // AND the link-queue candidates.
-        const [rawContacts, plansByContact, linkQueue] = await Promise.all([
+        // One contacts fetch + one orders fetch feed everything: the audit
+        // (duplicates/no-phone), the link-queue candidates, the plan badges
+        // AND the unreachable-subscribers section.
+        const [rawContacts, orders, linkQueue] = await Promise.all([
           fetchAllContacts(),
-          activePlansByContact().catch(() => new Map<string, string[]>()),
+          listAllActiveOrders().catch(() => [] as any[]),
           links.receptionQueue().catch(() => []),
         ]);
+        const plansByContact = new Map<string, string[]>();
+        for (const o of orders) {
+          const cid = o?.buyer?.contactId;
+          if (!cid) continue;
+          plansByContact.set(cid, [...(plansByContact.get(cid) ?? []), o.planName ?? "abonnement"]);
+        }
+        const unreachable = auditActiveSubscribers(orders, rawContacts, phoneMatchVariants);
         const audit = auditContacts(rawContacts);
         const allDupIds = audit.duplicates.flatMap((g) => g.contacts.map((c) => c.id));
-        const [memberIds, dismissedSet] = await Promise.all([
+        const [memberIds, dismissedSet, noPhoneWithBookings] = await Promise.all([
           findMemberContactIds(allDupIds).catch(() => new Set<string>()),
           q.dismissedDuplicateGroups().catch(() => new Set<string>()),
+          contactIdsWithUpcomingBookings(audit.noPhone.map((c) => c.id)).catch(
+            () => new Set<string>(),
+          ),
         ]);
 
         const banner = done
@@ -531,25 +545,42 @@ ${linkCards}`
           const leftoverNote = plan?.leftoverIds.length
             ? ` <span class="muted">(${plan.leftoverIds.length} fiche(s) protégée(s) — compte membre ou abonnement — resteront : Wix interdit de les fusionner ; à traiter avec la réception si besoin.)</span>`
             : "";
+          const signature = q.duplicateGroupSignature(g.contacts.map((c) => c.id));
           const action = plan
             ? `<form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ${plan.sourceIds.length} fiche(s) dans « ${escapeHtml(keeper?.name ?? "?").replaceAll("'", "\\'")} » ?\\n\\nLes fiches fusionnées sont SUPPRIMÉES (irréversible).')">
 <input type="hidden" name="group" value="${ids}">
 <button class="act">Fusionner ${plan.sourceIds.length} fiche(s)</button>
 </form>${leftoverNote}`
-            : `<span class="muted">⚠️ Rien à fusionner automatiquement : ces fiches sont des comptes membres (Wix interdit de fusionner deux membres). À traiter dans Wix avec la réception.</span>`;
+            : `<span class="muted">⚠️ Rien à fusionner automatiquement : ces fiches sont des comptes membres (Wix interdit de fusionner deux membres). À traiter dans Wix avec la réception.</span>
+<form class="inline" method="post" action="/admin/crm/merge-dismiss" style="margin-left:.4rem" onsubmit="return confirm('Marquer ce groupe comme traité ?\\n\\nIl disparaîtra de la liste (restaurable), et réapparaîtra tout seul si ses fiches changent.')">
+<input type="hidden" name="key" value="${escapeHtml(g.key)}">
+<input type="hidden" name="group" value="${ids}">
+<button class="act" style="background:#6e7781">✅ Traité dans Wix</button>
+</form>`;
           const html = `<div class="card ${hasPlan ? "warn" : ""}">
 <b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro${hasPlan ? ` <span class="badge" style="background:#cf222e">abonnée non reconnue</span>` : ""}
 <table><tr><th>Fiche</th><th>Numéro(s) enregistré(s)</th><th class="hide-sm">Créée</th><th>Sort</th></tr>${rows}</table>
 <div style="margin-top:.5rem">${action}</div>
 </div>`;
-          return { html, hasPlan, actionable: plan !== null };
+          return {
+            html,
+            hasPlan,
+            actionable: plan !== null,
+            key: g.key,
+            signature,
+            dismissed: plan === null && dismissedSet.has(`${g.key}|${signature}`),
+            names: g.contacts.map((c) => c.name).join(" / "),
+          };
         });
 
         // A duplicate involving an active abonnement is CRITICAL: the client
         // pays a plan Awa cannot see (ambiguous match → no plan found → asked
         // to pay Wave again). Those groups come first, actionable ones next.
-        const priority = groupInfos.filter((g) => g.hasPlan);
-        const rest = groupInfos.filter((g) => !g.hasPlan);
+        // Groups marked "traité" (member-only, handled in Wix) are folded away.
+        const visible = groupInfos.filter((g) => !g.dismissed);
+        const treated = groupInfos.filter((g) => g.dismissed);
+        const priority = visible.filter((g) => g.hasPlan);
+        const rest = visible.filter((g) => !g.hasPlan);
         const byActionable = (a: (typeof groupInfos)[number], b: (typeof groupInfos)[number]) =>
           Number(b.actionable) - Number(a.actionable);
         const prioritySection = priority.length
@@ -558,29 +589,85 @@ ${linkCards}`
 doublon existe : à leur prochain message, Awa leur proposera de payer par Wave. À traiter en premier.</p>
 ${priority.sort(byActionable).map((g) => g.html).join("")}`
           : "";
+        const treatedSection = treated.length
+          ? `<div class="card"><details><summary>✅ Groupes marqués traités (${treated.length})</summary>
+<table><tr><th>Numéro</th><th>Fiches</th><th></th></tr>${treated
+              .map(
+                (g) => `<tr><td>…${escapeHtml(g.key)}</td><td>${escapeHtml(g.names)}</td>
+<td><form class="inline" method="post" action="/admin/crm/merge-restore">
+<input type="hidden" name="key" value="${escapeHtml(g.key)}">
+<input type="hidden" name="sig" value="${escapeHtml(g.signature)}">
+<button class="act" style="background:#6e7781">Ré-afficher</button>
+</form></td></tr>`,
+              )
+              .join("")}</table></details></div>`
+          : "";
         const groupCards =
           prioritySection +
           (rest.length
             ? `<h2>Autres doublons (${rest.length})</h2>
 ${rest.sort(byActionable).map((g) => g.html).join("")}`
-            : "");
+            : "") +
+          treatedSection;
 
-        const noPhoneRows = audit.noPhone
+        // Active clients first: an upcoming booking or a live plan means Awa
+        // will fail on them SOON — the dormant rest can wait.
+        const noPhoneActive = audit.noPhone.filter(
+          (c) => noPhoneWithBookings.has(c.id) || plansByContact.has(c.id),
+        );
+        const noPhoneDormant = audit.noPhone.filter((c) => !noPhoneActive.includes(c));
+        const noPhoneRow = (c: (typeof audit.noPhone)[number]) => {
+          const badges =
+            (noPhoneWithBookings.has(c.id)
+              ? ` <span class="badge" style="background:#1a7f37">📅 résa à venir</span>`
+              : "") +
+            ((plansByContact.get(c.id) ?? []).length
+              ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml((plansByContact.get(c.id) ?? []).join(" · "))}</span>`
+              : "");
+          return `<tr><td>${escapeHtml(c.name)}${badges}</td><td>${escapeHtml(c.email ?? "—")}</td></tr>`;
+        };
+        const noPhoneActiveBlock = noPhoneActive.length
+          ? `<div class="card warn"><b>🔴 Actives — à compléter en premier (${noPhoneActive.length})</b>
+<p class="muted">Elles ont une résa à venir ou un abonnement en cours : Awa échouera sur elles à leur
+prochain message.</p>
+<table><tr><th>Nom</th><th>Email</th></tr>${noPhoneActive.map(noPhoneRow).join("")}</table></div>`
+          : "";
+        const noPhoneRows = noPhoneDormant.map(noPhoneRow).join("");
+
+        const issueLabel: Record<string, string> = {
+          contact_missing: "fiche supprimée ou introuvable",
+          no_phone: "aucun téléphone sur la fiche",
+          phone_unmatchable: "numéro mal formaté (illisible pour Awa)",
+        };
+        const unreachableRows = unreachable
           .map(
-            (c) =>
-              `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.email ?? "—")}</td></tr>`,
+            (u) => `<tr>
+<td><b>${escapeHtml(u.contact?.name ?? u.contactId)}</b>${u.contact?.email ? `<div class="muted">${escapeHtml(u.contact.email)}</div>` : ""}</td>
+<td>${u.plans.map((p) => `🎫 ${escapeHtml(p.planName)}${p.endDate ? ` <span class="muted">(fin ${fmtDate(p.endDate)})</span>` : ""}`).join("<br>")}</td>
+<td>${escapeHtml(issueLabel[u.issue] ?? u.issue)}</td>
+<td>${(u.contact?.phones ?? []).map((p) => escapeHtml(p)).join("<br>") || `<span class="muted">—</span>`}</td>
+</tr>`,
           )
           .join("");
+        const unreachableSection = unreachable.length
+          ? `<h2>🎫 Abonnés injoignables (${unreachable.length})</h2>
+<p class="muted">Ces clientes paient un abonnement ACTIF mais Awa ne pourra jamais les reconnaître :
+leur fiche n'a pas de numéro utilisable. C'est exactement la population du cas « abonnement
+introuvable » — à compléter dans Wix → Contacts avec leur numéro WhatsApp (+221...), en priorité.</p>
+<div class="card warn"><table><tr><th>Abonnée</th><th>Abonnement(s)</th><th>Problème</th><th>Numéro(s) enregistré(s)</th></tr>${unreachableRows}</table></div>`
+          : "";
 
         const body = `
 ${banner}
 <div class="stat-grid">
 <div class="stat"><span class="muted">Fiches contact Wix</span><b>${audit.total}</b></div>
 <div class="stat"><span class="muted">Liaisons en attente</span><b>${linkQueue.length}</b></div>
+<div class="stat"><span class="muted">Abonnés injoignables</span><b>${unreachable.length}</b></div>
 <div class="stat"><span class="muted">Numéros en doublon</span><b>${audit.duplicates.length}</b></div>
 <div class="stat"><span class="muted">Fiches sans téléphone</span><b>${audit.noPhone.length}</b></div>
 </div>
 ${linkSection}
+${unreachableSection}
 <h2>👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
 <p class="muted">Awa refuse (prudemment) de choisir quand un numéro correspond à plusieurs fiches :
 ces clientes ne sont pas reconnues. Un clic fusionne le groupe — la fiche conservée (✓) est choisie
@@ -591,8 +678,9 @@ ${groupCards || `<div class="card"><span class="ok">✓ Aucun doublon — rien �
 <h2>📵 Fiches sans téléphone ${audit.noPhone.length ? `(${audit.noPhone.length})` : ""}</h2>
 <p class="muted">Invisibles pour Awa (elle reconnaît les clientes par leur numéro WhatsApp).
 À compléter directement dans Wix → Contacts, avec le numéro WhatsApp de la cliente.</p>
+${noPhoneActiveBlock}
 <div class="card">
-${audit.noPhone.length ? `<details><summary>Voir la liste (${audit.noPhone.length})</summary><table><tr><th>Nom</th><th>Email</th></tr>${noPhoneRows}</table></details>` : `<span class="ok">✓ Toutes les fiches ont un téléphone.</span>`}
+${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à venir ni abonnement (${noPhoneDormant.length})</summary><table><tr><th>Nom</th><th>Email</th></tr>${noPhoneRows}</table></details>` : audit.noPhone.length === 0 ? `<span class="ok">✓ Toutes les fiches ont un téléphone.</span>` : `<span class="ok">✓ Aucune fiche dormante.</span>`}
 </div>`;
         reply.type("text/html").send(layout("Hygiène CRM", "/admin/crm", body));
       });
@@ -667,6 +755,35 @@ ${audit.noPhone.length ? `<details><summary>Voir la liste (${audit.noPhone.lengt
       });
 
       // ---------- Liaison 1 clic : numéro WhatsApp → fiche Wix choisie ----------
+      // Mark a non-mergeable duplicate group (member accounts) as handled in
+      // Wix: hides it from the list. Reversible, and the group reappears by
+      // itself if its composition changes (signature recomputed server-side).
+      admin.post("/crm/merge-dismiss", async (req, reply) => {
+        const bodyIn = (req.body ?? {}) as Record<string, string>;
+        const key = String(bodyIn.key ?? "").trim();
+        const group = String(bodyIn.group ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (!key || group.length < 2) {
+          return reply.redirect(`/admin/crm?err=${encodeURIComponent("groupe invalide")}`, 303);
+        }
+        await q.dismissDuplicateGroup(key, q.duplicateGroupSignature(group), req.adminUser ?? "?");
+        req.log.info({ key, group, by: req.adminUser }, "CRM duplicate group marked handled");
+        return reply.redirect("/admin/crm?done=traite", 303);
+      });
+
+      admin.post("/crm/merge-restore", async (req, reply) => {
+        const bodyIn = (req.body ?? {}) as Record<string, string>;
+        const key = String(bodyIn.key ?? "").trim();
+        const sig = String(bodyIn.sig ?? "").trim();
+        if (key && sig) {
+          await q.restoreDuplicateGroup(key, sig);
+          req.log.info({ key, by: req.adminUser }, "CRM duplicate group restored");
+        }
+        return reply.redirect("/admin/crm?done=restaure", 303);
+      });
+
       admin.post("/crm/link", async (req, reply) => {
         const bodyIn = (req.body ?? {}) as Record<string, string>;
         const fail = (msg: string) =>

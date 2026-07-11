@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { pool } from "../db/index.js";
 
 /**
@@ -197,4 +198,44 @@ export async function stats(): Promise<AdminStats> {
     revenue7d: r.revenue_7d,
     refundsPending: r.refunds_pending,
   };
+}
+
+// ---------- hygiène CRM : groupes de doublons marqués « traités » ----------
+
+/**
+ * Signature stable d'un groupe de doublons : hash des ids de fiches triés.
+ * Si la composition du groupe change (fiche ajoutée/fusionnée/supprimée), la
+ * signature change et le groupe réapparaît sur /admin/crm.
+ */
+export function duplicateGroupSignature(contactIds: string[]): string {
+  return crypto
+    .createHash("sha256")
+    .update([...contactIds].sort().join(","))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** Ensemble des groupes masqués, sous la forme "phoneKey|signature". */
+export async function dismissedDuplicateGroups(): Promise<Set<string>> {
+  const res = await pool.query(`select phone_key, group_signature from crm_dismissed_duplicates`);
+  return new Set(res.rows.map((r: any) => `${r.phone_key}|${r.group_signature}`));
+}
+
+export async function dismissDuplicateGroup(
+  phoneKey: string,
+  signature: string,
+  by: string,
+): Promise<void> {
+  await pool.query(
+    `insert into crm_dismissed_duplicates (phone_key, group_signature, dismissed_by)
+     values ($1, $2, $3) on conflict do nothing`,
+    [phoneKey, signature, by],
+  );
+}
+
+export async function restoreDuplicateGroup(phoneKey: string, signature: string): Promise<void> {
+  await pool.query(
+    `delete from crm_dismissed_duplicates where phone_key = $1 and group_signature = $2`,
+    [phoneKey, signature],
+  );
 }

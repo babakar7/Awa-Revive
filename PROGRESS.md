@@ -682,6 +682,20 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       doublon existe (match ambigu → « pas d'abonnement » → Wave proposé à
       tort). 4 groupes concernés au 11/07. Tri secondaire : les groupes
       fusionnables en un clic avant les groupes 100 % membres.
+    - **« ✅ Traité dans Wix » sur les groupes non fusionnables (11/07, demande
+      Babakar)** : les groupes 100 % comptes membres (réglés à la main dans
+      Wix, ou assumés tels quels) peuvent être marqués traités → masqués de la
+      liste, restaurables depuis une section repliée « Groupes marqués
+      traités ». Table `crm_dismissed_duplicates` avec **signature du groupe**
+      (hash des ids triés, `duplicateGroupSignature`) : si la composition du
+      groupe change (fiche ajoutée/fusionnée), la signature change et le groupe
+      RÉAPPARAÎT tout seul — un « traité » ne peut pas masquer un problème
+      nouveau. Action loggée avec l'admin user, non destructive.
+    - **Fiches sans téléphone priorisées par activité (11/07, demande
+      Babakar)** : bloc « 🔴 Actives — à compléter en premier » (résa à venir
+      📅 via `contactIdsWithUpcomingBookings` — extended-bookings batch
+      `contactId $in`, vérifié live — ou abonnement 🎫) au-dessus des fiches
+      dormantes repliées. Au 11/07 : 9 actives / 146 dormantes sur 155.
 
 ## 5. Chronologie condensée
 

@@ -225,4 +225,17 @@ create index if not exists idx_link_requests_status
 create unique index if not exists idx_link_requests_one_open
   on link_requests (client_id)
   where status in ('AWAITING_EMAIL','AWAITING_CODE','NEEDS_RECEPTION');
+
+-- Groupes de doublons marqués « traités » depuis /admin/crm (typiquement des
+-- fiches 100 % comptes membres que Wix refuse de fusionner — réglés à la main
+-- dans Wix ou assumés). Masqués de la page tant que leur composition ne change
+-- pas : la signature est un hash des ids de fiches triés, donc une fiche
+-- ajoutée/supprimée fait réapparaître le groupe.
+create table if not exists crm_dismissed_duplicates (
+  phone_key text not null,
+  group_signature text not null,
+  dismissed_by text,
+  dismissed_at timestamptz not null default now(),
+  primary key (phone_key, group_signature)
+);
 `;

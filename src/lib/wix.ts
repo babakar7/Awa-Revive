@@ -257,6 +257,42 @@ export interface WixContactBooking {
   participants: number;
 }
 
+/**
+ * Which of these contacts have at least one UPCOMING confirmed booking —
+ * batched ($in verified live 11/07) for the /admin/crm activity ranking.
+ * Same caveats as above: date filter unusable server-side → future cut here.
+ */
+export async function contactIdsWithUpcomingBookings(
+  contactIds: string[],
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  const now = Date.now();
+  for (let i = 0; i < contactIds.length; i += 50) {
+    const batch = contactIds.slice(i, i + 50);
+    for (let offset = 0; offset < 500; offset += 100) {
+      const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+        query: {
+          filter: {
+            "contactDetails.contactId": { $in: batch },
+            status: { $in: ["CONFIRMED", "PENDING"] },
+          },
+          paging: { limit: 100, offset },
+        },
+      });
+      const ebs: any[] = data?.extendedBookings ?? [];
+      for (const eb of ebs) {
+        const b = eb?.booking;
+        const cid = b?.contactDetails?.contactId;
+        const slot = b?.bookedEntity?.slot ?? b?.bookedEntity?.schedule ?? {};
+        const start: string | undefined = slot.startDate ?? slot.firstSessionStart;
+        if (cid && start && Date.parse(start) > now) out.add(cid);
+      }
+      if (ebs.length < 100) break;
+    }
+  }
+  return out;
+}
+
 export async function listContactUpcomingBookings(
   contactId: string,
 ): Promise<WixContactBooking[]> {
