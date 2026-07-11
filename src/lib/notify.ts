@@ -30,11 +30,8 @@ export function emailNotificationsEnabled(): boolean {
   return config.BREVO_API_KEY !== "";
 }
 
-/**
- * Send one email to reception and resolve true on success, false on failure.
- * Exported for the test script; app code should use notifyReception().
- */
-export async function sendReceptionEmail(subject: string, body: string): Promise<boolean> {
+/** Send one email to any recipient via the Brevo HTTP API. Throws on failure. */
+export async function sendEmail(toEmail: string, subject: string, body: string): Promise<void> {
   const res = await fetch(BREVO_ENDPOINT, {
     method: "POST",
     headers: {
@@ -44,9 +41,9 @@ export async function sendReceptionEmail(subject: string, body: string): Promise
     },
     body: JSON.stringify({
       sender: parseSender(config.EMAIL_FROM),
-      to: [{ email: config.RECEPTION_EMAIL }],
-      subject: `[Awa] ${subject}`,
-      textContent: `${body}\n\n—\nEnvoyé automatiquement par Awa (bot de réservation WhatsApp).`,
+      to: [{ email: toEmail }],
+      subject,
+      textContent: body,
     }),
     // Never let a slow API hang a send for minutes.
     signal: AbortSignal.timeout(15_000),
@@ -55,7 +52,39 @@ export async function sendReceptionEmail(subject: string, body: string): Promise
     const detail = await res.text().catch(() => "");
     throw new Error(`Brevo ${res.status}: ${detail.slice(0, 300)}`);
   }
+}
+
+/**
+ * Send one email to reception and resolve true on success, false on failure.
+ * Exported for the test script; app code should use notifyReception().
+ */
+export async function sendReceptionEmail(subject: string, body: string): Promise<boolean> {
+  await sendEmail(
+    config.RECEPTION_EMAIL,
+    `[Awa] ${subject}`,
+    `${body}\n\n—\nEnvoyé automatiquement par Awa (bot de réservation WhatsApp).`,
+  );
   return true;
+}
+
+/**
+ * The account-linking verification code, sent to the email carried by the
+ * client's Wix fiche. This inbox is the ONLY channel the code travels
+ * through: Awa never sees it (it is absent from every tool result), so the
+ * model can't leak it — the client proves ownership by reading their mail.
+ */
+export async function sendVerificationCodeEmail(toEmail: string, code: string): Promise<void> {
+  await sendEmail(
+    toEmail,
+    "[Revive] Votre code de vérification",
+    `Bonjour,\n\n` +
+      `Votre code de vérification Revive : ${code}\n\n` +
+      `Recopiez-le dans la conversation WhatsApp avec Awa pour relier votre numéro ` +
+      `à votre compte. Il est valable 10 minutes.\n\n` +
+      `Si vous n'êtes pas à l'origine de cette demande, ignorez cet email — ` +
+      `rien ne sera modifié sur votre compte.\n\n` +
+      `À bientôt au studio,\nRevive Dakar`,
+  );
 }
 
 /**
