@@ -1012,6 +1012,35 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       reflet côté profil WhatsApp réel, puis tester la photo si `WA_APP_ID` est
       configuré.
 
+35. **Vente d'abonnements : renouvellement self-service + alerte réception pour
+    les combinaisons absentes du catalogue (12/07).** Deux décisions produit de
+    Babakar :
+    - **Renouvellement** : le prompt disait « le renouvellement se gère avec le
+      studio » pour les plans récurrents (`billing: "recurring"`) — détour
+      inutile. Correction : le client **rachète lui-même** le même plan via Awa
+      (`list_plans` + `create_plan_payment_link`) quand l'abonnement est
+      terminé. 4 wordings corrigés
+      ([systemPrompt.ts:114](src/agent/systemPrompt.ts), 3 endroits dans
+      [tools.ts](src/agent/tools.ts) : description de l'outil, note
+      `list_plans`, note `create_plan_payment_link`). Toujours vrai : le lien
+      Wave ne couvre que la première période — aucun changement côté Wix
+      (pas d'auto-renouvellement serveur, juste un nouveau paiement à chaque
+      fois).
+    - **Combinaison de cours absente du catalogue Wix** : le studio a
+      maintenant beaucoup de cours, toutes les combinaisons d'abonnement
+      n'existent pas encore. Nouvelle règle prompt
+      ([systemPrompt.ts](src/agent/systemPrompt.ts), section « Selling
+      abonnements ») : si le plan demandé n'est pas dans `list_plans`, Awa
+      appelle `handoff_to_human` avec un motif préfixé **« Créer un
+      abonnement : »** + la demande exacte (cours, fréquence, budget évoqué) —
+      jamais de prix inventé ni de promesse que la formule existera telle
+      quelle. Réutilise le handoff existant ([tools.ts:1770](src/agent/tools.ts) —
+      déjà dual-channel email+WhatsApp), donc le sujet de notification devient
+      directement actionnable (`🙋🏾 Handoff client — Créer un abonnement : …`)
+      sans nouveau canal ni nouvelle table.
+    - 205 tests, build vert. **Non testé en réel** (comme le reste de la vente
+      d'abonnements, cf. §6) — à vérifier au prochain test de vente.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -1129,7 +1158,9 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   tests. Puis **invitation avant paiement fiabilisée + Awa crée le compte des
   nouveaux** (§33). Puis **édition du profil WhatsApp Business depuis
   `/admin/profile`** (§34 — description/adresse/photo via l'API Cloud, horaires
-  composés dans la description faute de champ dédié côté Meta). 205 tests.
+  composés dans la description faute de champ dédié côté Meta). Puis **vente
+  d'abonnements : renouvellement self-service + alerte réception pour les
+  combinaisons absentes du catalogue** (§35). 205 tests.
 
 ## 6. Reste à faire
 
@@ -1138,7 +1169,10 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   cos-25wmbc6bg1y6y) puis cliquer « ✅ Remboursement effectué » dans /admin
   (ou `refund:done -- af3124b4-e6da-4108-911c-322000b604ca` en secours).
 - [ ] Achat d'abonnement via Awa ("test fusion" 50 FCFA) — flux vente jamais
-  encore exercé en réel.
+  encore exercé en réel. En profiter pour vérifier §35 : demander à Awa un
+  renouvellement (doit proposer un rachat direct, pas un renvoi au studio) et
+  demander une combinaison absente du catalogue (doit déclencher un handoff
+  « Créer un abonnement : … » reçu côté réception).
 - [ ] Re-test groupe : 5 places Fusion (le cap Wix est maintenant 8).
 - [ ] Test optionnel du refus < 16h (seul chemin annulation pas observé en réel).
 - [ ] Commande café adossée à une résa (extras dans le lien Wave) — flux

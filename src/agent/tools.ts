@@ -133,8 +133,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Create a Wave payment link to BUY an abonnement/pack. Price comes from the Wix catalog. After payment, " +
       "the plan is activated automatically (or by reception if the client has no member account) and the client " +
       "gets a WhatsApp confirmation. Only call after the client clearly chose a plan from list_plans and you " +
-      "know their first name. For recurring plans this link covers the FIRST period only — renewals are handled " +
-      "with the studio.",
+      "know their first name. For recurring plans this link covers the FIRST period only — renewal is " +
+      "self-service: the client just buys it again here when it ends.",
     input_schema: {
       type: "object",
       properties: {
@@ -818,7 +818,7 @@ export async function executeTool(
                 covers === null ? "unknown — coverage is verified at booking time" : covers,
               billing_note:
                 p.billing === "recurring"
-                  ? `Renouvelé chaque ${p.periodLabel ?? "période"} — via Awa le paiement couvre la première période, le renouvellement se gère avec le studio.`
+                  ? `Renouvelé chaque ${p.periodLabel ?? "période"} — via Awa le paiement couvre la première période ; pour renouveler, il suffit de racheter le plan ici quand il se termine.`
                   : undefined,
             };
           }),
@@ -884,7 +884,7 @@ export async function executeTool(
           "Relay the link. The plan is confirmed only once paid; the client gets an automatic WhatsApp " +
           "confirmation after payment." +
           (plan.billing === "recurring"
-            ? " Recurring plan: this payment covers the FIRST period; renewals are handled with the studio — say so."
+            ? " Recurring plan: this payment covers the FIRST period; renewal is self-service — the client just buys it again here when it ends, say so."
             : ""),
       });
     }
