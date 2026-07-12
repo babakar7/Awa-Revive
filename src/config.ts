@@ -68,7 +68,7 @@ export const config = {
   BASE_URL: required("BASE_URL"),
   RECEPTION_PHONE: optional("RECEPTION_PHONE", "+221784644329"),
   PAYMENT_LINK_TTL_MINUTES: parseInt(optional("PAYMENT_LINK_TTL_MINUTES", "20"), 10),
-  STUDIO_ADDRESS: optional("STUDIO_ADDRESS", "Revive Studio, Dakar"),
+  STUDIO_ADDRESS: optional("STUDIO_ADDRESS", "Revive Pilates, Almadies Lot 2, Dakar"),
   PORT: parseInt(optional("PORT", "3000"), 10),
   TIMEZONE: "Africa/Dakar",
 };
