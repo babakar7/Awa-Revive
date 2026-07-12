@@ -69,12 +69,13 @@ export async function activeMemberships(client: Client): Promise<MembershipLooku
       client.name ?? undefined,
     );
     const memberships = contactId ? await wix.listActiveMemberships(contactId) : [];
-    // Recurring vs one-time comes from the live catalog. A plan not found there
-    // (archived/hidden) is treated as NON-renewable — we never wrongly offer to
-    // renew a one-time pack (discovery pack, carnets).
+    // Renewability comes from the live catalog (business rule in wix.ts:
+    // duration ≥ 1 month, not a gift card). A plan not found there (archived/
+    // hidden, or a free program filtered out) is treated as NON-renewable — we
+    // never wrongly offer to renew a trial (Pack Découverte) or a gift card.
     const catalog = memberships.length ? await wix.listPlans().catch(() => []) : [];
-    const recurringPlanIds = new Set(
-      catalog.filter((p) => p.billing === "recurring").map((p) => p.id),
+    const renewablePlanIds = new Set(
+      catalog.filter((p) => p.renewable).map((p) => p.id),
     );
     const plans = await Promise.all(
       memberships.map(async (m) => ({
@@ -84,7 +85,7 @@ export async function activeMemberships(client: Client): Promise<MembershipLooku
           ? await wix.planRemainingSessions(contactId, m.planId, m.planName)
           : null,
         expiresAt: m.expiresAt,
-        renewable: recurringPlanIds.has(m.planId),
+        renewable: renewablePlanIds.has(m.planId),
       })),
     );
     const result: MembershipLookup = { linked: contactId !== null, plans };

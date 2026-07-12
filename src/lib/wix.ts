@@ -694,9 +694,37 @@ export interface WixPlan {
   billing: "one_time" | "recurring";
   /** Durée/période humaine, ex "1 mois", "2 semaines", ou null si illimité. */
   periodLabel: string | null;
+  /**
+   * Awa peut proposer de le RENOUVELER. Règle métier (Babakar, 12/07) : durée
+   * ≥ 1 mois ET pas une carte cadeau. Le Pack Découverte (2 semaines) et les
+   * cartes cadeaux sont donc exclus ; les carnets (≥ 1 mois) sont inclus. Les
+   * programmes gratuits n'arrivent jamais ici (listPlans écarte les plans à 0 F).
+   */
+  renewable: boolean;
 }
 
 let plansCache: { fetchedAt: number; plans: WixPlan[] } | null = null;
+
+const DURATION_DAYS: Record<string, number> = { DAY: 1, WEEK: 7, MONTH: 30, YEAR: 365 };
+
+function durationToDays(duration: any): number | null {
+  if (!duration?.count || !duration?.unit) return null;
+  const per = DURATION_DAYS[duration.unit];
+  return per ? per * duration.count : null;
+}
+
+/**
+ * Business rule for "Awa may offer to renew this plan". Pure (unit-tested).
+ * Renewable = a real plan of ~a month or more, and NOT a gift card (a gift
+ * isn't a subscription to renew). Short trials like the Pack Découverte
+ * (2 weeks → 14 days) fall under the 28-day floor and are excluded. Free promo
+ * programs (0 F) never reach this — listPlans drops them before this runs.
+ */
+export function isPlanRenewable(name: string, durationDays: number | null): boolean {
+  if (durationDays === null || durationDays < 28) return false;
+  if (/cadeau/i.test(name)) return false;
+  return true;
+}
 
 function periodLabel(duration: any): string | null {
   if (!duration?.count || !duration?.unit) return null;
@@ -733,13 +761,15 @@ export async function listPlans(): Promise<WixPlan[]> {
       const duration = recurring
         ? p.pricing.subscription.cycleDuration
         : p?.pricing?.singlePaymentForDuration;
+      const name = p.name ?? "Abonnement";
       return {
         id: p.id,
-        name: p.name ?? "Abonnement",
+        name,
         description: (p.description ?? "").slice(0, 300),
         priceXof: price,
         billing: recurring ? "recurring" : "one_time",
         periodLabel: periodLabel(duration),
+        renewable: isPlanRenewable(name, durationToDays(duration)),
       } as WixPlan;
     })
     .filter((p: WixPlan) => p.priceXof > 0);

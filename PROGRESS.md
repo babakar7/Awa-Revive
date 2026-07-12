@@ -1072,17 +1072,24 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     - 211 tests, build vert. **Non testé en réel** (comme le reste de la vente,
       cf. §6).
     - **⚠️ Bug prod corrigé le 12/07 (même jour) : Awa a proposé de renouveler
-      un PACK DÉCOUVERTE** (achat unique) à une vraie cliente. L'offre de
+      un PACK DÉCOUVERTE** (essai 2 semaines) à une vraie cliente. L'offre de
       renouvellement (contexte + prompt) ET le sweep push ne filtraient pas les
-      plans one-time. Correctif : `MembershipContext.renewable`
-      ([membershipContext.ts](src/lib/membershipContext.ts)) = vrai UNIQUEMENT
-      pour les plans `billing:"recurring"` du catalogue live (un plan absent du
-      catalogue = non renouvelable, posture prudente). Le contexte marque les
-      packs « ONE-TIME pack — NEVER offer to renew », le prompt interdit toute
-      offre de renouvellement hors plans récurrents, et `renewalNudgeCandidates`
-      prend un `recurringPlanIds: Set` et exclut les packs one-time (testé). 212
-      tests. Le renouvellement ne vise donc plus QUE les abonnements récurrents
-      (mensuels et +).
+      plans non renouvelables.
+    - **Découverte cruciale** : dans Wix, **AUCUN plan n'est `recurring`** — les
+      19 plans sont tous `one_time` (paiement unique pour une durée). Un premier
+      correctif basé sur `billing === "recurring"` aurait donc désactivé le
+      renouvellement pour TOUT. Le bon critère (règle Babakar 12/07) est
+      **durée ≥ 1 mois ET pas une carte cadeau** ; les programmes gratuits sont
+      déjà écartés (listPlans filtre les plans à 0 F). Fonction pure testée
+      `isPlanRenewable(name, durationDays)` dans [wix.ts](src/lib/wix.ts),
+      exposée comme `WixPlan.renewable`. Vérifié en live : 16 renouvelables
+      (mensuels, combos, carnets), 3 non (2 cartes cadeaux + Pack Découverte).
+    - `MembershipContext.renewable` = `p.renewable` du catalogue live (plan
+      absent = non renouvelable, prudent). Le contexte marque les plans non
+      renouvelables « NOT renewable — NEVER offer to renew » ; le prompt s'y fie
+      (carnets = renouvelables, seuls les trials/cartes cadeaux sont exclus) ;
+      `renewalNudgeCandidates` prend `renewablePlanIds: Set` et exclut le reste
+      (testé). 217 tests.
 
 ## 5. Chronologie condensée
 
