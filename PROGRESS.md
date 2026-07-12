@@ -1071,6 +1071,18 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       Railway une fois approuvé.
     - 211 tests, build vert. **Non testé en réel** (comme le reste de la vente,
       cf. §6).
+    - **⚠️ Bug prod corrigé le 12/07 (même jour) : Awa a proposé de renouveler
+      un PACK DÉCOUVERTE** (achat unique) à une vraie cliente. L'offre de
+      renouvellement (contexte + prompt) ET le sweep push ne filtraient pas les
+      plans one-time. Correctif : `MembershipContext.renewable`
+      ([membershipContext.ts](src/lib/membershipContext.ts)) = vrai UNIQUEMENT
+      pour les plans `billing:"recurring"` du catalogue live (un plan absent du
+      catalogue = non renouvelable, posture prudente). Le contexte marque les
+      packs « ONE-TIME pack — NEVER offer to renew », le prompt interdit toute
+      offre de renouvellement hors plans récurrents, et `renewalNudgeCandidates`
+      prend un `recurringPlanIds: Set` et exclut les packs one-time (testé). 212
+      tests. Le renouvellement ne vise donc plus QUE les abonnements récurrents
+      (mensuels et +).
 
 ## 5. Chronologie condensée
 

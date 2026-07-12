@@ -22,20 +22,25 @@ import * as repo from "./repo.js";
 export interface RenewalCandidate {
   orderId: string;
   contactId: string;
+  planId: string;
   planName: string;
   endDate: string; // ISO
 }
 
 /**
  * Pure filter (unit-tested): ACTIVE plan orders whose endDate falls in
- * [now, now + days]. Orders without a readable future endDate are skipped
- * (valid-until-cancelled plans never expire, so they never need a renewal
- * nudge). `orders` is the raw Wix order list (listAllActiveOrders).
+ * [now, now + days] AND whose plan is renewable (recurring). One-time packs
+ * (the discovery pack, carnets) are buy-once and must NEVER be nudged, even
+ * though they carry an endDate — so an order whose planId is not in
+ * `recurringPlanIds` is dropped. Orders without a readable future endDate are
+ * skipped too (valid-until-cancelled plans never expire). `orders` is the raw
+ * Wix order list (listAllActiveOrders).
  */
 export function renewalNudgeCandidates(
   orders: any[],
   now: Date,
   days: number,
+  recurringPlanIds: Set<string>,
 ): RenewalCandidate[] {
   const horizon = now.getTime() + days * 86_400_000;
   const out: RenewalCandidate[] = [];
@@ -43,11 +48,14 @@ export function renewalNudgeCandidates(
     const contactId = o?.buyer?.contactId;
     const endDate = o?.endDate;
     const orderId = o?.id;
-    if (!contactId || !endDate || !orderId) continue;
+    const planId = o?.planId;
+    if (!contactId || !endDate || !orderId || !planId) continue;
+    // One-time packs are buy-once — never nudge them for renewal.
+    if (!recurringPlanIds.has(planId)) continue;
     const t = new Date(endDate).getTime();
     if (Number.isNaN(t)) continue;
     if (t >= now.getTime() && t <= horizon) {
-      out.push({ orderId, contactId, planName: o.planName ?? "ton abonnement", endDate });
+      out.push({ orderId, contactId, planId, planName: o.planName ?? "ton abonnement", endDate });
     }
   }
   return out;
@@ -66,8 +74,16 @@ export async function sweepRenewalNudges(log: {
 }): Promise<number> {
   if (!config.WA_RENEWAL_TEMPLATE) return 0; // feature off until Meta approves it
 
-  const orders = await wix.listAllActiveOrders();
-  const candidates = renewalNudgeCandidates(orders, new Date(), config.RENEWAL_NUDGE_DAYS);
+  const [orders, catalog] = await Promise.all([wix.listAllActiveOrders(), wix.listPlans()]);
+  const recurringPlanIds = new Set(
+    catalog.filter((p) => p.billing === "recurring").map((p) => p.id),
+  );
+  const candidates = renewalNudgeCandidates(
+    orders,
+    new Date(),
+    config.RENEWAL_NUDGE_DAYS,
+    recurringPlanIds,
+  );
   let sent = 0;
   for (const c of candidates) {
     let client;

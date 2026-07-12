@@ -17,6 +17,13 @@ export interface MembershipContext {
   remaining: number | null;
   /** ISO end date of the plan; null when Wix exposes none (valid-until-cancelled). */
   expiresAt: string | null;
+  /**
+   * True ONLY for recurring subscriptions (monthly and up). One-time packs —
+   * the discovery pack, carnets — are buy-once and must NEVER be offered for
+   * renewal. Conservative: a plan absent from the live catalog (archived/
+   * hidden) counts as non-renewable, so we never wrongly push a renewal.
+   */
+  renewable: boolean;
 }
 
 /**
@@ -62,6 +69,13 @@ export async function activeMemberships(client: Client): Promise<MembershipLooku
       client.name ?? undefined,
     );
     const memberships = contactId ? await wix.listActiveMemberships(contactId) : [];
+    // Recurring vs one-time comes from the live catalog. A plan not found there
+    // (archived/hidden) is treated as NON-renewable — we never wrongly offer to
+    // renew a one-time pack (discovery pack, carnets).
+    const catalog = memberships.length ? await wix.listPlans().catch(() => []) : [];
+    const recurringPlanIds = new Set(
+      catalog.filter((p) => p.billing === "recurring").map((p) => p.id),
+    );
     const plans = await Promise.all(
       memberships.map(async (m) => ({
         plan: m.planName,
@@ -70,6 +84,7 @@ export async function activeMemberships(client: Client): Promise<MembershipLooku
           ? await wix.planRemainingSessions(contactId, m.planId, m.planName)
           : null,
         expiresAt: m.expiresAt,
+        renewable: recurringPlanIds.has(m.planId),
       })),
     );
     const result: MembershipLookup = { linked: contactId !== null, plans };
