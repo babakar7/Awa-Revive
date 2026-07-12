@@ -40,6 +40,7 @@ npm run dev               # start with hot reload
 | `WA_ACCESS_TOKEN` | Permanent system-user token (Meta Business settings) |
 | `WA_APP_SECRET` | Meta app dashboard → App settings → Basic → App secret |
 | `WA_VERIFY_TOKEN` | Any string; must match what you type in the Meta webhook config |
+| `WA_APP_ID` | Optional — Meta app ID (not the phone-number id), only needed to change the WhatsApp Business profile photo from `/admin/profile` (resumable upload API is app-scoped) |
 | `WIX_API_KEY` / `WIX_SITE_ID` | Wix account → API keys ([docs](https://dev.wix.com/docs/rest/business-solutions/bookings)) |
 | `WAVE_API_KEY` | Wave business portal — `wave_sn_prod_...` ([docs](https://docs.wave.com/checkout)) |
 | `WAVE_WEBHOOK_SECRET` | `wave_sn_WHS_...` — shown **once** when you register the webhook endpoint in the Wave portal (Developer → Webhooks). Not the `wave_sn_AKS_` request-signing secret. |
@@ -136,6 +137,18 @@ bookings & plan orders (status filters), handoffs. The two buttons only
 RECORD manual actions — no money ever moves from the dashboard; refunds are
 done by a human in the Wave portal (`npm run refund:done` remains as CLI
 fallback).
+
+**Profile page (`/admin/profile`)**: edit the WhatsApp Business profile
+(description, address, photo) via the Cloud API's `whatsapp_business_profile`
+endpoint. Meta has **no "hours" field** on that endpoint — hours are entered
+in their own textarea and folded into the description text as a trailing
+block (`composeBusinessDescription` in [src/lib/whatsapp.ts](src/lib/whatsapp.ts)),
+truncated to stay under Meta's 512-char description limit. The last-saved
+values are kept in the `whatsapp_profile` table so the form round-trips even
+though hours have nowhere to live on Meta's side. Photo editing needs an
+additional `WA_APP_ID` env var (Meta's resumable upload API is app-scoped,
+not phone-number-scoped) — without it the photo field is hidden and
+description/address/hours still work.
 
 Deploy target: Railway / Render / Fly.io — anything that runs Node and exposes HTTPS. Set all env vars, point `DATABASE_URL` at managed Postgres; migrations run automatically at boot. The service is stateless apart from Postgres, so restarts mid-flow lose nothing (acceptance #8) — the in-memory rate limiter and Wix catalog cache rebuild themselves.
 

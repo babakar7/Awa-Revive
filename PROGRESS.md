@@ -985,6 +985,33 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     - **⚠️ NON encore validé E2E en prod** au moment de l'écriture (voir runbook
       §7 pour rejouer : reset `email_prompted_at`, email inconnu → création).
 
+34. **Édition du profil WhatsApp Business depuis le dashboard (12/07).**
+    Babakar voulait éditer photo/description/adresse/horaires du profil sans
+    passer par Meta Business Suite. Endpoint Cloud API
+    `POST /{phone-number-id}/whatsapp_business_profile` — même bearer token
+    que l'envoi de messages (`WA_ACCESS_TOKEN`/`WA_PHONE_NUMBER_ID`), nouveaux
+    helpers `getBusinessProfile`/`updateBusinessProfile`/`uploadProfilePictureHandle`
+    dans [src/lib/whatsapp.ts](src/lib/whatsapp.ts). Nouvelle page
+    `/admin/profile` (même pattern formulaire→validation→appel API que
+    `/admin/crm/link`).
+    - **Piège Meta : aucun champ « horaires ».** Le endpoint n'expose que
+      `about`/`address`/`description`/`email`/`websites`/photo — pas d'horaires
+      d'ouverture. Contournement assumé : un textarea Horaires séparé dans le
+      formulaire, composé dans la `description` envoyée à Meta (bloc `🕒
+      Horaires` en fin de texte, `composeBusinessDescription`, tronqué à 512
+      caractères en gardant le bloc horaires intact — testé unitairement).
+      Table `whatsapp_profile` (ligne unique) pour que le formulaire round-trippe
+      malgré ce contournement.
+    - **Photo = flux à part.** Nécessite l'API resumable upload de Meta,
+      scopée à l'**App ID** (pas le phone-number id) → nouvelle var d'env
+      optionnelle `WA_APP_ID`. Sans elle, le champ photo est masqué dans le
+      formulaire ; description/adresse/horaires restent fonctionnels.
+    - **⚠️ NON encore validé E2E en prod** (pas de `WA_ACCESS_TOKEN`/`WA_APP_ID`
+      réels disponibles pendant l'implémentation) — à tester en premier après
+      déploiement : `/admin/profile`, éditer les 3 champs texte, vérifier le
+      reflet côté profil WhatsApp réel, puis tester la photo si `WA_APP_ID` est
+      configuré.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -1099,7 +1126,10 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —
   une abonnée sur un numéro non relié n'est plus poussée au paiement Wave sans
   qu'Awa lui propose d'abord, une fois, de relier son compte par email). 182
-  tests.
+  tests. Puis **invitation avant paiement fiabilisée + Awa crée le compte des
+  nouveaux** (§33). Puis **édition du profil WhatsApp Business depuis
+  `/admin/profile`** (§34 — description/adresse/photo via l'API Cloud, horaires
+  composés dans la description faute de champ dédié côté Meta). 205 tests.
 
 ## 6. Reste à faire
 
@@ -1124,6 +1154,10 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
 - [ ] Café sans résa : demander un smoothie sans réserver de cours → lien Wave
   café seul, confirmation « à récupérer au comptoir », email réception « sans
   réservation ».
+- [ ] `/admin/profile` (§34, jamais testé E2E) : éditer description/adresse/
+  horaires → vérifier le reflet dans le profil WhatsApp Business réel (app ou
+  Meta Business Suite) ; si `WA_APP_ID` configuré, tester aussi le changement
+  de photo via URL.
 - [ ] Date explicite lointaine : demander « et le [date à +3 semaines] ? » →
   fenêtre correcte (bonne date, bonne année), pas d'arithmétique inventée.
 - [ ] Liste d'attente : s'inscrire sur un cours plein, libérer une place dans

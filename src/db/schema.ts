@@ -295,4 +295,18 @@ create table if not exists app_state (
   value text not null,
   updated_at timestamptz not null default now()
 );
+
+-- Copie locale des champs édités depuis /admin/profile (profil WhatsApp
+-- Business). Meta n'a pas de champ "horaires" natif : on le garde ici séparé
+-- de la description pour que le formulaire reste éditable, et on le compose
+-- dans la description envoyée à Meta (composeBusinessDescription). Ligne
+-- unique (id=1) ; si vide, le formulaire se préremplit depuis Meta en direct.
+create table if not exists whatsapp_profile (
+  id smallint primary key default 1 check (id = 1),
+  description text,
+  address text,
+  hours text,
+  updated_by text,
+  updated_at timestamptz not null default now()
+);
 `;

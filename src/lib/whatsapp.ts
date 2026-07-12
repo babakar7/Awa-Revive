@@ -120,6 +120,123 @@ export async function sendImage(to: string, png: Buffer, caption?: string): Prom
   });
 }
 
+// ---------- WhatsApp Business profile (about/address/description/photo) ----------
+
+export interface BusinessProfile {
+  about?: string;
+  address?: string;
+  description?: string;
+  email?: string;
+  websites?: string[];
+  profile_picture_url?: string;
+}
+
+const PROFILE_FIELDS = "about,address,description,email,websites,profile_picture_url";
+
+/** Fetch the current WhatsApp Business profile (used to prefill the admin form). */
+export async function getBusinessProfile(): Promise<BusinessProfile> {
+  const res = await fetch(
+    `${GRAPH_BASE}/${config.WA_PHONE_NUMBER_ID}/whatsapp_business_profile?fields=${PROFILE_FIELDS}`,
+    {
+      headers: { Authorization: `Bearer ${config.WA_ACCESS_TOKEN}` },
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`WhatsApp business profile fetch failed (${res.status}): ${await res.text()}`);
+  }
+  const body = (await res.json()) as { data?: BusinessProfile[] };
+  return body.data?.[0] ?? {};
+}
+
+/**
+ * Update the WhatsApp Business profile. Only the fields passed in are sent —
+ * Meta leaves anything omitted untouched. `about` (≤139 chars) and
+ * `description` (≤512 chars) limits are Meta's; validate before calling.
+ */
+export async function updateBusinessProfile(fields: {
+  about?: string;
+  address?: string;
+  description?: string;
+  email?: string;
+  profile_picture_handle?: string;
+}): Promise<void> {
+  const res = await fetch(`${GRAPH_BASE}/${config.WA_PHONE_NUMBER_ID}/whatsapp_business_profile`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.WA_ACCESS_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ messaging_product: "whatsapp", ...fields }),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`WhatsApp business profile update failed (${res.status}): ${await res.text()}`);
+  }
+}
+
+/**
+ * Turn image bytes into a profile_picture_handle via Meta's resumable upload
+ * API, so it can be passed to updateBusinessProfile(). Requires WA_APP_ID
+ * (separate from the phone-number id) — throws a clear error if unset so the
+ * admin route can show a friendly message instead of a raw Meta error.
+ */
+export async function uploadProfilePictureHandle(bytes: Buffer, mimeType: string): Promise<string> {
+  if (!config.WA_APP_ID) {
+    throw new Error(
+      "WA_APP_ID n'est pas configuré — l'édition de la photo de profil est désactivée.",
+    );
+  }
+  const startRes = await fetch(
+    `${GRAPH_BASE}/${config.WA_APP_ID}/uploads?file_length=${bytes.length}&file_type=${encodeURIComponent(mimeType)}`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.WA_ACCESS_TOKEN}` },
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    },
+  );
+  if (!startRes.ok) {
+    throw new Error(`Photo upload (start) failed (${startRes.status}): ${await startRes.text()}`);
+  }
+  const sessionId = ((await startRes.json()) as { id?: string })?.id;
+  if (!sessionId) throw new Error("Photo upload: session id manquant dans la réponse Meta");
+
+  const transferRes = await fetch(`${GRAPH_BASE}/${sessionId}`, {
+    method: "POST",
+    headers: {
+      Authorization: `OAuth ${config.WA_ACCESS_TOKEN}`,
+      file_offset: "0",
+    },
+    body: new Uint8Array(bytes),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!transferRes.ok) {
+    throw new Error(`Photo upload (transfer) failed (${transferRes.status}): ${await transferRes.text()}`);
+  }
+  const handle = ((await transferRes.json()) as { h?: string })?.h;
+  if (!handle) throw new Error("Photo upload: handle manquant dans la réponse Meta");
+  return handle;
+}
+
+/**
+ * Meta's whatsapp_business_profile has no "hours" field, so opening hours are
+ * folded into the description as a trailing block. Pure (unit tested) so the
+ * 512-char Meta limit is enforced predictably — truncates the description
+ * first, then drops the hours block entirely if there's no room left for it
+ * (never truncate the hours block itself, that would read as broken).
+ */
+export function composeBusinessDescription(description: string, hours: string): string {
+  const MAX = 512;
+  const trimmedDescription = description.trim();
+  const trimmedHours = hours.trim();
+  if (!trimmedHours) return trimmedDescription.slice(0, MAX);
+  const block = `\n\n🕒 Horaires\n${trimmedHours}`;
+  if (trimmedDescription.length + block.length <= MAX) return trimmedDescription + block;
+  const room = MAX - block.length;
+  if (room <= 0) return trimmedDescription.slice(0, MAX);
+  return trimmedDescription.slice(0, room) + block;
+}
+
 // ---------- interactive messages (reply buttons / lists) ----------
 
 export interface InteractiveOption {

@@ -27,6 +27,10 @@ export const config = {
   // Must have exactly 2 body variables: {{1}} subject, {{2}} flattened detail.
   WA_RECEPTION_TEMPLATE: optional("WA_RECEPTION_TEMPLATE", ""),
   WA_RECEPTION_TEMPLATE_LANG: optional("WA_RECEPTION_TEMPLATE_LANG", "fr"),
+  // Meta App ID — only needed for the resumable upload flow used to change
+  // the WhatsApp Business profile photo. Empty = photo edit disabled in
+  // /admin/profile; description/address/hours still work.
+  WA_APP_ID: optional("WA_APP_ID", ""),
 
   // Wix
   WIX_API_KEY: required("WIX_API_KEY"),

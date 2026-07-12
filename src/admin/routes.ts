@@ -25,7 +25,13 @@ import {
   phoneMatchVariants,
 } from "../lib/wix.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
-import { sendText } from "../lib/whatsapp.js";
+import {
+  composeBusinessDescription,
+  getBusinessProfile,
+  sendText,
+  updateBusinessProfile,
+  uploadProfilePictureHandle,
+} from "../lib/whatsapp.js";
 import * as links from "../domain/linkRequests.js";
 import * as reviews from "../domain/conversationReview.js";
 import { renderTestChecklist } from "./testChecklist.js";
@@ -99,6 +105,7 @@ function layout(title: string, active: string, body: string): string {
     ["/admin/handoffs", "Handoffs"],
     ["/admin/reviews", "À reprendre 🔁"],
     ["/admin/crm", "CRM 🗂"],
+    ["/admin/profile", "Profil 📱"],
     ["/admin/tests", "À tester 🧪"],
   ]
     .map(
@@ -989,6 +996,104 @@ ${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à 
         await links.dismiss(request.id, req.adminUser ?? "?");
         req.log.info({ request: request.id, by: req.adminUser }, "Link request dismissed");
         return reply.redirect(`/admin/crm?done=dismissed`, 303);
+      });
+
+      // ---------- Profil WhatsApp Business (photo, description, adresse, horaires) ----------
+      admin.get("/profile", async (req, reply) => {
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+
+        const local = await q.getLocalWhatsAppProfile().catch(() => null);
+        let live: Awaited<ReturnType<typeof getBusinessProfile>> = {};
+        try {
+          live = await getBusinessProfile();
+        } catch (e) {
+          req.log.warn({ err: e }, "Failed to fetch live WhatsApp business profile");
+        }
+
+        const description = local?.description ?? live.description ?? "";
+        const address = local?.address ?? live.address ?? "";
+        const hours = local?.hours ?? "";
+
+        const banner = done
+          ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${
+              done === "photo-err"
+                ? "Description/adresse enregistrées. La photo n'a PAS pu être changée (voir ci-dessous)."
+                : "Profil WhatsApp Business mis à jour."
+            }</span></div>`
+          : err
+            ? `<div class="card warn">⚠️ ${escapeHtml(err)}</div>`
+            : "";
+
+        const photoSection = config.WA_APP_ID
+          ? `<label>URL d'une photo (carrée, JPG/PNG)<input type="url" name="photo_url" placeholder="https://…"></label>
+<p class="muted">Laisser vide pour ne pas changer la photo actuelle.</p>`
+          : `<p class="muted">⚠️ Édition de la photo désactivée (variable d'env <code>WA_APP_ID</code> non configurée).</p>`;
+
+        reply.type("text/html").send(
+          layout(
+            "Profil WhatsApp",
+            "/admin/profile",
+            `<h2>Profil WhatsApp Business</h2>
+${banner}
+<div class="card">
+${
+  live.profile_picture_url
+    ? `<img src="${escapeHtml(live.profile_picture_url)}" alt="Photo de profil actuelle" style="width:96px;height:96px;border-radius:50%;object-fit:cover;margin-bottom:.8rem">`
+    : ""
+}
+<form method="post" action="/admin/profile" style="display:flex;flex-direction:column;gap:.8rem">
+<label>Description<textarea name="description" rows="5" maxlength="512" style="width:100%;padding:.55rem .8rem;border:1px solid #e4ddd3;border-radius:10px;font:inherit">${escapeHtml(description)}</textarea></label>
+<label>Adresse<input type="text" name="address" maxlength="256" value="${escapeHtml(address)}" style="width:100%;padding:.55rem .8rem;border:1px solid #e4ddd3;border-radius:10px;font:inherit"></label>
+<label>Horaires <span class="muted">(pas de champ dédié côté WhatsApp — ajoutés automatiquement à la fin de la description)</span><textarea name="hours" rows="4" style="width:100%;padding:.55rem .8rem;border:1px solid #e4ddd3;border-radius:10px;font:inherit">${escapeHtml(hours)}</textarea></label>
+${photoSection}
+<button class="act" style="align-self:flex-start">Enregistrer</button>
+</form>
+</div>`,
+          ),
+        );
+      });
+
+      admin.post("/profile", async (req, reply) => {
+        const bodyIn = (req.body ?? {}) as Record<string, string>;
+        const fail = (msg: string) => reply.redirect(`/admin/profile?err=${encodeURIComponent(msg)}`, 303);
+
+        const description = String(bodyIn.description ?? "").trim();
+        const address = String(bodyIn.address ?? "")
+          .trim()
+          .slice(0, 256);
+        const hours = String(bodyIn.hours ?? "").trim();
+        const photoUrl = String(bodyIn.photo_url ?? "").trim();
+
+        const composedDescription = composeBusinessDescription(description, hours);
+
+        try {
+          await updateBusinessProfile({ description: composedDescription, address });
+        } catch (e) {
+          req.log.error({ err: e }, "WhatsApp business profile update failed");
+          return fail("échec de la mise à jour du profil WhatsApp — réessaie");
+        }
+
+        await q.saveLocalWhatsAppProfile({ description, address, hours }, req.adminUser ?? "?");
+        req.log.info({ by: req.adminUser }, "WhatsApp business profile updated from admin dashboard");
+
+        if (!photoUrl) {
+          return reply.redirect("/admin/profile?done=1", 303);
+        }
+
+        try {
+          const imgRes = await fetch(photoUrl, { signal: AbortSignal.timeout(15_000) });
+          if (!imgRes.ok) throw new Error(`download failed (${imgRes.status})`);
+          const mimeType = imgRes.headers.get("content-type") ?? "image/jpeg";
+          const bytes = Buffer.from(await imgRes.arrayBuffer());
+          const handle = await uploadProfilePictureHandle(bytes, mimeType);
+          await updateBusinessProfile({ profile_picture_handle: handle });
+        } catch (e) {
+          req.log.error({ err: e }, "WhatsApp business profile photo update failed");
+          return reply.redirect("/admin/profile?done=photo-err", 303);
+        }
+
+        return reply.redirect("/admin/profile?done=1", 303);
       });
 
       // ---------- Actions de pointage (aucune action monétaire) ----------

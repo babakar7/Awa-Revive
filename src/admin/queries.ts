@@ -252,3 +252,38 @@ export async function restoreDuplicateGroup(phoneKey: string, signature: string)
     [phoneKey, signature],
   );
 }
+
+// ---------- profil WhatsApp Business (/admin/profile) ----------
+
+export interface WhatsAppProfileRow {
+  description: string | null;
+  address: string | null;
+  hours: string | null;
+  updated_by: string | null;
+  updated_at: Date | null;
+}
+
+/** Dernière copie enregistrée depuis /admin/profile, ou null si jamais éditée. */
+export async function getLocalWhatsAppProfile(): Promise<WhatsAppProfileRow | null> {
+  const res = await pool.query(
+    `select description, address, hours, updated_by, updated_at from whatsapp_profile where id = 1`,
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function saveLocalWhatsAppProfile(
+  fields: { description: string; address: string; hours: string },
+  by: string,
+): Promise<void> {
+  await pool.query(
+    `insert into whatsapp_profile (id, description, address, hours, updated_by, updated_at)
+     values (1, $1, $2, $3, $4, now())
+     on conflict (id) do update set
+       description = excluded.description,
+       address = excluded.address,
+       hours = excluded.hours,
+       updated_by = excluded.updated_by,
+       updated_at = now()`,
+    [fields.description, fields.address, fields.hours, by],
+  );
+}
