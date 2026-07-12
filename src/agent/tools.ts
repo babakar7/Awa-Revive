@@ -140,6 +140,15 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       properties: {
         plan_id: { type: "string", description: "Plan id from list_plans" },
         client_name: { type: "string", description: "Client's first name" },
+        start: {
+          type: "string",
+          enum: ["now", "after_current"],
+          description:
+            "When the plan should start. Default 'now'. Use 'after_current' ONLY when the client is renewing/re-buying " +
+            "while they still have an active plan and wants the new one to begin when the current one ends (no lost days). " +
+            "The server computes the real start date from Wix — you never pass a date. If the client has no active plan, " +
+            "the server falls back to 'now' and says so in the result.",
+        },
         client_declined_verification: {
           type: "boolean",
           description:
@@ -847,7 +856,19 @@ export async function executeTool(
 
       // Member resolution decides auto vs manual activation after payment —
       // resolved NOW and stored, so the webhook path stays fast and simple.
-      const memberId = await wix.resolveMemberIdForPlan(phone, clientName || client.name || undefined);
+      const contactId = await wix.findContactIdByPhone(phone, clientName || client.name || undefined);
+      const memberId = contactId ? await wix.findMemberIdByContactId(contactId) : null;
+
+      // Chained renewal: when the client wants the new plan to start after the
+      // current one, resolve the real end date from Wix (never from the model).
+      // No active plan / no readable end date → fall back to "now" and flag it.
+      let startsAt: Date | null = null;
+      let startFellBack = false;
+      if (input.start === "after_current") {
+        const endIso = contactId ? await wix.latestPlanEndDate(contactId) : null;
+        if (endIso) startsAt = new Date(endIso);
+        else startFellBack = true;
+      }
 
       // One active plan link per client.
       await repo.expireActivePlanOrders(client.id);
@@ -857,6 +878,7 @@ export async function executeTool(
         planName: plan.name,
         amountXof: plan.priceXof,
         memberId,
+        startsAt,
       });
 
       let session;
@@ -873,16 +895,24 @@ export async function executeTool(
       const expiresAt = new Date(Date.now() + config.PAYMENT_LINK_TTL_MINUTES * 60 * 1000);
       await repo.setPlanOrderAwaitingPayment(draft.id, session.id, session.wave_launch_url, expiresAt);
 
+      const startNote = startsAt
+        ? ` This is a chained renewal: after payment the plan starts on ${startsAt.toISOString().slice(0, 10)} (when the current one ends) — tell the client that date.`
+        : startFellBack
+          ? " The client asked to start after their current plan, but no active plan with a future end date was found, so it will start NOW — tell them that."
+          : "";
+
       return JSON.stringify({
         payment_link: session.wave_launch_url,
         amount_fcfa: plan.priceXof,
         plan: plan.name,
         billing: plan.billing,
         period: plan.periodLabel ?? undefined,
+        starts_on: startsAt ? startsAt.toISOString().slice(0, 10) : "now",
         expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
         note:
           "Relay the link. The plan is confirmed only once paid; the client gets an automatic WhatsApp " +
           "confirmation after payment." +
+          startNote +
           (plan.billing === "recurring"
             ? " Recurring plan: this payment covers the FIRST period; renewal is self-service — the client just buys it again here when it ends, say so."
             : ""),

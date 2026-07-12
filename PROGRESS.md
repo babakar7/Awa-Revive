@@ -1041,6 +1041,37 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     - 205 tests, build vert. **Non testé en réel** (comme le reste de la vente
       d'abonnements, cf. §6) — à vérifier au prochain test de vente.
 
+36. **Renouvellement d'abonnement : date de début choisie + offre en
+    conversation + rappel push J-3 (12/07).** Suite de §35.
+    - **Chaînage (date de début)** : l'API Wix `checkout/orders/offline` accepte
+      un `startDate` optionnel (vérifié doc officielle : date future ⇒ ordre
+      PENDING, activé automatiquement à la date — aucun cron côté serveur). Awa
+      a un nouvel input `start: "now" | "after_current"` sur
+      `create_plan_payment_link` ; en `after_current`, le SERVEUR résout la date
+      de fin réelle du plan actif via `wix.latestPlanEndDate(contactId)`
+      ([wix.ts](src/lib/wix.ts)) — jamais le modèle (anti-injection). Stockée sur
+      `pending_plan_orders.starts_at`, passée à `createOfflinePlanOrder` dans le
+      webhook Wave. Sans plan actif → repli « now » annoncé. Confirmation client
+      et note réception mentionnent la date de démarrage.
+    - **Offre en conversation (sans template)** : la date de fin (`endDate` Wix,
+      déjà fetchée) est maintenant plombée jusqu'au contexte par message
+      (`MembershipContext.expiresAt` → `dynamicContext` affiche « ends le … (in N
+      day(s)) »). Le prompt permet à Awa de proposer le renouvellement UNE fois
+      quand un plan finit sous ~7 jours (ou solde 0), avec le choix
+      maintenant/à la suite.
+    - **Rappel push J-3 (template Meta, DORMANT jusqu'à approbation)** : nouveau
+      `src/domain/renewalNudge.ts` calqué sur `expiryNudge` — `renewalNudgeCandidates`
+      (fonction pure testée : ordres ACTIVE dont `endDate` ∈ [now, now+N j]),
+      sweep dans le tick 5 min de [index.ts](src/index.ts). Envoi hors fenêtre
+      24h ⇒ **template obligatoire** (`WA_RENEWAL_TEMPLATE`, 3 vars nom/plan/date) ;
+      tant que la var est vide, le sweep est un no-op. One-shot par ordre Wix
+      (table `renewal_nudges`, claim AVANT envoi). Le tour assistant est
+      persité pour qu'Awa ait le contexte quand le client répond. **Template
+      soumis à Meta, EN VÉRIFICATION au 12/07** — poser `WA_RENEWAL_TEMPLATE` sur
+      Railway une fois approuvé.
+    - 211 tests, build vert. **Non testé en réel** (comme le reste de la vente,
+      cf. §6).
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -1160,7 +1191,9 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   `/admin/profile`** (§34 — description/adresse/photo via l'API Cloud, horaires
   composés dans la description faute de champ dédié côté Meta). Puis **vente
   d'abonnements : renouvellement self-service + alerte réception pour les
-  combinaisons absentes du catalogue** (§35). 205 tests.
+  combinaisons absentes du catalogue** (§35). Puis **renouvellement : date de
+  début choisie (chaînage Wix startDate) + offre en conversation + rappel push
+  J-3 dormant** (§36). 211 tests.
 
 ## 6. Reste à faire
 
@@ -1173,6 +1206,14 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   renouvellement (doit proposer un rachat direct, pas un renvoi au studio) et
   demander une combinaison absente du catalogue (doit déclencher un handoff
   « Créer un abonnement : … » reçu côté réception).
+- [ ] §36 chaînage : racheter un plan avec `start:"after_current"` alors qu'un
+  plan est actif → vérifier dans Wix que l'ordre est PENDING avec la bonne
+  `startDate`, et que la confirmation WhatsApp annonce la date. Sans plan actif
+  → repli « démarre maintenant ».
+- [ ] §36 rappel push J-3 : APRÈS approbation du template Meta (en vérification
+  au 12/07), poser `WA_RENEWAL_TEMPLATE` (+ lang) sur Railway, créer un plan
+  test finissant sous 2-3 j → le sweep 5 min envoie UN template (relancer : pas
+  de doublon) ; y répondre → Awa enchaîne sur le renouvellement.
 - [ ] Re-test groupe : 5 places Fusion (le cap Wix est maintenant 8).
 - [ ] Test optionnel du refus < 16h (seul chemin annulation pas observé en réel).
 - [ ] Commande café adossée à une résa (extras dans le lien Wave) — flux

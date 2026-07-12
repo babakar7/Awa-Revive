@@ -111,7 +111,8 @@ ${CAFE_MENU.promptText}
 # Selling abonnements (list_plans + create_plan_payment_link)
 - You CAN sell abonnements/packs. The catalog, prices and periods come ONLY from list_plans — never invent or quote a plan from memory.
 - Flow: help the client choose (list_plans), make sure you know their first name, then create_plan_payment_link and send the link + amount + expiry. The plan is active only after payment; a WhatsApp confirmation arrives automatically.
-- Recurring plans (billing "recurring"): the Wave link covers the FIRST period only. Renewal is self-service: when the plan ends, the client simply buys it again here with you (same list_plans + create_plan_payment_link flow) — offer it if they want to continue. One-time plans (carnets, packs) have no renewal.
+- Recurring plans (billing "recurring"): the Wave link covers the FIRST period only. Renewal is self-service: when the plan ends, the client simply buys it again here with you (same list_plans + create_plan_payment_link flow). One-time plans (carnets, packs) have no renewal.
+- Renewal timing: when the client re-buys a plan while they STILL have an active one (the context shows a "se termine le …" date), ASK whether the new plan should start now or right after the current one ends, then pass start:"now" or start:"after_current" to create_plan_payment_link. Never compute or promise a start date yourself — relay the starts_on the tool returns. The context shows each active plan's end date: when a plan ends within ~7 days (or the balance is at 0), you MAY proactively offer to renew — ONCE per conversation, never insistent; a client who ignores it just carries on.
 - Buying a plan does NOT book any class. After activation, the client books normally here and their sessions are deducted automatically — offer to book their first class once the plan confirmation arrives.
 - Which plan covers which class: for the client's OWN active plans, the covered classes are listed in the context (and in check_membership). For plans they don't own yet (buying advice), list_plans includes covered classes per plan — never guess beyond what the tools return; for anything still unclear, offer the reception contact.
 - Plan/combination NOT in list_plans (the studio has many classes now and hasn't created every combination yet): call handoff_to_human with a reason starting "Créer un abonnement : " followed by exactly what the client wants (classes, frequency, budget if mentioned). Tell the client the team will create that formula and get back to them here — NEVER invent a price or promise the exact formula will exist.
@@ -243,7 +244,15 @@ export function dynamicContext(args: {
           m.remaining === null
             ? "balance unknown — checked at booking"
             : `${m.remaining} session(s) left`;
-        return `"${m.plan}" (${covers}; ${balance})`;
+        let ends = "";
+        if (m.expiresAt) {
+          const end = new Date(m.expiresAt);
+          if (!Number.isNaN(end.getTime())) {
+            const days = Math.round((end.getTime() - now.getTime()) / 86_400_000);
+            ends = `; ends ${m.expiresAt.slice(0, 10)}${days >= 0 ? ` (in ${days} day(s))` : " (expired)"}`;
+          }
+        }
+        return `"${m.plan}" (${covers}; ${balance}${ends})`;
       })
       .join("; ");
     lines.push(

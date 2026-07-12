@@ -757,16 +757,44 @@ export async function getPlan(planId: string): Promise<WixPlan | null> {
  * purchases are member-only in Wix — the caller must resolve memberId first
  * and fall back to manual reception activation when the client has no member
  * account.
+ *
+ * startDate (ISO): optional. When in the FUTURE, Wix creates the order as
+ * PENDING and activates it automatically on that date — this is how a renewal
+ * bought early chains onto the end of the current plan (no lost days, no cron
+ * on our side). Omitted/past → activates immediately (Wix default = now).
  */
-export async function createOfflinePlanOrder(planId: string, memberId: string): Promise<string> {
+export async function createOfflinePlanOrder(
+  planId: string,
+  memberId: string,
+  startDate?: string,
+): Promise<string> {
   const data = await wixPost("/pricing-plans/v2/checkout/orders/offline", {
     planId,
     memberId,
     paid: true,
+    ...(startDate ? { startDate } : {}),
   });
   const orderId = data?.order?.id;
   if (!orderId) throw new Error(`Offline plan order returned no id: ${JSON.stringify(data)}`);
   return orderId;
+}
+
+/**
+ * The latest future end date among a contact's active plans, or null when they
+ * have none (or none with a readable future endDate). Used to chain a renewal:
+ * the new plan starts when the current one ends. Server-resolved from Wix so
+ * the date is never taken from the model (anti prompt-injection).
+ */
+export async function latestPlanEndDate(contactId: string): Promise<string | null> {
+  const memberships = await listActiveMemberships(contactId);
+  const now = Date.now();
+  let latest: number | null = null;
+  for (const m of memberships) {
+    if (!m.expiresAt) continue;
+    const t = new Date(m.expiresAt).getTime();
+    if (!Number.isNaN(t) && t > now && (latest === null || t > latest)) latest = t;
+  }
+  return latest === null ? null : new Date(latest).toISOString();
 }
 
 /** Contact → member GUID (plan purchases are member-only). Null if no member. */
@@ -803,7 +831,7 @@ export interface EligibleBenefit {
 }
 
 /** Members and contacts are distinct entities; resolve via the Members API. */
-async function findMemberIdByContactId(contactId: string): Promise<string | null> {
+export async function findMemberIdByContactId(contactId: string): Promise<string | null> {
   try {
     const data = await wixPost("/members/v1/members/query", {
       query: { filter: { contactId } },

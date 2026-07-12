@@ -251,10 +251,20 @@ async function processPlanPayment(order: any, log: any): Promise<void> {
   const lang: string = client?.language ?? "fr";
   const phoneDisplay = `+${String(client?.wa_phone ?? "").replace(/^\+/, "")}`;
 
+  // Chained renewal: a future start date makes Wix create the order as PENDING
+  // and activate it automatically on that day (so an early renewal doesn't
+  // waste the days left on the current plan).
+  const startsAt: Date | null = order.starts_at ? new Date(order.starts_at) : null;
+  const startsInFuture = startsAt !== null && startsAt.getTime() > Date.now();
+
   let activated = false;
   if (order.member_id) {
     try {
-      const wixOrderId = await wix.createOfflinePlanOrder(order.plan_id, order.member_id);
+      const wixOrderId = await wix.createOfflinePlanOrder(
+        order.plan_id,
+        order.member_id,
+        startsInFuture ? startsAt!.toISOString() : undefined,
+      );
       await repo.markPlanOrderActivated(order.id, wixOrderId);
       activated = true;
       // The client's new plan is live now — drop the stale membership cache so
@@ -273,13 +283,21 @@ async function processPlanPayment(order: any, log: any): Promise<void> {
         `automatique n'a pas pu se faire${order.member_id ? "" : " (pas de compte membre Wix relié à ce numéro)"}.\n` +
         `  Client : ${client?.name ?? "?"} (${phoneDisplay})\n` +
         `  Formule : ${order.plan_name}\n` +
-        `  Montant payé : ${order.amount_xof} FCFA (session Wave : ${order.wave_session_id ?? "?"})\n\n` +
-        `À faire dans le dashboard Wix : Abonnements → attribuer "${order.plan_name}" au client ` +
+        `  Montant payé : ${order.amount_xof} FCFA (session Wave : ${order.wave_session_id ?? "?"})\n` +
+        (startsInFuture
+          ? `  ⚠️ Démarrage voulu : ${startsAt!.toISOString().slice(0, 10)} (renouvellement à la fin de l'abonnement actuel) — régler la date de début en conséquence.\n`
+          : "") +
+        `\nÀ faire dans le dashboard Wix : Abonnements → attribuer "${order.plan_name}" au client ` +
         `(créer/relier sa fiche si besoin — numéro WhatsApp ci-dessus), en marquant l'ordre comme payé.`,
     );
   }
 
-  const msg = planConfirmationMessage(lang, order.plan_name, activated);
+  const msg = planConfirmationMessage(
+    lang,
+    order.plan_name,
+    activated,
+    startsInFuture ? startsAt! : null,
+  );
   try {
     await sendText(client.wa_phone, msg);
     await repo.addTurn(order.client_id, "assistant", msg);
@@ -372,7 +390,36 @@ export function cafeConfirmationMessage(
   }
 }
 
-function planConfirmationMessage(lang: string, planName: string, activated: boolean): string {
+function planConfirmationMessage(
+  lang: string,
+  planName: string,
+  activated: boolean,
+  startsAt: Date | null,
+): string {
+  // Chained renewal: the plan is paid but activates on a future date.
+  if (startsAt) {
+    const d = startsAt.toISOString().slice(0, 10);
+    switch (lang) {
+      case "en":
+        return (
+          `✅ Payment received — your "${planName}" plan is renewed!\n\n` +
+          `It starts on ${d}, right when your current plan ends — no interruption. ` +
+          `I'll deduct from it automatically once it kicks in 💪🏾`
+        );
+      case "wo":
+        return (
+          `✅ Fey bi jot na — sa abonnement "${planName}" renouvelé na!\n\n` +
+          `Day tàmbali ${d}, bu sa abonnement bi mujj jeex — amul interruption. ` +
+          `Dinaa ci wàññiku bu tàmbalee 💪🏾`
+        );
+      default:
+        return (
+          `✅ Paiement reçu — ton abonnement "${planName}" est renouvelé !\n\n` +
+          `Il démarre le ${d}, pile à la fin de ton abonnement actuel — aucune interruption. ` +
+          `Je décompterai dessus automatiquement une fois qu'il prend le relais 💪🏾`
+        );
+    }
+  }
   if (activated) {
     switch (lang) {
       case "en":

@@ -6,6 +6,7 @@ import { escalateStaleLinkRequests } from "./domain/linkRequests.js";
 import { runReviewSweep, maybeSendDailyDigest } from "./domain/conversationReview.js";
 import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
+import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import { buildServer } from "./server.js";
 
@@ -64,6 +65,14 @@ async function main() {
       if (await maybeSendDailyDigest()) app.log.info("Daily digest sent to reception");
     } catch (err) {
       app.log.error({ err }, "Conversation-review sweep failed");
+    }
+    try {
+      // Relance de renouvellement J-N (no-op tant que WA_RENEWAL_TEMPLATE
+      // n'est pas configuré — envoi hors fenêtre 24h = template obligatoire).
+      const nudged = await sweepRenewalNudges(app.log);
+      if (nudged > 0) app.log.info({ nudged }, "Renewal nudges sent");
+    } catch (err) {
+      app.log.error({ err }, "Renewal-nudge sweep failed");
     }
   }, 5 * 60 * 1000);
   cancellationSweeper.unref();

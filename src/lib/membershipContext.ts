@@ -15,6 +15,8 @@ export interface MembershipContext {
   covers: string[] | null;
   /** Session credits left on the plan; null when the balance can't be read. */
   remaining: number | null;
+  /** ISO end date of the plan; null when Wix exposes none (valid-until-cancelled). */
+  expiresAt: string | null;
 }
 
 /**
@@ -67,6 +69,7 @@ export async function activeMemberships(client: Client): Promise<MembershipLooku
         remaining: contactId
           ? await wix.planRemainingSessions(contactId, m.planId, m.planName)
           : null,
+        expiresAt: m.expiresAt,
       })),
     );
     const result: MembershipLookup = { linked: contactId !== null, plans };

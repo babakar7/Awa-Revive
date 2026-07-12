@@ -146,6 +146,12 @@ create table if not exists pending_plan_orders (
 create index if not exists idx_plan_orders_client_status
   on pending_plan_orders (client_id, status);
 
+-- Date de démarrage voulue du plan (renouvellement anticipé chaîné à la fin de
+-- l'abonnement actuel). NULL = démarrage immédiat. Passée à Wix comme startDate
+-- à l'activation (ordre PENDING jusqu'à cette date, activé automatiquement).
+alter table pending_plan_orders
+  add column if not exists starts_at timestamptz;
+
 -- Café-only Wave orders: a menu order attached to a booking the client paid
 -- with their abonnement (that flow has no payment link, so the café can't ride
 -- along — this is its own small Wave link). No Wix booking is ever created
@@ -294,6 +300,16 @@ create table if not exists app_state (
   key text primary key,
   value text not null,
   updated_at timestamptz not null default now()
+);
+
+-- Rappel de renouvellement envoyé (J-3 avant la fin d'un abonnement, via
+-- template Meta approuvé). Clé = l'ordre Wix : un rappel par période de plan.
+-- Un renouvellement crée un NOUVEL ordre Wix, donc un nouveau droit au rappel.
+-- Même posture one-shot que expiry_nudged_at : on claime AVANT l'envoi.
+create table if not exists renewal_nudges (
+  wix_order_id text primary key,
+  client_id uuid references clients(id),
+  sent_at timestamptz not null default now()
 );
 
 -- Copie locale des champs édités depuis /admin/profile (profil WhatsApp

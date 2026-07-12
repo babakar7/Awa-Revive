@@ -63,6 +63,38 @@ export async function markEmailPrompted(clientId: string): Promise<void> {
   );
 }
 
+/**
+ * Find a local client whose WhatsApp number matches any of the given phone
+ * spellings (a Wix contact's phones come in e164/raw forms). wa_phone is
+ * stored as bare digits (WhatsApp wa_id), so we compare on digits only.
+ * Returns null when the subscriber has never messaged Awa (no local row).
+ */
+export async function findClientByPhone(candidates: string[]): Promise<Client | null> {
+  const digits = [...new Set(candidates.map((c) => c.replace(/\D/g, "")).filter(Boolean))];
+  if (digits.length === 0) return null;
+  const res = await pool.query(
+    `select id, wa_phone, name, language, email_prompted_at, claimed_email
+       from clients where regexp_replace(wa_phone, '\\D', '', 'g') = any($1) limit 1`,
+    [digits],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Atomically claim the right to send ONE renewal nudge for a Wix order.
+ * Returns false if a previous sweep already claimed it (one-shot per plan
+ * period; a renewal creates a new Wix order → a fresh claim). Claimed BEFORE
+ * sending: a lost nudge is a minor miss, a double nudge is spam.
+ */
+export async function claimRenewalNudge(wixOrderId: string, clientId: string): Promise<boolean> {
+  const res = await pool.query(
+    `insert into renewal_nudges (wix_order_id, client_id) values ($1, $2)
+     on conflict (wix_order_id) do nothing`,
+    [wixOrderId, clientId],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
 export async function saveClaimedEmail(clientId: string, email: string): Promise<void> {
   await pool.query(
     `update clients set claimed_email = $2, updated_at = now() where id = $1`,
@@ -535,6 +567,7 @@ export interface PlanOrder {
   link_expires_at: Date | null;
   wix_order_id: string | null;
   member_id: string | null;
+  starts_at: Date | null;
 }
 
 /**
@@ -568,11 +601,13 @@ export async function createDraftPlanOrder(args: {
   planName: string;
   amountXof: number;
   memberId: string | null;
+  /** Chained renewal: when the new plan should start (null = immediately). */
+  startsAt?: Date | null;
 }): Promise<PlanOrder> {
   const res = await pool.query(
-    `insert into pending_plan_orders (client_id, plan_id, plan_name, amount_xof, member_id, status)
-     values ($1, $2, $3, $4, $5, 'DRAFT') returning *`,
-    [args.clientId, args.planId, args.planName, args.amountXof, args.memberId],
+    `insert into pending_plan_orders (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, status)
+     values ($1, $2, $3, $4, $5, $6, 'DRAFT') returning *`,
+    [args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null],
   );
   return res.rows[0];
 }

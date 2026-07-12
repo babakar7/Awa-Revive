@@ -27,6 +27,14 @@ export const config = {
   // Must have exactly 2 body variables: {{1}} subject, {{2}} flattened detail.
   WA_RECEPTION_TEMPLATE: optional("WA_RECEPTION_TEMPLATE", ""),
   WA_RECEPTION_TEMPLATE_LANG: optional("WA_RECEPTION_TEMPLATE_LANG", "fr"),
+  // Approved CLIENT-facing template for the pre-expiry renewal nudge (sent
+  // outside the 24h window, so a free-text send would fail with 131047). Empty
+  // = the renewal push is disabled (the in-conversation offer still works).
+  // 3 body variables: {{1}} first name, {{2}} plan name, {{3}} end date.
+  WA_RENEWAL_TEMPLATE: optional("WA_RENEWAL_TEMPLATE", ""),
+  WA_RENEWAL_TEMPLATE_LANG: optional("WA_RENEWAL_TEMPLATE_LANG", "fr"),
+  // Days before a plan's end date to send the renewal nudge.
+  RENEWAL_NUDGE_DAYS: parseInt(optional("RENEWAL_NUDGE_DAYS", "3"), 10),
   // Meta App ID — only needed for the resumable upload flow used to change
   // the WhatsApp Business profile photo. Empty = photo edit disabled in
   // /admin/profile; description/address/hours still work.

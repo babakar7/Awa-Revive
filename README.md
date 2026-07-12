@@ -41,6 +41,8 @@ npm run dev               # start with hot reload
 | `WA_APP_SECRET` | Meta app dashboard → App settings → Basic → App secret |
 | `WA_VERIFY_TOKEN` | Any string; must match what you type in the Meta webhook config |
 | `WA_APP_ID` | Optional — Meta app ID (not the phone-number id), only needed to change the WhatsApp Business profile photo from `/admin/profile` (resumable upload API is app-scoped) |
+| `WA_RENEWAL_TEMPLATE` / `WA_RENEWAL_TEMPLATE_LANG` | Optional — approved Meta template for the pre-expiry renewal nudge (3 vars: name, plan, end date). Empty = renewal push disabled (the in-conversation renewal offer still works). Lang defaults to `fr` |
+| `RENEWAL_NUDGE_DAYS` | Optional — days before a plan's end date to send the renewal nudge (default 3) |
 | `WIX_API_KEY` / `WIX_SITE_ID` | Wix account → API keys ([docs](https://dev.wix.com/docs/rest/business-solutions/bookings)) |
 | `WAVE_API_KEY` | Wave business portal — `wave_sn_prod_...` ([docs](https://docs.wave.com/checkout)) |
 | `WAVE_WEBHOOK_SECRET` | `wave_sn_WHS_...` — shown **once** when you register the webhook endpoint in the Wave portal (Developer → Webhooks). Not the `wave_sn_AKS_` request-signing secret. |
