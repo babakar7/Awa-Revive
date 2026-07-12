@@ -932,6 +932,59 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       `verificationGuard.test.ts` (code-avant-paiement) et checklist
       `first-contact-link`. 190 tests.
 
+33. **Invitation de liaison fiabilisée + Awa CRÉE le compte des nouveaux (12/07,
+    demande Babakar après 2e test raté)**. Deux problèmes constatés sur le test
+    de Babakar (numéro 774982711, nuit 11→12/07) :
+    - **(A) L'invitation §32 n'est jamais partie AVANT le paiement.** Cause : la
+      garde « première conversation à vie » (`!history.some(assistant)`). Le
+      1er message (23:49) aurait dû la déclencher mais l'envoi a raté
+      silencieusement ; puis 2 « souci technique » (crédits Anthropic épuisés,
+      voir chrono) ont persisté des tours `assistant` → la garde a
+      DÉFINITIVEMENT gelé l'invitation. Résultat : le client a payé (00:06)
+      PUIS seulement reçu la demande d'email (filet post-paiement wave.ts) —
+      exactement le flux qu'on voulait éviter. **Fix** : la garde
+      `!history.some(assistant)` est SUPPRIMÉE. Le seul verrou est désormais le
+      flag durable `email_prompted_at` (armé après envoi réussi), donc
+      l'invitation se REPRÉSENTE à chaque message tant qu'elle n'a pas
+      réellement été délivrée. Prédicat extrait et testé :
+      `shouldOfferLinking(memberships, client)` dans
+      [lib/linkAsk.ts](src/lib/linkAsk.ts). Le champ contexte
+      `firstContactUnlinked` devient `unlinkedNeverAsked` (marqueur prompt
+      « FIRST CONTACT » → « UNLINKED NUMBER »). L'invitation N'est PAS accrochée
+      au tour de repli technique (`replyText === FALLBACK_REPLY` → skip, elle
+      repart au message suivant). **Effet de bord assumé** : tout le parc de
+      clients non reliés jamais invités recevra UNE invitation à son prochain
+      message (souhaitable — ce sont les clients à relier).
+    - **(B) Un VRAI nouveau client (rien dans Wix) était une impasse.**
+      L'invitation disait « sinon ignore » ; s'il donnait son email,
+      `request_email_verification` → candidat `none` → **escalade réception**
+      (ticket manuel pour ce qui devrait être une création de compte). Décision
+      Babakar : **Awa crée la fiche elle-même, email vérifié par code AVANT
+      création** (zéro fiche poubelle), deux points d'entrée (invitation
+      élargie + email inconnu). Implémentation :
+      - `emailAskMessage` (FR/EN/WO) élargi : « déjà un compte ? donne l'email
+        … pas encore ? envoie nom+email et je t'en crée un ».
+      - `request_email_verification` : nouveaux inputs `create_account` +
+        `client_name`. Candidat `none` sans flag → `email_not_found_offer_creation`
+        (PAS d'escalade, PAS de code — on propose la création). Avec
+        `create_account:true` + nom → envoi du code, `setAwaitingCode` avec
+        `wix_contact_id NULL` (= marqueur création) + `claimed_name`.
+      - `submit_verification_code` : code OK et `wix_contact_id NULL` → au lieu
+        d'`addPhoneToContact`, `wix.createContact({name, phone, email})` (POST
+        contacts/v4). Le balayage post-vérif (fusion des doublons portant le
+        numéro) s'applique tel quel → absorbe une éventuelle fiche anonyme
+        laissée par une ancienne résa Wave. Renvoie `account_created`.
+      - Nouvelle colonne `link_requests.claimed_name` (schema.ts, ALTER + CREATE),
+        exposée dans [domain/linkRequests.ts](src/domain/linkRequests.ts).
+      - Les escalades réception restent pour `client_has_no_email`, `ambiguous`,
+        erreurs de lookup, échec d'envoi email. Le sweep 30 min rattrape un
+        `none`-sans-suite silencieux (aucun client perdu).
+    - Tests `firstContactLink.test.ts` étendus (shouldOfferLinking : lookup nul,
+      linked, déjà prompté, claimed_email, + régression « historique assistant
+      n'empêche plus l'offre »). 200 tests, build vert.
+    - **⚠️ NON encore validé E2E en prod** au moment de l'écriture (voir runbook
+      §7 pour rejouer : reset `email_prompted_at`, email inconnu → création).
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement

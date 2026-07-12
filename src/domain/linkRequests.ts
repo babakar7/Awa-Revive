@@ -32,6 +32,11 @@ export interface LinkRequest {
   id: string;
   client_id: string;
   claimed_email: string | null;
+  /** Name the client gave for a NEW account (only set on the create-account
+   *  path, where wix_contact_id stays null until the fiche is created). */
+  claimed_name: string | null;
+  /** The proven existing fiche to attach to; null on the create-account path
+   *  (no fiche yet — one is created at submit_verification_code time). */
   wix_contact_id: string | null;
   code_hash: string | null;
   code_expires_at: Date | null;
@@ -104,19 +109,21 @@ export async function getOrOpen(clientId: string): Promise<LinkRequest> {
 export async function setAwaitingCode(
   id: string,
   email: string,
-  wixContactId: string,
+  wixContactId: string | null,
   codeHash: string,
+  claimedName?: string | null,
 ): Promise<void> {
   await pool.query(
     `update link_requests
         set status = 'AWAITING_CODE', claimed_email = $2, wix_contact_id = $3,
             code_hash = $4, code_expires_at = now() + ($5 || ' minutes')::interval,
+            claimed_name = coalesce($6, claimed_name),
             attempts = 0, detail = null,
             emails_sent = case when updated_at < now() - interval '24 hours'
                                then 1 else emails_sent + 1 end,
             updated_at = now()
       where id = $1`,
-    [id, email, wixContactId, codeHash, String(CODE_TTL_MINUTES)],
+    [id, email, wixContactId, codeHash, String(CODE_TTL_MINUTES), claimedName ?? null],
   );
 }
 

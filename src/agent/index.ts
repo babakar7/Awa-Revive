@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import { notifyReception } from "../lib/notify.js";
 import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
-import { emailAskMessage } from "../lib/linkAsk.js";
+import { emailAskMessage, shouldOfferLinking } from "../lib/linkAsk.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
 import { CAFE_MENU } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
@@ -122,24 +122,20 @@ export async function handleInboundText(args: {
 
   const history = await repo.lastTurns(client.id, 20);
 
-  // First-contact account matching: a subscriber messaging from a number that
+  // Account-linking invitation: a subscriber messaging from a number that
   // isn't on their Wix fiche is invisible to Awa and would be pushed to Wave
   // for a class their abonnement covers. When the live lookup says the number
-  // matches NO unique contact, this is their first conversation ever, and the
-  // one-shot email prompt hasn't fired yet, the SERVER appends ONE ignorable
-  // "do you already have an account?" message right after Awa's reply (below).
-  // Deterministic, never left to the model — a prod test (11/07) showed the
-  // model dropping a prompt-injected version when the client's message routed
-  // it elsewhere. The one-shot flag (email_prompted_at, shared with the
-  // post-payment ask in wave.ts) is armed only AFTER the message is actually
-  // sent, so a skipped delivery never burns the single chance.
-  // memberships === null = lookup failed → unknown → never ask.
-  const firstContactUnlinked =
-    memberships !== null &&
-    !memberships.linked &&
-    !client.email_prompted_at &&
-    !client.claimed_email &&
-    !history.some((t) => t.role === "assistant");
+  // matches NO unique contact and the one-shot email prompt hasn't fired yet,
+  // the SERVER appends ONE ignorable "do you already have an account?" message
+  // right after Awa's reply (below). Deterministic, never left to the model —
+  // a prod test (11/07) showed the model dropping a prompt-injected version.
+  // NB: this is NOT gated on "first conversation ever" — that guard was
+  // fragile (a failed send, or the credits-exhausted technical fallback that
+  // persists an assistant turn, permanently burned the single chance, and the
+  // whole existing unlinked client base could never be asked). The durable
+  // one-shot is email_prompted_at alone, armed only AFTER a successful send,
+  // so it retries on the next message until it actually lands.
+  const unlinkedNeverAsked = shouldOfferLinking(memberships, client);
 
   const messages: Anthropic.MessageParam[] = [];
   for (const turn of history) {
@@ -174,7 +170,7 @@ export async function handleInboundText(args: {
         activePlanOrder,
         activeCafeOrder,
         memberships: memberships === null ? null : memberships.plans,
-        firstContactUnlinked,
+        unlinkedNeverAsked,
         recentRefunds,
         habit,
       }),
@@ -273,12 +269,13 @@ export async function handleInboundText(args: {
     await repo.addTurn(client.id, "assistant", replyText);
   }
 
-  // First-contact account matching: the client's actual request was just
-  // answered — NOW append the one-time, ignorable "do you already have a Revive
-  // account?" message, server-side (see the firstContactUnlinked comment
-  // above). Only when a reply actually went out, and the flag is armed only
-  // after a successful send so a failed delivery keeps the single chance.
-  if (firstContactUnlinked && (replyText || interactiveSent)) {
+  // Account-linking invitation: the client's actual request was just answered
+  // — NOW append the one-time, ignorable "do you already have a Revive
+  // account?" message, server-side (see the unlinkedNeverAsked comment above).
+  // Only when a real reply went out (never after the technical-fallback turn,
+  // where it would read as a non-sequitur), and the flag is armed only after a
+  // successful send so a failed delivery keeps the single chance.
+  if (unlinkedNeverAsked && (replyText || interactiveSent) && replyText !== FALLBACK_REPLY) {
     try {
       const ask = emailAskMessage(client.language ?? lang ?? "fr");
       await sendText(args.waPhone, ask);

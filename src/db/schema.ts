@@ -221,6 +221,7 @@ create table if not exists link_requests (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references clients(id),
   claimed_email text,
+  claimed_name text,
   wix_contact_id text,
   code_hash text,
   code_expires_at timestamptz,
@@ -234,6 +235,11 @@ create table if not exists link_requests (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Name the client gave for a NEW account (create-account linking path). On an
+-- existing DB the table above already exists, so this ALTER is what adds it.
+alter table link_requests
+  add column if not exists claimed_name text;
 
 create index if not exists idx_link_requests_status
   on link_requests (status, created_at);

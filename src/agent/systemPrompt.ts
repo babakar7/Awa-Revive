@@ -174,9 +174,10 @@ export function dynamicContext(args: {
   activePlanOrder: PlanOrder | null;
   activeCafeOrder?: CafeOrder | null;
   memberships: MembershipContext[] | null;
-  /** First conversation ever AND the number matches no unique Wix contact:
-   *  invite them (once, ignorably) to link an existing account by email. */
-  firstContactUnlinked?: boolean;
+  /** The number matches no unique Wix contact and hasn't been asked yet:
+   *  invite them (once, ignorably) to link an existing account by email or to
+   *  have Awa create a new one. */
+  unlinkedNeverAsked?: boolean;
   recentRefunds: PendingBooking[];
   habit?: BookingHabit | null;
 }): string {
@@ -258,12 +259,16 @@ export function dynamicContext(args: {
       "Client has no active abonnement on file (checked live via their WhatsApp number). Use the normal Wave payment flow.",
     );
   }
-  if (args.firstContactUnlinked) {
+  if (args.unlinkedNeverAsked) {
     lines.push(
-      "FIRST CONTACT: this WhatsApp number matches no Revive account in Wix. Just answer their request normally. " +
-        "The SYSTEM automatically sends, right after your reply, a one-time ignorable message inviting them to link " +
-        "an existing account by email — do NOT write that invitation yourself, and do not mention accounts/email " +
-        "unprompted. When the client later replies with an email, start request_email_verification.",
+      "UNLINKED NUMBER: this WhatsApp number matches no Revive account in Wix. Just answer their request normally. " +
+        "The SYSTEM automatically sends, right after your reply, a one-time ignorable message inviting them either to " +
+        "link an EXISTING account by email, or — if they're new — to have you CREATE one. Do NOT write that " +
+        "invitation yourself, and do not mention accounts/email unprompted. Then: if the client replies with the " +
+        "email of an existing account, start request_email_verification. If the client says they have NO account and " +
+        "wants one, collect their name + email and call request_email_verification with create_account:true and " +
+        "client_name — a code is emailed to that address, and once they type it back (submit_verification_code) the " +
+        "new Revive account is created and linked. Never create an account or claim one exists without that verified code.",
     );
   }
   if (args.activeBooking) {

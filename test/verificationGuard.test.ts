@@ -9,6 +9,7 @@ function req(status: LinkRequestStatus, codeExpiresAt: Date | null): LinkRequest
     id: "r1",
     client_id: "c1",
     claimed_email: "a@b.com",
+    claimed_name: null,
     wix_contact_id: "w1",
     code_hash: "x",
     code_expires_at: codeExpiresAt,

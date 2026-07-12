@@ -325,17 +325,30 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "request_email_verification",
     description:
-      "Start linking this WhatsApp number to the client's existing Revive account via their email: the " +
-      "server finds the Wix account carrying that email and sends a 6-digit code TO THAT INBOX; the client " +
-      "then reads the code from their email and types it here (submit_verification_code). Use whenever a " +
-      "client shares the email of their existing account — after a failed check_membership claim, after the " +
-      "post-payment linking question, or any account/history context. If the client says they have no email " +
-      "or can't access it, call with client_has_no_email:true instead — reception takes over (the client " +
-      "does NOT need to call). You never see the code: it only exists in the client's inbox.",
+      "Verify a client's email by code, to either LINK an existing Revive account or CREATE a new one. The " +
+      "server sends a 6-digit code TO THAT INBOX; the client reads it from their email and types it here " +
+      "(submit_verification_code). Use whenever a client shares an email — after a failed check_membership " +
+      "claim, the post-payment linking question, or the account invitation. If the email matches no Wix " +
+      "account, the server tells you so (status email_not_found_offer_creation) WITHOUT sending a code — " +
+      "offer to create a fresh account; if the client agrees, call again with create_account:true AND " +
+      "client_name (their full name), which sends the code and, once verified, creates the account. If the " +
+      "client says they have no email or can't access it, call with client_has_no_email:true instead — " +
+      "reception takes over (the client does NOT need to call). You never see the code: it only exists in " +
+      "the client's inbox.",
     input_schema: {
       type: "object",
       properties: {
-        email: { type: "string", description: "The email of the client's existing Revive account" },
+        email: { type: "string", description: "The email to verify (existing account, or the one for a new account)" },
+        create_account: {
+          type: "boolean",
+          description:
+            "true ONLY when the email matched no account and the client agreed to create a new one — must be " +
+            "sent together with client_name",
+        },
+        client_name: {
+          type: "string",
+          description: "The client's full name, required when create_account is true (used on the new fiche)",
+        },
         client_has_no_email: {
           type: "boolean",
           description:
@@ -1495,15 +1508,56 @@ export async function executeTool(
               "The account carrying this email ALREADY has this WhatsApp number — no verification " +
               "needed. Run check_membership again to see their plans.",
           });
-        case "none":
-          await escalateLinkRequest(request, client, `aucune fiche Wix ne porte l'email déclaré (${email})`);
+        case "none": {
+          const wantsCreate = input.create_account === true;
+          const clientName = String(input.client_name ?? "").slice(0, 80).trim();
+          if (!wantsCreate) {
+            // No fiche carries this email — DON'T escalate. Offer to create a
+            // fresh account (client_name + create_account:true on the next
+            // call), or let them re-try another email if they expected one.
+            return JSON.stringify({
+              status: "email_not_found_offer_creation",
+              message:
+                "No existing Revive account carries this email. Ask the client: do they want you to CREATE a " +
+                "new account with this email? If yes, get their full name and call request_email_verification " +
+                "again with create_account:true and client_name. If they expected an existing account, they " +
+                "can re-send a different email instead. (No code was sent yet.)",
+            });
+          }
+          if (!clientName) {
+            return JSON.stringify({
+              status: "name_required",
+              message:
+                "To create the account, ask the client for their full name, then call again with " +
+                "create_account:true and client_name.",
+            });
+          }
+          const code = links.generateCode();
+          // wix_contact_id null = create-account marker: the fiche is created at
+          // submit_verification_code time, once the email is proven by code.
+          await links.setAwaitingCode(request.id, email, null, links.hashCode(code, request.id), clientName);
+          try {
+            await sendVerificationCodeEmail(email, code);
+          } catch (err) {
+            console.error("Verification-code email failed (account creation):", err);
+            await escalateLinkRequest(request, client, `envoi du code impossible (création compte, email ${email})`);
+            return JSON.stringify({
+              status: "send_failed",
+              message:
+                "The verification email could not be sent — reception has been notified. Tell the client the " +
+                "team is on it (no need to call).",
+            });
+          }
           return JSON.stringify({
-            status: "email_not_found",
+            status: "code_sent_for_new_account",
+            expires_in_minutes: links.CODE_TTL_MINUTES,
             message:
-              "No Revive account carries this email. Reception has been notified and will link the " +
-              "account manually — tell the client the team is on it (no need to call). They can also " +
-              "re-try with another email address. Offer normal Wave payment for bookings that can't wait.",
+              "A 6-digit code was just emailed to that address. Ask the client to read it in their inbox " +
+              "(spam folder too) and type it HERE — then call submit_verification_code, which will create " +
+              `their new Revive account. The code is valid ${links.CODE_TTL_MINUTES} minutes. You do NOT ` +
+              "know the code and can never confirm or repeat it — it only exists in the client's inbox.",
           });
+        }
         case "ambiguous":
           await escalateLinkRequest(
             request,
@@ -1590,10 +1644,23 @@ export async function executeTool(
         });
       }
       const wa = `+${client.wa_phone.replace(/^\+/, "")}`;
+      // Two paths converge here, both now proven by the code:
+      //  - wix_contact_id set → existing account, attach this number to it;
+      //  - wix_contact_id null → create-account path, create the fiche now.
+      let provenId: string;
       try {
-        await wix.addPhoneToContact(request.wix_contact_id!, wa);
+        if (request.wix_contact_id) {
+          await wix.addPhoneToContact(request.wix_contact_id, wa);
+          provenId = request.wix_contact_id;
+        } else {
+          provenId = await wix.createContact({
+            name: request.claimed_name ?? client.name ?? undefined,
+            phone: wa,
+            email: request.claimed_email ?? undefined,
+          });
+        }
       } catch (err) {
-        console.error("addPhoneToContact failed after verified code:", err);
+        console.error("Wix write failed after verified code:", err);
         await escalateLinkRequest(request, client, "code vérifié mais écriture Wix en échec");
         return JSON.stringify({
           status: "link_failed",
@@ -1602,16 +1669,17 @@ export async function executeTool(
             "finish the linking manually. Tell the client the team is on it (no need to call).",
         });
       }
-      await links.markVerified(request.id, request.wix_contact_id!);
+      await links.markVerified(request.id, provenId);
       invalidateMembershipCache(client.id);
 
-      // Post-verification duplicate handling. The number was JUST added to the
-      // proven fiche, so we list ALL fiches carrying it (not the "unique-or-
-      // null" collapse of findContactIdByPhone — that returns null both when
-      // the Wix search index simply lags the write we just made, AND when a
-      // real second fiche exists; conflating them produced a FALSE
-      // "verified_pending_merge", cf. the 340 ms race seen 11/07).
-      const provenId = request.wix_contact_id!;
+      // Post-verification duplicate handling. The number is JUST on the proven
+      // fiche (attached or freshly created), so we list ALL fiches carrying it
+      // (not the "unique-or-null" collapse of findContactIdByPhone — that
+      // returns null both when the Wix search index simply lags the write we
+      // just made, AND when a real second fiche exists; conflating them
+      // produced a FALSE "verified_pending_merge", cf. the 340 ms race 11/07).
+      // On the create path this also absorbs any anonymous fiche a past Wave
+      // payment left on this number.
       const allFiches = await wix.findContactsByPhone(wa);
       const otherIds = allFiches
         .map((c: any) => c.id as string)
@@ -1684,14 +1752,18 @@ export async function executeTool(
         }
       }
 
-      const memberships = await wix.listActiveMemberships(request.wix_contact_id!);
+      const memberships = await wix.listActiveMemberships(provenId);
+      const created = !request.wix_contact_id;
       return JSON.stringify({
-        status: "verified",
+        status: created ? "account_created" : "verified",
         active_plans: memberships.map((m) => ({ plan: m.planName, expires: m.expiresAt })),
-        message:
-          "Account linked! You CAN now tell the client their account is connected to this WhatsApp " +
-          "number. Their active plans are listed above (details/balance via check_membership) — offer " +
-          "to book their next class right away, on the plan when it covers the class.",
+        message: created
+          ? "New Revive account created and linked to this WhatsApp number! Tell the client their account " +
+            "is set up — future bookings and any abonnement will be tied to it automatically. Offer to book " +
+            "their next class right away."
+          : "Account linked! You CAN now tell the client their account is connected to this WhatsApp " +
+            "number. Their active plans are listed above (details/balance via check_membership) — offer " +
+            "to book their next class right away, on the plan when it covers the class.",
       });
     }
 

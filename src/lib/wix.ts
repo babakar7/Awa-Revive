@@ -599,6 +599,46 @@ export async function addPhoneToContact(
   }
 }
 
+/**
+ * Create a brand-new CRM contact for a client who has no Wix account yet.
+ * Called only AFTER the client proved ownership of the email by code
+ * (submit_verification_code) — the email is therefore known-good and, per the
+ * "none" candidate that routed here, carried by no existing fiche, so this
+ * never duplicates on email. The WhatsApp number may still exist on an
+ * anonymous fiche from a past Wave payment; the caller's post-verification
+ * merge absorbs that. Senegalese numbers go in as countryCode SN + local
+ * digits so Wix computes the e164Phone that findContactIdByPhone matches.
+ */
+export async function createContact(args: {
+  name?: string;
+  phone: string;
+  email?: string;
+}): Promise<string> {
+  const info: any = {};
+  const name = args.name?.trim();
+  if (name) {
+    const parts = name.split(/\s+/);
+    info.name = {
+      first: parts[0],
+      ...(parts.length > 1 ? { last: parts.slice(1).join(" ") } : {}),
+    };
+  }
+  const e164 = args.phone.startsWith("+") ? args.phone : `+${args.phone}`;
+  const digits = e164.replace(/\D/g, "");
+  info.phones = {
+    items: [
+      digits.startsWith("2217") && digits.length === 12
+        ? { tag: "MOBILE", countryCode: "SN", phone: digits.slice(3) }
+        : { tag: "MOBILE", phone: e164 },
+    ],
+  };
+  if (args.email) info.emails = { items: [{ tag: "MAIN", email: args.email }] };
+  const data = await wixPost("/contacts/v4/contacts", { info });
+  const id = data?.contact?.id;
+  if (!id) throw new Error(`Wix create contact returned no id: ${JSON.stringify(data)}`);
+  return id;
+}
+
 // ---------- pricing plans (memberships / abonnements) ----------
 
 export interface Membership {
