@@ -17,18 +17,19 @@ Bookings**, avec paiement préalable via **Wave** (mobile money) ou via leur
 `@anthropic-ai/sdk` (modèle `claude-sonnet-5`, effort low, prompt caching).
 
 **Invariant central : aucune réservation n'est créée dans Wix avant qu'un
-paiement Wave soit vérifié par webhook signé** (ou qu'une séance d'abonnement
-soit décomptée par Wix). Le modèle propose, le serveur décide : prix depuis le
-catalogue Wix uniquement, event_ids validés contre `slot_cache` (anti
-prompt-injection), règle des 16h vérifiée côté serveur.
+paiement soit vérifié** (Wave : webhook signé ; OM/Max It : callback +
+verify-by-lookup API ; ou séance d'abonnement décomptée par Wix). Le modèle
+propose, le serveur décide : prix depuis le catalogue Wix uniquement, event_ids
+validés contre `slot_cache` (anti prompt-injection), règle des 16h vérifiée
+côté serveur.
 
 ## 2. État : TOUT LE PÉRIMÈTRE PHASE 1+ EST EN PRODUCTION ET VALIDÉ E2E
 
 Production : `https://resabot-production.up.railway.app` (Railway, service +
 Postgres), déployée depuis GitHub (`babakar7/Awa-Revive`, push sur main =
 déploiement). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
-phone_number_id 1175926012276896). Tests : 90 unitaires (`npm test`, rapides,
-sans réseau) + 29 d'intégration sur les chemins de paiement Wave + OM
+phone_number_id 1175926012276896). Tests : ~270 unitaires (`npm test`, rapides,
+sans réseau) + **29 d'intégration** sur les chemins de paiement Wave + OM
 (`npm run test:integration`, Postgres jetable via Docker, APIs externes
 mockées) — exécutés en CI GitHub Actions à chaque push.
 
@@ -91,7 +92,7 @@ src/
                       idempotence marquée APRÈS traitement (échec = retry Wave rejouable) ;
                       reconcileStuckBookings() : rattrape les PAID jamais réservés (crash) — voir §4.14
 scripts/              simulate-wave-webhook, daily-summary, mark-refunded (refund:done), test-email
-test/                 90 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
+test/                 ~270 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
 test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgres jetable (docker run,
                       globalSetup maison — PAS testcontainers, incompatible Node 20.17), mock fetch
                       Wix/Wave/OM/Meta/Brevo qui THROW sur tout appel inattendu — voir §4.12 / §4.15
@@ -1340,6 +1341,16 @@ test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgre
   jamais la réponse). 5 tests `conversationStart`. Fichiers :
   [notify.ts](src/lib/notify.ts), [index.ts](src/agent/index.ts), config,
   repo, `.env.example`.
+- **13/07 — Tests d'intégration Orange Money / Max It (`7fb8487`).** Nouveau
+  fichier [orange-money-webhook.test.ts](test/integration/orange-money-webhook.test.ts)
+  (15 cas) sur le même harnais Postgres jetable + fetch mock que Wave. Valide
+  le chemin **unsigned callback → OAuth → GET transactions (source de vérité)
+  → fulfillment partagé → BOOKED** (ou REFUND_NEEDED). Anti-forgery (lookup
+  vide / montant / partner / order), idempotence `om:{transactionId}`, lookup
+  500 non marqué processed puis retry. Env dummy + mock dans
+  [globalSetup.ts](test/integration/globalSetup.ts) /
+  [helpers.ts](test/integration/helpers.ts) (`deliverOmWebhook`). Suite
+  intégration **29/29** (14 Wave + 15 OM) en CI. Détail : §4.12.
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —
