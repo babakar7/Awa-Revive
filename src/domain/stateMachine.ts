@@ -5,13 +5,15 @@ import type pg from "pg";
  *
  * DRAFT ──payment link created──► AWAITING_PAYMENT
  * AWAITING_PAYMENT ──TTL passed──────────────► EXPIRED
- * AWAITING_PAYMENT ──valid Wave webhook──────► PAID
+ * AWAITING_PAYMENT ──valid Wave/OM webhook───► PAID
  * PAID ──slot still free, Wix booking OK─────► BOOKED
  * PAID ──slot gone or Wix error──────────────► REFUND_NEEDED
  *
  * Plus (spec edge cases):
- * EXPIRED ──late Wave webhook────────────────► PAID  (money taken; honor it)
- * DRAFT ──superseded / Wave session failed───► EXPIRED
+ * EXPIRED ──late Wave/OM webhook─────────────► PAID  (money taken; honor it)
+ * DRAFT ──superseded / session create failed─► EXPIRED
+ * DRAFT ──client paid before setAwaiting─────► PAID  (orphan draft: session
+ *   existed with clientReference=draft.id; webhook-verified money wins)
  * BOOKED ──cancelled in Wix (reception)──────► CANCELLED  (synced lazily)
  * BOOKED ──cancelled by Awa, Wave-paid ≥16h──► REFUND_NEEDED (manual refund owed)
  * REFUND_NEEDED ──manual refund done in Wave─► REFUNDED   (npm run refund:done)
@@ -27,7 +29,9 @@ export type BookingStatus =
   | "CANCELLED";
 
 export const TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
-  DRAFT: ["AWAITING_PAYMENT", "EXPIRED"],
+  // DRAFT→PAID: verified payment landed while the row was still DRAFT (crash
+  // between Wave/OM session create and setAwaitingPayment). Money wins.
+  DRAFT: ["AWAITING_PAYMENT", "EXPIRED", "PAID"],
   AWAITING_PAYMENT: ["PAID", "EXPIRED"],
   EXPIRED: ["PAID"], // late payment after TTL — honor it
   PAID: ["BOOKED", "REFUND_NEEDED"],

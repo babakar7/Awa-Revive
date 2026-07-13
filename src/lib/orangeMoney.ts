@@ -224,16 +224,7 @@ export async function lookupSuccessfulTransaction(
     throw new Error(`OM transaction lookup failed (${res.status}): ${await res.text()}`);
   }
   const data: any = await res.json();
-  // Response shape may be a list or a single object — normalize.
-  const items: any[] = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.data)
-      ? data.data
-      : Array.isArray(data?.content)
-        ? data.content
-        : data?.transactionId
-          ? [data]
-          : [];
+  const items = normalizeTransactionList(data);
   const hit =
     items.find(
       (t) =>
@@ -241,20 +232,7 @@ export async function lookupSuccessfulTransaction(
         String(t?.status ?? "").toUpperCase() === "SUCCESS",
     ) ?? null;
   if (!hit) return null;
-  const amountRaw = hit.amount?.value ?? hit.amount ?? hit.value;
-  const amountValue = typeof amountRaw === "number" ? amountRaw : Number(amountRaw);
-  return {
-    transactionId: String(hit.transactionId ?? hit.id ?? transactionId),
-    status: String(hit.status ?? ""),
-    amountValue: Number.isFinite(amountValue) ? amountValue : 0,
-    partnerId: hit.partner?.id != null ? String(hit.partner.id) : null,
-    metadata: (hit.metadata && typeof hit.metadata === "object" ? hit.metadata : {}) as Record<
-      string,
-      unknown
-    >,
-    customerId: hit.customer?.id != null ? String(hit.customer.id) : null,
-    raw: hit,
-  };
+  return parseOmTransaction(hit, transactionId);
 }
 
 /** Pure checks used after lookup (unit-tested). */
@@ -277,6 +255,62 @@ export function transactionMatchesPending(
     return { ok: false, reason: "order_mismatch" };
   }
   return { ok: true };
+}
+
+function normalizeTransactionList(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.content)) return data.content;
+  if (data?.transactionId) return [data];
+  return [];
+}
+
+function parseOmTransaction(hit: any, fallbackId?: string): OmTransaction {
+  const amountRaw = hit.amount?.value ?? hit.amount ?? hit.value;
+  const amountValue = typeof amountRaw === "number" ? amountRaw : Number(amountRaw);
+  return {
+    transactionId: String(hit.transactionId ?? hit.id ?? fallbackId ?? ""),
+    status: String(hit.status ?? ""),
+    amountValue: Number.isFinite(amountValue) ? amountValue : 0,
+    partnerId: hit.partner?.id != null ? String(hit.partner.id) : null,
+    metadata: (hit.metadata && typeof hit.metadata === "object" ? hit.metadata : {}) as Record<
+      string,
+      unknown
+    >,
+    customerId: hit.customer?.id != null ? String(hit.customer.id) : null,
+    raw: hit,
+  };
+}
+
+/**
+ * Search SUCCESS merchant payments in a time window (reconcile lost callbacks).
+ * Shape varies by Sonatel version — we normalize like lookupSuccessfulTransaction.
+ * Throws on HTTP error so the poller can fall back to a reception digest.
+ */
+export async function searchSuccessfulTransactions(
+  from: Date,
+  to: Date,
+): Promise<OmTransaction[]> {
+  const token = await getAccessToken();
+  const url = new URL(`${config.OM_API_BASE}/api/eWallet/v1/transactions`);
+  url.searchParams.set("fromDateTime", from.toISOString());
+  url.searchParams.set("toDateTime", to.toISOString());
+  // Some portal docs use from/to — send both; extra params are usually ignored.
+  url.searchParams.set("from", from.toISOString());
+  url.searchParams.set("to", to.toISOString());
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`OM transaction search failed (${res.status}): ${await res.text()}`);
+  }
+  const data: any = await res.json();
+  const items = normalizeTransactionList(data);
+  return items
+    .filter((t) => String(t?.status ?? "").toUpperCase() === "SUCCESS")
+    .map((t) => parseOmTransaction(t));
 }
 
 /** Reset token cache (tests). */

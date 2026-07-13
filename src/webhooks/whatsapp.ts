@@ -9,9 +9,12 @@ import {
 } from "../agent/index.js";
 import { transcribeWhatsAppAudio, transcriptionEnabled } from "../lib/transcribe.js";
 import { describeWhatsAppImage, imageTurnText } from "../lib/imageInput.js";
-import { alreadyProcessed } from "../domain/repo.js";
+import { wasProcessed, markProcessed } from "../domain/repo.js";
 import { allowMessage } from "../lib/rateLimit.js";
 import { enqueue } from "../lib/serialize.js";
+
+/** In-memory claim so concurrent Meta re-deliveries can't both process. */
+const inFlightMessages = new Set<string>();
 
 export function registerWhatsAppWebhook(app: FastifyInstance): void {
   // GET challenge handshake (SPEC §4.1)
@@ -36,8 +39,22 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
     const messages = parseInboundMessages(req.body);
 
     for (const msg of messages) {
-      // Dedupe by WhatsApp message id — webhooks retry (SPEC §4.1).
-      if (await alreadyProcessed(`wa:${msg.id}`, "whatsapp")) {
+      const dedupeId = `wa:${msg.id}`;
+      // Dedupe by WhatsApp message id — webhooks retry (SPEC §4.1). RETRIABLE
+      // pattern: claim the id in-memory synchronously (before any await, so a
+      // concurrent re-delivery can't slip through), read-only DB check, and
+      // record it as processed only AFTER the message is fully handled (in the
+      // enqueue task below). A crash mid-processing thus leaves the id
+      // UNrecorded → Meta's retry reprocesses it instead of the message being
+      // lost forever (the old mark-before pattern lost every message a crash
+      // interrupted).
+      if (inFlightMessages.has(msg.id)) {
+        req.log.info({ id: msg.id }, "WhatsApp message already in flight, skipping");
+        continue;
+      }
+      inFlightMessages.add(msg.id);
+      if (await wasProcessed(dedupeId)) {
+        inFlightMessages.delete(msg.id);
         req.log.info({ id: msg.id }, "Duplicate WhatsApp message, skipping");
         continue;
       }
@@ -45,6 +62,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
       // dropped burst isn't just silence, without spamming during a flood.
       const rate = allowMessage(msg.from);
       if (!rate.allowed) {
+        inFlightMessages.delete(msg.id);
         req.log.warn({ from: msg.from }, "Rate limit exceeded, dropping message");
         if (rate.notifyThrottle) {
           void sendText(
@@ -56,7 +74,8 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
         continue;
       }
 
-      // Ack fast; process async, serialized per client.
+      // Ack fast; process async, serialized per client. Mark processed only on
+      // success; release the in-flight claim either way.
       enqueue(msg.from, async () => {
         try {
           if (msg.type === "text" && msg.text) {
@@ -110,8 +129,12 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
           } else {
             await handleUnsupportedMedia(msg.from, msg.id);
           }
+          // Success only: so a crash mid-handling leaves the id free for Meta retry.
+          await markProcessed(dedupeId, "whatsapp");
         } catch (err) {
           req.log.error({ err, from: msg.from }, "Inbound message processing failed");
+        } finally {
+          inFlightMessages.delete(msg.id);
         }
       });
     }

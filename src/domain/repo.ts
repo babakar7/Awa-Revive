@@ -355,7 +355,34 @@ export async function expireStaleBookings(): Promise<number> {
         set status = 'EXPIRED', updated_at = now()
       where status = 'AWAITING_PAYMENT' and link_expires_at < now()`,
   );
-  return res.rowCount ?? 0;
+  const stale = res.rowCount ?? 0;
+  // Orphan DRAFTs (session created then crash before setAwaitingPayment, or
+  // abandoned mid-flow): never sat in AWAITING so the TTL above never saw them.
+  const drafts = await pool.query(
+    `update pending_bookings
+        set status = 'EXPIRED', updated_at = now()
+      where status = 'DRAFT' and created_at < now() - interval '1 hour'`,
+  );
+  return stale + (drafts.rowCount ?? 0);
+}
+
+/** REFUND_NEEDED rows that never got a successful reception/client notify. */
+export async function stuckUnnotifiedRefunds(limit = 20): Promise<PendingBooking[]> {
+  const res = await pool.query(
+    `select * from pending_bookings
+      where status = 'REFUND_NEEDED' and refund_notified_at is null
+      order by updated_at asc limit $1`,
+    [limit],
+  );
+  return res.rows;
+}
+
+export async function markRefundNotified(bookingId: string): Promise<void> {
+  await pool.query(
+    `update pending_bookings set refund_notified_at = now(), updated_at = now()
+      where id = $1 and status = 'REFUND_NEEDED'`,
+    [bookingId],
+  );
 }
 
 /**
@@ -729,6 +756,8 @@ export interface PlanOrder {
   member_id: string | null;
   starts_at: Date | null;
   payment_method: string;
+  fulfilling_at: Date | null;
+  reception_notified_at: Date | null;
 }
 
 /**
@@ -789,19 +818,80 @@ export async function setPlanOrderAwaitingPayment(
 }
 
 export async function markPlanOrderPaid(id: string): Promise<PlanOrder | null> {
-  return transitionPlanOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED"]);
+  // DRAFT included: verified payment can land before setAwaitingPayment
+  // (crash between session create and AWAITING). Same money-first rule as bookings.
+  return transitionPlanOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED", "DRAFT"]);
 }
 
 export async function markPlanOrderActivated(
   id: string,
   wixOrderId: string,
 ): Promise<PlanOrder | null> {
-  return transitionPlanOrder(id, "ACTIVATED", ["PAID"], { wix_order_id: wixOrderId });
+  return transitionPlanOrder(id, "ACTIVATED", ["PAID"], {
+    wix_order_id: wixOrderId,
+    fulfilling_at: null,
+  });
 }
 
 export async function findPlanOrderById(id: string): Promise<PlanOrder | null> {
   const res = await pool.query(`select * from pending_plan_orders where id = $1`, [id]);
   return res.rows[0] ?? null;
+}
+
+/**
+ * Claim a PAID plan order that still needs work: either auto-activation
+ * (member + no wix_order_id) or manual reception notify (no reception_notified_at).
+ */
+export async function claimPlanOrderForFulfillment(id: string): Promise<PlanOrder | null> {
+  const res = await pool.query(
+    `update pending_plan_orders
+        set fulfilling_at = now(), updated_at = now()
+      where id = $1 and status = 'PAID'
+        and (
+          (member_id is not null and wix_order_id is null)
+          or (reception_notified_at is null)
+        )
+        and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
+      returning *`,
+    [id],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function markPlanOrderReceptionNotified(id: string): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set reception_notified_at = now(), updated_at = now(), fulfilling_at = null
+      where id = $1`,
+    [id],
+  );
+}
+
+export async function clearPlanOrderFulfilling(id: string): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders set fulfilling_at = null, updated_at = now() where id = $1`,
+    [id],
+  );
+}
+
+/** PAID plans never activated / never notified — grace period like bookings. */
+export async function stuckPaidPlanOrders(
+  graceMinutes = 3,
+  limit = 20,
+): Promise<PlanOrder[]> {
+  const res = await pool.query(
+    `select * from pending_plan_orders
+      where status = 'PAID'
+        and (
+          (member_id is not null and wix_order_id is null)
+          or reception_notified_at is null
+        )
+        and updated_at < now() - make_interval(mins => $1)
+        and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
+      order by updated_at asc limit $2`,
+    [graceMinutes, limit],
+  );
+  return res.rows;
 }
 
 /** One active plan payment link per client — expire any previous one. */
@@ -813,13 +903,17 @@ export async function expireActivePlanOrders(clientId: string): Promise<void> {
   );
 }
 
-/** TTL sweep — plan links past expiry → EXPIRED. */
+/** TTL sweep — plan links past expiry → EXPIRED (+ orphan DRAFTs > 1h). */
 export async function expireStalePlanOrders(): Promise<number> {
   const res = await pool.query(
     `update pending_plan_orders set status = 'EXPIRED', updated_at = now()
       where status = 'AWAITING_PAYMENT' and link_expires_at < now()`,
   );
-  return res.rowCount ?? 0;
+  const drafts = await pool.query(
+    `update pending_plan_orders set status = 'EXPIRED', updated_at = now()
+      where status = 'DRAFT' and created_at < now() - interval '1 hour'`,
+  );
+  return (res.rowCount ?? 0) + (drafts.rowCount ?? 0);
 }
 
 export async function activeAwaitingPlanOrder(clientId: string): Promise<PlanOrder | null> {
@@ -848,6 +942,8 @@ export interface CafeOrder {
   payment_link: string | null;
   link_expires_at: Date | null;
   payment_method: string;
+  fulfilling_at: Date | null;
+  fulfilled_at: Date | null;
 }
 
 async function transitionCafeOrder(
@@ -913,7 +1009,43 @@ export async function setCafeOrderAwaitingPayment(
 }
 
 export async function markCafeOrderPaid(id: string): Promise<CafeOrder | null> {
-  return transitionCafeOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED"]);
+  return transitionCafeOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED", "DRAFT"]);
+}
+
+export async function claimCafeOrderForFulfillment(id: string): Promise<CafeOrder | null> {
+  const res = await pool.query(
+    `update pending_cafe_orders
+        set fulfilling_at = now(), updated_at = now()
+      where id = $1 and status = 'PAID' and fulfilled_at is null
+        and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
+      returning *`,
+    [id],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function markCafeOrderFulfilled(id: string): Promise<void> {
+  await pool.query(
+    `update pending_cafe_orders
+        set fulfilled_at = now(), fulfilling_at = null, updated_at = now()
+      where id = $1`,
+    [id],
+  );
+}
+
+export async function stuckPaidCafeOrders(
+  graceMinutes = 3,
+  limit = 20,
+): Promise<CafeOrder[]> {
+  const res = await pool.query(
+    `select * from pending_cafe_orders
+      where status = 'PAID' and fulfilled_at is null
+        and updated_at < now() - make_interval(mins => $1)
+        and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
+      order by updated_at asc limit $2`,
+    [graceMinutes, limit],
+  );
+  return res.rows;
 }
 
 /** The client's live unpaid bar link, for the per-message dynamic context. */
@@ -941,13 +1073,55 @@ export async function expireActiveCafeOrders(clientId: string): Promise<void> {
   );
 }
 
-/** TTL sweep — bar links past expiry → EXPIRED. */
+/** TTL sweep — bar links past expiry → EXPIRED (+ orphan DRAFTs > 1h). */
 export async function expireStaleCafeOrders(): Promise<number> {
   const res = await pool.query(
     `update pending_cafe_orders set status = 'EXPIRED', updated_at = now()
       where status = 'AWAITING_PAYMENT' and link_expires_at < now()`,
   );
-  return res.rowCount ?? 0;
+  const drafts = await pool.query(
+    `update pending_cafe_orders set status = 'EXPIRED', updated_at = now()
+      where status = 'DRAFT' and created_at < now() - interval '1 hour'`,
+  );
+  return (res.rowCount ?? 0) + (drafts.rowCount ?? 0);
+}
+
+/**
+ * Recent OM/Max It orders still waiting for a webhook (callback may have been
+ * lost). Used by the OM reconcile poller — AWAITING_PAYMENT or EXPIRED, last 24h.
+ */
+export async function awaitingOmPaymentCandidates(limit = 50): Promise<
+  { kind: "booking" | "plan" | "cafe"; id: string; amount_xof: number; payment_method: string }[]
+> {
+  const out: {
+    kind: "booking" | "plan" | "cafe";
+    id: string;
+    amount_xof: number;
+    payment_method: string;
+  }[] = [];
+  for (const [kind, table] of [
+    ["booking", "pending_bookings"],
+    ["plan", "pending_plan_orders"],
+    ["cafe", "pending_cafe_orders"],
+  ] as const) {
+    const res = await pool.query(
+      `select id, amount_xof, payment_method from ${table}
+        where payment_method in ('orange_money', 'maxit')
+          and status in ('AWAITING_PAYMENT', 'EXPIRED', 'DRAFT')
+          and created_at > now() - interval '24 hours'
+        order by created_at desc limit $1`,
+      [limit],
+    );
+    for (const r of res.rows) {
+      out.push({
+        kind,
+        id: r.id,
+        amount_xof: r.amount_xof,
+        payment_method: r.payment_method,
+      });
+    }
+  }
+  return out;
 }
 
 // ---------- waitlist (full slots the client asked to be pinged about) ----------

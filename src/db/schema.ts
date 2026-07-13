@@ -190,6 +190,28 @@ alter table pending_plan_orders
 alter table pending_cafe_orders
   add column if not exists payment_method text not null default 'wave';
 
+-- Plan/cafe fulfillment lease (same idea as pending_bookings.fulfilling_at):
+-- a crash between markPaid and activation/notify left rows in PAID forever
+-- with no sweep. Lease + stuck reconcile recovers them.
+alter table pending_plan_orders
+  add column if not exists fulfilling_at timestamptz;
+-- Set when reception is notified for manual activation (no member / offline
+-- failed) so retries don't spam. Auto path uses wix_order_id instead.
+alter table pending_plan_orders
+  add column if not exists reception_notified_at timestamptz;
+
+alter table pending_cafe_orders
+  add column if not exists fulfilling_at timestamptz;
+-- Set when reception + client confirmations for a paid bar order are done
+-- (or attempted). PAID + fulfilled_at IS NULL = stuck, reclaimable.
+alter table pending_cafe_orders
+  add column if not exists fulfilled_at timestamptz;
+
+-- REFUND_NEEDED with no successful client/reception notify (crash mid-markRefund).
+-- Sweep re-notifies rows where this is null.
+alter table pending_bookings
+  add column if not exists refund_notified_at timestamptz;
+
 -- Waitlist for full class slots: the client explicitly asked to be pinged if
 -- a spot frees up. The 5-min sweep re-checks availability; a freed spot sends
 -- ONE WhatsApp nudge (claim WAITING→NOTIFIED before sending, one-shot). No

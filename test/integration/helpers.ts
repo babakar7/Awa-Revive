@@ -167,6 +167,24 @@ export function makeFetchMock(): FetchMock {
       if (om.failLookup) return json(500, { error: "lookup_down" });
       const u = new URL(url);
       const txnId = u.searchParams.get("transactionId") ?? "";
+      // Date-range search (reconcile poller) — no transactionId: return empty list
+      // unless a test configures transactions with ids (rare).
+      if (!txnId) {
+        const listed = Object.entries(om.transactions)
+          .filter(([, v]) => v && (v as any).status !== "FAILED")
+          .map(([id, v]) => {
+            const base = v as NonNullable<typeof om.defaultLookup>;
+            return {
+              transactionId: id,
+              status: base?.status ?? "SUCCESS",
+              amount: { unit: "XOF", value: base?.amountValue ?? 15000 },
+              partner: { id: base?.partnerId ?? "553651" },
+              metadata: base?.metadata ?? {},
+              customer: base?.customerId != null ? { id: base.customerId } : undefined,
+            };
+          });
+        return json(200, { data: listed });
+      }
       const configured = Object.prototype.hasOwnProperty.call(om.transactions, txnId)
         ? om.transactions[txnId]
         : undefined;

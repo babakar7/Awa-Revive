@@ -32,6 +32,10 @@ describe("pending_bookings state machine (SPEC §5, §10.9)", () => {
     expect(canTransition("DRAFT", "EXPIRED")).toBe(true);
   });
 
+  it("DRAFT → PAID (verified payment after crash before setAwaitingPayment)", () => {
+    expect(canTransition("DRAFT", "PAID")).toBe(true);
+  });
+
   it("payment-first invariant: BOOKED is only reachable from PAID", () => {
     for (const from of ALL) {
       expect(canTransition(from, "BOOKED")).toBe(from === "PAID");

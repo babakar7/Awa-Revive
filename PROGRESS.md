@@ -1,9 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — **tests d'intégration OM/Max It**
-> (verify-by-lookup + fulfill) ; Pack Découverte éligibilité ; activation B2 no-go ;
-> OM/Max It en prod ; rebrand café → bar.
+> Dernière mise à jour : **13 juillet 2026** — **LOT 1 paiement** (lease plans/café,
+> pas de refund post-BOOKED, DRAFT→PAID, filet OM poller, anti-spam webhook OM,
+> re-notif refund) ; tests intégration OM ; Pack Découverte ; B2 no-go.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar).
@@ -1351,6 +1351,22 @@ test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgre
   [globalSetup.ts](test/integration/globalSetup.ts) /
   [helpers.ts](test/integration/helpers.ts) (`deliverOmWebhook`). Suite
   intégration **29/29** (14 Wave + 15 OM) en CI. Détail : §4.12.
+- **13/07 — LOT 1 : stop perte d'argent silencieuse (chemin paiement).**
+  (1.1) Plans + café : `claim*ForFulfillment` + `stuckPaid*` + reconcile dans le
+  sweep 60 s (`fulfilling_at`, `reception_notified_at` plan, `fulfilled_at` café)
+  — un crash entre PAID et activation/notif ne laisse plus d'orphelin sans
+  reprise. (1.2) Après `BOOKED` / `createBooking` Wix, **jamais** de
+  `markRefund` : échec WhatsApp → notif réception « confirmé mais client non
+  notifié ». (1.3) `DRAFT → PAID` autorisé (session provider créée, crash avant
+  `setAwaitingPayment`) + expire DRAFT > 1 h. (1.4) Poller
+  `reconcileAwaitingOmPayments` : search transactions 24 h, match
+  `metadata.order` → même fulfill ; soft-fail si API search down. (1.5) Webhook
+  OM : existence locale de `order` **avant** lookup Sonatel ; rate-limit 1/h
+  des notifs « introuvable ». (1.6) `refund_notified_at` + re-notify sweep.
+  Fichiers : [fulfillment.ts](src/domain/fulfillment.ts), [repo.ts](src/domain/repo.ts),
+  [stateMachine.ts](src/domain/stateMachine.ts), [schema.ts](src/db/schema.ts),
+  [orangeMoney.ts](src/lib/orangeMoney.ts) / [webhooks/orangeMoney.ts](src/webhooks/orangeMoney.ts),
+  [index.ts](src/index.ts).
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —

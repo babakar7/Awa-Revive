@@ -112,16 +112,17 @@ describe("routing & ack", () => {
     expect(mock.omLookupCalls()).toHaveLength(0);
   });
 
-  it("accepts but no-ops an unknown order id (no Wix call)", async () => {
+  it("unknown order id does NOT call Sonatel lookup (anti-spam)", async () => {
     const res = await deliverOmWebhook(app, {
       orderId: "00000000-0000-4000-8000-000000000000",
       transactionId: "OM_TX_unknown_order",
     });
     expect(res.statusCode).toBe(200);
     await settle(500);
-    // Lookup may still run after finding no pending row... actually handler
-    // looks up FIRST, then loads pending. So lookup happens.
+    expect(mock.omLookupCalls()).toHaveLength(0);
+    expect(mock.omTokenCalls()).toHaveLength(0);
     expect(mock.wixCreateBookingCalls()).toHaveLength(0);
+    expect(mock.emailCalls()).toHaveLength(0);
   });
 });
 
@@ -304,7 +305,10 @@ describe("idempotency & retriability", () => {
     await deliverOmWebhook(app, { orderId: booking.id, transactionId });
     await waitForStatus(booking.id, "BOOKED");
     expect(mock.wixCreateBookingCalls()).toHaveLength(1);
-    expect(await wasOmProcessed(transactionId)).toBe(true);
+    await waitFor(
+      async () => ((await wasOmProcessed(transactionId)) ? true : null),
+      "om id marked processed after successful retry",
+    );
   });
 
   it("a different transactionId after BOOKED does not re-create the Wix booking", async () => {

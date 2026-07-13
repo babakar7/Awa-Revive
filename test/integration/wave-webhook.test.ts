@@ -148,6 +148,17 @@ describe("happy path", () => {
     await waitForStatus(booking.id, "BOOKED");
     expect(mock.wixCreateBookingCalls()).toHaveLength(1);
   });
+
+  it("orphan DRAFT (session created, crash before setAwaiting) → PAID → BOOKED", async () => {
+    const client = await seedClient();
+    // Client paid a Wave/OM session whose client_reference is this draft id,
+    // but setAwaitingPayment never ran — money-first: honor the webhook.
+    const booking = await seedBooking(client.id, { status: "DRAFT" });
+
+    await deliverWaveWebhook(app, booking.id);
+    await waitForStatus(booking.id, "BOOKED");
+    expect(mock.wixCreateBookingCalls()).toHaveLength(1);
+  });
 });
 
 describe("idempotency & duplicate deliveries", () => {

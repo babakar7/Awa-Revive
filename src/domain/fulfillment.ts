@@ -79,8 +79,15 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
   const lang: string = client?.language ?? "fr";
 
   // 5. Re-check slot in Wix, then create the booking — or flag for refund.
+  // CRITICAL: only the path up to BOOKED may call markRefund. Anything after
+  // (WhatsApp confirm, bar offer, unlinked ask) is post-BOOKED: a failure there
+  // must NEVER refund — the seat is already reserved and paid.
+  let wixBookingId: string;
+  let participants: number;
+  let serviceLabel: string;
+  let extras: ExtraLine[];
   try {
-    const participants = Math.max(1, booking.participants ?? 1);
+    participants = Math.max(1, booking.participants ?? 1);
     const slotStartIso = new Date(booking.slot_start).toISOString();
 
     // Payment landed after class start (Wave links outlive their local TTL,
@@ -100,7 +107,7 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
       return;
     }
 
-    const wixBookingId = await wix.createBooking({
+    wixBookingId = await wix.createBooking({
       slot: fresh.raw ?? booking.slot_json,
       name: client?.name ?? "Client Revive",
       phone: `+${client.wa_phone.replace(/^\+/, "")}`,
@@ -109,10 +116,18 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
 
     await transition(pool, booking.id, "BOOKED", { wix_booking_id: wixBookingId });
     log.info({ bookingId: booking.id, wixBookingId, participants }, "Booking confirmed in Wix");
-
-    const serviceLabel =
+    serviceLabel =
       participants > 1 ? `${booking.service_name} — ${participants} places` : booking.service_name;
-    const extras = extrasFromJson(booking.extras_json);
+    extras = extrasFromJson(booking.extras_json);
+  } catch (err) {
+    log.error({ err, bookingId: booking.id }, "Wix booking failed after payment");
+    // Not a capacity problem — don't tell the client the spot was taken.
+    await markRefund(booking.id, client, lang, log, undefined, "technical");
+    return;
+  }
+
+  // --- Post-BOOKED: never refund from here ---
+  try {
     const confirmation = confirmationMessage(
       lang,
       serviceLabel,
@@ -122,43 +137,47 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
     );
     await sendText(client.wa_phone, confirmation);
     await repo.addTurn(booking.client_id, "assistant", confirmation);
-
-    // Book-first, menu-after: now that the class is confirmed, offer the bar
-    // menu as its own (separate) order. Skipped if a bar was somehow already
-    // attached to this booking. Non-blocking — a proposal hiccup must never
-    // break the confirmed booking.
-    if (extras.length === 0) {
-      await sendCafeMenuOffer({ waPhone: client.wa_phone, clientId: booking.client_id, lang, log });
-    }
-
-    // Bar order → tell the team to prepare it (email + WhatsApp reception).
-    // Never let a notification problem break the rest of the flow.
-    if (extras.length > 0) {
-      try {
-        notifyReception(
-          `☕ Commande bar payée — ${booking.extras_amount_xof} FCFA`,
-          `Un client a payé une commande bar avec sa réservation :\n` +
-            `  Client : ${client?.name ?? "?"} (+${String(client.wa_phone).replace(/^\+/, "")})\n` +
-            extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
-            `\n  À servir : ${booking.order_note ?? "prête après le cours"}\n` +
-            `  Cours : ${serviceLabel} — ${new Date(booking.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })}\n` +
-            `  Total bar : ${booking.extras_amount_xof} FCFA (payé, inclus dans le paiement Wave)`,
-        );
-      } catch (err) {
-        log.error({ err, bookingId: booking.id }, "Bar order notification failed");
-      }
-    }
-
-    // Unlinked client? (phone→contact match failed → a duplicate contact was
-    // just created in Wix). Two things, once per client: ask the client for
-    // their account email HERE IN THE CHAT (never "send it to reception"),
-    // and notify reception automatically.
-    await maybeHandleUnlinkedClient(client, booking, lang, log);
   } catch (err) {
-    log.error({ err, bookingId: booking.id }, "Wix booking failed after payment");
-    // Not a capacity problem — don't tell the client the spot was taken.
-    await markRefund(booking.id, client, lang, log, undefined, "technical");
+    log.error({ err, bookingId: booking.id }, "Client confirmation failed after BOOKED");
+    notifyReception(
+      "⚠️ Résa confirmée mais client non notifié",
+      `La place est réservée dans Wix (BOOKED) mais le WhatsApp de confirmation a échoué.\n` +
+        `  Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
+        `  Cours : ${serviceLabel}\n` +
+        `  Wix booking : ${wixBookingId}\n` +
+        `  Booking id : ${booking.id}\n\n` +
+        `À faire : écrire au client manuellement (la place EST prise, ne pas rembourser).`,
+    );
   }
+
+  // Book-first, menu-after: now that the class is confirmed, offer the bar
+  // menu as its own (separate) order. Non-blocking.
+  if (extras.length === 0) {
+    await sendCafeMenuOffer({
+      waPhone: client.wa_phone,
+      clientId: booking.client_id,
+      lang,
+      log,
+    });
+  }
+
+  if (extras.length > 0) {
+    try {
+      notifyReception(
+        `☕ Commande bar payée — ${booking.extras_amount_xof} FCFA`,
+        `Un client a payé une commande bar avec sa réservation :\n` +
+          `  Client : ${client?.name ?? "?"} (+${String(client.wa_phone).replace(/^\+/, "")})\n` +
+          extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
+          `\n  À servir : ${booking.order_note ?? "prête après le cours"}\n` +
+          `  Cours : ${serviceLabel} — ${new Date(booking.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })}\n` +
+          `  Total bar : ${booking.extras_amount_xof} FCFA (payé, inclus dans le paiement)`,
+      );
+    } catch (err) {
+      log.error({ err, bookingId: booking.id }, "Bar order notification failed");
+    }
+  }
+
+  await maybeHandleUnlinkedClient(client, booking, lang, log);
 }
 
 /**
@@ -178,21 +197,78 @@ export async function reconcileStuckBookings(log: any): Promise<number> {
   return stuck.length;
 }
 
+/** PAID plan orders never activated / never reception-notified. */
+export async function reconcileStuckPlanOrders(log: PaymentLog): Promise<number> {
+  const stuck = await repo.stuckPaidPlanOrders();
+  for (const o of stuck) {
+    log.warn({ planOrderId: o.id }, "Reconciling stuck PAID plan order");
+    await fulfillPlanOrder(o.id, log).catch((err) =>
+      log.error({ err, planOrderId: o.id }, "Reconciliation of stuck plan order failed"),
+    );
+  }
+  return stuck.length;
+}
+
+/** PAID cafe orders never notified (fulfilled_at null). */
+export async function reconcileStuckCafeOrders(log: PaymentLog): Promise<number> {
+  const stuck = await repo.stuckPaidCafeOrders();
+  for (const o of stuck) {
+    log.warn({ cafeOrderId: o.id }, "Reconciling stuck PAID cafe order");
+    await fulfillCafeOrder(o.id, log).catch((err) =>
+      log.error({ err, cafeOrderId: o.id }, "Reconciliation of stuck cafe order failed"),
+    );
+  }
+  return stuck.length;
+}
+
+/** REFUND_NEEDED with no refund_notified_at — re-run reception + client notify. */
+export async function reconcileUnnotifiedRefunds(log: PaymentLog): Promise<number> {
+  const stuck = await repo.stuckUnnotifiedRefunds();
+  for (const b of stuck) {
+    log.warn({ bookingId: b.id }, "Re-notifying REFUND_NEEDED without refund_notified_at");
+    const clientRes = await pool.query(`select * from clients where id = $1`, [b.client_id]);
+    const client = clientRes.rows[0];
+    if (!client) continue;
+    try {
+      await notifyRefundParties(b, client, client.language ?? "fr", log);
+      await repo.markRefundNotified(b.id);
+    } catch (err) {
+      log.error({ err, bookingId: b.id }, "Refund re-notify failed");
+    }
+  }
+  return stuck.length;
+}
+
 /**
- * Plan purchase paid via Wave. The Wix offline order (the actual activation)
- * happens HERE and only here, after the verified webhook — same payment-first
- * invariant as class bookings.
+ * Plan purchase paid via Wave/OM. The Wix offline order (activation) happens
+ * HERE after the verified webhook — same payment-first invariant as classes.
  *
- * Two outcomes:
- *  - client has a Wix member account (member_id resolved at link creation) →
- *    plan activated automatically, client told it's active;
- *  - no member account → stays PAID, reception is emailed to activate
- *    manually, client told the team is finalizing it.
+ * Re-entrant: if already PAID but not activated/notified (crash mid-flight),
+ * a webhook retry or the stuck-plan sweep resumes via claimPlanOrderForFulfillment.
  */
-export async function processPlanPayment(order: any, log: any): Promise<void> {
+export async function processPlanPayment(order: any, log: PaymentLog): Promise<void> {
   const paid = await repo.markPlanOrderPaid(order.id);
   if (!paid) {
-    log.info({ planOrderId: order.id, status: order.status }, "Plan order not payable — skipping");
+    const current = await repo.findPlanOrderById(order.id);
+    if (!current || current.status !== "PAID") {
+      log.info(
+        { planOrderId: order.id, status: current?.status ?? order.status },
+        "Plan order not payable — skipping",
+      );
+      return;
+    }
+    log.info({ planOrderId: order.id }, "Plan already PAID — resuming fulfillment");
+  }
+  await fulfillPlanOrder(order.id, log);
+}
+
+/**
+ * Exclusive plan fulfillment (lease). Safe from webhook, retry, and sweep.
+ */
+export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Promise<void> {
+  const order = await repo.claimPlanOrderForFulfillment(planOrderId);
+  if (!order) {
+    log.info({ planOrderId }, "Plan already fulfilled or being fulfilled — skipping");
     return;
   }
 
@@ -201,14 +277,11 @@ export async function processPlanPayment(order: any, log: any): Promise<void> {
   const lang: string = client?.language ?? "fr";
   const phoneDisplay = `+${String(client?.wa_phone ?? "").replace(/^\+/, "")}`;
 
-  // Chained renewal: a future start date makes Wix create the order as PENDING
-  // and activate it automatically on that day (so an early renewal doesn't
-  // waste the days left on the current plan).
   const startsAt: Date | null = order.starts_at ? new Date(order.starts_at) : null;
   const startsInFuture = startsAt !== null && startsAt.getTime() > Date.now();
 
-  let activated = false;
-  if (order.member_id) {
+  let activated = !!order.wix_order_id;
+  if (!activated && order.member_id) {
     try {
       const wixOrderId = await wix.createOfflinePlanOrder(
         order.plan_id,
@@ -217,8 +290,6 @@ export async function processPlanPayment(order: any, log: any): Promise<void> {
       );
       await repo.markPlanOrderActivated(order.id, wixOrderId);
       activated = true;
-      // The client's new plan is live now — drop the stale membership cache so
-      // the next message sees it instead of waiting out the 10-min TTL.
       invalidateMembershipCache(order.client_id);
       log.info({ planOrderId: order.id, wixOrderId }, "Plan activated in Wix");
     } catch (err) {
@@ -226,14 +297,15 @@ export async function processPlanPayment(order: any, log: any): Promise<void> {
     }
   }
 
-  if (!activated) {
+  // Manual path (or auto failed): notify reception once.
+  if (!activated && !order.reception_notified_at) {
     notifyReception(
       `🎫 ABONNEMENT payé — activation manuelle : ${order.plan_name}`,
-      `Un client a acheté un abonnement via Awa (paiement Wave reçu) mais l'activation ` +
+      `Un client a acheté un abonnement via Awa (paiement reçu) mais l'activation ` +
         `automatique n'a pas pu se faire${order.member_id ? "" : " (pas de compte membre Wix relié à ce numéro)"}.\n` +
         `  Client : ${client?.name ?? "?"} (${phoneDisplay})\n` +
         `  Formule : ${order.plan_name}\n` +
-        `  Montant payé : ${order.amount_xof} FCFA (session Wave : ${order.wave_session_id ?? "?"})\n` +
+        `  Montant payé : ${order.amount_xof} FCFA (session : ${order.wave_session_id ?? "?"})\n` +
         (startsInFuture
           ? `  ⚠️ Démarrage voulu : ${startsAt!.toISOString().slice(0, 10)} (renouvellement à la fin de l'abonnement actuel) — régler la date de début en conséquence.\n`
           : "") +
@@ -241,6 +313,12 @@ export async function processPlanPayment(order: any, log: any): Promise<void> {
         `(créer/relier sa fiche si besoin — numéro WhatsApp ci-dessus), en marquant l'ordre comme payé. ` +
         `Astuce : au moment d'attribuer le plan, l'envoi d'un email au client est optionnel — décoche-le si tu ne veux pas le notifier.`,
     );
+    await repo.markPlanOrderReceptionNotified(order.id);
+  } else if (activated) {
+    await repo.clearPlanOrderFulfilling(order.id).catch(() => {});
+  } else {
+    // Already reception-notified on a prior attempt — release lease.
+    await repo.clearPlanOrderFulfilling(order.id).catch(() => {});
   }
 
   const msg = planConfirmationMessage(
@@ -258,16 +336,28 @@ export async function processPlanPayment(order: any, log: any): Promise<void> {
 }
 
 /**
- * Bar-only order paid via Wave (menu order alongside a membership booking —
- * that flow has no payment link, so the bar got its own). No Wix booking to
- * create: we only mark it paid, tell reception to prepare it, and confirm to
- * the client. Same payment-first stance — reception acts only after the
- * verified webhook.
+ * Bar-only order paid via Wave/OM. Re-entrant via claim + fulfilled_at.
  */
-export async function processCafePayment(order: any, log: any): Promise<void> {
+export async function processCafePayment(order: any, log: PaymentLog): Promise<void> {
   const paid = await repo.markCafeOrderPaid(order.id);
   if (!paid) {
-    log.info({ cafeOrderId: order.id, status: order.status }, "Bar order not payable — skipping");
+    const current = await repo.findCafeOrderById(order.id);
+    if (!current || current.status !== "PAID" || current.fulfilled_at) {
+      log.info(
+        { cafeOrderId: order.id, status: current?.status ?? order.status },
+        "Bar order not payable — skipping",
+      );
+      return;
+    }
+    log.info({ cafeOrderId: order.id }, "Bar already PAID — resuming fulfillment");
+  }
+  await fulfillCafeOrder(order.id, log);
+}
+
+export async function fulfillCafeOrder(cafeOrderId: string, log: PaymentLog): Promise<void> {
+  const order = await repo.claimCafeOrderForFulfillment(cafeOrderId);
+  if (!order) {
+    log.info({ cafeOrderId }, "Bar order already fulfilled or being fulfilled — skipping");
     return;
   }
 
@@ -292,7 +382,7 @@ export async function processCafePayment(order: any, log: any): Promise<void> {
         extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
         `\n  À servir : ${order.order_note ?? (standalone ? "dès que possible" : "prête après le cours")}\n` +
         (standalone ? "" : `  Cours associé : ${order.service_name ?? "?"} — ${slotLabel}\n`) +
-        `  Total bar : ${order.amount_xof} FCFA (payé via Wave)`,
+        `  Total bar : ${order.amount_xof} FCFA (payé)`,
     );
   } catch (err) {
     log.error({ err, cafeOrderId: order.id }, "Bar order notification failed");
@@ -305,6 +395,10 @@ export async function processCafePayment(order: any, log: any): Promise<void> {
   } catch (err) {
     log.error({ err, cafeOrderId: order.id }, "Failed to send bar confirmation");
   }
+
+  // Mark fulfilled even if WhatsApp failed — reception was told (or we logged).
+  // Retrying forever would re-spam the kitchen.
+  await repo.markCafeOrderFulfilled(order.id);
 }
 
 export function cafeConfirmationMessage(
@@ -472,20 +566,39 @@ async function markRefund(
   await transition(pool, bookingId, "REFUND_NEEDED");
   log.warn({ bookingId, ...spots }, "REFUND_NEEDED recorded — manual processing in Wave portal");
   const bookingRow = await repo.findBookingById(bookingId);
+  try {
+    await notifyRefundParties(bookingRow, client, lang, log, spots, reason);
+    await repo.markRefundNotified(bookingId);
+  } catch (err) {
+    // Leave refund_notified_at null so the sweep re-notifies.
+    log.error({ err, bookingId }, "Refund notifications failed — will retry via sweep");
+  }
+}
+
+/** Reception email/WA + client WhatsApp for a REFUND_NEEDED row. */
+async function notifyRefundParties(
+  bookingRow: any,
+  client: any,
+  lang: string,
+  log: PaymentLog,
+  spots?: { requested: number; remaining: number },
+  reason: RefundReason = "slot_taken",
+): Promise<void> {
+  const bookingId = bookingRow?.id ?? "?";
   notifyReception(
     `💸 REMBOURSEMENT à faire — ${bookingRow?.amount_xof ?? "?"} FCFA`,
-    `Un paiement doit être remboursé dans le portail Wave :\n` +
+    `Un paiement doit être remboursé dans le portail Wave/OM :\n` +
       `  Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
       `  Cours : ${bookingRow?.service_name ?? "?"} — ${bookingRow ? new Date(bookingRow.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE }) : "?"}\n` +
       `  Montant : ${bookingRow?.amount_xof ?? "?"} FCFA\n` +
       (bookingRow && bookingRow.extras_amount_xof > 0
         ? `  Dont commande bar : ${bookingRow.extras_amount_xof} FCFA (incluse dans le montant ci-dessus — la commande ne doit PAS être préparée).\n`
         : "") +
-      `  Session Wave : ${bookingRow?.wave_session_id ?? "?"}\n` +
+      `  Session : ${bookingRow?.wave_session_id ?? "?"}\n` +
       `  Booking id : ${bookingId}\n\n` +
-      `Après remboursement dans le portail Wave, clôturer avec :\n` +
+      `Après remboursement dans le portail, clôturer avec :\n` +
       `  railway run npm run refund:done -- ${bookingId}\n\n` +
-      `Le client a déjà été prévenu sur WhatsApp (remboursement sous 24h).`,
+      `Le client a été (ou sera) prévenu sur WhatsApp (remboursement sous 24h).`,
   );
   const msg = refundMessage(lang, spots, reason);
   try {
@@ -493,6 +606,7 @@ async function markRefund(
     await repo.addTurn(client.id, "assistant", msg);
   } catch (err) {
     log.error({ err, bookingId }, "Failed to notify client about refund");
+    throw err; // keep refund_notified_at null for sweep
   }
 }
 
