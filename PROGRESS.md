@@ -1,12 +1,11 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** (rebrand café → **bar** côté produit).
-> Compléments : `README.md` (setup,
-> archi détaillée), `PHASE2.md` (backlog priorisé), `WIX-WEBHOOK-PLAN.md`
-> (chantier EN VEILLE — ne pas implémenter), `business-info.md` (source de
-> vérité métier d'Awa, chargée au boot), `cafe-menu.md` (menu du bar, source
-> de vérité des prix bar, chargé au boot).
+> Dernière mise à jour : **13 juillet 2026** — **Orange Money / Max It en prod**
+> (env Railway + paiements réels OK) ; rebrand café → bar ; UX capability menus.
+> Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
+> `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
+> `business-info.md`, `cafe-menu.md` (menu du bar).
 
 ## 1. Le projet en une minute
 
@@ -172,19 +171,41 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     du lien ; sans compte membre → statut reste PAID + email réception pour
     activation manuelle + message client adapté. Toutes les formules Revive
     sont one_time (pas de récurrence à gérer).
-12. **Orange Money / Max It (13/07) — code livré, Stage A dark en prod.**
-    ~~BLOQUÉ Sonatel (08/07 invalid_client)~~ **supersédé** : OAuth prod
-    `api.orange-sonatel.com/oauth/token` **200** (form-urlencoded), QR
-    `POST /api/eWallet/v4/qrcode` **200** avec merchant `553651`,
-    `deepLinks.OM` / `deepLinks.MAXIT`, `qrId`. Site live
-    (`orangecheckout.jsw`) : header **`X-Callback-Url`** per-request (pas de
-    registration merchant-level), `code` en number, metadata echoed.
-    **Implémentation Awa** : `src/lib/orangeMoney.ts`, webhook
-    `/webhooks/orange-money`, fulfillment partagé `domain/fulfillment.ts`,
-    `payment_method` wave|orange_money|maxit sur bookings/plans/café.
-    **Verify-by-lookup** obligatoire avant fulfill (callback non signé).
-    Feature flag = les 3 env OM ; **Railway sans OM vars = Wave only**
-    (Stage A). Stage B : payer 100 F, confirmer ack/lookup, poser env Railway.
+12. **Orange Money / Max It (13/07) — LIVE en prod.**
+    ~~BLOQUÉ Sonatel (08/07 invalid_client)~~ **supersédé** puis **activé**.
+    - **API** : OAuth `POST {OM_API_BASE}/oauth/token` form-urlencoded
+      (client_id/secret/grant_type) ; QR `POST /api/eWallet/v4/qrcode` avec
+      header **`X-Callback-Url`** = Awa webhook (per-request, comme le site
+      `orangecheckout.jsw` — pas de registration merchant-level) ; `code`
+      merchant **number** `553651` ; `metadata: {order, channel:"awa"}` echo
+      sur le webhook ; `validity` en **secondes** (minutes × 60) ; réponse
+      `deepLinks.OM` + `deepLinks.MAXIT` (+ `qrId`). Même deep link famille
+      sugu.orange-sonatel.com — deux choix produit comme le site.
+    - **Code** : `src/lib/orangeMoney.ts` ; webhook `POST /webhooks/orange-money`
+      (`src/webhooks/orangeMoney.ts`) ; fulfillment partagé
+      `src/domain/fulfillment.ts` (extrait de wave.ts) ; tools
+      `payment_method` wave|orange_money|maxit sur create_payment_link /
+      create_plan_payment_link / create_cafe_payment_link ; colonnes
+      `payment_method` aussi sur plan/café. **Verify-by-lookup** obligatoire
+      (`GET /api/eWallet/v1/transactions?transactionId=`) avant PAID/fulfill
+      (callback non signé — anti-forgery). Idempotence `om:{transactionId}`
+      marquée APRÈS fulfill (comme Wave).
+    - **UX** : present_options 3 boutons Payer Wave / Orange Money / Max It
+      (ids pay_wave / pay_om / pay_maxit) si méthode non nommée ; un lien HTTPS
+      dans WhatsApp (pas d'image QR).
+    - **Ops** : env Railway posés (`OM_CLIENT_ID`, `OM_CLIENT_SECRET`,
+      `OM_MERCHANT_CODE=553651`, `OM_API_BASE=https://api.orange-sonatel.com`) ;
+      `BASE_URL=https://resabot-production.up.railway.app`. Script test
+      `npm run om:create-link -- 100` → écrit `om-last-links.txt` (gitignored) ;
+      how-to `OM-LINKS-HOW-TO.md`. Plan détaillé `ORANGE-MONEY-PLAN.md`.
+    - **Validé** : paiements manuels 100 F via liens OM **et** Max It OK
+      (Babakar). Perf : 1er lien après deploy lent (token OAuth cold) →
+      **warm token au boot + keep-alive 3 min** + logs
+      `[om] createQrPayment token=…ms qr=…ms` (`86042b6`).
+    - **Reste** : E2E résa Awa complète (choix dans le chat → pay → ✅ WhatsApp)
+      à confirmer si pas déjà fait ; ack/retry Sonatel si payload atypique
+      (logs `OM webhook received`) ; poller réconciliation AWAITING_PAYMENT OM
+      (optionnel, transactions search).
 13. **Menu du bar (10/07)** : commande bar adossée à une résa, dans le MÊME lien
     Wave (`amount_xof` = grand total cours + bar). `cafe-menu.md` (éditable par
     le propriétaire : `- ID | Nom | prix | description`, IDs stables, lu AU BOOT
@@ -1234,11 +1255,13 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   verte.
 - **13/07** : **sept UX** (§4.37) — pages paiement wa.me, tips pré-cours par
   mots-clés, reçu image à la demande (`send_receipt`), waitlist template
-  fallback 131047 (dormant sans env), raccourci mes prochains cours,
-  micro-onboarding anti-clash liaison/habitude, runbook domaine custom.
-  240 unit + 14 intégration. Même jour : **rebrand café → bar** (copy produit) ;
-  **capability menus sur ouverture vague** (y compris clients déjà connus) —
-  tiered upcoming vs onboarding, once per ~24h (`capability_menu_at`).
+  fallback 131047, raccourci mes prochains cours, micro-onboarding anti-clash
+  liaison/habitude, runbook domaine custom. **Rebrand café → bar**.
+  **Capability menus** sur ouverture vague (nouveaux + habitués), once ~24h.
+  Puis **Orange Money / Max It** (§4.12) : extract fulfillment, client Sonatel,
+  webhook + verify-by-lookup, 3 boutons de paiement, env Railway, paiements
+  réels 100 F OK (OM + Max It), `om:create-link` + warm token. Plan :
+  `ORANGE-MONEY-PLAN.md`.
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —
@@ -1337,7 +1360,11 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
 - [ ] Relecture du wolof par un locuteur natif.
 - [ ] Brief réceptionniste (emails d'Awa : handoffs, remboursements, comptes à
   lier, abonnements à activer) + plan de communication du numéro.
-- [ ] Orange Money : reprendre à la réponse du support Sonatel (§4.12).
+- [x] **Orange Money / Max It** → **FAIT (13/07)** : code + env Railway + liens
+  payants validés (§4.12). Reste éventuel : E2E résa chat complète + poller
+  réconciliation OM si webhooks ratés.
+- [ ] `npm run om:create-link` : documenter dans README (lien vers
+  `OM-LINKS-HOW-TO.md`) si pas déjà clair.
 
 - [x] **Dashboard admin Awa** → **FAIT (10/07)** : `/admin` en production —
   Basic Auth 2 comptes (`ADMIN_USERS` : babakar + reception), vue d'ensemble
@@ -1349,14 +1376,21 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   zéro dépendance. `refund:done` conservé en secours CLI.
 
 **Backlog Phase 2** (voir `PHASE2.md`) — tête de liste suggérée :
-`get_my_bookings` élargi aux résas comptoir/site (lookup par contactId),
-remboursements automatiques via l'API Wave (`POST /v1/checkout/sessions/:id/refund`),
-vente d'abonnements par Awa, Orange Money, rappels de séance (templates Meta),
-report en un geste, transcription vocale (décidée : OpenAI `gpt-4o-mini-transcribe`,
-`OPENAI_API_KEY` déjà posée — reste à coder, voir chronologie 10/07 soir).
+remboursements automatiques Wave/OM, rappels de séance (templates Meta),
+stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
+élargi, vente d'abonnements, report, transcription : déjà en prod ou Phase 1+.)
 
 ## 7. Runbook ops
 
+- **Orange Money / Max It** (prod) :
+  - Env Railway : `OM_CLIENT_ID`, `OM_CLIENT_SECRET`, `OM_MERCHANT_CODE=553651`,
+    `OM_API_BASE=https://api.orange-sonatel.com` (vide = Wave only).
+  - Webhook : `POST {BASE_URL}/webhooks/orange-money` (posé via header
+    `X-Callback-Url` à la création du QR — pas d'enregistrement merchant).
+  - Test lien sans chat : `npm run om:create-link -- 100` puis ouvrir
+    `om-last-links.txt` (voir `OM-LINKS-HOW-TO.md`). Logs : `[om] token…`,
+    `[om] createQrPayment token=…ms qr=…ms`, `OM webhook received`.
+  - Remboursements OM : manuels (portail / réception), comme Wave Phase 1.
 - Déploiement : **auto-deploy actif** — `git push` sur `main` (repo
   `babakar7/Awa-Revive`) rebuild et redéploie tout seul sur Railway. Faire
   `npm run build && npm test` AVANT de pousser (et
