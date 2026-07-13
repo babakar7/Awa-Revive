@@ -153,6 +153,29 @@ export async function markVerified(id: string, contactId: string): Promise<void>
   );
 }
 
+/**
+ * The client's account was JUST proven (VERIFIED) or linked (LINKED) within
+ * the last `minutes` — used to refuse re-opening a fresh verification right
+ * after one completed. Without this guard, the model (amnesiac about the tool
+ * result across turns, or racing the Wix search index that lags the fiche it
+ * just created) can call request_email_verification again, email a SECOND code
+ * and needlessly re-arm AWAITING_CODE — which then BLOCKS the payment link
+ * (verificationBlocksPayment). Prod 13/07. Window matches CODE_TTL_MINUTES.
+ */
+export async function recentlyResolved(
+  clientId: string,
+  minutes = CODE_TTL_MINUTES,
+): Promise<LinkRequest | null> {
+  const res = await pool.query(
+    `select * from link_requests
+      where client_id = $1 and status in ('VERIFIED','LINKED')
+        and updated_at > now() - ($2 || ' minutes')::interval
+      order by updated_at desc limit 1`,
+    [clientId, String(minutes)],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function markNeedsReception(id: string, detail: string): Promise<void> {
   await pool.query(
     `update link_requests

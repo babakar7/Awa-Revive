@@ -15,9 +15,51 @@ const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
 const MAX_TOOL_ITERATIONS = 8;
 
+// Per-tool-turn cap when replaying past tool activity into the model's context
+// (see the history loop). Enough to carry a verification status or the key
+// ids of a result, without replaying a full class list byte for byte.
+const TOOL_REPLAY_MAXLEN = 700;
+
 const FALLBACK_REPLY =
   "Désolé, j'ai un souci technique 🙏🏾 Réessaie dans un instant, ou contacte la réception : " +
   config.RECEPTION_PHONE;
+
+/**
+ * Turn stored conversation turns into the alternating user/assistant messages
+ * the Messages API requires.
+ *
+ *  - 'tool' turns (Awa's own tool calls + results) are replayed as part of the
+ *    assistant's actions, so the model SEES what it already did — the
+ *    verification it just passed, the real ids it fetched, the buttons it
+ *    already sent — instead of re-issuing them from an amnesiac view (prod
+ *    13/07). Each is rendered as a compact [outil] line, capped so a long
+ *    result can't blow up the replayed context.
+ *  - Consecutive same-role turns are coalesced so roles strictly alternate.
+ *    Without this, a failed WhatsApp send (assistant turn never persisted) or
+ *    the tool→assistant folding above would leave two same-role messages in a
+ *    row and 400 the next request.
+ *  - The first message must be from the user; leading non-user turns are
+ *    dropped.
+ */
+export function buildHistoryMessages(
+  turns: { role: string; content: string }[],
+  toolReplayMaxLen = TOOL_REPLAY_MAXLEN,
+): Anthropic.MessageParam[] {
+  const messages: Anthropic.MessageParam[] = [];
+  for (const turn of turns) {
+    const role: "user" | "assistant" = turn.role === "user" ? "user" : "assistant";
+    const content =
+      turn.role === "tool" ? `[outil] ${turn.content.slice(0, toolReplayMaxLen)}` : turn.content;
+    if (messages.length === 0 && role !== "user") continue;
+    const last = messages[messages.length - 1];
+    if (last && last.role === role && typeof last.content === "string") {
+      last.content += `\n${content}`;
+      continue;
+    }
+    messages.push({ role, content });
+  }
+  return messages;
+}
 
 const TECH_FAILURE_HANDOFF_PREFIX = "Échec technique — le client a reçu le message d'erreur";
 
@@ -129,7 +171,7 @@ export async function handleInboundText(args: {
     repo.countUpcomingBooked(client.id),
   ]);
 
-  const history = await repo.lastTurns(client.id, 20);
+  const history = await repo.lastTurnsForReplay(client.id, 30);
 
   // Account-linking invitation: a subscriber messaging from a number that
   // isn't on their Wix fiche is invisible to Awa and would be pushed to Wave
@@ -155,22 +197,7 @@ export async function handleInboundText(args: {
     capabilityMenuAt: client.capability_menu_at,
   });
 
-  const messages: Anthropic.MessageParam[] = [];
-  for (const turn of history) {
-    const role = turn.role as "user" | "assistant";
-    // First message must be from the user; drop any leading assistant turns.
-    if (messages.length === 0 && role !== "user") continue;
-    // Coalesce consecutive same-role turns so the roles always alternate as
-    // the Messages API requires. Without this, a failed WhatsApp send (which
-    // drops the assistant turn before it's persisted) would leave two user
-    // turns in a row and make the very next request 400.
-    const last = messages[messages.length - 1];
-    if (last && last.role === role && typeof last.content === "string") {
-      last.content += `\n${turn.content}`;
-      continue;
-    }
-    messages.push({ role, content: turn.content });
-  }
+  const messages: Anthropic.MessageParam[] = buildHistoryMessages(history);
   if (messages.length === 0) {
     messages.push({ role: "user", content: args.text });
   }

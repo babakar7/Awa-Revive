@@ -162,6 +162,29 @@ export async function recentTranscriptExcerpt(clientId: string, n = 6): Promise<
   return turns.map((t) => `${t.role}: ${t.content}`.slice(0, 300)).join("\n");
 }
 
+/**
+ * Like lastTurns but ALSO returns the 'tool' turns (the tool calls + results
+ * Awa made), so the agent loop can replay what she DID, not only what she
+ * SAID. Without this the model is amnesiac about its own actions across turns
+ * and re-derives or re-issues them from a partial view (prod 13/07: a stale
+ * 6-digit code re-submitted, a service_id hallucinated, payment buttons
+ * re-sent). Kept separate from lastTurns so the human-facing handoff excerpt
+ * stays free of tool noise.
+ */
+export async function lastTurnsForReplay(clientId: string, n = 30): Promise<Turn[]> {
+  const res = await pool.query(
+    `select role, content, created_at
+       from (select role, content, created_at
+               from conversations
+              where client_id = $1 and role in ('user', 'assistant', 'tool')
+              order by created_at desc
+              limit $2) t
+      order by created_at asc`,
+    [clientId, n],
+  );
+  return res.rows;
+}
+
 // ---------- webhook idempotency ----------
 
 /**

@@ -1650,6 +1650,21 @@ export async function executeTool(
     }
 
     case "request_email_verification": {
+      // Just verified/linked moments ago? Don't start over or email a second
+      // code (which would re-arm AWAITING_CODE and block the payment link).
+      // The account is already set up — continue the booking. Prod 13/07.
+      const justResolved = await links.recentlyResolved(client.id);
+      if (justResolved) {
+        invalidateMembershipCache(client.id);
+        return JSON.stringify({
+          status: "already_verified_recently",
+          message:
+            "This client's account was JUST verified/linked moments ago — do NOT start another " +
+            "verification, do NOT ask for the email again, do NOT send a new code. Their account is " +
+            "connected. Simply continue what they wanted: run check_membership if you need their plans, " +
+            "otherwise proceed to book (create_payment_link, or book_with_membership if a plan covers it).",
+        });
+      }
       const request = await links.getOrOpen(client.id);
       if (input.client_has_no_email === true) {
         const detail = "le client n'a pas d'email (ou n'y a pas accès)";
@@ -1804,8 +1819,11 @@ export async function executeTool(
         return JSON.stringify({
           status: "no_pending_verification",
           message:
-            "No verification is in progress for this client — start one with " +
-            "request_email_verification (ask for their account email first).",
+            "No verification is in progress. This usually means the code was ALREADY accepted earlier in " +
+            "this conversation (the account is set up) — do NOT restart a verification, re-ask for the " +
+            "email, or resubmit an old code. Just continue what the client wanted: answer their question " +
+            "and/or proceed to book (create_payment_link, or book_with_membership if a plan covers it). " +
+            "Start a NEW request_email_verification only if the client now brings up a different account.",
         });
       }
       if (!links.looksLikeCode(code)) {
