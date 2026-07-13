@@ -1,9 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — **Pack Découverte éligibilité**
-> (garde-fou serveur : jamais de pack si historique Pilates) ; OM/Max It en prod ;
-> rebrand café → bar ; UX capability menus.
+> Dernière mise à jour : **13 juillet 2026** — **tests d'intégration OM/Max It**
+> (verify-by-lookup + fulfill) ; Pack Découverte éligibilité ; activation B2 no-go ;
+> OM/Max It en prod ; rebrand café → bar.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar).
@@ -28,7 +28,7 @@ Production : `https://resabot-production.up.railway.app` (Railway, service +
 Postgres), déployée depuis GitHub (`babakar7/Awa-Revive`, push sur main =
 déploiement). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
 phone_number_id 1175926012276896). Tests : 90 unitaires (`npm test`, rapides,
-sans réseau) + 14 d'intégration sur le chemin de paiement
+sans réseau) + 29 d'intégration sur les chemins de paiement Wave + OM
 (`npm run test:integration`, Postgres jetable via Docker, APIs externes
 mockées) — exécutés en CI GitHub Actions à chaque push.
 
@@ -92,9 +92,9 @@ src/
                       reconcileStuckBookings() : rattrape les PAID jamais réservés (crash) — voir §4.14
 scripts/              simulate-wave-webhook, daily-summary, mark-refunded (refund:done), test-email
 test/                 90 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
-test/integration/     14 tests d'intégration du chemin de paiement : Postgres jetable (docker run,
+test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgres jetable (docker run,
                       globalSetup maison — PAS testcontainers, incompatible Node 20.17), mock fetch
-                      Wix/Wave/Meta/Brevo qui THROW sur tout appel inattendu — voir §4.15
+                      Wix/Wave/OM/Meta/Brevo qui THROW sur tout appel inattendu — voir §4.12 / §4.15
 ```
 
 ## 4. Décisions & pièges découverts (à lire absolument avant de toucher au code)
@@ -203,6 +203,19 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       (Babakar). Perf : 1er lien après deploy lent (token OAuth cold) →
       **warm token au boot + keep-alive 3 min** + logs
       `[om] createQrPayment token=…ms qr=…ms` (`86042b6`).
+    - **Tests d'intégration OM (13/07)** : [test/integration/orange-money-webhook.test.ts](test/integration/orange-money-webhook.test.ts)
+      (15 cas) sur Postgres jetable + fetch mock — même harness que Wave.
+      Couvre : ack 200 sans signature, ignore non-MERCHANT / non-SUCCESS /
+      payload incomplet, happy path callback → OAuth → GET transactions →
+      BOOKED + confirmation WhatsApp, anti-forgery (lookup sans SUCCESS,
+      montant bas, mauvais partner, order mismatch), idempotence
+      `om:{transactionId}` (doublon + 2e txn après BOOKED), lookup en 500
+      **non** marqué processed puis retry OK, REFUND_NEEDED si créneau plein.
+      Env dummy dans globalSetup (`OM_CLIENT_*`, `OM_MERCHANT_CODE=553651`,
+      `OM_API_BASE=https://api.orange-sonatel.test`) ; mock étendu dans
+      [helpers.ts](test/integration/helpers.ts) (`deliverOmWebhook`, état
+      `om.transactions` / `failLookup`). Suite intégration : **29** tests
+      (14 Wave + 15 OM).
     - **Reste** : E2E résa Awa complète (choix dans le chat → pay → ✅ WhatsApp)
       à confirmer si pas déjà fait ; ack/retry Sonatel si payload atypique
       (logs `OM webhook received`) ; poller réconciliation AWAITING_PAYMENT OM
@@ -254,13 +267,14 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     (dotenv n'écrase jamais l'existant), mock fetch installé UNE fois par
     suite (les notifications fire-and-forget en vol toucheraient les vraies
     APIs avec un restore par test) et qui throw sur toute URL non mockée.
-    14 scénarios : signature, happy path, paiement tardif honoré, doublons
+    Wave — 14 scénarios : signature, happy path, paiement tardif honoré, doublons
     (même event id ET event id différent), 3 causes de remboursement,
     récupération de PAID bloqué (retry, sweep, bail actif/périmé),
-    retriabilité. AUCUN secret réel requis. CI GitHub Actions
-    (`.github/workflows/ci.yml`) : tsc + unit + intégration à chaque push ;
-    « Wait for CI » à activer côté Railway pour bloquer les déploiements
-    rouges (pas seulement les signaler).
+    retriabilité. OM/Max It — 15 scénarios (13/07) : voir §4.12 (verify-by-lookup,
+    anti-forgery, idempotence `om:…`, retry après lookup 500). AUCUN secret réel
+    requis. CI GitHub Actions (`.github/workflows/ci.yml`) : tsc + unit +
+    intégration à chaque push ; « Wait for CI » à activer côté Railway pour
+    bloquer les déploiements rouges (pas seulement les signaler).
 16. **Messages interactifs cliquables (10/07)** — outil `present_options`
     ([tools.ts](src/agent/tools.ts)) : Awa envoie un message natif WhatsApp
     cliquable (≤3 options courtes → boutons ; sinon liste, max 10 lignes) et le

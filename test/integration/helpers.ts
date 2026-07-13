@@ -4,7 +4,7 @@ import { signWavePayload } from "../../src/lib/wave.js";
 
 /**
  * Integration-test toolkit: fetch mock for the external APIs, DB seed
- * helpers, and a signed Wave-webhook delivery helper.
+ * helpers, and Wave / Orange Money webhook delivery helpers.
  *
  * The Wix response shapes mirror what production has actually stored in
  * slot_cache.slot_json / conversations tool turns (slot = { sessionId,
@@ -34,8 +34,43 @@ export interface WixState {
   failCreateBooking: boolean;
 }
 
+/**
+ * Controllable Sonatel OM responses for verify-by-lookup (the webhook is only
+ * a trigger — fulfillment always re-fetches the transaction).
+ */
+export interface OmState {
+  /** OAuth /token returns 500. */
+  failToken: boolean;
+  /** GET transactions returns 500 (lookup throws → event stays retriable). */
+  failLookup: boolean;
+  /**
+   * Lookup hit for a transactionId. null = no SUCCESS row (handler returns
+   * without fulfilling). Defaults are filled per request when unset.
+   */
+  transactions: Record<
+    string,
+    | null
+    | {
+        status?: string;
+        amountValue?: number;
+        partnerId?: string | null;
+        metadata?: Record<string, unknown>;
+        customerId?: string | null;
+      }
+  >;
+  /** Defaults applied when a txn id is not listed in `transactions`. */
+  defaultLookup: {
+    status: string;
+    amountValue: number;
+    partnerId: string;
+    metadata: Record<string, unknown>;
+    customerId: string | null;
+  } | null;
+}
+
 export interface FetchMock {
   wix: WixState;
+  om: OmState;
   calls: RecordedCall[];
   /** Calls to the WhatsApp Cloud API, parsed. */
   waCalls: () => RecordedCall[];
@@ -44,15 +79,33 @@ export interface FetchMock {
   /** Brevo email sends, parsed. */
   emailCalls: () => RecordedCall[];
   wixCreateBookingCalls: () => RecordedCall[];
+  omTokenCalls: () => RecordedCall[];
+  omLookupCalls: () => RecordedCall[];
   install: () => void;
   restore: () => void;
   /**
-   * Reset recorded calls + Wix state between tests. The mock itself stays
+   * Reset recorded calls + Wix/OM state between tests. The mock itself stays
    * installed for the whole suite: fire-and-forget notifications
    * (notifyReception) can still be in flight when a test ends, and a
    * per-test restore would let those stragglers reach the REAL APIs.
    */
   reset: () => void;
+}
+
+function defaultOmState(): OmState {
+  return {
+    failToken: false,
+    failLookup: false,
+    transactions: {},
+    // Happy-path defaults: SUCCESS for any unknown txn id.
+    defaultLookup: {
+      status: "SUCCESS",
+      amountValue: 15000,
+      partnerId: "553651",
+      metadata: {},
+      customerId: "221770000001",
+    },
+  };
 }
 
 export function makeFetchMock(): FetchMock {
@@ -69,6 +122,8 @@ export function makeFetchMock(): FetchMock {
     createdBookingIds: [],
     failCreateBooking: false,
   };
+
+  const om: OmState = defaultOmState();
 
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -97,6 +152,52 @@ export function makeFetchMock(): FetchMock {
     // --- Brevo (reception email) ---
     if (url.includes("api.brevo.com")) {
       return json(201, { messageId: `brevo-${calls.length}` });
+    }
+
+    // --- Orange Money / Max It (Sonatel) ---
+    if (url.includes("/oauth/token") && method === "POST") {
+      if (om.failToken) return json(500, { error: "token_down" });
+      return json(200, {
+        access_token: "test-om-access-token",
+        expires_in: 300,
+        token_type: "Bearer",
+      });
+    }
+    if (url.includes("/api/eWallet/v1/transactions") && method === "GET") {
+      if (om.failLookup) return json(500, { error: "lookup_down" });
+      const u = new URL(url);
+      const txnId = u.searchParams.get("transactionId") ?? "";
+      const configured = Object.prototype.hasOwnProperty.call(om.transactions, txnId)
+        ? om.transactions[txnId]
+        : undefined;
+      if (configured === null) {
+        return json(200, { data: [] });
+      }
+      const base = configured ?? om.defaultLookup;
+      if (!base) return json(200, { data: [] });
+      return json(200, {
+        data: [
+          {
+            transactionId: txnId,
+            status: base.status ?? "SUCCESS",
+            amount: { unit: "XOF", value: base.amountValue ?? 15000 },
+            partner: { id: base.partnerId ?? "553651" },
+            metadata: base.metadata ?? {},
+            customer: base.customerId != null ? { id: base.customerId } : undefined,
+          },
+        ],
+      });
+    }
+    if (url.includes("/api/eWallet/v4/qrcode")) {
+      // Not needed for webhook tests; still mock so a stray create never escapes.
+      return json(200, {
+        qrId: "qr_test",
+        deepLink: "https://sugu.orange-sonatel.com/test",
+        deepLinks: {
+          OM: "https://sugu.orange-sonatel.com/om",
+          MAXIT: "https://sugu.orange-sonatel.com/maxit",
+        },
+      });
     }
 
     // --- Wix availability ---
@@ -139,6 +240,7 @@ export function makeFetchMock(): FetchMock {
 
   return {
     wix,
+    om,
     calls,
     waCalls: () => calls.filter((c) => c.url.includes("graph.facebook.com")),
     waTextsTo: (waId: string) =>
@@ -153,6 +255,9 @@ export function makeFetchMock(): FetchMock {
     emailCalls: () => calls.filter((c) => c.url.includes("api.brevo.com")),
     wixCreateBookingCalls: () =>
       calls.filter((c) => c.url.endsWith("/bookings/v2/bookings") && c.method === "POST"),
+    omTokenCalls: () => calls.filter((c) => c.url.includes("/oauth/token")),
+    omLookupCalls: () =>
+      calls.filter((c) => c.url.includes("/api/eWallet/v1/transactions") && c.method === "GET"),
     install: () => {
       globalThis.fetch = mockFetch as typeof fetch;
     },
@@ -168,6 +273,11 @@ export function makeFetchMock(): FetchMock {
       wix.eventId = "ev_1";
       wix.createdBookingIds.length = 0;
       wix.failCreateBooking = false;
+      const d = defaultOmState();
+      om.failToken = d.failToken;
+      om.failLookup = d.failLookup;
+      om.transactions = {};
+      om.defaultLookup = d.defaultLookup;
     },
   };
 }
@@ -304,4 +414,52 @@ export async function deliverWaveWebhook(
     headers: { "content-type": "application/json", "wave-signature": signature },
   });
   return { statusCode: res.statusCode };
+}
+
+// ---------- Orange Money / Max It webhook delivery ----------
+
+/**
+ * POST a Sonatel-style MERCHANT_PAYMENT SUCCESS callback to
+ * /webhooks/orange-money. No signature — production trusts verify-by-lookup.
+ */
+export async function deliverOmWebhook(
+  app: FastifyInstance,
+  opts: {
+    orderId: string;
+    transactionId?: string;
+    status?: string;
+    type?: string;
+    customerId?: string;
+    /** Omit metadata.order entirely when false. */
+    includeOrder?: boolean;
+  },
+): Promise<{ statusCode: number; body: any }> {
+  const transactionId =
+    opts.transactionId ?? `OM_TX_${Math.random().toString(36).slice(2, 12)}`;
+  const payload: Record<string, unknown> = {
+    type: opts.type ?? "MERCHANT_PAYMENT",
+    status: opts.status ?? "SUCCESS",
+    transactionId,
+    customer: { id: opts.customerId ?? "221770000001" },
+  };
+  if (opts.includeOrder !== false) {
+    payload.metadata = { order: opts.orderId, channel: "awa" };
+  } else {
+    payload.metadata = { channel: "awa" };
+  }
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/webhooks/orange-money",
+    payload,
+    headers: { "content-type": "application/json" },
+  });
+  return { statusCode: res.statusCode, body: res.json() };
+}
+
+export async function wasOmProcessed(transactionId: string): Promise<boolean> {
+  const r = await pool.query(`select 1 from processed_webhooks where id = $1`, [
+    `om:${transactionId}`,
+  ]);
+  return (r.rowCount ?? 0) > 0;
 }

@@ -73,6 +73,14 @@ export async function setup(): Promise<void> {
     WAVE_API_KEY: "test-wave-key",
     WAVE_WEBHOOK_SECRET: "test-wave-webhook-secret",
 
+    // Orange Money / Max It — dummy credentials so isOmEnabled() is true and
+    // verify-by-lookup can run; every OM HTTP call is intercepted by the
+    // fetch mock (never hits Sonatel).
+    OM_CLIENT_ID: "test-om-client",
+    OM_CLIENT_SECRET: "test-om-secret",
+    OM_MERCHANT_CODE: "553651",
+    OM_API_BASE: "https://api.orange-sonatel.test",
+
     // Anthropic (never called in these tests)
     ANTHROPIC_API_KEY: "test-anthropic-key",
 
