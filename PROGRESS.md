@@ -1304,6 +1304,24 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   flag `discovery_eligible` dans le contexte dynamique (évite un back-track
   UX mais coûte un appel bookings/tour). Hors scope : bloquer sur un pack
   déjà acheté (scoping = présence Pilates, pas l'achat du pack).
+- **13/07 — Notif WhatsApp « nouvelle conversation » (Babakar seul, PAS la
+  réception).** Un ping WhatsApp part vers `NEW_CHAT_NOTIFY_PHONE` (défaut
+  `+221774982711`, configurable, vide = off) dès qu'un client **démarre** une
+  conversation avec Awa : nouveau lead OU retour après un silence
+  ≥ `NEW_CHAT_NOTIFY_GAP_HOURS` (défaut 6h) → un seul ping par session, pas un
+  par message. **Destinataire = ce seul numéro** ; la réception (`notifyReception`,
+  handoff/refund/non-relié) n'est PAS concernée par ce déclencheur. Détection :
+  `isConversationStart(lastActivityAt, now, gapHours)` (pur, testé) sur
+  `repo.lastConversationActivityAt` — appelée AVANT de persister le tour entrant.
+  Branché dans `handleInboundText` (texte/bouton/vocal/image) + les 3 handlers
+  média-en-échec. Livraison : `sendWhatsAppNotification(phone, …)` factorisé
+  depuis l'ancien `sendReceptionWhatsApp` — texte libre d'abord, repli sur le
+  template réception `WA_RECEPTION_TEMPLATE` si fenêtre 24h fermée (Meta 131047,
+  facturé). **Piège** : sans ce template posé sur Railway, le ping n'arrive que
+  si le numéro notifié a écrit à Awa dans les 24h. Fire-and-forget (ne bloque
+  jamais la réponse). 5 tests `conversationStart`. Fichiers :
+  [notify.ts](src/lib/notify.ts), [index.ts](src/agent/index.ts), config,
+  repo, `.env.example`.
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —
