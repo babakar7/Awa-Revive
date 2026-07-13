@@ -81,8 +81,9 @@ export const config = {
   EMAIL_FROM: optional("EMAIL_FROM", "Awa - Revive <support@revive.sn>"),
   RECEPTION_EMAIL: optional("RECEPTION_EMAIL", "support@revive.sn"),
 
-  // Admin dashboard (optional — /admin answers 503 until this is set).
-  // Format: "user1:password1,user2:password2"
+  // Admin dashboard accounts. Format: "user1:password1,user2:password2".
+  // Unset → built-in fallback login revive/revive (see admin/auth.ts) — the
+  // dashboard is never served without a login.
   ADMIN_USERS: optional("ADMIN_USERS", ""),
 
   // App

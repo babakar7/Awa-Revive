@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAdminUsers, verifyBasicAuth } from "../src/admin/auth.js";
+import { parseAdminUsers, verifyBasicAuth, FALLBACK_USERS } from "../src/admin/auth.js";
 import { escapeHtml } from "../src/admin/routes.js";
 
 function basic(user: string, pass: string): string {
@@ -31,8 +31,19 @@ describe("admin auth — ADMIN_USERS parsing", () => {
     expect(users.get("ok")).toBe("yes");
   });
 
-  it("empty string → no accounts (dashboard disabled)", () => {
+  it("empty string → no accounts (the hook then uses the built-in fallback)", () => {
     expect(parseAdminUsers("").size).toBe(0);
+  });
+});
+
+describe("admin auth — built-in fallback (ADMIN_USERS unset)", () => {
+  it("accepts revive/revive", () => {
+    expect(verifyBasicAuth(basic("revive", "revive"), FALLBACK_USERS)).toBe("revive");
+  });
+
+  it("rejects a wrong password and a missing header (never open)", () => {
+    expect(verifyBasicAuth(basic("revive", "wrong"), FALLBACK_USERS)).toBeNull();
+    expect(verifyBasicAuth(undefined, FALLBACK_USERS)).toBeNull();
   });
 });
 

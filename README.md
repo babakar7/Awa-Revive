@@ -131,7 +131,8 @@ npm run build && npm start   # production
 
 Server-rendered, zero-dependency dashboard (`src/admin/`) protected by HTTP
 Basic Auth. Set `ADMIN_USERS="babakar:pass1,reception:pass2"` (one account per
-human — action logs record who clicked); unset → `/admin` answers 503. Pages:
+human — action logs record who clicked); unset → built-in fallback login
+`revive` / `revive` (never open, never 503). Pages:
 overview ("à traiter": pending refunds with a *remboursement effectué* button,
 paid plan orders awaiting manual Wix activation, recent handoffs, day/7-day
 stats), conversations (search + full thread incl. collapsed tool calls),

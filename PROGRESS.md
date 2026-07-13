@@ -808,8 +808,10 @@ test/integration/     31 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     - Prompt §Abonnements et §Linking réécrits : Awa ne connaît jamais le code
       et ne peut ni l'envoyer ni le confirmer ; après `verified` elle PEUT dire
       que le compte est relié (avant, jamais). 169 tests.
-    - **⚠️ À faire au prochain déploiement** : remettre `ADMIN_USERS` en prod —
-      le POST /admin/crm/link écrit dans Wix, la page ne doit plus être ouverte.
+    - ~~⚠️ À faire au prochain déploiement : remettre `ADMIN_USERS` en prod~~
+      **Résolu (13/07)** : login fallback en dur `revive`/`revive` quand
+      `ADMIN_USERS` est vide ([admin/auth.ts](src/admin/auth.ts)) — la page
+      n'est plus jamais servie sans login.
 
 31. **Boucle de résultat — aucun client ne repart les mains vides en silence
     (12/07, demande Babakar : « comment améliorer Awa pour que les clients
@@ -1516,9 +1518,10 @@ test/integration/     31 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   « oui », vérifier qu'Awa relance bien check_availability (pas de lien direct).
 
 **Avant lancement (essentiellement côté Babakar, dans Wix) :**
-- [ ] **Remettre `ADMIN_USERS` en prod** — le dashboard `/admin` est
-  actuellement OUVERT sans login (choix explicite de Babakar pour la phase de
-  test, 10/07). Indispensable avant toute communication publique.
+- [x] **Protéger `/admin`** → **FAIT (13/07)** : login fallback en dur
+  `revive`/`revive` quand `ADMIN_USERS` est vide — plus jamais ouvert sans
+  login. Optionnel plus tard : poser `ADMIN_USERS` sur Railway pour des comptes
+  nominatifs (les logs d'action diraient qui a cliqué) et un mot de passe fort.
 - [ ] Activer **« Wait for CI »** sur le service Railway (Settings → Deploy)
   pour que les commits rouges ne se déploient pas (la CI seule ne fait que
   signaler).
