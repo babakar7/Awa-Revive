@@ -1065,6 +1065,16 @@ export async function executeTool(
           : session.method === "orange_money"
             ? "Orange Money"
             : "Wave";
+      // Activation honesty: a pricing-plan order can only be auto-activated for
+      // a Wix MEMBER. When no member was resolved (typical for a brand-new
+      // client who only has a contact fiche), activation falls to reception
+      // AFTER payment — so the plan is NOT usable instantly and a class can't
+      // be booked on it right away. Tell the model to set that expectation
+      // BEFORE the client pays, instead of letting them discover it afterwards.
+      const activationManual = !memberId;
+      const activationNote = activationManual
+        ? " ACTIVATION: this client has no linked member account yet, so the plan will be activated by the team shortly AFTER payment (usually quick) — NOT instantly. When you relay the link, tell the client their pack is activated by the team just after payment and that you'll be able to book their class once it's active. Do NOT promise instant activation or an immediate booking."
+        : "";
       return JSON.stringify({
         payment_link: session.paymentLink,
         payment_method: session.method,
@@ -1074,10 +1084,12 @@ export async function executeTool(
         billing: plan.billing,
         period: plan.periodLabel ?? undefined,
         starts_on: startsAt ? startsAt.toISOString().slice(0, 10) : "now",
+        activation: activationManual ? "manual_after_payment" : "auto_after_payment",
         expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
         note:
           `Relay the link (open in ${appLabel}). The plan is confirmed only once paid; automatic WhatsApp confirmation after payment.` +
           startNote +
+          activationNote +
           (plan.billing === "recurring"
             ? " Recurring plan: this payment covers the FIRST period; renewal is self-service — the client just buys it again here when it ends, say so."
             : ""),
