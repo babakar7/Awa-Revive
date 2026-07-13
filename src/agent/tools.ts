@@ -10,6 +10,7 @@ import {
 } from "../lib/scheduleImage.js";
 import { classTip } from "../lib/classTips.js";
 import { renderReceiptImage, formatXof } from "../lib/receiptImage.js";
+import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
 import {
   CAFE_MENU,
   computeExtras,
@@ -2032,6 +2033,12 @@ export async function executeTool(
         "assistant",
         `${body}\n[message interactif ${kind} — options : ${options.map((o) => o.title).join(" · ")}]`,
       );
+      // Once-per-conversation window for vague-opener capability menus.
+      if (options.some((o) => isCapabilityOptionId(o.id))) {
+        await repo.markCapabilityMenuShown(client.id).catch((err) =>
+          console.error("markCapabilityMenuShown failed:", err),
+        );
+      }
       return JSON.stringify({
         sent: true,
         format: kind,

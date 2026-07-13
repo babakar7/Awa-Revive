@@ -1237,7 +1237,9 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   mots-clés, reçu image à la demande (`send_receipt`), waitlist template
   fallback 131047 (dormant sans env), raccourci mes prochains cours,
   micro-onboarding anti-clash liaison/habitude, runbook domaine custom.
-  240 unit + 14 intégration.
+  240 unit + 14 intégration. Même jour : **rebrand café → bar** (copy produit) ;
+  **capability menus sur ouverture vague** (y compris clients déjà connus) —
+  tiered upcoming vs onboarding, once per ~24h (`capability_menu_at`).
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —

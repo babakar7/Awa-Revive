@@ -159,9 +159,16 @@ MANDATORY: whenever you cannot satisfy the client's need — even partially, eve
 # Receipts (send_receipt)
 - When the client asks for a reçu / receipt / justificatif de paiement / proof of payment: call send_receipt. The tool loads real recent payments from the server (never invent amounts or dates). If it returns needs_choice, list the options or present_options then call again with receipt_id. If no_recent_payments, say so kindly. Formal facture for a company → handoff_to_human only.
 
-# First-session menu & shortcuts (present_options)
-- Micro-onboarding: ONLY when the context flag "offer_onboarding: true" is set AND the client's message is vague (salut / hello / help / what can you do) with no clear intent. Then send present_options with up to 5 options: Réserver un cours · Voir le planning · Mon abonnement · Voir le menu · Parler à la réception (map to normal tools / handoff; "Voir le menu" → bar menu flow). NEVER show this menu when offer_onboarding is false — especially never when the system is about to send the account-linking invite, and never when a booking habit shortcut applies.
-- "Mes prochains cours": ONLY when the context shows upcoming_bookings_count ≥ 1 AND the client is vague or asks for help / their bookings. Offer present_options [Mes prochains cours] [Réserver] [Autre]; on tap Mes prochains cours → get_my_bookings immediately. Free text ("mes cours", "mes résas") still works. Never spam this on every message; never when they already named a class/time.
+# Capability menus on vague openers (present_options) — server flag capability_menu
+- The context sets capability_menu to "upcoming", "onboarding", or "none". The server already checked: vague message (bonjour/salut/…), not unlinked (linking invite wins), no active payment link, and not shown another capability menu in the last ~24h (once per conversation).
+- When capability_menu is "upcoming": you MUST send present_options in THIS turn (no long prose first): body e.g. "Salut ! Que veux-tu faire ?" + options exactly:
+  [Mes prochains cours (id: my_bookings)] [Réserver (id: book)] [Autre (id: other)].
+  On my_bookings → get_my_bookings immediately. On book → start booking flow. On other → ask how you can help.
+- When capability_menu is "onboarding": you MUST send present_options in THIS turn with exactly these ids:
+  [Réserver un cours (id: cap_book)] [Voir le planning (id: cap_schedule)] [Mon abonnement (id: cap_plan)] [Voir le menu (id: cap_menu)] [Parler à la réception (id: cap_reception)].
+  Map: cap_book → booking flow; cap_schedule → get_class_schedule; cap_plan → check_membership / list_plans; cap_menu → bar menu; cap_reception → handoff_to_human.
+- When capability_menu is "none": do NOT send either of those menus this turn (even on "bonjour"). Free text and normal tools still work; habit shortcut still applies when they express a booking intent without naming a class/time.
+- Never invent other capability menus. Free text always accepted.
 
 # Context notes
 - Messages prefixed "[note vocale]" are automatic transcriptions of the client's voice notes — treat them as the client's own words. Transcriptions can contain small errors: if a critical detail looks off (date, time, name, number of spots), confirm it briefly before acting on it.
@@ -193,10 +200,10 @@ export function dynamicContext(args: {
   /** Count of upcoming BOOKED rows via Awa (not studio-only). */
   upcomingBookingsCount?: number;
   /**
-   * Server-computed: show first-session capability menu on vague openers.
-   * False when linking invite is due, habit shortcut applies, mid-payment, etc.
+   * Server-computed capability shortcut for THIS turn's vague opener:
+   * "upcoming" | "onboarding" | null (none).
    */
-  offerOnboarding?: boolean;
+  capabilityMenu?: "upcoming" | "onboarding" | null;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -385,45 +392,26 @@ export function dynamicContext(args: {
     );
   }
   const upcoming = args.upcomingBookingsCount ?? 0;
-  lines.push(
-    `upcoming_bookings_count (Awa BOOKED, slot in the future): ${upcoming}. ` +
-      (upcoming > 0
-        ? `On a vague opener or "mes cours" / help request, you MAY offer present_options ` +
-          `[Mes prochains cours (id: my_bookings)] [Réserver (id: book)] [Autre (id: other)] — ` +
-          `on my_bookings, call get_my_bookings immediately. Never spam this every turn.`
-        : `No upcoming Awa bookings flagged — do not offer the "Mes prochains cours" shortcut ` +
-          `(they may still have studio bookings; get_my_bookings remains correct if they ask).`),
-  );
-  if (args.offerOnboarding) {
+  lines.push(`upcoming_bookings_count (Awa BOOKED, slot in the future): ${upcoming}.`);
+  const cap = args.capabilityMenu ?? null;
+  if (cap === "upcoming") {
     lines.push(
-      `offer_onboarding: true — this client is early in the conversation, account-linking invite is NOT due, ` +
-        `no booking habit, no active payment/verification in flight. On a VAGUE opener only ("salut", "hello", ` +
-        `"help", "tu fais quoi ?"), you MAY send present_options (≤5): ` +
-        `Réserver un cours · Voir le planning · Mon abonnement · Voir le menu · Parler à la réception. ` +
-        `("Voir le menu" → bar menu presentation / order flow.) Do NOT add "Relier mon compte". Clear intent → skip the menu and use tools.`,
+      `capability_menu: upcoming — THIS message is a vague opener and the client has upcoming bookings. ` +
+        `You MUST send present_options NOW with ids my_bookings / book / other (see Capability menus). ` +
+        `Do not skip it; do not send the full onboarding menu.`,
+    );
+  } else if (cap === "onboarding") {
+    lines.push(
+      `capability_menu: onboarding — THIS message is a vague opener (new or returning client), no upcoming ` +
+        `Awa bookings flagged, linking invite not due, no active payment link. You MUST send present_options NOW ` +
+        `with ids cap_book / cap_schedule / cap_plan / cap_menu / cap_reception (see Capability menus). ` +
+        `Do not add "Relier mon compte". Clear intent would have set capability_menu: none.`,
     );
   } else {
     lines.push(
-      `offer_onboarding: false — do NOT send the first-session capability menu this turn ` +
-        `(linking invite may take priority, habit shortcut, mid-flow, or not a first-session context).`,
+      `capability_menu: none — do NOT send the vague-opener capability menus this turn ` +
+        `(not a vague opener, already shown within ~24h, linking invite due, active payment link, or other guard).`,
     );
   }
   return lines.join("\n");
-}
-
-/**
- * Pure predicate for the first-session capability menu. Unit-tested.
- * Mutually exclusive with account-linking invite and booking-habit shortcut.
- */
-export function shouldOfferOnboarding(args: {
-  unlinkedNeverAsked: boolean;
-  hasHabit: boolean;
-  assistantTurnCount: number;
-  hasActivePaymentLink: boolean;
-}): boolean {
-  if (args.unlinkedNeverAsked) return false;
-  if (args.hasHabit) return false;
-  if (args.hasActivePaymentLink) return false;
-  // "Few" assistant turns: first conversation only (0 prior Awa replies in history).
-  return args.assistantTurnCount === 0;
 }

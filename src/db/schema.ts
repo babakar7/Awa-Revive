@@ -76,6 +76,11 @@ alter table clients
 alter table clients
   add column if not exists claimed_email text;
 
+-- Last time a capability shortcut menu was delivered (vague openers).
+-- "Once per conversation" ≈ suppress for 24h after a successful send.
+alter table clients
+  add column if not exists capability_menu_at timestamptz;
+
 create index if not exists idx_pending_bookings_client_status
   on pending_bookings (client_id, status);
 create index if not exists idx_pending_bookings_status_expiry
