@@ -1266,7 +1266,29 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   pack d'essai du catalogue (« Pack Découverte », vérifié live via list_plans +
   covers_classes) au lieu d'une séance à la carte — constat prod 13/07, une
   cliente découverte s'est vu vendre une à-la-carte 12 000 F sans mention du
-  pack.
+  pack. Puis **fiabilisation payment-tunnel** (`buildHistoryMessages` : les
+  tours `tool` sont rejoués dans le contexte du modèle → il voit ce qu'il a
+  DÉJÀ fait ; garde-fous vérif : `recentlyResolved` refuse de re-vérifier un
+  compte résolu < 10 min, message `no_pending_verification` = « déjà fait,
+  continue » ; prompt : un paiement en attente ne met jamais la conv en pause,
+  ne pas re-renvoyer boutons/lien déjà envoyés). Constat prod 13/07 : Awa
+  ignorait une question (« où êtes-vous ? ») en plein paiement et re-poussait
+  les boutons + re-soumettait un code périmé. 6 tests `historyReplay`.
+- **Activation abonnement pour NOUVEAU client (13/07, étape 1 faite ;
+  étape 2 EN ATTENTE d'un probe ops).** Rappel de la contrainte (§11) : un
+  pricing plan ne s'active en auto que pour un **member** Wix ; un vrai nouveau
+  client n'a qu'une **fiche contact** (`createContact`) → `member_id` null →
+  après paiement le plan reste PAID + activation manuelle réception. **Étape 1
+  livrée** : `create_plan_payment_link` renvoie désormais
+  `activation: manual_after_payment` + consigne quand `memberId` est null, pour
+  qu'Awa prévienne le client AVANT paiement (activation par l'équipe juste après,
+  pas instantanée) au lieu qu'il le découvre après. **Étape 2 (activation
+  instantanée via création paresseuse d'un member dans le webhook) NON codée** :
+  gated par un probe one-off `npm run wix:probe-member -- <email-test>`
+  (`scripts/probe-create-member.ts`) qui sonde `POST /members/v1/members` — le
+  critère no-go est **un email envoyé au client par Wix** (invitation /
+  mot de passe). À faire : lancer le probe avec une boîte jetable, vérifier
+  l'inbox, puis décider. Détails : plan `what-do-you-think-mutable-spring.md`.
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —
