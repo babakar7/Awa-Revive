@@ -61,14 +61,20 @@ export function shouldFallbackWaitlistTemplate(
   return !!templateName && String(err).includes("131047");
 }
 
-/** Template body params: class name + date/time label (sanitized). Pure. */
+/**
+ * Template body params: class name + date/time label (sanitized). Pure.
+ * `templateLang` is the Meta language code (e.g. en, en_US, fr) so {{2}}
+ * matches the template language (English template → English weekday/month).
+ */
 export function waitlistTemplateParams(
   serviceName: string,
   slotStart: Date,
+  templateLang: string = "fr",
 ): [string, string] {
+  const locale = /^en/i.test(templateLang) ? "en-GB" : "fr-FR";
   return [
     toTemplateParam(serviceName, 60),
-    toTemplateParam(formatSlot(slotStart, "fr-FR"), 60),
+    toTemplateParam(formatSlot(slotStart, locale), 60),
   ];
 }
 
@@ -115,6 +121,7 @@ export async function sweepWaitlist(log: {
           const [p1, p2] = waitlistTemplateParams(
             entry.service_name,
             new Date(entry.slot_start),
+            config.WA_WAITLIST_TEMPLATE_LANG,
           );
           await sendTemplate(
             entry.wa_phone,

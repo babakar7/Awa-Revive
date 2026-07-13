@@ -39,8 +39,9 @@ export const config = {
   // OUTSIDE the 24h free-text window (Meta 131047). Empty = free-text only
   // (NOTIFY_FAILED outside the window). 2 body variables: {{1}} class name,
   // {{2}} date/time. Free text is tried first; template only on 131047.
+  // Language code must match Meta exactly (en, en_US, fr, …).
   WA_WAITLIST_TEMPLATE: optional("WA_WAITLIST_TEMPLATE", ""),
-  WA_WAITLIST_TEMPLATE_LANG: optional("WA_WAITLIST_TEMPLATE_LANG", "fr"),
+  WA_WAITLIST_TEMPLATE_LANG: optional("WA_WAITLIST_TEMPLATE_LANG", "en"),
   // Meta App ID — only needed for the resumable upload flow used to change
   // the WhatsApp Business profile photo. Empty = photo edit disabled in
   // /admin/profile; description/address/hours still work.

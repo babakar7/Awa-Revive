@@ -54,12 +54,20 @@ describe("shouldFallbackWaitlistTemplate", () => {
 });
 
 describe("waitlistTemplateParams", () => {
-  it("returns two sanitized body params (class + date)", () => {
+  it("returns two sanitized body params (class + date) in French by default", () => {
     const [cls, when] = waitlistTemplateParams("Pilates Fusion", slot);
     expect(cls).toContain("Pilates");
     expect(when).toMatch(/juillet|17/);
     // no newlines (Meta template rule)
     expect(cls).not.toMatch(/[\n\t]/);
     expect(when).not.toMatch(/[\n\t]/);
+  });
+
+  it("formats {{2}} in English when template lang is en / en_US", () => {
+    const [, whenEn] = waitlistTemplateParams("Pilates Fusion", slot, "en");
+    expect(whenEn).toMatch(/July|Friday|17/i);
+    expect(whenEn).not.toMatch(/juillet/i);
+    const [, whenUs] = waitlistTemplateParams("Yoga", slot, "en_US");
+    expect(whenUs).toMatch(/July|17/i);
   });
 });
