@@ -1007,6 +1007,24 @@ export async function executeTool(
       const contactId = await wix.findContactIdByPhone(phone, clientName || client.name || undefined);
       const memberId = contactId ? await wix.findMemberIdByContactId(contactId) : null;
 
+      // Pack Découverte eligibility (server decides): only for first-time
+      // Pilates clients. History visible only when contactId is linked — if
+      // null (unknown number / unlinked account), sell without asking (minimal
+      // friction; an old client on a new number may slip through — accepted).
+      // Other past classes (aquabike, yoga…) do not disqualify.
+      if (
+        wix.isDiscoveryPlan(plan.name) &&
+        contactId &&
+        (await wix.hasPastPilatesBooking(contactId))
+      ) {
+        return JSON.stringify({
+          error: "discovery_not_eligible",
+          message:
+            "This client has already done Pilates at Revive — the discovery pack is for first-time " +
+            "Pilates clients only. Do NOT sell it. Offer a normal single class (à la carte) or another plan instead.",
+        });
+      }
+
       // Chained renewal: when the client wants the new plan to start after the
       // current one, resolve the real end date from Wix (never from the model).
       // No active plan / no readable end date → fall back to "now" and flag it.

@@ -345,6 +345,58 @@ export async function listContactUpcomingBookings(
   return out.sort((a, b) => Date.parse(a.startDate) - Date.parse(b.startDate));
 }
 
+/**
+ * Has this contact ever booked a Pilates class at Revive (confirmed or pending)?
+ *
+ * Used to gate the Pack Découverte: the pack is for first-time Pilates clients
+ * only. Other past classes (aquabike, yoga…) do NOT disqualify. Past OR future
+ * Pilates bookings both count — a confirmed booking proves they are no longer
+ * "new to Pilates", and Wix date filters are unreliable server-side (see
+ * listContactUpcomingBookings comments).
+ *
+ * Defensive: any unexpected shape or network error → false. Prefer letting a
+ * sale through over blocking on a bug (unknown / unlinked numbers also sell
+ * without asking — friction is only applied when history is clearly visible).
+ */
+export async function hasPastPilatesBooking(contactId: string): Promise<boolean> {
+  try {
+    const extendedBookings: any[] = [];
+    for (let offset = 0; offset < 500; offset += 100) {
+      const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+        query: {
+          filter: {
+            "contactDetails.contactId": contactId,
+            status: { $in: ["CONFIRMED", "PENDING"] },
+          },
+          paging: { limit: 100, offset },
+        },
+      });
+      const batch: any[] = data?.extendedBookings ?? [];
+      extendedBookings.push(...batch);
+      if (batch.length < 100) break;
+    }
+    if (extendedBookings.length === 0) return false;
+
+    const services = await listServices().catch(() => [] as WixService[]);
+    const serviceName = (id: string | undefined) =>
+      services.find((s) => s.id === id)?.name ?? "";
+
+    for (const eb of extendedBookings) {
+      const b = eb?.booking;
+      if (!b?.id) continue;
+      const status = b.status ?? "UNKNOWN";
+      if (status !== "CONFIRMED" && status !== "PENDING") continue;
+      const slot = b?.bookedEntity?.slot ?? b?.bookedEntity?.schedule ?? {};
+      const name: string = b?.bookedEntity?.title ?? serviceName(slot.serviceId);
+      if (/pilates/i.test(name)) return true;
+    }
+    return false;
+  } catch (err) {
+    console.error("hasPastPilatesBooking failed (allowing sale):", err);
+    return false;
+  }
+}
+
 // ---------- contacts ----------
 
 /**
@@ -724,6 +776,16 @@ export function isPlanRenewable(name: string, durationDays: number | null): bool
   if (durationDays === null || durationDays < 28) return false;
   if (/cadeau/i.test(name)) return false;
   return true;
+}
+
+/**
+ * Business rule: is this the one-shot discovery / trial pack for first-time
+ * Pilates clients? Name-based (same approach as isPlanRenewable / gift cards) —
+ * the live catalogue is the source of plan names, we only classify them here.
+ * Matches "Pack Découverte", "Discovery", "Essai", "Trial", etc.
+ */
+export function isDiscoveryPlan(name: string): boolean {
+  return /découverte|discovery|essai|trial/i.test(name);
 }
 
 function periodLabel(duration: any): string | null {

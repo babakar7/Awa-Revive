@@ -1,8 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — **Orange Money / Max It en prod**
-> (env Railway + paiements réels OK) ; rebrand café → bar ; UX capability menus.
+> Dernière mise à jour : **13 juillet 2026** — **Pack Découverte éligibilité**
+> (garde-fou serveur : jamais de pack si historique Pilates) ; OM/Max It en prod ;
+> rebrand café → bar ; UX capability menus.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar).
@@ -1289,6 +1290,20 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   critère no-go est **un email envoyé au client par Wix** (invitation /
   mot de passe). À faire : lancer le probe avec une boîte jetable, vérifier
   l'inbox, puis décider. Détails : plan `what-do-you-think-mutable-spring.md`.
+- **13/07 — Pack Découverte : garde-fou éligibilité (serveur décide).** Le pack
+  d'essai est réservé aux clients qui n'ont **jamais fait de Pilates** à Revive
+  (présence = booking CONFIRMED/PENDING dont le nom matche `/pilates/i` ;
+  aquabike/yoga ne disqualifient pas). `isDiscoveryPlan(name)` (pur, tests) +
+  `hasPastPilatesBooking(contactId)` (bookings-reader paginé, toute date ;
+  erreur réseau → false, ne jamais bloquer une vente sur un bug) dans
+  [wix.ts](src/lib/wix.ts). Gate dans `create_plan_payment_link` : si plan
+  découverte + contact relié + historique Pilates → `discovery_not_eligible`
+  (pas de lien de paiement ; Awa bascule à-la-carte). Contact non relié → on
+  vend sans demander (friction minimale ; ancien client sur nouveau numéro
+  accepté comme angle mort). business-info § découverte affiné. Hors v1 :
+  flag `discovery_eligible` dans le contexte dynamique (évite un back-track
+  UX mais coûte un appel bookings/tour). Hors scope : bloquer sur un pack
+  déjà acheté (scoping = présence Pilates, pas l'achat du pack).
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —
