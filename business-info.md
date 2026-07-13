@@ -2,8 +2,9 @@
 
 <!--
   Awa (the WhatsApp assistant) answers general questions ONLY from this file.
-  Anything not written here, she says she doesn't know and offers the reception
-  contact. Edit freely — plain text, French or English. The server must be
+  Anything not written here, she says she doesn't know and calls
+  handoff_to_human so the client receives the prefilled reception link. Edit
+  freely — plain text, French or English. The server must be
   restarted (or redeployed) to pick up changes.
 
   ⚠️ Do NOT put class prices or schedules here — Awa always gets those live
@@ -15,6 +16,9 @@
 - Nom : Revive
 - Adresse / localisation : Revive Pilates, Almadies, Dakar — plan Google Maps : https://maps.app.goo.gl/jJS8rS3sV5j41SGc9
 - Téléphone réception (WhatsApp + appels) : +221 78 464 43 29
+  Pour un contact écrit, Awa utilise toujours le lien WhatsApp prérempli renvoyé
+  par handoff_to_human. Elle affiche le numéro brut en plus seulement si le
+  client demande explicitement à appeler.
 - Awa (réservations sur WhatsApp) : +221 78 953 66 76 — lien direct :
   https://wa.me/221789536676?text=Bonjour . Si un client veut partager Awa avec un proche ou
   demande "comment on te contacte ?", donne ce lien.
@@ -90,7 +94,7 @@ mémorisée. (Idem prix et créneaux : outils uniquement.)
 
 Note pour Awa : ne propose JAMAIS de passer au studio pour payer, et ne
 mentionne JAMAIS la carte bancaire. Si le client ne peut pas payer avec les
-moyens disponibles, handoff_to_human + numéro réception.
+moyens disponibles, handoff_to_human + lien WhatsApp prérempli.
 
 
 ## Annulation / retard
@@ -118,8 +122,8 @@ Comment Annuler
 Note pour Awa : tu peux annuler toi-même les réservations prises via toi
 (outil cancel_booking), uniquement ≥ 16h avant le cours — suis la section
 Cancellations de tes instructions. Moins de 16h avant : refus poli, la séance
-est due ; pour une situation exceptionnelle, orienter vers la réception SANS
-suggérer d'exemples d'excuses valables.
+est due ; pour une situation exceptionnelle, appeler handoff_to_human afin de
+fournir le lien prérempli, SANS suggérer d'exemples d'excuses valables.
 
 ## Enfants et bébés nageurs
 
@@ -132,8 +136,8 @@ suggérer d'exemples d'excuses valables.
 
 - Places limitées par cours : la réservation à l'avance via Awa est recommandée.
 - Vestiaires disponibles sur place : douches, serviettes et casiers fournis.
-- Séance Privée et Pilates Privé : la réservation passe par la réception pour
-  un accompagnement personnalisé.
+- Séance Privée et Pilates Privé : appeler handoff_to_human ; la réservation
+  passe par la réception pour un accompagnement personnalisé.
   - Chaussettes antidérapantes, tenues et bouteilles en vente au studio
 - Parking : oui.
 - Accès piscine : la piscine est accessible aux membres en dehors des heures de

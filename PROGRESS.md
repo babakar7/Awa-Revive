@@ -1,10 +1,10 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — lot **exactitude & fermeture**
-> (reçus/CA multi-rails, nudge expiration honnête, remboursement d'annulation
-> enregistré, `/healthz` relié à Postgres) ; sécurisation admin explicitement
-> reportée. LOT 1+2 robustesse paiement/boucle ; poller OM abandonné.
+> Dernière mise à jour : **13 juillet 2026** — handoffs réception en un clic
+> (`wa.me` contextualisé avec prénom + motif, dernier appui Envoyer explicite),
+> après le lot **exactitude & fermeture**. LOT 1+2 robustesse paiement/boucle ;
+> poller OM abandonné.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
@@ -31,8 +31,8 @@ côté serveur.
 Production : `https://resabot-production.up.railway.app` (Railway, service +
 Postgres), déployée depuis GitHub (`babakar7/Awa-Revive`, push sur main =
 déploiement). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
-phone_number_id 1175926012276896). Tests : ~278 unitaires (`npm test`, rapides,
-sans réseau) + **31 d'intégration** sur les chemins de paiement Wave + OM et la santé DB
+phone_number_id 1175926012276896). Tests : ~286 unitaires (`npm test`, rapides,
+sans réseau) + **34 d'intégration** sur les chemins de paiement Wave + OM, la santé DB et les escalades de liaison
 (`npm run test:integration`, Postgres jetable via Docker, APIs externes
 mockées) — exécutés en CI GitHub Actions à chaque push.
 
@@ -48,7 +48,7 @@ Flux validés en conditions réelles (argent réel / site Wix réel) :
 | Client non relié → demande d'email en chat + email réception | ✅ | one-shot par client ; le client répond DANS le chat (jamais "envoie à la réception") |
 | Abonnements : détection auto + résa sans paiement | ✅ 05-06/07 | voir §4 — Benefit Programs, PAS le checkout eCommerce |
 | Annulation par Awa (règle 16h) | ✅ 06/07 | abonnement → re-crédit auto ; paiement Awa → remboursement enregistré sous 24h, réception prévenue |
-| Handoffs (« je peux vous appeler ? », plaintes…) | ✅ | numéro réception + email auto à support@revive.sn |
+| Handoffs (« je peux vous appeler ? », plaintes…) | ✅ | lien `wa.me` prénom + motif + email auto ; numéro brut ajouté seulement pour un appel explicite |
 | Notifications réception (email Brevo + WhatsApp) | ✅ | dual-channel non-bloquant, voir §4.6 |
 | Annulation côté réception (dashboard Wix) | ✅ | sweep 5 min = synchro **silencieuse** ; Wix notifie le client lui-même |
 | Typing indicator | ✅ | rafraîchi à chaque itération d'outil (Meta l'éteint à ~25 s) |
@@ -95,8 +95,8 @@ src/
                       idempotence marquée APRÈS traitement (échec = retry Wave rejouable) ;
                       reconcileStuckBookings() : rattrape les PAID jamais réservés (crash) — voir §4.14
 scripts/              simulate-wave-webhook, daily-summary, mark-refunded (refund:done), test-email
-test/                 ~278 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
-test/integration/     31 tests d'intégration (15 Wave + 15 OM/Max It + 1 healthz) : Postgres jetable (docker run,
+test/                 ~286 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
+test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 healthz + 3 liaisons) : Postgres jetable (docker run,
                       globalSetup maison — PAS testcontainers, incompatible Node 20.17), mock fetch
                       Wix/Wave/OM/Meta/Brevo qui THROW sur tout appel inattendu — voir §4.12 / §4.15
 ```
@@ -1177,6 +1177,16 @@ test/integration/     31 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     - 240 tests unitaires + 14 intégration verts.
 
 ## 5. Chronologie condensée
+
+- **13/07 — Handoffs réception en un clic.** Tous les parcours où le client doit
+  écrire à la réception donnent un `wa.me` vers `RECEPTION_PHONE`, avec message
+  prérempli « prénom + motif » nettoyé et borné. Le client est averti que
+  WhatsApp ouvre le message mais exige encore un appui sur Envoyer. Le lien est
+  produit côté serveur pour les handoffs, annulations `studio:`, replis
+  techniques et activations manuelles ; le modèle ne fabrique plus le contact.
+  Le numéro brut reste disponible uniquement quand le client demande à appeler.
+  Les reprises déjà automatiques (remboursement Awa, liaison de compte) ne
+  demandent toujours aucune répétition au client.
 
 - **13/07 — Lot « exactitude & fermeture » (revue externe, admin reporté).**
   Reçus : `paidVia` vient désormais de `payment_method` pour Wave, Orange Money,

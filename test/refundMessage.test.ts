@@ -21,8 +21,11 @@ describe("refundMessage", () => {
   });
 
   it("technical: keeps the generic technical-issue message (fr)", () => {
-    const msg = refundMessage("fr", undefined, "technical");
+    const msg = refundMessage("fr", undefined, "technical", "Aminata");
     expect(msg).toContain("souci technique");
+    expect(msg).toContain("https://wa.me/221784644329?text=");
+    expect(decodeURIComponent(msg)).toContain("je suis Aminata");
+    expect(msg).not.toContain("+221784644329");
   });
 
   it("slot_taken stays the default reason", () => {

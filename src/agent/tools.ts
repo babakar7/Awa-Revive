@@ -11,6 +11,7 @@ import {
 import { classTip } from "../lib/classTips.js";
 import { renderReceiptImage, formatXof } from "../lib/receiptImage.js";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
+import { receptionWhatsAppLink } from "../lib/receptionContact.js";
 import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
 import {
   CAFE_MENU,
@@ -508,12 +509,17 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "a person (e.g. \"je peux vous appeler ?\"), complaints, refunds beyond what cancel_booking handles, " +
       "cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
       "medical questions, formal company invoices (facture officielle / entreprise — simple reçus use " +
-      "send_receipt), anything off-script. Records the handoff and returns the reception WhatsApp number " +
-      "to give the client immediately.",
+      "send_receipt), anything off-script. Records the handoff and returns a click-to-chat WhatsApp link with " +
+      "a prefilled message to give the client immediately.",
     input_schema: {
       type: "object",
       properties: {
-        reason: { type: "string", description: "Short reason for the handoff" },
+        reason: {
+          type: "string",
+          description:
+            "Short operational reason in French. Keep it high-level: no internal ids, amounts, full transcript, " +
+            "or sensitive medical details.",
+        },
       },
       required: ["reason"],
       additionalProperties: false,
@@ -743,7 +749,9 @@ export async function executeTool(
       if (!service.priceXof || service.priceXof <= 0) {
         return JSON.stringify({
           error: "no_price",
-          message: "This class has no fixed price configured. Hand off to reception.",
+          message:
+            "This class has no fixed price configured. Call handoff_to_human so the client receives the " +
+            "prefilled reception link.",
         });
       }
 
@@ -757,7 +765,8 @@ export async function executeTool(
           message:
             `This class allows at most ${service.maxParticipantsPerBooking} spot(s) per booking. ` +
             `Offer to book ${service.maxParticipantsPerBooking} now (they can pay and book the rest right after, ` +
-            `one booking at a time), or suggest contacting reception for the whole group at once.`,
+            `one booking at a time). For the whole group at once, call handoff_to_human so they receive the ` +
+            `prefilled reception link.`,
         });
       }
 
@@ -1195,7 +1204,8 @@ export async function executeTool(
           max_participants_per_booking: service.maxParticipantsPerBooking,
           message:
             `This class allows at most ${service.maxParticipantsPerBooking} spot(s) per booking. ` +
-            `Offer to book ${service.maxParticipantsPerBooking} on the plan now, or contact reception for a larger group.`,
+            `Offer to book ${service.maxParticipantsPerBooking} on the plan now. If they want a larger group, ` +
+            `call handoff_to_human so they receive the prefilled reception link.`,
         });
       }
 
@@ -1450,8 +1460,8 @@ export async function executeTool(
       // Bookings made at the counter/website ("studio:<wix id>" from
       // get_my_bookings): Awa can cancel them in Wix (same 16h rule), but she
       // has no payment context (cash? OM? plan via the site?), so the money
-      // side is ALWAYS reception's — client is told to contact them, reception
-      // gets an email to check refund/re-credit.
+      // side is ALWAYS reception's — client gets a prefilled click-to-chat
+      // link and reception gets a notification to check refund/re-credit.
       if (bookingId.startsWith("studio:")) {
         const wixId = bookingId.slice("studio:".length);
         // Ownership check server-side: the id must be among THIS client's own
@@ -1475,11 +1485,17 @@ export async function executeTool(
             hours_before_class: Math.max(0, Math.round(hoursLeftStudio * 10) / 10),
             message:
               "Cancellation refused: less than 16 hours before the class, the session is due (studio policy). " +
-              "Politely explain the 16h rule and say that for exceptional situations they can contact reception. " +
+              "Politely explain the 16h rule. If they insist on an exceptional situation, call handoff_to_human " +
+              "so they receive the prefilled reception link. " +
               "Do NOT suggest examples of valid excuses.",
           });
         }
         await wix.cancelBooking(wixId);
+        const receptionContact = receptionWhatsAppLink(
+          config.RECEPTION_PHONE,
+          client.name,
+          `l'annulation de ma réservation ${wb.serviceName} du ${fmtDakar(wb.startDate)} — vérifier le remboursement ou le re-crédit`,
+        );
         notifyReception(
           "ℹ️ Annulation d'une résa studio via Awa — vérifier remboursement/re-crédit",
           `Awa a annulé (≥ 16h avant le cours) une réservation prise au comptoir ou sur le site :\n` +
@@ -1495,11 +1511,13 @@ export async function executeTool(
           slot_start_dakar: fmtDakar(wb.startDate),
           booked_via: "studio",
           reception_whatsapp: config.RECEPTION_PHONE,
+          reception_whatsapp_url: receptionContact.url,
+          reception_prefilled_message: receptionContact.message,
           note:
             "Cancelled in Wix. This booking was made at the counter/website, so Awa does not know how it was " +
             "paid: tell the client the cancellation is done and that for any refund or session re-credit they " +
-            "should CONTACT RECEPTION (give this number) — reception has also been notified. Do not promise " +
-            "a refund amount, a re-credit, or a delay.",
+            "should OPEN reception_whatsapp_url. Say that the message is already prepared and they only need to " +
+            "send it. Reception has also been notified. Do not promise a refund amount, a re-credit, or a delay.",
         });
       }
 
@@ -1521,7 +1539,8 @@ export async function executeTool(
           hours_before_class: Math.max(0, Math.round(hoursLeft * 10) / 10),
           message:
             "Cancellation refused: less than 16 hours before the class, the session is due (studio policy). " +
-            "Politely explain the 16h rule and say that for exceptional situations they can contact reception. " +
+            "Politely explain the 16h rule. If they insist on an exceptional situation, call handoff_to_human " +
+            "so they receive the prefilled reception link. " +
             "Do NOT suggest examples of valid excuses.",
         });
       }
@@ -1707,7 +1726,8 @@ export async function executeTool(
           status: "too_many_requests",
           message:
             "Verification-email limit reached for today (anti-abuse). Tell the client to try again " +
-            "tomorrow, or offer reception / normal Wave payment meanwhile.",
+            "tomorrow, or offer normal Wave payment meanwhile. If they want reception help now, call " +
+            "handoff_to_human so they receive the prefilled contact link.",
         });
       }
       await repo.saveClaimedEmail(client.id, email); // surfaces in the daily summary
@@ -2106,20 +2126,29 @@ export async function executeTool(
 
     case "handoff_to_human": {
       const reason = String(input.reason ?? "unspecified").slice(0, 500);
+      const receptionContact = receptionWhatsAppLink(
+        config.RECEPTION_PHONE,
+        client.name,
+        reason,
+      );
       await repo.recordHandoff(client.id, reason);
       notifyReception(
         `🙋🏾 Handoff client — ${reason.slice(0, 60)}`,
         `Un client a besoin de la réception :\n` +
           `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
           `  Motif : ${reason}\n\n` +
-          `Awa lui a donné le numéro de la réception — il va probablement écrire ou appeler.\n` +
+          `Awa lui a donné un lien WhatsApp avec message prérempli — il va probablement écrire ou appeler.\n` +
           `Extrait de la conversation dans le registre handoffs (npm run summary).`,
       );
       return JSON.stringify({
         reception_whatsapp: config.RECEPTION_PHONE,
+        reception_whatsapp_url: receptionContact.url,
+        reception_prefilled_message: receptionContact.message,
         note:
           "Handoff recorded in the reception register (email notification is best-effort — never claim " +
-          "an email was sent). Give the client this number and tell them the team will help.",
+          "an email was sent). Give the client reception_whatsapp_url and say the message is already prepared: " +
+          "they only need to open the link and tap Send. If they explicitly asked to CALL, also give " +
+          "reception_whatsapp as the phone number.",
       });
     }
 
@@ -2143,7 +2172,8 @@ export async function executeTool(
             error: "no_classes_scheduled",
             message:
               "No class sessions found in the coming week, so there is no schedule to show. " +
-              "Say the planning is unavailable right now and offer the reception contact.",
+              "Say the planning is unavailable right now and call handoff_to_human so the client receives " +
+              "the prefilled reception link.",
           });
         }
         let png: Buffer | null = null;

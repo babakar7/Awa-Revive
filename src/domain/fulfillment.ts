@@ -10,6 +10,10 @@ import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/ca
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { classTip } from "../lib/classTips.js";
+import {
+  receptionLinkInstruction,
+  receptionWhatsAppLink,
+} from "../lib/receptionContact.js";
 
 /**
  * Payment fulfillment — shared by Wave and Orange Money / Max It webhooks.
@@ -326,6 +330,7 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
     order.plan_name,
     activated,
     startsInFuture ? startsAt! : null,
+    client?.name,
   );
   try {
     await sendText(client.wa_phone, msg);
@@ -435,11 +440,12 @@ export function cafeConfirmationMessage(
   }
 }
 
-function planConfirmationMessage(
+export function planConfirmationMessage(
   lang: string,
   planName: string,
   activated: boolean,
   startsAt: Date | null,
+  clientName?: string | null,
 ): string {
   // Chained renewal: the plan is paid but activates on a future date.
   if (startsAt) {
@@ -484,24 +490,30 @@ function planConfirmationMessage(
         );
     }
   }
+  const receptionContact = receptionWhatsAppLink(
+    config.RECEPTION_PHONE,
+    clientName,
+    `l'activation de mon abonnement « ${planName} » après paiement`,
+  );
+  const contactInstruction = receptionLinkInstruction(lang, receptionContact.url);
   switch (lang) {
     case "en":
       return (
         `✅ Payment received for the "${planName}" plan!\n\n` +
         `The team is finalizing its activation on your account — you'll be able to book with it very soon. ` +
-        `Any question: ${config.RECEPTION_PHONE}`
+        `If you need to contact them:\n\n${contactInstruction}`
       );
     case "wo":
       return (
         `✅ Fey bi jot na ngir abonnement "${planName}"!\n\n` +
         `Ekib bi mungi sotal sa compte — dinga man a book ak moom léegi léegi. ` +
-        `Soo amee laaj: ${config.RECEPTION_PHONE}`
+        `Soo bëggee jokkoo ak ñoom:\n\n${contactInstruction}`
       );
     default:
       return (
         `✅ Paiement reçu pour l'abonnement "${planName}" !\n\n` +
         `L'équipe finalise son activation sur ton compte — tu pourras réserver avec très vite. ` +
-        `Une question : ${config.RECEPTION_PHONE}`
+        `Si tu as besoin de la joindre :\n\n${contactInstruction}`
       );
   }
 }
@@ -512,7 +524,7 @@ function planConfirmationMessage(
  * duplicate contact. We then:
  *   1. Ask the client — in this same WhatsApp chat, replying to Awa — for the
  *      email of their existing account (if any). Never phrased as "send it to
- *      the reception number".
+ *      the prefilled reception link".
  *   2. Email reception so the duplicate is known even if the client ignores
  *      the question.
  */
@@ -600,7 +612,7 @@ async function notifyRefundParties(
       `  railway run npm run refund:done -- ${bookingId}\n\n` +
       `Le client a été (ou sera) prévenu sur WhatsApp (remboursement sous 24h).`,
   );
-  const msg = refundMessage(lang, spots, reason);
+  const msg = refundMessage(lang, spots, reason, client?.name);
   try {
     await sendText(client.wa_phone, msg);
     await repo.addTurn(client.id, "assistant", msg);
@@ -676,9 +688,21 @@ export function refundMessage(
   lang: string,
   spots?: { requested: number; remaining: number },
   reason: RefundReason = "slot_taken",
+  clientName?: string | null,
 ): string {
   // Group shortage: be precise about why, so the client can adjust.
   const shortage = spots && spots.requested > 1 && spots.remaining > 0;
+  const technicalContact =
+    reason === "technical"
+      ? receptionWhatsAppLink(
+          config.RECEPTION_PHONE,
+          clientName,
+          "mon remboursement après un incident technique sur ma réservation",
+        )
+      : null;
+  const technicalContactInstruction = technicalContact
+    ? receptionLinkInstruction(lang, technicalContact.url)
+    : "";
   switch (lang) {
     case "en":
       if (shortage)
@@ -694,7 +718,8 @@ export function refundMessage(
       if (reason === "technical")
         return (
           `We're so sorry 😔 — a technical issue prevented us from finalizing your booking. ` +
-          `You will be refunded within 24h. Reply here if you'd like to try again, or contact reception: ${config.RECEPTION_PHONE} 🙏🏾`
+          `You will be refunded within 24h. Reply here if you'd like to try again. 🙏🏾\n\n` +
+          technicalContactInstruction
         );
       return (
         `We're so sorry 😔 — that spot was just taken while your payment went through. ` +
@@ -714,7 +739,8 @@ export function refundMessage(
       if (reason === "technical")
         return (
           `Baal ma — am na jafe-jafe technique bu tere réservation bi sotti. ` +
-          `Dinañu la delloo sa xaalis balaa 24 waxtu. Bindal ma fii walla jokkool ak réception bi: ${config.RECEPTION_PHONE} 🙏🏾`
+          `Dinañu la delloo sa xaalis balaa 24 waxtu. Bindal ma fii su la neexee nga jéemaat. 🙏🏾\n\n` +
+          technicalContactInstruction
         );
       return (
         `Baal ma — palass bi jeex na ci diggante bi nga fey. Dinañu la delloo sa xaalis balaa 24 waxtu. ` +
@@ -734,7 +760,8 @@ export function refundMessage(
       if (reason === "technical")
         return (
           `Désolé 😔 — un souci technique a empêché de finaliser ta réservation. ` +
-          `Tu seras remboursé(e) sous 24h. Écris-moi ici si tu veux réessayer, ou contacte la réception : ${config.RECEPTION_PHONE} 🙏🏾`
+          `Tu seras remboursé(e) sous 24h. Écris-moi ici si tu veux réessayer. 🙏🏾\n\n` +
+          technicalContactInstruction
         );
       return (
         `Désolé 😔 — cette place vient d'être prise pendant ton paiement. ` +

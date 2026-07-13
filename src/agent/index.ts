@@ -9,6 +9,10 @@ import { CAFE_MENU } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { SYSTEM_PROMPT, dynamicContext } from "./systemPrompt.js";
 import { capabilityMenuKind, isVagueOpener } from "../lib/capabilityMenu.js";
+import {
+  receptionLinkInstruction,
+  receptionWhatsAppLink,
+} from "../lib/receptionContact.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
@@ -41,9 +45,17 @@ export function extractText(response: Anthropic.Message): string {
     .trim();
 }
 
-const FALLBACK_REPLY =
-  "Désolé, j'ai un souci technique 🙏🏾 Réessaie dans un instant, ou contacte la réception : " +
-  config.RECEPTION_PHONE;
+export function technicalFallbackMessage(clientName?: string | null): string {
+  const contact = receptionWhatsAppLink(
+    config.RECEPTION_PHONE,
+    clientName,
+    "un souci technique rencontré avec Awa",
+  );
+  return (
+    "Désolé, j'ai un souci technique 🙏🏾 Réessaie dans un instant.\n\n" +
+    receptionLinkInstruction("fr", contact.url)
+  );
+}
 
 /**
  * Turn stored conversation turns into the alternating user/assistant messages
@@ -124,7 +136,7 @@ async function maybeNotifyConversationStart(
 }
 
 /**
- * The client just received FALLBACK_REPLY: the agent loop crashed or produced
+ * The client just received the technical fallback: the agent loop crashed or produced
  * nothing. Record it in the handoffs register and tell reception (fire and
  * forget — this must never delay or break the reply path). Deduped 24h per
  * client so a retry-spam doesn't flood anyone.
@@ -136,7 +148,7 @@ async function notifyTechnicalFailure(client: repo.Client): Promise<void> {
     notifyReception(
       "⚠️ Échec technique — un client est planté",
       `Awa n'a pas réussi à répondre à ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")}) ` +
-        `et lui a envoyé le message d'erreur (« souci technique, réessaie ou contacte la réception »).\n\n` +
+        `et lui a envoyé le message d'erreur avec un lien WhatsApp prérempli vers la réception.\n\n` +
         `À faire : jeter un œil à sa conversation (${config.BASE_URL}/admin/conversations) et le ` +
         `recontacter si son besoin est visible. Si ça se répète, prévenir le support technique.`,
     );
@@ -298,6 +310,7 @@ export async function handleInboundText(args: {
 
   let replyText: string | null = null;
   let interactiveSent = false;
+  let usedTechnicalFallback = false;
   // Book-first, menu-after (abonnement flow): a successful book_with_membership
   // this turn means the SERVER sends the incontournables list right after the
   // model's confirmation — deterministic, never left to the model's judgment
@@ -375,7 +388,9 @@ export async function handleInboundText(args: {
           isError = true;
           result = JSON.stringify({
             error: "tool_failed",
-            message: "The service is temporarily unavailable. Apologize and offer the reception contact.",
+            message:
+              "The service is temporarily unavailable. Apologize and call handoff_to_human so the client " +
+              "receives the prefilled reception link.",
           });
           console.error(`Tool ${block.name} failed:`, err);
         }
@@ -414,7 +429,8 @@ export async function handleInboundText(args: {
   // spurious sentinel can never leave the client without an answer.
   if (replyText?.trim() === NO_REPLY_SENTINEL) replyText = null;
   if (!replyText && !interactiveSent) {
-    replyText = FALLBACK_REPLY;
+    replyText = technicalFallbackMessage(client.name ?? args.profileName ?? null);
+    usedTechnicalFallback = true;
     // Boucle de résultat (§4.31) : le client vient de recevoir « souci
     // technique » — la réception DOIT le savoir (avant : un console.error que
     // personne ne lit, client planté en silence). Dédup 24h par client.
@@ -432,7 +448,7 @@ export async function handleInboundText(args: {
   // Only when a real reply went out (never after the technical-fallback turn,
   // where it would read as a non-sequitur), and the flag is armed only after a
   // successful send so a failed delivery keeps the single chance.
-  if (unlinkedNeverAsked && (replyText || interactiveSent) && replyText !== FALLBACK_REPLY) {
+  if (unlinkedNeverAsked && (replyText || interactiveSent) && !usedTechnicalFallback) {
     try {
       const ask = emailAskMessage(client.language ?? lang ?? "fr");
       await sendText(args.waPhone, ask);

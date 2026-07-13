@@ -50,7 +50,7 @@ npm run dev               # start with hot reload
 | `CLAUDE_MODEL` | defaults to `claude-sonnet-5` |
 | `DATABASE_URL` | Postgres connection string |
 | `BASE_URL` | Public HTTPS URL of this service (tunnel URL in local dev) |
-| `RECEPTION_PHONE` | Human handoff destination (existing reception WhatsApp) |
+| `RECEPTION_PHONE` | Human handoff destination; used to build contextual `wa.me` links with a prefilled message |
 | `PAYMENT_LINK_TTL_MINUTES` | Wave link validity (default 20) |
 | `STUDIO_ADDRESS` | Shown in booking confirmations |
 
@@ -170,6 +170,6 @@ Deploy target: Railway / Render / Fly.io — anything that runs Node and exposes
 4. Forged Wave webhook → 401, no state change (`--bad-signature`).
 5. Duplicate Wave webhook → exactly one Wix booking (`processed_webhooks` + atomic PAID transition).
 6. Slot-taken race → `REFUND_NEEDED` recorded, client notified, no Wix booking.
-7. "I want to cancel my class" → handoff row + reception number in reply.
+7. Complaint / formal invoice / human request → handoff row + contextual `wa.me` link; tapping it opens the prefilled reception message and the client taps Send.
 8. Restart mid-flow → no lost state (everything in Postgres).
 9. Unit tests: both signature verifiers, state machine transitions (`npm test`).
