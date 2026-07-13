@@ -39,9 +39,20 @@ describe("WhatsApp reception contact", () => {
 
   it("falls back safely when the name and reason are missing", () => {
     expect(receptionHandoffMessage(null, "")).toBe(
-      "Bonjour. Awa m'oriente vers vous concernant : une demande d'aide.",
+      "Bonjour. Awa m'a conseillé de vous écrire. J'ai besoin de votre aide.",
     );
-    expect(receptionHandoffMessage(null, "...?")).toContain("une demande d'aide");
+    expect(receptionHandoffMessage(null, "...?")).toContain("J'ai besoin de votre aide");
+  });
+
+  it("rewrites third-person tool reasons as a natural client message", () => {
+    expect(
+      receptionHandoffMessage(
+        "Baba",
+        "Le client souhaite parler directement à la réception",
+      ),
+    ).toBe(
+      "Bonjour, je suis Baba. Awa m'a conseillé de vous écrire. Je souhaite parler directement à quelqu'un de l'équipe Revive.",
+    );
   });
 
   it("explains in all supported languages that the final Send tap remains", () => {

@@ -32,9 +32,25 @@ export function receptionHandoffMessage(clientName: unknown, reason: unknown): s
     reason,
     MAX_HANDOFF_REASON_LENGTH,
   ).replace(/[.!?…]+$/, "");
-  const cleanReason = reasonWithoutTrailingPunctuation || "une demande d'aide";
+  let cleanReason = reasonWithoutTrailingPunctuation
+    .replace(/^(?:le|la) client(?:e)? souhaite\s+/i, "Je souhaite ")
+    .replace(/^(?:le|la) client(?:e)? (?:veut|voudrait)\s+/i, "Je souhaite ")
+    .replace(/^(?:le|la) client(?:e)? demande(?: à| de)?\s+/i, "Je souhaite ")
+    .replace(/^souhaite\s+/i, "Je souhaite ")
+    .replace(/^(?:veut|voudrait)\s+/i, "Je souhaite ")
+    .replace(
+      /parler directement à la réception/gi,
+      "parler directement à quelqu'un de l'équipe Revive",
+    )
+    .replace(/(?:contacter|joindre) la réception/gi, "contacter l'équipe Revive");
+  if (!cleanReason) cleanReason = "J'ai besoin de votre aide";
+
+  const isFirstPerson = /^(?:je\b|j['’]|mon\b|ma\b|mes\b|nous\b|notre\b|nos\b)/i.test(
+    cleanReason,
+  );
+  const request = isFirstPerson ? cleanReason : `Ma demande concerne : ${cleanReason}`;
   const intro = name ? `Bonjour, je suis ${name}.` : "Bonjour.";
-  return `${intro} Awa m'oriente vers vous concernant : ${cleanReason}.`;
+  return `${intro} Awa m'a conseillé de vous écrire. ${request}.`;
 }
 
 export function receptionWhatsAppLink(

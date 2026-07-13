@@ -517,7 +517,9 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         reason: {
           type: "string",
           description:
-            "Short operational reason in French. Keep it high-level: no internal ids, amounts, full transcript, " +
+            "A short complete sentence in French, written in the CLIENT'S first person so it can be sent " +
+            "directly to reception. Example: \"Je souhaite parler directement à quelqu'un de l'équipe Revive\". " +
+            "Never write \"le client souhaite\". Keep it high-level: no internal ids, amounts, full transcript, " +
             "or sensitive medical details.",
         },
       },

@@ -31,7 +31,7 @@ côté serveur.
 Production : `https://resabot-production.up.railway.app` (Railway, service +
 Postgres), déployée depuis GitHub (`babakar7/Awa-Revive`, push sur main =
 déploiement). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
-phone_number_id 1175926012276896). Tests : ~286 unitaires (`npm test`, rapides,
+phone_number_id 1175926012276896). Tests : ~287 unitaires (`npm test`, rapides,
 sans réseau) + **34 d'intégration** sur les chemins de paiement Wave + OM, la santé DB et les escalades de liaison
 (`npm run test:integration`, Postgres jetable via Docker, APIs externes
 mockées) — exécutés en CI GitHub Actions à chaque push.
@@ -95,7 +95,7 @@ src/
                       idempotence marquée APRÈS traitement (échec = retry Wave rejouable) ;
                       reconcileStuckBookings() : rattrape les PAID jamais réservés (crash) — voir §4.14
 scripts/              simulate-wave-webhook, daily-summary, mark-refunded (refund:done), test-email
-test/                 ~286 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
+test/                 ~287 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
 test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 healthz + 3 liaisons) : Postgres jetable (docker run,
                       globalSetup maison — PAS testcontainers, incompatible Node 20.17), mock fetch
                       Wix/Wave/OM/Meta/Brevo qui THROW sur tout appel inattendu — voir §4.12 / §4.15
