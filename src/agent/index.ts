@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
-import { notifyReception } from "../lib/notify.js";
+import { notifyReception, notifyNewConversation } from "../lib/notify.js";
 import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
 import { emailAskMessage, shouldOfferLinking } from "../lib/linkAsk.js";
@@ -62,6 +62,45 @@ export function buildHistoryMessages(
 }
 
 const TECH_FAILURE_HANDOFF_PREFIX = "Échec technique — le client a reçu le message d'erreur";
+
+/**
+ * A message is a NEW conversation when the client has never messaged
+ * (lastActivityAt null) or has been silent for at least gapHours. Pure so the
+ * threshold logic is unit-tested independently of the DB/notify plumbing.
+ */
+export function isConversationStart(
+  lastActivityAt: Date | null,
+  now: number,
+  gapHours: number,
+): boolean {
+  if (lastActivityAt === null) return true;
+  return now - new Date(lastActivityAt).getTime() >= gapHours * 3_600_000;
+}
+
+/**
+ * Ping the configured number when a client STARTS a conversation — a brand-new
+ * person, or a returning one after a quiet gap. MUST be called BEFORE the
+ * incoming message is persisted, so the gap query reflects prior activity only.
+ * Fire-and-forget and swallow-safe: a notification hiccup never blocks the reply.
+ */
+async function maybeNotifyConversationStart(
+  client: repo.Client,
+  preview: string,
+  profileName?: string,
+): Promise<void> {
+  if (config.NEW_CHAT_NOTIFY_PHONE === "") return;
+  try {
+    const last = await repo.lastConversationActivityAt(client.id);
+    if (!isConversationStart(last, Date.now(), config.NEW_CHAT_NOTIFY_GAP_HOURS)) return;
+    notifyNewConversation({
+      displayName: client.name ?? profileName ?? "Client",
+      waPhone: client.wa_phone,
+      preview: preview.replace(/\s+/g, " ").trim().slice(0, 160),
+    });
+  } catch (err) {
+    console.error("maybeNotifyConversationStart failed (non-blocking):", err);
+  }
+}
 
 /**
  * The client just received FALLBACK_REPLY: the agent loop crashed or produced
@@ -141,6 +180,10 @@ export async function handleInboundText(args: {
   void sendTypingIndicator(args.waMessageId);
 
   const client = await repo.upsertClient(args.waPhone);
+
+  // Conversation-start ping (before the incoming turn is persisted, so the gap
+  // query sees only prior activity).
+  await maybeNotifyConversationStart(client, args.text, args.profileName);
 
   const lang = detectLanguage(args.text);
   if (lang) await repo.updateClientLanguage(client.id, lang);
@@ -357,6 +400,7 @@ export async function handleInboundText(args: {
 export async function handleFailedImage(waPhone: string, waMessageId: string): Promise<void> {
   void sendTypingIndicator(waMessageId);
   const client = await repo.upsertClient(waPhone);
+  await maybeNotifyConversationStart(client, "[image]");
   await repo.addTurn(client.id, "user", "[image reçue — lecture échouée]", waMessageId);
   const reply =
     "Désolée, je n'ai pas réussi à lire ton image 🙏🏾 Tu peux m'écrire ce qu'elle montre ?\n" +
@@ -369,6 +413,7 @@ export async function handleFailedImage(waPhone: string, waMessageId: string): P
 export async function handleUnsupportedMedia(waPhone: string, waMessageId: string): Promise<void> {
   void sendTypingIndicator(waMessageId);
   const client = await repo.upsertClient(waPhone);
+  await maybeNotifyConversationStart(client, "[message non lisible]");
   await repo.addTurn(client.id, "user", "[non-text message]", waMessageId);
   const reply =
     "Je ne peux pas lire ce type de message 🙏🏾 Écris-moi (ou envoie une note vocale) ce que tu veux réserver !\n" +
@@ -381,6 +426,7 @@ export async function handleUnsupportedMedia(waPhone: string, waMessageId: strin
 export async function handleFailedVoiceNote(waPhone: string, waMessageId: string): Promise<void> {
   void sendTypingIndicator(waMessageId);
   const client = await repo.upsertClient(waPhone);
+  await maybeNotifyConversationStart(client, "[note vocale]");
   await repo.addTurn(client.id, "user", "[note vocale — transcription échouée]", waMessageId);
   const reply =
     "Désolée, je n'ai pas réussi à écouter ta note vocale 🙏🏾 Tu peux me l'écrire ?\n" +

@@ -101,26 +101,66 @@ export function toTemplateParam(text: string, maxLength = 550): string {
 }
 
 /**
- * Send one WhatsApp message to reception. Free-form text first (full detail,
- * free); if the 24h window is closed (Meta error 131047) and a template is
- * configured, fall back to the approved template so the notification still
- * lands. Exported for the test script; app code should use notifyReception().
+ * Send one WhatsApp notification to an arbitrary number. Free-form text first
+ * (full detail, free); if the 24h window is closed (Meta error 131047) and the
+ * reception Utility template is configured, fall back to it so the message
+ * still lands (billed per message). Any other error propagates.
  */
-export async function sendReceptionWhatsApp(subject: string, body: string): Promise<void> {
+export async function sendWhatsAppNotification(
+  toPhone: string,
+  subject: string,
+  body: string,
+): Promise<void> {
   // The Cloud API expects a wa_id-style number (digits only, no "+").
-  const to = config.RECEPTION_PHONE.replace(/\D/g, "");
+  const to = toPhone.replace(/\D/g, "");
   try {
     await sendText(to, `🔔 *[Awa] ${subject}*\n\n${body}`);
   } catch (err) {
     if (!config.WA_RECEPTION_TEMPLATE || !String(err).includes("131047")) throw err;
     console.warn(
-      `[notify] 24h window closed — falling back to template "${config.WA_RECEPTION_TEMPLATE}"`,
+      `[notify] 24h window closed for ${to} — falling back to template "${config.WA_RECEPTION_TEMPLATE}"`,
     );
     await sendTemplate(to, config.WA_RECEPTION_TEMPLATE, config.WA_RECEPTION_TEMPLATE_LANG, [
       toTemplateParam(subject, 120),
       toTemplateParam(body),
     ]);
   }
+}
+
+/**
+ * Send one WhatsApp message to reception. Exported for the test script; app
+ * code should use notifyReception().
+ */
+export async function sendReceptionWhatsApp(subject: string, body: string): Promise<void> {
+  await sendWhatsAppNotification(config.RECEPTION_PHONE, subject, body);
+}
+
+/**
+ * Fire-and-forget WhatsApp ping when someone STARTS a conversation with Awa.
+ * Goes to NEW_CHAT_NOTIFY_PHONE (empty = feature off). Never awaited by the
+ * caller and never throws — a notification hiccup must not affect the client.
+ */
+export function notifyNewConversation(args: {
+  displayName: string;
+  waPhone: string;
+  preview: string;
+}): void {
+  if (config.NEW_CHAT_NOTIFY_PHONE === "") return;
+  const cleanPhone = args.waPhone.replace(/^\+/, "");
+  const subject = "Nouvelle conversation";
+  const body =
+    `${args.displayName} (+${cleanPhone}) vient de démarrer une conversation avec Awa.\n` +
+    `Premier message : « ${args.preview} »\n` +
+    `Ouvrir : https://wa.me/${cleanPhone}`;
+  sendWhatsAppNotification(config.NEW_CHAT_NOTIFY_PHONE, subject, body)
+    .then(() => console.log(`[notify] New-conversation ping sent for +${cleanPhone}`))
+    .catch((err) =>
+      console.error(
+        `[notify] Failed to send new-conversation ping for +${cleanPhone} ` +
+          `(if 131047, the notify number hasn't messaged Awa in 24h and no template is set):`,
+        err,
+      ),
+    );
 }
 
 /**

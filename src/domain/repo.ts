@@ -56,6 +56,20 @@ export async function upsertClient(waPhone: string): Promise<Client> {
   return res.rows[0];
 }
 
+/**
+ * Timestamp of this client's most recent conversation turn, or null if they
+ * have never messaged. Used to tell a fresh conversation start (no activity
+ * for a while, or ever) from a continuing one — call it BEFORE persisting the
+ * incoming turn, so "now" isn't counted as prior activity.
+ */
+export async function lastConversationActivityAt(clientId: string): Promise<Date | null> {
+  const res = await pool.query(
+    `select max(created_at) as last from conversations where client_id = $1`,
+    [clientId],
+  );
+  return res.rows[0]?.last ?? null;
+}
+
 /** One-shot flag: the "link your account" email question is asked at most once. */
 export async function markEmailPrompted(clientId: string): Promise<void> {
   await pool.query(
