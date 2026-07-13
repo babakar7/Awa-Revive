@@ -1568,11 +1568,13 @@ export async function executeTool(
         });
       }
 
-      // Wave-paid: refund is owed — reception processes it manually.
+      // Awa-paid (Wave / OM / Max It): refund is owed and already enters the
+      // reception queue. The client must not be asked to repeat the request.
       await repo.markRefundNeeded(bookingId);
+      const paymentLabel = paymentMethodLabel(booking.payment_method);
       notifyReception(
         `💸 REMBOURSEMENT à faire (annulation client) — ${booking.amount_xof} FCFA`,
-        `Un client a annulé via Awa (≥ 16h avant le cours) — remboursement à traiter dans le portail Wave :\n` +
+        `Un client a annulé via Awa (≥ 16h avant le cours) — remboursement à traiter via ${paymentLabel} :\n` +
           `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
           `  Cours : ${booking.service_name} — ${fmtDakar(String(booking.slot_start))}\n` +
           `  Montant : ${booking.amount_xof} FCFA (${booking.participants} place(s))\n` +
@@ -1581,25 +1583,26 @@ export async function executeTool(
                 extrasFromJson(booking.extras_json),
               )}) — vérifier qu'elle n'a pas déjà été servie.\n`
             : "") +
-          `  Session Wave : ${booking.wave_session_id ?? "?"}\n` +
+          `  Session ${paymentLabel} : ${booking.wave_session_id ?? "?"}\n` +
           `  Booking id : ${bookingId}\n\n` +
-          `Après remboursement dans le portail Wave, clôturer avec :\n` +
+          `Après remboursement via ${paymentLabel}, clôturer avec :\n` +
           `  npm run refund:done -- ${bookingId}`,
       );
       return JSON.stringify({
         cancelled: true,
         class: booking.service_name,
         slot_start_dakar: fmtDakar(String(booking.slot_start)),
-        refund: "client_contacts_reception",
-        reception_whatsapp: config.RECEPTION_PHONE,
+        refund: "recorded_reception_processes",
+        refund_within_hours: 24,
         amount_fcfa: booking.amount_xof,
         cafe_order_refund_note:
           booking.extras_amount_xof > 0
             ? `The refund total includes their bar order (${booking.extras_amount_xof} FCFA) — mention it.`
             : undefined,
         note:
-          "Cancelled. Tell the client to CONTACT RECEPTION themselves (give this number) to arrange " +
-          "the refund — do not say reception will contact them, and do not promise a delay.",
+          "Cancelled. Tell the client: cancellation done ✅, the refund is recorded and will be processed " +
+          "within 24 hours by the team; reception has already been notified. Do NOT ask the client to contact " +
+          "reception or repeat the request.",
       });
     }
 

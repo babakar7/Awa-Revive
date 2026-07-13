@@ -32,17 +32,20 @@ export function expiryNudgeMessage(
     case "en":
       return (
         `⏳ Your payment link for ${serviceName} (${formatSlot(slotStart, "en-GB")}) has expired — ` +
-        `no worries, nothing was charged. Want me to send you a fresh link? Just reply here 🙂`
+        `we haven't received a payment confirmation. If you just paid, your confirmation should arrive ` +
+        `automatically within 1–2 minutes; otherwise, reply here and I'll send you a fresh link 🙂`
       );
     case "wo":
       return (
         `⏳ Sa lien de paiement ngir ${serviceName} (${formatSlot(slotStart, "fr-FR")}) jeex na — ` +
-        `deetu ci dara, feyoo dara. Ndax bëgg nga ma yónnee la beneen lien bu bees? Bindal ma fii 🙂`
+        `jotagunu confirmation fey bi. Su fekkee fey nga leegi, confirmation bi dina ñëw ci 1–2 simili; ` +
+        `lu ko moy, bindal ma fii ma yónnee la beneen lien bu bees 🙂`
       );
     default:
       return (
         `⏳ Ton lien de paiement pour ${serviceName} (${formatSlot(slotStart, "fr-FR")}) a expiré — ` +
-        `pas d'inquiétude, rien n'a été débité. Tu veux que je t'en renvoie un tout frais ? Réponds-moi ici 🙂`
+        `nous n'avons pas reçu de confirmation de paiement. Si tu viens de payer, ta confirmation devrait ` +
+        `arriver automatiquement d'ici 1 à 2 min ; sinon, réponds-moi et je t'en renvoie un tout frais 🙂`
       );
   }
 }
