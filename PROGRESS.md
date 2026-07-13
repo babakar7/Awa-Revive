@@ -1409,6 +1409,15 @@ test/integration/     30 tests d'intégration (15 Wave + 15 OM/Max It) : Postgre
   sans `metadata.order` → auto-reconcile impossible. Code poller supprimé du
   sweep ; chemin OM = **callback + lookup `transactionId` uniquement**. Voir
   §4.12 « Poller search transactions ABANDONNÉ ».
+- **13/07 — Hotfix re-spam message remboursement (Syndel, Linsey, …).** Cause :
+  LOT 1 a ajouté `refund_notified_at` **sans backfill** ; le sweep 60 s
+  `reconcileUnnotifiedRefunds` a repris **tous** les `REFUND_NEEDED` historiques
+  (colonne NULL) et renvoyé le template « place prise / remboursé sous 24h »
+  (`refundMessage` défaut `slot_taken`) comme si c'était un paiement frais.
+  Fix : backfill one-shot dans schema (`refund_notified_at = updated_at` pour
+  les REFUND_NEEDED/REFUNDED créés avant le deploy) + le sweep ne re-notifie
+  que les lignes **récentes** (grace 2 min, max âge 2 h). Leçon : toute colonne
+  « notifié ? » doit backfiller l'historique ou borner le temps.
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —

@@ -212,6 +212,18 @@ alter table pending_cafe_orders
 alter table pending_bookings
   add column if not exists refund_notified_at timestamptz;
 
+-- ONE-SHOT backfill (13/07 incident): the column shipped NULL for every
+-- historical REFUND_NEEDED. The 60s sweep then re-WhatsApp'd the "place prise /
+-- remboursement 24h" template to clients (Syndel, Linsey, …) who already got
+-- it (or whose case was closed). Treat anything already REFUND_NEEDED before
+-- the feature as "already notified" so the sweep only retries true mid-flight
+-- crashes going forward.
+update pending_bookings
+  set refund_notified_at = coalesce(updated_at, created_at)
+  where status in ('REFUND_NEEDED', 'REFUNDED')
+    and refund_notified_at is null
+    and created_at < '2026-07-13T18:00:00Z';
+
 -- Waitlist for full class slots: the client explicitly asked to be pinged if
 -- a spot frees up. The 5-min sweep re-checks availability; a freed spot sends
 -- ONE WhatsApp nudge (claim WAITING→NOTIFIED before sending, one-shot). No

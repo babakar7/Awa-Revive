@@ -366,13 +366,23 @@ export async function expireStaleBookings(): Promise<number> {
   return stale + (drafts.rowCount ?? 0);
 }
 
-/** REFUND_NEEDED rows that never got a successful reception/client notify. */
-export async function stuckUnnotifiedRefunds(limit = 20): Promise<PendingBooking[]> {
+/**
+ * REFUND_NEEDED rows that never got a successful reception/client notify.
+ * Only recent rows (past a short grace, within a 2h window) — never the whole
+ * historical backlog (that re-spammed clients on first deploy of this column).
+ */
+export async function stuckUnnotifiedRefunds(
+  graceMinutes = 2,
+  maxAgeHours = 2,
+  limit = 20,
+): Promise<PendingBooking[]> {
   const res = await pool.query(
     `select * from pending_bookings
       where status = 'REFUND_NEEDED' and refund_notified_at is null
-      order by updated_at asc limit $1`,
-    [limit],
+        and updated_at < now() - make_interval(mins => $1)
+        and updated_at > now() - make_interval(hours => $2)
+      order by updated_at asc limit $3`,
+    [graceMinutes, maxAgeHours, limit],
   );
   return res.rows;
 }
