@@ -1,12 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — **LOT 1 paiement** (`6a70364`) +
-> **LOT 2 boucle/résilience** (`88ba0e3`, `3b6d268`, + parts dans `6a70364`)
-> livrés suite à un audit robustesse 3 axes ; **poller search OM abandonné**
-> après probe Sonatel (`5df41cb` — pas de
-> `metadata.order` en list) ; tests intégration Wave+OM (30) ; Pack Découverte
-> éligibilité ; activation plan B2 no-go.
+> Dernière mise à jour : **13 juillet 2026** — **hotfix re-spam refund**
+> (`977c45f` : backfill `refund_notified_at` — Syndel/Linsey) ; LOT 1+2
+> robustesse paiement/boucle ; poller OM abandonné ; Pack Découverte ; B2 no-go.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
