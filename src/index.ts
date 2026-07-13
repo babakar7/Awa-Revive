@@ -8,11 +8,15 @@ import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
+import { startOmTokenKeepAlive } from "./lib/orangeMoney.js";
 import { buildServer } from "./server.js";
 
 async function main() {
   assertConfig();
   await migrate();
+
+  // Warm OM OAuth so the first client payment is not blocked by Sonatel token latency.
+  startOmTokenKeepAlive();
 
   const app = buildServer();
 

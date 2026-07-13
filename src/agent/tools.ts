@@ -81,11 +81,13 @@ async function createClientPaymentSession(args: {
   name: string;
 }): Promise<{ sessionId: string; paymentLink: string; expiresAt: Date; method: ClientPaymentMethod }> {
   const ttlMin = config.PAYMENT_LINK_TTL_MINUTES;
+  const t0 = Date.now();
   if (args.method === "wave") {
     const session = await wave.createCheckoutSession({
       amountXof: args.amountXof,
       clientReference: args.clientReference,
     });
+    console.log(`[pay] wave checkout ${Date.now() - t0}ms`);
     return {
       sessionId: session.id,
       paymentLink: session.wave_launch_url,
@@ -93,6 +95,7 @@ async function createClientPaymentSession(args: {
       method: "wave",
     };
   }
+  // Token should already be warm (boot keep-alive); getAccessToken is free if cached.
   const qr = await om.createQrPayment({
     amountXof: args.amountXof,
     clientReference: args.clientReference,
@@ -107,6 +110,7 @@ async function createClientPaymentSession(args: {
     qr.validUntil && qr.validUntil.getTime() > Date.now()
       ? new Date(Math.min(qr.validUntil.getTime(), Date.now() + ttlMin * 60_000))
       : new Date(Date.now() + ttlMin * 60_000);
+  console.log(`[pay] om/${args.method} session ${Date.now() - t0}ms qrId=${qr.qrId}`);
   return { sessionId: qr.qrId, paymentLink: link, expiresAt, method: args.method };
 }
 

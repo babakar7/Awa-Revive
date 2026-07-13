@@ -37,46 +37,87 @@ export interface OmTransaction {
 }
 
 let cachedToken: { token: string; expiresAtMs: number } | null = null;
+/** Coalesce concurrent token fetches (avoid N cold OAuth waits on one deploy). */
+let tokenInflight: Promise<string> | null = null;
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 /** True when prod OM credentials are configured (feature flag for tools). */
 export function isOmEnabled(): boolean {
   return !!(config.OM_CLIENT_ID && config.OM_CLIENT_SECRET && config.OM_MERCHANT_CODE);
 }
 
+/**
+ * Fetch/cache OAuth token. Single-flight + in-memory cache (~5 min bearer).
+ * First call after deploy is the slow one (Sonatel OAuth); later calls are free.
+ */
 export async function getAccessToken(): Promise<string> {
   if (!isOmEnabled()) throw new Error("Orange Money is not configured");
   const now = Date.now();
-  // Refresh 30s before expiry.
-  if (cachedToken && cachedToken.expiresAtMs > now + 30_000) {
+  // Refresh 45s before expiry so a payment never waits on a dying token.
+  if (cachedToken && cachedToken.expiresAtMs > now + 45_000) {
     return cachedToken.token;
   }
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: config.OM_CLIENT_ID,
-    client_secret: config.OM_CLIENT_SECRET,
+  if (tokenInflight) return tokenInflight;
+
+  tokenInflight = (async () => {
+    const t0 = Date.now();
+    const body = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: config.OM_CLIENT_ID,
+      client_secret: config.OM_CLIENT_SECRET,
+    });
+    const res = await fetch(`${config.OM_API_BASE}/oauth/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body,
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      throw new Error(`OM token failed (${res.status}): ${await res.text()}`);
+    }
+    const data: any = await res.json();
+    if (!data?.access_token) {
+      throw new Error(`OM token response missing access_token: ${JSON.stringify(data)}`);
+    }
+    const expiresIn = Number(data.expires_in) || 300;
+    cachedToken = {
+      token: data.access_token,
+      expiresAtMs: Date.now() + expiresIn * 1000,
+    };
+    console.log(`[om] token fetched in ${Date.now() - t0}ms (expires_in=${expiresIn}s)`);
+    return cachedToken.token;
+  })().finally(() => {
+    tokenInflight = null;
   });
-  const res = await fetch(`${config.OM_API_BASE}/oauth/token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body,
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new Error(`OM token failed (${res.status}): ${await res.text()}`);
+
+  return tokenInflight;
+}
+
+/**
+ * Warm the token at boot / on a timer so the first client payment is not
+ * blocked by OAuth. Safe to call when OM is disabled (no-op).
+ */
+export async function warmOmToken(): Promise<void> {
+  if (!isOmEnabled()) return;
+  try {
+    await getAccessToken();
+  } catch (err) {
+    console.warn("[om] token warm failed (will retry on next payment):", err);
   }
-  const data: any = await res.json();
-  if (!data?.access_token) {
-    throw new Error(`OM token response missing access_token: ${JSON.stringify(data)}`);
-  }
-  const expiresIn = Number(data.expires_in) || 300;
-  cachedToken = {
-    token: data.access_token,
-    expiresAtMs: now + expiresIn * 1000,
-  };
-  return cachedToken.token;
+}
+
+/** Keep the bearer hot (prod token ~5 min). Call once at boot. */
+export function startOmTokenKeepAlive(): void {
+  if (!isOmEnabled() || keepAliveTimer) return;
+  // Refresh every 3 min while token lives ~5 min.
+  keepAliveTimer = setInterval(() => {
+    void warmOmToken();
+  }, 3 * 60_000);
+  keepAliveTimer.unref?.();
+  void warmOmToken();
 }
 
 /** Pure: pick the deep link for the client's app choice. */
@@ -106,7 +147,9 @@ export async function createQrPayment(args: {
   successUrl: string;
   cancelUrl: string;
 }): Promise<OmQrSession> {
+  const t0 = Date.now();
   const token = await getAccessToken();
+  const tToken = Date.now() - t0;
   const merchantCode = Number(config.OM_MERCHANT_CODE);
   if (!Number.isFinite(merchantCode)) {
     throw new Error(`OM_MERCHANT_CODE must be numeric, got ${config.OM_MERCHANT_CODE}`);
@@ -121,6 +164,7 @@ export async function createQrPayment(args: {
     name: args.name.slice(0, 80) || "Revive",
     validity: validitySeconds,
   };
+  const tQr0 = Date.now();
   const res = await fetch(`${config.OM_API_BASE}/api/eWallet/v4/qrcode`, {
     method: "POST",
     headers: {
@@ -136,6 +180,9 @@ export async function createQrPayment(args: {
   if (!res.ok) {
     throw new Error(`OM QR create failed (${res.status}): ${await res.text()}`);
   }
+  console.log(
+    `[om] createQrPayment token=${tToken}ms qr=${Date.now() - tQr0}ms total=${Date.now() - t0}ms`,
+  );
   const data: any = await res.json();
   if (!data?.qrId || !(data?.deepLink || data?.deepLinks)) {
     throw new Error(`OM QR response missing qrId/deepLink: ${JSON.stringify(data)}`);
