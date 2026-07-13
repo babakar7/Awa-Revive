@@ -276,8 +276,27 @@ export async function notifyLinkNeedsReception(
  * Sweep (60 s, index.ts) : les demandes AWAITING_* silencieuses depuis plus
  * de STALE_AFTER_MINUTES basculent en NEEDS_RECEPTION + notif — le cas
  * Dieynaba « merci puis disparaît » ne se perd plus, même après un restart.
+ *
+ * Garde-fou (prod 13/07 — Alicia) : une demande orpheline dont le client a
+ * DÉJÀ un compte relié (une autre demande VERIFIED/LINKED) est auto-classée
+ * DISMISSED en silence, pas escaladée — sinon la réception reçoit une fausse
+ * « vérification jamais aboutie » alors que le compte a bien été créé/relié.
  */
 export async function escalateStaleLinkRequests(): Promise<number> {
+  await pool.query(
+    `update link_requests lr
+        set status = 'DISMISSED', linked_by = 'system-auto',
+            code_hash = null, updated_at = now()
+      where lr.status in ('AWAITING_EMAIL','AWAITING_CODE')
+        and lr.updated_at < now() - ($1 || ' minutes')::interval
+        and exists (
+          select 1 from link_requests done
+           where done.client_id = lr.client_id
+             and done.status in ('VERIFIED','LINKED')
+        )`,
+    [String(STALE_AFTER_MINUTES)],
+  );
+
   const res = await pool.query(
     `update link_requests lr
         set status = 'NEEDS_RECEPTION',
