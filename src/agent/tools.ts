@@ -20,11 +20,95 @@ import {
 import * as wix from "../lib/wix.js";
 import { planVerifiedMerge } from "../lib/crmAudit.js";
 import * as wave from "../lib/wave.js";
+import * as om from "../lib/orangeMoney.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import * as links from "../domain/linkRequests.js";
 import type { LinkRequest } from "../domain/linkRequests.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
+
+export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
+
+/** Server-side payment rail resolution (unit-tested). */
+export function resolvePaymentMethod(
+  raw: unknown,
+  omEnabled: boolean,
+): { ok: true; method: ClientPaymentMethod } | { ok: false; error: string; message: string } {
+  const m = String(raw ?? "").trim().toLowerCase();
+  if (!m) {
+    if (!omEnabled) return { ok: true, method: "wave" };
+    return {
+      ok: false,
+      error: "payment_method_required",
+      message:
+        "payment_method is required. Ask the client which way they want to pay with present_options: " +
+        "[Payer Wave (id: pay_wave)] [Payer Orange Money (id: pay_om)] [Payer Max It (id: pay_maxit)], " +
+        "then call this tool again with payment_method wave | orange_money | maxit.",
+    };
+  }
+  if (m === "wave") return { ok: true, method: "wave" };
+  if (m === "orange_money" || m === "om") {
+    if (!omEnabled) {
+      return {
+        ok: false,
+        error: "orange_money_unavailable",
+        message: "Orange Money is not available right now — offer Wave only.",
+      };
+    }
+    return { ok: true, method: "orange_money" };
+  }
+  if (m === "maxit" || m === "max_it") {
+    if (!omEnabled) {
+      return {
+        ok: false,
+        error: "maxit_unavailable",
+        message: "Max It is not available right now — offer Wave only.",
+      };
+    }
+    return { ok: true, method: "maxit" };
+  }
+  return {
+    ok: false,
+    error: "invalid_payment_method",
+    message: "payment_method must be wave, orange_money, or maxit.",
+  };
+}
+
+async function createClientPaymentSession(args: {
+  method: ClientPaymentMethod;
+  amountXof: number;
+  clientReference: string;
+  name: string;
+}): Promise<{ sessionId: string; paymentLink: string; expiresAt: Date; method: ClientPaymentMethod }> {
+  const ttlMin = config.PAYMENT_LINK_TTL_MINUTES;
+  if (args.method === "wave") {
+    const session = await wave.createCheckoutSession({
+      amountXof: args.amountXof,
+      clientReference: args.clientReference,
+    });
+    return {
+      sessionId: session.id,
+      paymentLink: session.wave_launch_url,
+      expiresAt: new Date(Date.now() + ttlMin * 60_000),
+      method: "wave",
+    };
+  }
+  const qr = await om.createQrPayment({
+    amountXof: args.amountXof,
+    clientReference: args.clientReference,
+    name: args.name,
+    validityMinutes: ttlMin,
+    callbackUrl: `${config.BASE_URL}/webhooks/orange-money`,
+    successUrl: `${config.BASE_URL}/payment/success`,
+    cancelUrl: `${config.BASE_URL}/payment/error`,
+  });
+  const link = om.pickDeepLink(args.method, qr.deepLink, qr.deepLinks);
+  const expiresAt =
+    qr.validUntil && qr.validUntil.getTime() > Date.now()
+      ? new Date(Math.min(qr.validUntil.getTime(), Date.now() + ttlMin * 60_000))
+      : new Date(Date.now() + ttlMin * 60_000);
+  return { sessionId: qr.qrId, paymentLink: link, expiresAt, method: args.method };
+}
 
 /**
  * A Wave payment link must NOT be sold while an email verification is mid-flight
@@ -87,13 +171,11 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "create_payment_link",
     description:
-      "Create a Wave payment link for a specific class slot (the CLASS only — never the bar). Re-verifies the " +
+      "Create a payment link for a specific class slot (the CLASS only — never the bar). Re-verifies the " +
       "slot is still open, cancels any previous unpaid link for this client, and returns the payment URL, amount " +
-      "and expiry to relay to the client. Supports group bookings: set participants > 1 to book several spots " +
-      "under the same name with ONE payment link for the total (price × participants). Call this as soon as the " +
-      "client clearly chose a slot and you know their first name — do NOT ask about the menu first. The bar " +
-      "menu is offered automatically AFTER the booking is confirmed (its own separate link via " +
-      "create_cafe_payment_link); nothing bar-related goes on this link.",
+      "and expiry to relay to the client. payment_method: wave | orange_money | maxit — when Orange Money is " +
+      "enabled, REQUIRED (if the client hasn't chosen, present_options: Payer Wave / Payer Orange Money / Payer Max It). " +
+      "Supports group bookings via participants. Call once the client chose a slot + name — do NOT ask about the menu first.",
     input_schema: {
       type: "object",
       properties: {
@@ -101,6 +183,12 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         event_id: { type: "string", description: "event_id (or choice_id) of the chosen slot from check_availability" },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
         client_name: { type: "string", description: "Client's first name for the booking" },
+        payment_method: {
+          type: "string",
+          enum: ["wave", "orange_money", "maxit"],
+          description:
+            "How the client pays. Required when OM is enabled. Map present_options: pay_wave→wave, pay_om→orange_money, pay_maxit→maxit.",
+        },
         participants: {
           type: "integer",
           minimum: 1,
@@ -113,7 +201,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: "boolean",
           description:
             "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly " +
-            "says they can't access that inbox or prefers to pay by Wave now. Otherwise leave absent: if a code " +
+            "says they can't access that inbox or prefers to pay now. Otherwise leave absent: if a code " +
             "is pending, the server refuses the link so the client can type the code first (their abonnement may " +
             "cover this class).",
         },
@@ -133,16 +221,19 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "create_plan_payment_link",
     description:
-      "Create a Wave payment link to BUY an abonnement/pack. Price comes from the Wix catalog. After payment, " +
-      "the plan is activated automatically (or by reception if the client has no member account) and the client " +
-      "gets a WhatsApp confirmation. Only call after the client clearly chose a plan from list_plans and you " +
-      "know their first name. For recurring plans this link covers the FIRST period only — renewal is " +
-      "self-service: the client just buys it again here when it ends.",
+      "Create a payment link to BUY an abonnement/pack (Wave, Orange Money, or Max It). Price from Wix catalog. " +
+      "payment_method required when OM is enabled (present_options three buttons if unset). After payment the plan " +
+      "is activated (or by reception) and the client gets a WhatsApp confirmation.",
     input_schema: {
       type: "object",
       properties: {
         plan_id: { type: "string", description: "Plan id from list_plans" },
         client_name: { type: "string", description: "Client's first name" },
+        payment_method: {
+          type: "string",
+          enum: ["wave", "orange_money", "maxit"],
+          description: "How the client pays. Required when OM is enabled.",
+        },
         start: {
           type: "string",
           enum: ["now", "after_current"],
@@ -221,16 +312,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "create_cafe_payment_link",
     description:
-      "Create a Wave payment link for a MENU order attached to a class the client has ALREADY booked (paid by " +
-      "Wave or by abonnement — the bar always rides on its own separate small link, it is never bundled into " +
-      "the class link). Use it whenever the client wants something from the menu once their class is confirmed: " +
-      "the studio automatically offers the menu right after every booking, and this tool turns their order into a " +
-      "bar-only link. Leave linked_booking_id empty to attach to the class they just booked (the default), or " +
-      "pass a specific booking_id from get_my_bookings / book_with_membership if the client has several upcoming " +
-      "bookings and you must disambiguate. The server prices everything from the menu file and returns the link + " +
-      "breakdown. Also works with NO class booking at all when the client explicitly asks to order from the menu " +
-      "(standalone order, picked up at the counter) — the result tells you which case applied. Never use this for " +
-      "a class (that's create_payment_link).",
+      "Create a payment link for a MENU (bar) order after a class is booked, or a standalone counter order. " +
+      "payment_method: wave | orange_money | maxit (required when OM enabled). Server prices from the menu file.",
     input_schema: {
       type: "object",
       properties: {
@@ -239,6 +322,11 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           description:
             "Optional booking_id of the confirmed class this bar order accompanies (from get_my_bookings or " +
             "book_with_membership). Omit to use the client's most recent upcoming booking.",
+        },
+        payment_method: {
+          type: "string",
+          enum: ["wave", "orange_money", "maxit"],
+          description: "How the client pays. Required when OM is enabled.",
         },
         extras: {
           type: "array",
@@ -700,9 +788,10 @@ export async function executeTool(
       await repo.expireActiveBookings(client.id);
       await repo.updateClientName(client.id, clientName);
 
-      // 5. DRAFT booking → Wave session → AWAITING_PAYMENT. Class only — the
-      //    bar is never bundled here; it gets its own link after the booking
-      //    is confirmed (create_cafe_payment_link).
+      // 5. DRAFT booking → payment session → AWAITING_PAYMENT. Class only.
+      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
+      if (!pay.ok) return JSON.stringify({ error: pay.error, message: pay.message });
+
       const totalXof = service.priceXof * participants;
       const draft = await repo.createDraftBooking({
         clientId: client.id,
@@ -721,20 +810,35 @@ export async function executeTool(
 
       let session;
       try {
-        session = await wave.createCheckoutSession({
+        session = await createClientPaymentSession({
+          method: pay.method,
           amountXof: totalXof,
           clientReference: draft.id,
+          name: service.name,
         });
       } catch (err) {
         await repo.expireActiveBookings(client.id); // clean up the DRAFT
         throw err;
       }
 
-      const expiresAt = new Date(Date.now() + config.PAYMENT_LINK_TTL_MINUTES * 60 * 1000);
-      await repo.setAwaitingPayment(draft.id, session.id, session.wave_launch_url, expiresAt);
+      await repo.setAwaitingPayment(
+        draft.id,
+        session.sessionId,
+        session.paymentLink,
+        session.expiresAt,
+        session.method,
+      );
 
+      const appLabel =
+        session.method === "maxit"
+          ? "Max It"
+          : session.method === "orange_money"
+            ? "Orange Money"
+            : "Wave";
       return JSON.stringify({
-        payment_link: session.wave_launch_url,
+        payment_link: session.paymentLink,
+        payment_method: session.method,
+        payment_app: appLabel,
         amount_fcfa: totalXof,
         class_total_fcfa: totalXof,
         participants,
@@ -744,8 +848,9 @@ export async function executeTool(
         slot_start: fresh.startDate,
         slot_start_dakar: fmtDakar(fresh.startDate),
         note:
-          "Relay the link to the client (class only). Spot(s) confirmed only once paid; confirmation arrives " +
-          "automatically on WhatsApp, and the bar menu is offered right after that — do NOT bring up the menu now.",
+          `Relay the link to the client (class only) — tell them to open it in ${appLabel}. ` +
+          "Spot(s) confirmed only once paid; confirmation arrives automatically on WhatsApp, and the bar " +
+          "menu is offered right after that — do NOT bring up the menu now.",
       });
     }
 
@@ -790,6 +895,9 @@ export async function executeTool(
       }
       const orderNote = String(input.order_note ?? "").slice(0, 200).trim() || null;
 
+      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
+      if (!pay.ok) return JSON.stringify({ error: pay.error, message: pay.message });
+
       // One active bar link per client at a time.
       await repo.expireActiveCafeOrders(client.id);
       const draft = await repo.createDraftCafeOrder({
@@ -804,20 +912,35 @@ export async function executeTool(
 
       let session;
       try {
-        session = await wave.createCheckoutSession({
+        session = await createClientPaymentSession({
+          method: pay.method,
           amountXof: resolved.totalXof,
           clientReference: draft.id,
+          name: "Bar Revive",
         });
       } catch (err) {
         await repo.expireActiveCafeOrders(client.id); // clean up the DRAFT
         throw err;
       }
 
-      const expiresAt = new Date(Date.now() + config.PAYMENT_LINK_TTL_MINUTES * 60 * 1000);
-      await repo.setCafeOrderAwaitingPayment(draft.id, session.id, session.wave_launch_url, expiresAt);
+      await repo.setCafeOrderAwaitingPayment(
+        draft.id,
+        session.sessionId,
+        session.paymentLink,
+        session.expiresAt,
+        session.method,
+      );
 
+      const appLabel =
+        session.method === "maxit"
+          ? "Max It"
+          : session.method === "orange_money"
+            ? "Orange Money"
+            : "Wave";
       return JSON.stringify({
-        payment_link: session.wave_launch_url,
+        payment_link: session.paymentLink,
+        payment_method: session.method,
+        payment_app: appLabel,
         amount_fcfa: resolved.totalXof,
         extras: resolved.lines.map((l) => ({ item: l.name, qty: l.qty, line_total_fcfa: l.lineTotalXof })),
         order_note: orderNote ?? undefined,
@@ -826,12 +949,8 @@ export async function executeTool(
         slot_start_dakar: booking ? fmtDakar(String(booking.slot_start)) : undefined,
         standalone_order: booking ? undefined : true,
         note: booking
-          ? "Relay the link — this covers ONLY the bar order (the class itself is already booked and paid, " +
-            "nothing more to pay for it). State the items and total. Ready after the class unless the note says " +
-            "otherwise. Confirmation arrives automatically on WhatsApp once paid."
-          : "Relay the link — standalone bar order, no class attached. State the items and total, and say the " +
-            "order is picked up at the counter (ready as soon as possible unless the note says otherwise). " +
-            "Confirmation arrives automatically on WhatsApp once paid.",
+          ? `Relay the link (open in ${appLabel}) — ONLY the bar order. Confirmation arrives automatically once paid.`
+          : `Relay the link (open in ${appLabel}) — standalone bar order, pick up at the counter. Confirmation automatic once paid.`,
       });
     }
 
@@ -895,6 +1014,9 @@ export async function executeTool(
         else startFellBack = true;
       }
 
+      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
+      if (!pay.ok) return JSON.stringify({ error: pay.error, message: pay.message });
+
       // One active plan link per client.
       await repo.expireActivePlanOrders(client.id);
       const draft = await repo.createDraftPlanOrder({
@@ -908,17 +1030,24 @@ export async function executeTool(
 
       let session;
       try {
-        session = await wave.createCheckoutSession({
+        session = await createClientPaymentSession({
+          method: pay.method,
           amountXof: plan.priceXof,
           clientReference: draft.id,
+          name: plan.name,
         });
       } catch (err) {
         await repo.expireActivePlanOrders(client.id);
         throw err;
       }
 
-      const expiresAt = new Date(Date.now() + config.PAYMENT_LINK_TTL_MINUTES * 60 * 1000);
-      await repo.setPlanOrderAwaitingPayment(draft.id, session.id, session.wave_launch_url, expiresAt);
+      await repo.setPlanOrderAwaitingPayment(
+        draft.id,
+        session.sessionId,
+        session.paymentLink,
+        session.expiresAt,
+        session.method,
+      );
 
       const startNote = startsAt
         ? ` This is a chained renewal: after payment the plan starts on ${startsAt.toISOString().slice(0, 10)} (when the current one ends) — tell the client that date.`
@@ -926,8 +1055,16 @@ export async function executeTool(
           ? " The client asked to start after their current plan, but no active plan with a future end date was found, so it will start NOW — tell them that."
           : "";
 
+      const appLabel =
+        session.method === "maxit"
+          ? "Max It"
+          : session.method === "orange_money"
+            ? "Orange Money"
+            : "Wave";
       return JSON.stringify({
-        payment_link: session.wave_launch_url,
+        payment_link: session.paymentLink,
+        payment_method: session.method,
+        payment_app: appLabel,
         amount_fcfa: plan.priceXof,
         plan: plan.name,
         billing: plan.billing,
@@ -935,8 +1072,7 @@ export async function executeTool(
         starts_on: startsAt ? startsAt.toISOString().slice(0, 10) : "now",
         expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
         note:
-          "Relay the link. The plan is confirmed only once paid; the client gets an automatic WhatsApp " +
-          "confirmation after payment." +
+          `Relay the link (open in ${appLabel}). The plan is confirmed only once paid; automatic WhatsApp confirmation after payment.` +
           startNote +
           (plan.billing === "recurring"
             ? " Recurring plan: this payment covers the FIRST period; renewal is self-service — the client just buys it again here when it ends, say so."

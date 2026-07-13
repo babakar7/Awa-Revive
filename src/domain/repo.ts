@@ -246,11 +246,13 @@ export async function setAwaitingPayment(
   waveSessionId: string,
   paymentLink: string,
   expiresAt: Date,
+  paymentMethod: string = "wave",
 ): Promise<PendingBooking | null> {
   return (await transition(pool, bookingId, "AWAITING_PAYMENT", {
     wave_session_id: waveSessionId,
     payment_link: paymentLink,
     link_expires_at: expiresAt,
+    payment_method: paymentMethod,
   })) as PendingBooking | null;
 }
 
@@ -689,6 +691,7 @@ export interface PlanOrder {
   wix_order_id: string | null;
   member_id: string | null;
   starts_at: Date | null;
+  payment_method: string;
 }
 
 /**
@@ -738,11 +741,13 @@ export async function setPlanOrderAwaitingPayment(
   waveSessionId: string,
   paymentLink: string,
   expiresAt: Date,
+  paymentMethod: string = "wave",
 ): Promise<PlanOrder | null> {
   return transitionPlanOrder(id, "AWAITING_PAYMENT", ["DRAFT"], {
     wave_session_id: waveSessionId,
     payment_link: paymentLink,
     link_expires_at: expiresAt,
+    payment_method: paymentMethod,
   });
 }
 
@@ -805,6 +810,7 @@ export interface CafeOrder {
   wave_session_id: string | null;
   payment_link: string | null;
   link_expires_at: Date | null;
+  payment_method: string;
 }
 
 async function transitionCafeOrder(
@@ -859,11 +865,13 @@ export async function setCafeOrderAwaitingPayment(
   waveSessionId: string,
   paymentLink: string,
   expiresAt: Date,
+  paymentMethod: string = "wave",
 ): Promise<CafeOrder | null> {
   return transitionCafeOrder(id, "AWAITING_PAYMENT", ["DRAFT"], {
     wave_session_id: waveSessionId,
     payment_link: paymentLink,
     link_expires_at: expiresAt,
+    payment_method: paymentMethod,
   });
 }
 

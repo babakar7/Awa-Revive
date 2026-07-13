@@ -172,20 +172,19 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     du lien ; sans compte membre → statut reste PAID + email réception pour
     activation manuelle + message client adapté. Toutes les formules Revive
     sont one_time (pas de récurrence à gérer).
-12. **Orange Money (08/07) — BLOQUÉ chez Sonatel.** Flux connu et validé par
-    des intégrations tierces : token `POST {host}/oauth/token` (form ou Basic,
-    client_credentials), paiement `POST /api/eWallet/v4/qrcode` (Bearer +
-    `{amount:{unit:"XOF",value}, callbackSuccessUrl, callbackCancelUrl,
-    code:<MERCHANT_CODE>, metadata:{order}, name, validity}`), host sandbox
-    `api.sandbox.orange-sonatel.com`. App "Awa revive" approuvée + 4 APIs
-    approuvées (oauth, PAYMENT-OM, QR CODE-OM, NOTIFICATION), identifiant
-    passerelle `awa-revive-928bb260-...-sandbox`, MAIS toute demande de token
-    répond `invalid_client` (toutes combinaisons host/chemin/format testées,
-    clés régénérées 2×) → provisioning défaillant côté Sonatel, ticket support
-    envoyé par Babakar. Il manquera aussi le **merchant code** (champ `code`)
-    à récupérer. Clés dans `.env` (OM_SANDBOX_*). Reprendre ici quand le token
-    passe ; architecture cible = clone du chemin Wave (webhook NOTIFICATION ou
-    vérif de statut avant confirmation).
+12. **Orange Money / Max It (13/07) — code livré, Stage A dark en prod.**
+    ~~BLOQUÉ Sonatel (08/07 invalid_client)~~ **supersédé** : OAuth prod
+    `api.orange-sonatel.com/oauth/token` **200** (form-urlencoded), QR
+    `POST /api/eWallet/v4/qrcode` **200** avec merchant `553651`,
+    `deepLinks.OM` / `deepLinks.MAXIT`, `qrId`. Site live
+    (`orangecheckout.jsw`) : header **`X-Callback-Url`** per-request (pas de
+    registration merchant-level), `code` en number, metadata echoed.
+    **Implémentation Awa** : `src/lib/orangeMoney.ts`, webhook
+    `/webhooks/orange-money`, fulfillment partagé `domain/fulfillment.ts`,
+    `payment_method` wave|orange_money|maxit sur bookings/plans/café.
+    **Verify-by-lookup** obligatoire avant fulfill (callback non signé).
+    Feature flag = les 3 env OM ; **Railway sans OM vars = Wave only**
+    (Stage A). Stage B : payer 100 F, confirmer ack/lookup, poser env Railway.
 13. **Menu du bar (10/07)** : commande bar adossée à une résa, dans le MÊME lien
     Wave (`amount_xof` = grand total cours + bar). `cafe-menu.md` (éditable par
     le propriétaire : `- ID | Nom | prix | description`, IDs stables, lu AU BOOT

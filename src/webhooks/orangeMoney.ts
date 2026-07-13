@@ -1,0 +1,161 @@
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { config } from "../config.js";
+import * as repo from "../domain/repo.js";
+import { processPayment } from "../domain/fulfillment.js";
+import {
+  lookupSuccessfulTransaction,
+  transactionMatchesPending,
+} from "../lib/orangeMoney.js";
+import { notifyReception } from "../lib/notify.js";
+
+/**
+ * Orange Money / Max It payment notification (X-Callback-Url on QR create).
+ *
+ * Payment-first: the callback is only a TRIGGER. We always re-check the
+ * transaction via the authenticated GET /api/eWallet/v1/transactions API
+ * before fulfilling (webhook forgery must not free-book).
+ *
+ * Payload contract (Sonatel docs):
+ *   type MERCHANT_PAYMENT, status SUCCESS, metadata.order, transactionId, …
+ * Ack/auth headers: still empirically observed in Stage A — we return bare 200.
+ */
+export function registerOrangeMoneyWebhook(app: FastifyInstance): void {
+  app.post("/webhooks/orange-money", async (req: FastifyRequest, reply) => {
+    const rawBody = (req as any).rawBody as Buffer | undefined;
+    const body: any = req.body;
+
+    // Stage A observation: always log full headers + body (no secrets in body).
+    req.log.info(
+      {
+        headers: redactHeaders(req.headers as Record<string, unknown>),
+        bodyPreview: rawBody?.toString("utf8").slice(0, 4000),
+      },
+      "OM webhook received",
+    );
+
+    // Always 200 quickly so Sonatel doesn't thrash if we process slowly.
+    // If Stage A shows retries after bare 200, adjust the ack body later.
+    reply.code(200).send({ ok: true });
+
+    const type = String(body?.type ?? "");
+    const status = String(body?.status ?? "").toUpperCase();
+    const transactionId = body?.transactionId != null ? String(body.transactionId) : "";
+    const orderId =
+      body?.metadata?.order != null
+        ? String(body.metadata.order)
+        : body?.metadata?.Order != null
+          ? String(body.metadata.Order)
+          : "";
+
+    if (type && type !== "MERCHANT_PAYMENT") {
+      req.log.info({ type }, "OM webhook: ignoring non-merchant type");
+      return;
+    }
+    if (status && status !== "SUCCESS") {
+      req.log.info({ status, transactionId }, "OM webhook: non-SUCCESS — ignoring");
+      return;
+    }
+    if (!transactionId || !orderId) {
+      req.log.warn({ body }, "OM webhook: missing transactionId or metadata.order");
+      return;
+    }
+
+    const idemKey = `om:${transactionId}`;
+    if (await repo.wasProcessed(idemKey)) {
+      req.log.info({ transactionId }, "OM webhook: duplicate delivery, skipping");
+      return;
+    }
+
+    setImmediate(() => {
+      handleOmPayment({ transactionId, orderId, customerId: body?.customer?.id, log: req.log })
+        .then(() => repo.markProcessed(idemKey, "orange_money"))
+        .catch((err) =>
+          req.log.error(
+            { err, transactionId, orderId },
+            "OM payment processing failed — id NOT marked processed so provider can retry",
+          ),
+        );
+    });
+  });
+}
+
+async function handleOmPayment(args: {
+  transactionId: string;
+  orderId: string;
+  customerId?: string;
+  log: any;
+}): Promise<void> {
+  // Verify-by-lookup (source of truth).
+  let tx;
+  try {
+    tx = await lookupSuccessfulTransaction(args.transactionId);
+  } catch (err) {
+    args.log.error({ err, transactionId: args.transactionId }, "OM lookup failed");
+    notifyReception(
+      "⚠️ Paiement OM — vérif transaction échouée",
+      `Callback reçu pour order=${args.orderId} transactionId=${args.transactionId} mais ` +
+        `la recherche API a échoué. Ne pas marquer payé à la main sans vérifier dans le portail OM.\n` +
+        `Erreur: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    throw err;
+  }
+  if (!tx) {
+    args.log.warn({ transactionId: args.transactionId }, "OM lookup: no SUCCESS transaction");
+    notifyReception(
+      "⚠️ Paiement OM — transaction introuvable/non SUCCESS",
+      `Callback order=${args.orderId} transactionId=${args.transactionId} — lookup n'a pas confirmé SUCCESS. ` +
+        `Pas de réservation créée.`,
+    );
+    return;
+  }
+
+  // Load pending row for amount / existence.
+  const booking = await repo.findBookingById(args.orderId).catch(() => null);
+  const plan = booking ? null : await repo.findPlanOrderById(args.orderId).catch(() => null);
+  const cafe =
+    booking || plan ? null : await repo.findCafeOrderById(args.orderId).catch(() => null);
+  const pending = booking ?? plan ?? cafe;
+  if (!pending) {
+    args.log.warn({ orderId: args.orderId }, "OM webhook: unknown order id");
+    return;
+  }
+  const amountXof = pending.amount_xof;
+  const match = transactionMatchesPending(tx, {
+    amountXof,
+    merchantCode: config.OM_MERCHANT_CODE,
+    orderId: args.orderId,
+  });
+  if (!match.ok) {
+    args.log.warn(
+      { reason: match.reason, transactionId: args.transactionId, orderId: args.orderId },
+      "OM verify-by-lookup mismatch — not fulfilling",
+    );
+    notifyReception(
+      "⚠️ Paiement OM — mismatch vérif",
+      `Callback order=${args.orderId} transactionId=${args.transactionId} rejeté: ${match.reason}. ` +
+        `Montant attendu ${amountXof} FCFA. Pas de réservation créée.`,
+    );
+    return;
+  }
+
+  const payerPhone = args.customerId
+    ? String(args.customerId).replace(/\D/g, "")
+    : tx.customerId
+      ? String(tx.customerId).replace(/\D/g, "")
+      : null;
+
+  await processPayment(args.orderId, { payerPhone }, args.log);
+}
+
+function redactHeaders(h: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(h)) {
+    const lk = k.toLowerCase();
+    if (lk.includes("authorization") || lk.includes("cookie") || lk.includes("secret")) {
+      out[k] = "[redacted]";
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}

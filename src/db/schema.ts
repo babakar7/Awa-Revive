@@ -183,6 +183,13 @@ create table if not exists pending_cafe_orders (
 create index if not exists idx_cafe_orders_client_status
   on pending_cafe_orders (client_id, status);
 
+-- Payment rail on plan/cafe orders (bookings already have payment_method).
+-- wave | orange_money | maxit
+alter table pending_plan_orders
+  add column if not exists payment_method text not null default 'wave';
+alter table pending_cafe_orders
+  add column if not exists payment_method text not null default 'wave';
+
 -- Waitlist for full class slots: the client explicitly asked to be pinged if
 -- a spot frees up. The 5-min sweep re-checks availability; a freed spot sends
 -- ONE WhatsApp nudge (claim WAITING→NOTIFIED before sending, one-shot). No

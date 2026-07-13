@@ -58,6 +58,13 @@ export const config = {
   // signing enforced, outbound API calls must carry a Wave-Signature header.
   WAVE_SIGNING_SECRET: optional("WAVE_SIGNING_SECRET", ""),
 
+  // Orange Money / Max It (Sonatel). All three must be set to enable the rails;
+  // empty = Wave-only (today's behaviour). Merchant code is 6 digits.
+  OM_CLIENT_ID: optional("OM_CLIENT_ID", ""),
+  OM_CLIENT_SECRET: optional("OM_CLIENT_SECRET", ""),
+  OM_MERCHANT_CODE: optional("OM_MERCHANT_CODE", ""),
+  OM_API_BASE: optional("OM_API_BASE", "https://api.orange-sonatel.com"),
+
   // Anthropic (the SDK also reads ANTHROPIC_API_KEY itself)
   ANTHROPIC_API_KEY: required("ANTHROPIC_API_KEY"),
   CLAUDE_MODEL: optional("CLAUDE_MODEL", "claude-sonnet-5"),

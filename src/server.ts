@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { registerWhatsAppWebhook } from "./webhooks/whatsapp.js";
 import { registerWaveWebhook } from "./webhooks/wave.js";
+import { registerOrangeMoneyWebhook } from "./webhooks/orangeMoney.js";
 import { registerAdmin } from "./admin/routes.js";
 
 export function buildServer() {
@@ -37,6 +38,7 @@ export function buildServer() {
 
   registerWhatsAppWebhook(app);
   registerWaveWebhook(app);
+  registerOrangeMoneyWebhook(app);
   registerAdmin(app);
 
   // Minimal "return to WhatsApp" pages for Wave success/error redirects (SPEC §4.3).
