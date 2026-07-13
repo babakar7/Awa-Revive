@@ -1,12 +1,14 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — **LOT 1 paiement** (lease plans/café,
-> pas de refund post-BOOKED, DRAFT→PAID, filet OM poller, anti-spam webhook OM,
-> re-notif refund) ; tests intégration OM ; Pack Découverte ; B2 no-go.
+> Dernière mise à jour : **13 juillet 2026** — **LOT 1 paiement** livré (`6a70364`)
+> ; **poller search OM abandonné** après probe Sonatel (`5df41cb` — pas de
+> `metadata.order` en list) ; tests intégration Wave+OM (30) ; Pack Découverte
+> éligibilité ; activation plan B2 no-go.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
-> `business-info.md`, `cafe-menu.md` (menu du bar).
+> `business-info.md`, `cafe-menu.md` (menu du bar),
+> `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
 ## 1. Le projet en une minute
 
@@ -28,8 +30,8 @@ côté serveur.
 Production : `https://resabot-production.up.railway.app` (Railway, service +
 Postgres), déployée depuis GitHub (`babakar7/Awa-Revive`, push sur main =
 déploiement). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
-phone_number_id 1175926012276896). Tests : ~270 unitaires (`npm test`, rapides,
-sans réseau) + **29 d'intégration** sur les chemins de paiement Wave + OM
+phone_number_id 1175926012276896). Tests : ~274 unitaires (`npm test`, rapides,
+sans réseau) + **30 d'intégration** sur les chemins de paiement Wave + OM
 (`npm run test:integration`, Postgres jetable via Docker, APIs externes
 mockées) — exécutés en CI GitHub Actions à chaque push.
 
@@ -92,8 +94,8 @@ src/
                       idempotence marquée APRÈS traitement (échec = retry Wave rejouable) ;
                       reconcileStuckBookings() : rattrape les PAID jamais réservés (crash) — voir §4.14
 scripts/              simulate-wave-webhook, daily-summary, mark-refunded (refund:done), test-email
-test/                 ~270 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
-test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgres jetable (docker run,
+test/                 ~274 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
+test/integration/     30 tests d'intégration (15 Wave + 15 OM/Max It) : Postgres jetable (docker run,
                       globalSetup maison — PAS testcontainers, incompatible Node 20.17), mock fetch
                       Wix/Wave/OM/Meta/Brevo qui THROW sur tout appel inattendu — voir §4.12 / §4.15
 ```
@@ -215,15 +217,19 @@ test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgre
       Env dummy dans globalSetup (`OM_CLIENT_*`, `OM_MERCHANT_CODE=553651`,
       `OM_API_BASE=https://api.orange-sonatel.test`) ; mock étendu dans
       [helpers.ts](test/integration/helpers.ts) (`deliverOmWebhook`, état
-      `om.transactions` / `failLookup`). Suite intégration : **29** tests
-      (14 Wave + 15 OM).
-    - **Poller search transactions ABANDONNÉ (13/07)** : probe live
-      `GET …/transactions?fromDateTime&toDateTime` → HTTP 200, SUCCESS listés,
-      mais **`metadata.order` jamais renvoyé** (souvent seulement
-      `idempotencyKey` / champs Wix). Impossible de joindre un paiement à une
-      commande Awa sans risque. Filet = **webhook + lookup par transactionId**
-      uniquement ; recoupement manuel portail si callback perdu. Rouvrir seulement
-      si Sonatel echo le metadata du QR create.
+      `om.transactions` / `failLookup`). Suite intégration : **30** tests
+      (15 Wave incl. DRAFT→BOOKED + 15 OM).
+    - **Poller search transactions ABANDONNÉ (13/07, `5df41cb`)**. Probe live
+      merchant `553651` : `GET …/transactions?fromDateTime&toDateTime` →
+      HTTP 200, SUCCESS listés (amount, partner, customer, type), mais
+      **`metadata.order` jamais présent** (souvent `idempotencyKey` seul, ou
+      champs Wix site ; `reference` toujours null). Impossible de joindre un
+      paiement listé à un pending Awa sans risque de mauvais rattachement.
+      Code retiré : `reconcileAwaitingOmPayments`, `searchSuccessfulTransactions`,
+      `awaitingOmPaymentCandidates` ; plus dans le sweep 60 s. **Filet OM =
+      webhook callback + verify-by-lookup `transactionId` uniquement** ;
+      recoupement manuel portail si callback perdu. Rouvrir seulement si
+      Sonatel echo le metadata du QR create (`order` / `channel: awa`).
     - **Reste** : E2E résa Awa complète (choix dans le chat → pay → ✅ WhatsApp)
       à confirmer si pas déjà fait ; ack/retry Sonatel si payload atypique
       (logs `OM webhook received`).
@@ -274,12 +280,12 @@ test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgre
     (dotenv n'écrase jamais l'existant), mock fetch installé UNE fois par
     suite (les notifications fire-and-forget en vol toucheraient les vraies
     APIs avec un restore par test) et qui throw sur toute URL non mockée.
-    Wave — 14 scénarios : signature, happy path, paiement tardif honoré, doublons
-    (même event id ET event id différent), 3 causes de remboursement,
-    récupération de PAID bloqué (retry, sweep, bail actif/périmé),
-    retriabilité. OM/Max It — 15 scénarios (13/07) : voir §4.12 (verify-by-lookup,
-    anti-forgery, idempotence `om:…`, retry après lookup 500). AUCUN secret réel
-    requis. CI GitHub Actions (`.github/workflows/ci.yml`) : tsc + unit +
+    Wave — 15 scénarios : signature, happy path, paiement tardif, DRAFT→BOOKED
+    (orphelin), doublons, 3 causes de remboursement, PAID bloqué (retry/sweep/
+    bail), retriabilité. OM/Max It — 15 scénarios (13/07) : voir §4.12
+    (verify-by-lookup, anti-forgery, idempotence `om:…`, retry après lookup 500 ;
+    **pas** de poller search — abandonné). Total intégration **30**. AUCUN secret
+    réel requis. CI GitHub Actions (`.github/workflows/ci.yml`) : tsc + unit +
     intégration à chaque push ; « Wait for CI » à activer côté Railway pour
     bloquer les déploiements rouges (pas seulement les signaler).
 16. **Messages interactifs cliquables (10/07)** — outil `present_options`
@@ -1356,23 +1362,26 @@ test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgre
   500 non marqué processed puis retry. Env dummy + mock dans
   [globalSetup.ts](test/integration/globalSetup.ts) /
   [helpers.ts](test/integration/helpers.ts) (`deliverOmWebhook`). Suite
-  intégration **29/29** (14 Wave + 15 OM) en CI. Détail : §4.12.
-- **13/07 — LOT 1 : stop perte d'argent silencieuse (chemin paiement).**
+  intégration ensuite **30/30** (15 Wave + 15 OM) en CI. Détail : §4.12.
+- **13/07 — LOT 1 : stop perte d'argent silencieuse (`6a70364`).**
   (1.1) Plans + café : `claim*ForFulfillment` + `stuckPaid*` + reconcile dans le
   sweep 60 s (`fulfilling_at`, `reception_notified_at` plan, `fulfilled_at` café)
   — un crash entre PAID et activation/notif ne laisse plus d'orphelin sans
   reprise. (1.2) Après `BOOKED` / `createBooking` Wix, **jamais** de
   `markRefund` : échec WhatsApp → notif réception « confirmé mais client non
   notifié ». (1.3) `DRAFT → PAID` autorisé (session provider créée, crash avant
-  `setAwaitingPayment`) + expire DRAFT > 1 h. (1.4) Poller search OM **abandonné**
-  après probe (list API sans `metadata.order` — voir §4.12) ; code retiré du
-  sweep. (1.5) Webhook OM : existence locale de `order` **avant** lookup Sonatel ;
-  rate-limit 1/h des notifs « introuvable ». (1.6) `refund_notified_at` + re-notify
-  sweep.
-  Fichiers : [fulfillment.ts](src/domain/fulfillment.ts), [repo.ts](src/domain/repo.ts),
-  [stateMachine.ts](src/domain/stateMachine.ts), [schema.ts](src/db/schema.ts),
-  [orangeMoney.ts](src/lib/orangeMoney.ts) / [webhooks/orangeMoney.ts](src/webhooks/orangeMoney.ts),
-  [index.ts](src/index.ts).
+  `setAwaitingPayment`) + expire DRAFT > 1 h ; test intégration Wave
+  DRAFT→BOOKED. (1.5) Webhook OM : existence locale de `order` **avant** lookup
+  Sonatel ; rate-limit 1/h des notifs « introuvable ». (1.6) `refund_notified_at`
+  + re-notify sweep. Bonus : WhatsApp mark-processed-after-success +
+  `drainQueues` au SIGTERM. Fichiers : [fulfillment.ts](src/domain/fulfillment.ts),
+  [repo.ts](src/domain/repo.ts), [stateMachine.ts](src/domain/stateMachine.ts),
+  [schema.ts](src/db/schema.ts), [orangeMoney.ts](src/lib/orangeMoney.ts) /
+  [webhooks/orangeMoney.ts](src/webhooks/orangeMoney.ts), [index.ts](src/index.ts).
+- **13/07 — Poller search OM retiré (`5df41cb`).** Suite probe live : list API
+  sans `metadata.order` → auto-reconcile impossible. Code poller supprimé du
+  sweep ; chemin OM = **callback + lookup `transactionId` uniquement**. Voir
+  §4.12 « Poller search transactions ABANDONNÉ ».
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —
