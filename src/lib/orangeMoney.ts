@@ -99,7 +99,8 @@ export async function createQrPayment(args: {
   amountXof: number;
   clientReference: string;
   name: string;
-  /** Validity in minutes (aligned with PAYMENT_LINK_TTL_MINUTES). */
+  /** Validity window in minutes (aligned with PAYMENT_LINK_TTL_MINUTES).
+   *  Sonatel API expects **seconds** in the body (probe: validity 120 → 2 min). */
   validityMinutes: number;
   callbackUrl: string;
   successUrl: string;
@@ -110,6 +111,7 @@ export async function createQrPayment(args: {
   if (!Number.isFinite(merchantCode)) {
     throw new Error(`OM_MERCHANT_CODE must be numeric, got ${config.OM_MERCHANT_CODE}`);
   }
+  const validitySeconds = Math.max(60, Math.round(args.validityMinutes * 60));
   const body = {
     amount: { unit: "XOF", value: Math.round(args.amountXof) },
     callbackSuccessUrl: args.successUrl,
@@ -117,7 +119,7 @@ export async function createQrPayment(args: {
     code: merchantCode,
     metadata: { order: args.clientReference, channel: "awa" },
     name: args.name.slice(0, 80) || "Revive",
-    validity: Math.max(1, Math.round(args.validityMinutes)),
+    validity: validitySeconds,
   };
   const res = await fetch(`${config.OM_API_BASE}/api/eWallet/v4/qrcode`, {
     method: "POST",

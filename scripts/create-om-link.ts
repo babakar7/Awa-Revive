@@ -63,24 +63,46 @@ try {
   const omLink = om.pickDeepLink("orange_money", session.deepLink, session.deepLinks);
   const maxitLink = om.pickDeepLink("maxit", session.deepLink, session.deepLinks);
 
+  // One URL per line, no indent (easier to triple-click / copy in terminals & chat).
+  // Also write a small file you can open with `open om-last-links.txt`.
+  const { writeFileSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const outFile = resolve(process.cwd(), "om-last-links.txt");
+  const fileBody = [
+    `created_at=${new Date().toISOString()}`,
+    `amount_xof=${amountXof}`,
+    `order_id=${orderId}`,
+    `qr_id=${session.qrId}`,
+    session.validUntil ? `valid_until=${session.validUntil.toISOString()}` : "",
+    "",
+    "ORANGE_MONEY_LINK=",
+    omLink,
+    "",
+    "MAX_IT_LINK=",
+    maxitLink,
+    "",
+  ]
+    .filter((l) => l !== undefined)
+    .join("\n");
+  writeFileSync(outFile, fileBody, "utf8");
+
   console.log("✅ Session created");
-  console.log(`  qrId:       ${session.qrId}`);
-  if (session.validUntil) {
-    console.log(`  valid until: ${session.validUntil.toISOString()}`);
-  }
+  console.log(`qrId=${session.qrId}`);
+  if (session.validUntil) console.log(`valid_until=${session.validUntil.toISOString()}`);
   console.log("");
-  console.log("Open on your phone (tap or paste into Safari):");
+  console.log("--- Orange Money (copy the whole next line) ---");
+  console.log(omLink);
   console.log("");
-  console.log("  Orange Money:");
-  console.log(`  ${omLink}`);
+  console.log("--- Max It (copy the whole next line) ---");
+  console.log(maxitLink);
   console.log("");
-  console.log("  Max It:");
-  console.log(`  ${maxitLink}`);
+  console.log(`Full links also saved to:\n  ${outFile}`);
+  console.log("  open om-last-links.txt   # or: cat om-last-links.txt");
   console.log("");
   if (orderId.startsWith("manual-")) {
     console.log(
       "Note: order id is a test placeholder — webhook will log but not fulfill a booking.\n" +
-        "For a real fulfill test: create a pending booking (or pass --order <uuid> of an AWAITING_PAYMENT row).",
+        "For a real fulfill test: pass --order <uuid> of an AWAITING_PAYMENT row.",
     );
   } else {
     console.log(
