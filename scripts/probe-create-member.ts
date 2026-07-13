@@ -1,20 +1,19 @@
 /**
- * ONE-OFF PROBE (ops, run deliberately) — does Wix let us CREATE a member so a
- * pricing plan can be auto-activated for a brand-new client?
+ * ONE-OFF PROBE (ops) — can we CREATE a Wix member so a pricing plan
+ * auto-activates for a brand-new client? RESULT (13/07, closed): technically
+ * YES, but it's a NO-GO for us.
+ *   - POST /members/v1/members → 200; createOfflinePlanOrder with that member
+ *     id then activates the plan (ACTIVE even when member.status is PENDING).
+ *   - BUT Wix emails the client a Wix invite / set-password / welcome mail —
+ *     unacceptable in a silent WhatsApp payment flow.
+ * Decision: Awa does NOT create members. It auto-activates only when a member
+ * already exists; otherwise the manual reception path (dashboard, where the
+ * client email is optional). See PLAN-PACK-DECOUVERTE-ACTIVATION.md.
  *
- * Today Awa only creates CONTACTS (contacts/v4). Pricing-plan activation is
- * member-only (createOfflinePlanOrder), so a new client's Pack Découverte falls
- * to manual reception activation. Before writing lazy member-creation into the
- * payment webhook (ORANGE-MONEY-PLAN étape 2b — reuse of the plan file), we must
- * confirm the Members API behaves acceptably. This probe answers:
- *   1. Does POST /members/v1/members succeed, and what member.status comes back
- *      (APPROVED = usable now, PENDING = needs approval → likely a no-go)?
- *   2. Does Wix SEND THE CLIENT AN EMAIL (invite / set-password / welcome)?
- *      This is the most likely no-go — WATCH THE TEST INBOX after running.
- *   3. Is the member linked to the existing contact carrying that email?
- *   4. Can createOfflinePlanOrder then activate a plan with that member id?
+ * Kept only to RE-VALIDATE if Wix later lets us suppress the invite email
+ * site-wide — do NOT wire member creation into production fulfillment.
  *
- * ⚠️ Hits LIVE Wix and creates a REAL member (and maybe emails a real address).
+ * ⚠️ Hits LIVE Wix and creates a REAL member (and emails a real address).
  *    Use a disposable email you control. Clean up with --delete afterwards.
  *
  * Usage:

@@ -1275,21 +1275,25 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   ne pas re-renvoyer boutons/lien déjà envoyés). Constat prod 13/07 : Awa
   ignorait une question (« où êtes-vous ? ») en plein paiement et re-poussait
   les boutons + re-soumettait un code périmé. 6 tests `historyReplay`.
-- **Activation abonnement pour NOUVEAU client (13/07, étape 1 faite ;
-  étape 2 EN ATTENTE d'un probe ops).** Rappel de la contrainte (§11) : un
-  pricing plan ne s'active en auto que pour un **member** Wix ; un vrai nouveau
-  client n'a qu'une **fiche contact** (`createContact`) → `member_id` null →
-  après paiement le plan reste PAID + activation manuelle réception. **Étape 1
-  livrée** : `create_plan_payment_link` renvoie désormais
-  `activation: manual_after_payment` + consigne quand `memberId` est null, pour
-  qu'Awa prévienne le client AVANT paiement (activation par l'équipe juste après,
-  pas instantanée) au lieu qu'il le découvre après. **Étape 2 (activation
-  instantanée via création paresseuse d'un member dans le webhook) NON codée** :
-  gated par un probe one-off `npm run wix:probe-member -- <email-test>`
-  (`scripts/probe-create-member.ts`) qui sonde `POST /members/v1/members` — le
-  critère no-go est **un email envoyé au client par Wix** (invitation /
-  mot de passe). À faire : lancer le probe avec une boîte jetable, vérifier
-  l'inbox, puis décider. Détails : plan `what-do-you-think-mutable-spring.md`.
+- **Activation abonnement pour NOUVEAU client (13/07, étape 1 livrée ;
+  étape 2 FERMÉE — no-go).** Contrainte (§11) : l'API offline `createOfflineOrder`
+  exige un **member** id ; un vrai nouveau client n'a qu'une **fiche contact**
+  (`createContact`) → `member_id` null → après paiement le plan reste PAID +
+  activation manuelle réception. **Étape 1 livrée** : `create_plan_payment_link`
+  renvoie `activation: manual_after_payment` + consigne quand `memberId` est null,
+  pour qu'Awa prévienne le client AVANT paiement (activation par l'équipe juste
+  après, pas instantanée). **Étape 2 (création paresseuse d'un member pour
+  auto-activer) = NO-GO définitif**, tranché par deux probes live :
+  (a) offline order avec contactId nu comme memberId → **400 `MEMBER_DOESNT_EXIST`** ;
+  (b) `POST /members/v1/members` puis offline → **200 ACTIF**, MAIS Wix **envoie
+  un email au client** (invitation / mot de passe) — inacceptable pour un
+  paiement WhatsApp silencieux (le dashboard, lui, laisse ce mail optionnel, mais
+  ce contrôle n'existe pas sur l'API). **Décision** : Awa n'auto-active QUE si un
+  member existe déjà (`member_id` résolu à la création du lien) ; sinon chemin
+  manuel réception (dashboard, mail optionnel). **Pas de `createMember` en prod.**
+  Re-valider seulement si Babakar désactive un jour les emails d'invitation côté
+  Wix : `npm run wix:probe-member` / `npm run wix:probe-contact-plan`. Détails +
+  non-goals : `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 - **13/07 — Pack Découverte : garde-fou éligibilité (serveur décide).** Le pack
   d'essai est réservé aux clients qui n'ont **jamais fait de Pilates** à Revive
   (présence = booking CONFIRMED/PENDING dont le nom matche `/pilates/i` ;

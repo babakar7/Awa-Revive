@@ -238,7 +238,8 @@ export async function processPlanPayment(order: any, log: any): Promise<void> {
           ? `  ⚠️ Démarrage voulu : ${startsAt!.toISOString().slice(0, 10)} (renouvellement à la fin de l'abonnement actuel) — régler la date de début en conséquence.\n`
           : "") +
         `\nÀ faire dans le dashboard Wix : Abonnements → attribuer "${order.plan_name}" au client ` +
-        `(créer/relier sa fiche si besoin — numéro WhatsApp ci-dessus), en marquant l'ordre comme payé.`,
+        `(créer/relier sa fiche si besoin — numéro WhatsApp ci-dessus), en marquant l'ordre comme payé. ` +
+        `Astuce : au moment d'attribuer le plan, l'envoi d'un email au client est optionnel — décoche-le si tu ne veux pas le notifier.`,
     );
   }
 

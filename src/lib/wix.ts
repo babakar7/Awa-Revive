@@ -845,10 +845,15 @@ export async function getPlan(planId: string): Promise<WixPlan | null> {
 }
 
 /**
- * Activate a plan for a member after an offline (Wave) payment. Pricing-plan
- * purchases are member-only in Wix — the caller must resolve memberId first
- * and fall back to manual reception activation when the client has no member
- * account.
+ * Activate a plan for a member after an offline (Wave) payment. The offline
+ * order API REQUIRES a real Wix member id (a bare contactId → 400
+ * MEMBER_DOESNT_EXIST, probed 13/07) — the caller must resolve memberId first
+ * and fall back to manual reception activation when the client has none. Note
+ * a contact CAN hold a plan when assigned in the dashboard; the constraint is
+ * only about auto-activating via this API. Awa deliberately does NOT create
+ * members to fill the gap: POST /members/v1/members works but emails the client
+ * a Wix invite/set-password mail (probed 13/07), unacceptable in a silent
+ * WhatsApp flow. See PLAN-PACK-DECOUVERTE-ACTIVATION.md.
  *
  * startDate (ISO): optional. When in the FUTURE, Wix creates the order as
  * PENDING and activates it automatically on that date — this is how a renewal
@@ -889,7 +894,8 @@ export async function latestPlanEndDate(contactId: string): Promise<string | nul
   return latest === null ? null : new Date(latest).toISOString();
 }
 
-/** Contact → member GUID (plan purchases are member-only). Null if no member. */
+/** Contact → member GUID (offline plan activation via API needs a member id).
+ *  Null if the contact has no member account. */
 export async function resolveMemberIdForPlan(
   phone: string,
   firstName?: string,
