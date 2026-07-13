@@ -2,18 +2,20 @@ import { describe, expect, it } from "vitest";
 import { classTip } from "../src/lib/classTips.js";
 
 describe("classTip — keyword matching", () => {
-  it("Reformer / Pilates / Fusion / Yoga / Inversion → non-slip socks tip (fr)", () => {
-    for (const name of [
-      "Pilates Reformer Foundation",
-      "REFORMER Women Only",
-      "Pilates Mat",
-      "Fusion Flow",
-      "Yoga Vinyasa",
-      "Inversion Workshop",
-    ]) {
+  it("Reformer only → non-slip socks required", () => {
+    for (const name of ["Pilates Reformer Foundation", "REFORMER Women Only", "Reformer Sculpt"]) {
+      const tip = classTip(name, "fr");
+      expect(tip, name).toMatch(/chaussettes antidérapantes/i);
+      expect(tip, name).toMatch(/Reformer/i);
+    }
+  });
+
+  it("Pilates / Fusion / Yoga / Inversion without Reformer → tenue only, no socks", () => {
+    for (const name of ["Pilates Mat", "Fusion Flow", "Yoga Vinyasa", "Inversion Workshop"]) {
       const tip = classTip(name, "fr");
       expect(tip, name).toBeTruthy();
-      expect(tip).toMatch(/chaussettes antidérapantes|tenue de sport/i);
+      expect(tip, name).toMatch(/tenue de sport/i);
+      expect(tip, name).not.toMatch(/chaussettes antidérapantes/i);
     }
   });
 
@@ -47,5 +49,6 @@ describe("classTip — keyword matching", () => {
 
   it("aqua wins over pilates if both keywords present", () => {
     expect(classTip("Aqua Pilates", "fr")).toMatch(/maillot/i);
+    expect(classTip("Aqua Pilates", "fr")).not.toMatch(/chaussettes/i);
   });
 });

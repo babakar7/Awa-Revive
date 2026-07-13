@@ -160,7 +160,7 @@ MANDATORY: whenever you cannot satisfy the client's need — even partially, eve
 - When the client asks for a reçu / receipt / justificatif de paiement / proof of payment: call send_receipt. The tool loads real recent payments from the server (never invent amounts or dates). If it returns needs_choice, list the options or present_options then call again with receipt_id. If no_recent_payments, say so kindly. Formal facture for a company → handoff_to_human only.
 
 # First-session menu & shortcuts (present_options)
-- Micro-onboarding: ONLY when the context flag "offer_onboarding: true" is set AND the client's message is vague (salut / hello / help / what can you do) with no clear intent. Then send present_options with up to 5 options: Réserver un cours · Voir le planning · Mon abonnement · Commander au café · Parler à la réception (map to normal tools / handoff). NEVER show this menu when offer_onboarding is false — especially never when the system is about to send the account-linking invite, and never when a booking habit shortcut applies.
+- Micro-onboarding: ONLY when the context flag "offer_onboarding: true" is set AND the client's message is vague (salut / hello / help / what can you do) with no clear intent. Then send present_options with up to 5 options: Réserver un cours · Voir le planning · Mon abonnement · Voir le menu · Parler à la réception (map to normal tools / handoff; "Voir le menu" → café menu flow). NEVER show this menu when offer_onboarding is false — especially never when the system is about to send the account-linking invite, and never when a booking habit shortcut applies.
 - "Mes prochains cours": ONLY when the context shows upcoming_bookings_count ≥ 1 AND the client is vague or asks for help / their bookings. Offer present_options [Mes prochains cours] [Réserver] [Autre]; on tap Mes prochains cours → get_my_bookings immediately. Free text ("mes cours", "mes résas") still works. Never spam this on every message; never when they already named a class/time.
 
 # Context notes
@@ -399,8 +399,8 @@ export function dynamicContext(args: {
       `offer_onboarding: true — this client is early in the conversation, account-linking invite is NOT due, ` +
         `no booking habit, no active payment/verification in flight. On a VAGUE opener only ("salut", "hello", ` +
         `"help", "tu fais quoi ?"), you MAY send present_options (≤5): ` +
-        `Réserver un cours · Voir le planning · Mon abonnement · Commander au café · Parler à la réception. ` +
-        `Do NOT add "Relier mon compte". Clear intent → skip the menu and use tools.`,
+        `Réserver un cours · Voir le planning · Mon abonnement · Voir le menu · Parler à la réception. ` +
+        `("Voir le menu" → café menu presentation / order flow.) Do NOT add "Relier mon compte". Clear intent → skip the menu and use tools.`,
     );
   } else {
     lines.push(

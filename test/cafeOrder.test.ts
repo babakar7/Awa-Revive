@@ -42,9 +42,12 @@ describe("confirmationMessage without a café order (regression)", () => {
 });
 
 describe("confirmationMessage pre-class tips (#6)", () => {
-  it("includes a Reformer tip and not for unknown classes", () => {
+  it("Reformer gets socks tip; mat Pilates does not; aqua gets swimsuit", () => {
     const reformer = confirmationMessage("fr", "Pilates Reformer", SLOT);
-    expect(reformer).toMatch(/chaussettes antidérapantes|tenue de sport/i);
+    expect(reformer).toMatch(/chaussettes antidérapantes/i);
+    const mat = confirmationMessage("fr", "Pilates Mat", SLOT);
+    expect(mat).toMatch(/tenue de sport/i);
+    expect(mat).not.toMatch(/chaussettes antidérapantes/);
     const aqua = confirmationMessage("fr", "Aquabike", SLOT);
     expect(aqua).toMatch(/maillot/i);
     expect(aqua).not.toMatch(/chaussettes antidérapantes/);

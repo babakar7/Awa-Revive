@@ -3,15 +3,23 @@
  * in the service name — never a hard-coded list of full class names (same
  * invariant as business-info: the live Wix catalog is the source of classes).
  * Pure; null when no tip applies (do not invent).
+ *
+ * Chaussettes antidérapantes = Reformer only (business-info). Other studio
+ * floor classes (mat Pilates, yoga, fusion, inversion) get tenue de sport only.
  */
 
 export type TipLang = "fr" | "en" | "wo";
 
-const TIPS: Record<"reformer" | "aqua" | "boxe", Record<TipLang, string>> = {
+const TIPS: Record<"reformer" | "studio" | "aqua" | "boxe", Record<TipLang, string>> = {
   reformer: {
-    fr: "💡 Pense à une tenue de sport confortable et des chaussettes antidérapantes (obligatoires pour le Reformer — en vente au studio).",
-    en: "💡 Wear comfortable sports clothes and non-slip socks (required for Reformer — available at the studio).",
-    wo: "💡 Solloo tenue sport bu yomb ak caabi antidérapantes (dañu ko soxla ci Reformer — jëndees na ko ci studio bi).",
+    fr: "💡 Tenue de sport confortable + chaussettes antidérapantes obligatoires pour le Reformer (en vente au studio).",
+    en: "💡 Comfortable sports clothes + non-slip socks are required for Reformer (available at the studio).",
+    wo: "💡 Tenue sport bu yomb + caabi antidérapantes dañu ko soxla ci Reformer (jëndees na ko ci studio bi).",
+  },
+  studio: {
+    fr: "💡 Pense à une tenue de sport confortable.",
+    en: "💡 Wear comfortable sports clothes.",
+    wo: "💡 Solloo tenue sport bu yomb.",
   },
   aqua: {
     fr: "💡 Pense à ton maillot de bain ou lycra.",
@@ -32,9 +40,7 @@ function normalizeLang(lang: string | null | undefined): TipLang {
 
 /**
  * Return a one-line tip for this class name, or null if unknown.
- * Keywords are checked in order: aqua before generic pilates words that
- * might appear in compound names is fine; reformer/pilates/yoga share the
- * studio-floor tip.
+ * Order: aqua → boxe → reformer (socks) → other studio-floor activities.
  */
 export function classTip(serviceName: string, lang?: string | null): string | null {
   const s = serviceName
@@ -43,7 +49,6 @@ export function classTip(serviceName: string, lang?: string | null): string | nu
     .replace(/[\u0300-\u036f]/g, "");
   const l = normalizeLang(lang);
 
-  // Keyword contains-match (not full class names): "Aquabike" includes "aqua".
   // Aqua first so e.g. a future "Aqua Pilates" still gets swimsuit tip.
   if (
     s.includes("aqua") ||
@@ -58,14 +63,12 @@ export function classTip(serviceName: string, lang?: string | null): string | nu
   if (s.includes("boxe") || s.includes("boxing")) {
     return TIPS.boxe[l];
   }
-  if (
-    s.includes("reformer") ||
-    s.includes("pilates") ||
-    s.includes("fusion") ||
-    s.includes("yoga") ||
-    s.includes("inversion")
-  ) {
+  // Non-slip socks ONLY for Reformer (not generic Pilates / yoga / fusion).
+  if (s.includes("reformer")) {
     return TIPS.reformer[l];
+  }
+  if (s.includes("pilates") || s.includes("fusion") || s.includes("yoga") || s.includes("inversion")) {
+    return TIPS.studio[l];
   }
   return null;
 }
