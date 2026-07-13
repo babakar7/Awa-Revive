@@ -282,36 +282,10 @@ function parseOmTransaction(hit: any, fallbackId?: string): OmTransaction {
   };
 }
 
-/**
- * Search SUCCESS merchant payments in a time window (reconcile lost callbacks).
- * Shape varies by Sonatel version — we normalize like lookupSuccessfulTransaction.
- * Throws on HTTP error so the poller can fall back to a reception digest.
- */
-export async function searchSuccessfulTransactions(
-  from: Date,
-  to: Date,
-): Promise<OmTransaction[]> {
-  const token = await getAccessToken();
-  const url = new URL(`${config.OM_API_BASE}/api/eWallet/v1/transactions`);
-  url.searchParams.set("fromDateTime", from.toISOString());
-  url.searchParams.set("toDateTime", to.toISOString());
-  // Some portal docs use from/to — send both; extra params are usually ignored.
-  url.searchParams.set("from", from.toISOString());
-  url.searchParams.set("to", to.toISOString());
-  const res = await fetch(url.toString(), {
-    method: "GET",
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new Error(`OM transaction search failed (${res.status}): ${await res.text()}`);
-  }
-  const data: any = await res.json();
-  const items = normalizeTransactionList(data);
-  return items
-    .filter((t) => String(t?.status ?? "").toUpperCase() === "SUCCESS")
-    .map((t) => parseOmTransaction(t));
-}
+// Date-range transaction search was probed live 13/07: HTTP 200 but the list
+// never echoes metadata.order (only idempotencyKey / Wix fields). Cannot join
+// payments to pending Awa rows → no auto-reconcile poller. Re-open only if
+// Sonatel starts returning our QR metadata.order (or a usable reference).
 
 /** Reset token cache (tests). */
 export function _resetOmTokenCacheForTests(): void {

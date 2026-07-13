@@ -8,7 +8,6 @@ import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
-import { reconcileAwaitingOmPayments } from "./webhooks/orangeMoney.js";
 import {
   reconcileStuckPlanOrders,
   reconcileStuckCafeOrders,
@@ -68,9 +67,9 @@ async function main() {
       if (reconciled > 0) app.log.info({ reconciled }, "Reconciled stuck PAID rows");
       const refunds = await reconcileUnnotifiedRefunds(app.log);
       if (refunds > 0) app.log.info({ refunds }, "Re-notified REFUND_NEEDED rows");
-      // Lost OM/Max It callbacks: search merchant transactions for our metadata.order.
-      const omRec = await reconcileAwaitingOmPayments(app.log);
-      if (omRec > 0) app.log.info({ omRec }, "Reconciled OM payments via transaction search");
+      // OM lost-callback poller via transaction search: ABANDONNED (13/07 probe) —
+      // list API never returns metadata.order, so we cannot join to pending rows.
+      // Filet = webhook + verify-by-lookup only; ops recoup manually if needed.
       // Account-link request the client never completed (no email given, code
       // never typed) → hand it to reception so no plan-holder is lost silently.
       const escalated = await escalateStaleLinkRequests();

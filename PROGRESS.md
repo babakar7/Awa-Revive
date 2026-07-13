@@ -217,10 +217,16 @@ test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgre
       [helpers.ts](test/integration/helpers.ts) (`deliverOmWebhook`, état
       `om.transactions` / `failLookup`). Suite intégration : **29** tests
       (14 Wave + 15 OM).
+    - **Poller search transactions ABANDONNÉ (13/07)** : probe live
+      `GET …/transactions?fromDateTime&toDateTime` → HTTP 200, SUCCESS listés,
+      mais **`metadata.order` jamais renvoyé** (souvent seulement
+      `idempotencyKey` / champs Wix). Impossible de joindre un paiement à une
+      commande Awa sans risque. Filet = **webhook + lookup par transactionId**
+      uniquement ; recoupement manuel portail si callback perdu. Rouvrir seulement
+      si Sonatel echo le metadata du QR create.
     - **Reste** : E2E résa Awa complète (choix dans le chat → pay → ✅ WhatsApp)
       à confirmer si pas déjà fait ; ack/retry Sonatel si payload atypique
-      (logs `OM webhook received`) ; poller réconciliation AWAITING_PAYMENT OM
-      (optionnel, transactions search).
+      (logs `OM webhook received`).
 13. **Menu du bar (10/07)** : commande bar adossée à une résa, dans le MÊME lien
     Wave (`amount_xof` = grand total cours + bar). `cafe-menu.md` (éditable par
     le propriétaire : `- ID | Nom | prix | description`, IDs stables, lu AU BOOT
@@ -1358,11 +1364,11 @@ test/integration/     29 tests d'intégration (14 Wave + 15 OM/Max It) : Postgre
   reprise. (1.2) Après `BOOKED` / `createBooking` Wix, **jamais** de
   `markRefund` : échec WhatsApp → notif réception « confirmé mais client non
   notifié ». (1.3) `DRAFT → PAID` autorisé (session provider créée, crash avant
-  `setAwaitingPayment`) + expire DRAFT > 1 h. (1.4) Poller
-  `reconcileAwaitingOmPayments` : search transactions 24 h, match
-  `metadata.order` → même fulfill ; soft-fail si API search down. (1.5) Webhook
-  OM : existence locale de `order` **avant** lookup Sonatel ; rate-limit 1/h
-  des notifs « introuvable ». (1.6) `refund_notified_at` + re-notify sweep.
+  `setAwaitingPayment`) + expire DRAFT > 1 h. (1.4) Poller search OM **abandonné**
+  après probe (list API sans `metadata.order` — voir §4.12) ; code retiré du
+  sweep. (1.5) Webhook OM : existence locale de `order` **avant** lookup Sonatel ;
+  rate-limit 1/h des notifs « introuvable ». (1.6) `refund_notified_at` + re-notify
+  sweep.
   Fichiers : [fulfillment.ts](src/domain/fulfillment.ts), [repo.ts](src/domain/repo.ts),
   [stateMachine.ts](src/domain/stateMachine.ts), [schema.ts](src/db/schema.ts),
   [orangeMoney.ts](src/lib/orangeMoney.ts) / [webhooks/orangeMoney.ts](src/webhooks/orangeMoney.ts),

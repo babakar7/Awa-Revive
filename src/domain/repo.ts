@@ -1086,44 +1086,6 @@ export async function expireStaleCafeOrders(): Promise<number> {
   return (res.rowCount ?? 0) + (drafts.rowCount ?? 0);
 }
 
-/**
- * Recent OM/Max It orders still waiting for a webhook (callback may have been
- * lost). Used by the OM reconcile poller — AWAITING_PAYMENT or EXPIRED, last 24h.
- */
-export async function awaitingOmPaymentCandidates(limit = 50): Promise<
-  { kind: "booking" | "plan" | "cafe"; id: string; amount_xof: number; payment_method: string }[]
-> {
-  const out: {
-    kind: "booking" | "plan" | "cafe";
-    id: string;
-    amount_xof: number;
-    payment_method: string;
-  }[] = [];
-  for (const [kind, table] of [
-    ["booking", "pending_bookings"],
-    ["plan", "pending_plan_orders"],
-    ["cafe", "pending_cafe_orders"],
-  ] as const) {
-    const res = await pool.query(
-      `select id, amount_xof, payment_method from ${table}
-        where payment_method in ('orange_money', 'maxit')
-          and status in ('AWAITING_PAYMENT', 'EXPIRED', 'DRAFT')
-          and created_at > now() - interval '24 hours'
-        order by created_at desc limit $1`,
-      [limit],
-    );
-    for (const r of res.rows) {
-      out.push({
-        kind,
-        id: r.id,
-        amount_xof: r.amount_xof,
-        payment_method: r.payment_method,
-      });
-    }
-  }
-  return out;
-}
-
 // ---------- waitlist (full slots the client asked to be pinged about) ----------
 
 export interface WaitlistEntry {

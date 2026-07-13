@@ -4,9 +4,7 @@ import * as repo from "../domain/repo.js";
 import { processPayment } from "../domain/fulfillment.js";
 import {
   lookupSuccessfulTransaction,
-  searchSuccessfulTransactions,
   transactionMatchesPending,
-  isOmEnabled,
   type OmTransaction,
 } from "../lib/orangeMoney.js";
 import { notifyReception } from "../lib/notify.js";
@@ -187,72 +185,6 @@ async function handleOmPayment(args: {
       : null;
 
   await processPayment(args.orderId, { payerPhone }, args.log);
-}
-
-/**
- * Lost-callback filet: search recent SUCCESS OM transactions and fulfill any
- * that match a still-open Awa order (metadata.order = pending id). Soft-fails
- * if the search API is unavailable (logs + optional reception digest).
- */
-export async function reconcileAwaitingOmPayments(log: any): Promise<number> {
-  if (!isOmEnabled()) return 0;
-
-  const candidates = await repo.awaitingOmPaymentCandidates();
-  if (candidates.length === 0) return 0;
-
-  const byId = new Map(candidates.map((c) => [c.id, c]));
-  const to = new Date();
-  const from = new Date(to.getTime() - 24 * 3_600_000);
-
-  let txs: OmTransaction[];
-  try {
-    txs = await searchSuccessfulTransactions(from, to);
-  } catch (err) {
-    log.warn({ err }, "OM reconcile: transaction search failed — skipping this tick");
-    // Occasional digest so lost payments don't stay invisible forever.
-    if (shouldNotifyOmOnce("om_search_fail_digest")) {
-      notifyReception(
-        "⚠️ OM — recherche transactions indisponible",
-        `${candidates.length} commande(s) OM/Max It en attente (< 24h) et le search API a échoué. ` +
-          `Vérifier le portail Sonatel / réessayer plus tard. Les callbacks restent la voie principale.`,
-      );
-    }
-    return 0;
-  }
-
-  let n = 0;
-  for (const tx of txs) {
-    const orderId = tx.metadata?.order != null ? String(tx.metadata.order) : "";
-    if (!orderId || !byId.has(orderId)) continue;
-    const cand = byId.get(orderId)!;
-    const match = transactionMatchesPending(tx, {
-      amountXof: cand.amount_xof,
-      merchantCode: config.OM_MERCHANT_CODE,
-      orderId,
-    });
-    if (!match.ok) continue;
-
-    const idemKey = `om:${tx.transactionId}`;
-    if (await repo.wasProcessed(idemKey)) continue;
-
-    log.info(
-      { orderId, transactionId: tx.transactionId },
-      "OM reconcile: matching SUCCESS transaction for awaiting order",
-    );
-    try {
-      await processPayment(
-        orderId,
-        { payerPhone: tx.customerId ? String(tx.customerId).replace(/\D/g, "") : null },
-        log,
-      );
-      await repo.markProcessed(idemKey, "orange_money_reconcile");
-      n++;
-      byId.delete(orderId); // one payment per order
-    } catch (err) {
-      log.error({ err, orderId, transactionId: tx.transactionId }, "OM reconcile fulfill failed");
-    }
-  }
-  return n;
 }
 
 function redactHeaders(h: Record<string, unknown>): Record<string, unknown> {
