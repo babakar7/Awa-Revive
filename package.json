@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "simulate:wave": "tsx scripts/simulate-wave-webhook.ts",
+    "om:create-link": "tsx scripts/create-om-link.ts",
     "refund:done": "tsx scripts/mark-refunded.ts",
     "summary": "tsx scripts/daily-summary.ts",
     "email:test": "tsx scripts/test-email.ts",
