@@ -1,9 +1,10 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — **hotfix re-spam refund**
-> (`977c45f` : backfill `refund_notified_at` — Syndel/Linsey) ; LOT 1+2
-> robustesse paiement/boucle ; poller OM abandonné ; Pack Découverte ; B2 no-go.
+> Dernière mise à jour : **13 juillet 2026** — lot **exactitude & fermeture**
+> (reçus/CA multi-rails, nudge expiration honnête, remboursement d'annulation
+> enregistré, `/healthz` relié à Postgres) ; sécurisation admin explicitement
+> reportée. LOT 1+2 robustesse paiement/boucle ; poller OM abandonné.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
@@ -13,8 +14,9 @@
 
 **Awa** est un agent IA sur WhatsApp qui répond aux clients du studio
 fitness/bien-être **Revive** (Dakar) et réserve leurs cours dans **Wix
-Bookings**, avec paiement préalable via **Wave** (mobile money) ou via leur
-**abonnement** Wix. Stack : Node 20 / TypeScript / Fastify / Postgres /
+Bookings**, avec paiement préalable via **Wave**, **Orange Money / Max It**
+(mobile money) ou via leur **abonnement** Wix. Stack : Node 20 / TypeScript /
+Fastify / Postgres /
 `@anthropic-ai/sdk` (modèle `claude-sonnet-5`, effort low, prompt caching).
 
 **Invariant central : aucune réservation n'est créée dans Wix avant qu'un
@@ -29,8 +31,8 @@ côté serveur.
 Production : `https://resabot-production.up.railway.app` (Railway, service +
 Postgres), déployée depuis GitHub (`babakar7/Awa-Revive`, push sur main =
 déploiement). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
-phone_number_id 1175926012276896). Tests : ~274 unitaires (`npm test`, rapides,
-sans réseau) + **30 d'intégration** sur les chemins de paiement Wave + OM
+phone_number_id 1175926012276896). Tests : ~278 unitaires (`npm test`, rapides,
+sans réseau) + **31 d'intégration** sur les chemins de paiement Wave + OM et la santé DB
 (`npm run test:integration`, Postgres jetable via Docker, APIs externes
 mockées) — exécutés en CI GitHub Actions à chaque push.
 
@@ -45,7 +47,7 @@ Flux validés en conditions réelles (argent réel / site Wix réel) :
 | Rattachement contact CRM par téléphone | ✅ | e164 unique, tiebreak prénom si doublons, sinon null (prudence) |
 | Client non relié → demande d'email en chat + email réception | ✅ | one-shot par client ; le client répond DANS le chat (jamais "envoie à la réception") |
 | Abonnements : détection auto + résa sans paiement | ✅ 05-06/07 | voir §4 — Benefit Programs, PAS le checkout eCommerce |
-| Annulation par Awa (règle 16h) | ✅ 06/07 | abonnement → re-crédit auto ; Wave → client contacte la réception pour remboursement |
+| Annulation par Awa (règle 16h) | ✅ 06/07 | abonnement → re-crédit auto ; paiement Awa → remboursement enregistré sous 24h, réception prévenue |
 | Handoffs (« je peux vous appeler ? », plaintes…) | ✅ | numéro réception + email auto à support@revive.sn |
 | Notifications réception (email Brevo + WhatsApp) | ✅ | dual-channel non-bloquant, voir §4.6 |
 | Annulation côté réception (dashboard Wix) | ✅ | sweep 5 min = synchro **silencieuse** ; Wix notifie le client lui-même |
@@ -93,8 +95,8 @@ src/
                       idempotence marquée APRÈS traitement (échec = retry Wave rejouable) ;
                       reconcileStuckBookings() : rattrape les PAID jamais réservés (crash) — voir §4.14
 scripts/              simulate-wave-webhook, daily-summary, mark-refunded (refund:done), test-email
-test/                 ~274 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
-test/integration/     30 tests d'intégration (15 Wave + 15 OM/Max It) : Postgres jetable (docker run,
+test/                 ~278 tests unitaires purs (signatures, state machine, langue…) — pas de DB/réseau
+test/integration/     31 tests d'intégration (15 Wave + 15 OM/Max It + 1 healthz) : Postgres jetable (docker run,
                       globalSetup maison — PAS testcontainers, incompatible Node 20.17), mock fetch
                       Wix/Wave/OM/Meta/Brevo qui THROW sur tout appel inattendu — voir §4.12 / §4.15
 ```
@@ -155,9 +157,10 @@ test/integration/     30 tests d'intégration (15 Wave + 15 OM/Max It) : Postgre
 8. **Annulation par Awa (06/07)** : outil `cancel_booking`, uniquement les
    résas prises via Awa, ≥ 16h avant le cours (recalculé côté serveur à la
    consultation ET à l'exécution — le modèle ne peut pas contourner).
-   Abonnement → revert automatique du crédit ; Wave → `REFUND_NEEDED` + le
-   client doit CONTACTER LA RÉCEPTION pour le remboursement (Awa ne promet ni
-   rappel ni délai) + email réception en parallèle. < 16h → refus poli, sans
+   Abonnement → revert automatique du crédit ; paiement Awa (Wave/OM/Max It) →
+   `REFUND_NEEDED`, remboursement enregistré pour traitement sous 24h +
+   réception prévenue en parallèle (le client ne répète pas sa demande).
+   < 16h → refus poli, sans
    JAMAIS suggérer d'exemples d'excuses valables (consigne explicite de
    Babakar). Le report et les annulations partielles de groupe = handoff.
 9. **Emojis** : teinte de peau medium-dark (🏾) partout — codé en dur dans les
@@ -1173,6 +1176,23 @@ test/integration/     30 tests d'intégration (15 Wave + 15 OM/Max It) : Postgre
 
 ## 5. Chronologie condensée
 
+- **13/07 — Lot « exactitude & fermeture » (revue externe, admin reporté).**
+  Reçus : `paidVia` vient désormais de `payment_method` pour Wave, Orange Money,
+  Max It et abonnement (helper partagé également par les liens/outils). CA admin :
+  tous les rails payants + commandes café, abonnements de cours exclus. Relance
+  lien expiré : ne prétend plus « rien débité » ; elle distingue absence de
+  confirmation et paiement tout juste effectué (FR/EN/WO). Annulation payée via
+  Awa : le remboursement est enregistré et traité sous 24h, sans demander au
+  client de recontacter la réception ; le cas `studio:` reste inchangé. `/healthz`
+  fait un `SELECT 1` borné à 2 s et renvoie 503 si Postgres ne répond pas.
+  Verdict des 10 findings : (1) admin fail-closed **reporté par Babakar** ;
+  (2) outbox durable **écartée** (dédup reprenable + drain Lot 2, résiduel backlog) ;
+  (3) expiration **corrigée côté message** ; (4) reçus **corrigés** ;
+  (5) menu vs liaison **choix produit écarté** ; (6) remboursement annulation
+  **corrigé** ; (7) images Wolof **écartées** ; (8) revenus **corrigés** ;
+  (9) admin mobile **écarté valeur/effort** ; (10) healthz **corrigé**, budget
+  global message **écarté** (timeouts/retries Anthropic Lot 2).
+
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
   réel E2E, persona Awa, business-info.md, groupes, full slots, cache prompt.
 - **04/07** : contact-matching CRM, abonnements v1 (eCommerce — ne marchait
@@ -1529,7 +1549,8 @@ test/integration/     30 tests d'intégration (15 Wave + 15 OM/Max It) : Postgre
   zéro dépendance. `refund:done` conservé en secours CLI.
 
 **Backlog Phase 2** (voir `PHASE2.md`) — tête de liste suggérée :
-remboursements automatiques Wave/OM, rappels de séance (templates Meta),
+remboursements automatiques Wave/OM, notification client quand `refund:done`
+clôture réellement un remboursement, rappels de séance (templates Meta),
 stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
 élargi, vente d'abonnements, report, transcription : déjà en prod ou Phase 1+.)
 

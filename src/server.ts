@@ -3,6 +3,28 @@ import { registerWhatsAppWebhook } from "./webhooks/whatsapp.js";
 import { registerWaveWebhook } from "./webhooks/wave.js";
 import { registerOrangeMoneyWebhook } from "./webhooks/orangeMoney.js";
 import { registerAdmin } from "./admin/routes.js";
+import { pool } from "./db/index.js";
+
+const HEALTHCHECK_TIMEOUT_MS = 2_000;
+
+/** Readiness check: the process is useful only while Postgres answers. */
+export async function checkDatabaseHealth(timeoutMs = HEALTHCHECK_TIMEOUT_MS): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("database healthcheck timed out")), timeoutMs);
+    });
+    await Promise.race([
+      pool.query("select 1"),
+      timeout,
+    ]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export function buildServer() {
   const app = Fastify({ logger: true, trustProxy: true });
@@ -34,7 +56,10 @@ export function buildServer() {
     },
   );
 
-  app.get("/healthz", async () => ({ ok: true }));
+  app.get("/healthz", async (_req, reply) => {
+    const ok = await checkDatabaseHealth();
+    return reply.code(ok ? 200 : 503).send({ ok });
+  });
 
   registerWhatsAppWebhook(app);
   registerWaveWebhook(app);
