@@ -96,7 +96,7 @@ const REVIEW_TOOL: Anthropic.Tool = {
 
 const REVIEW_SYSTEM = `You review ended WhatsApp conversations between clients and Awa, the booking
 assistant of the Revive studio (Dakar). Awa books classes (paid via Wave or a membership), sells
-memberships, takes café orders, cancels/reschedules, answers studio questions, links accounts by
+memberships, takes bar orders, cancels/reschedules, answers studio questions, links accounts by
 email code, and hands off to human reception when she can't help.
 
 The conversation went silent: classify HOW it ended for the client, from the transcript alone.

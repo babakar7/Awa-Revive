@@ -473,7 +473,7 @@ export async function countUpcomingBooked(clientId: string): Promise<number> {
 /**
  * Recent paid items eligible for an on-demand receipt image (server-sourced
  * amounts only). Includes Wave class bookings (BOOKED, amount > 0), activated
- * plan orders, and paid café orders — last 90 days, max 10 each type.
+ * plan orders, and paid bar orders — last 90 days, max 10 each type.
  */
 export type ReceiptCandidate = {
   kind: "booking" | "plan" | "cafe";
@@ -541,7 +541,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
     });
   }
   for (const c of cafes.rows) {
-    let cafeLabel = "Commande café";
+    let cafeLabel = "Commande bar";
     try {
       const items = Array.isArray(c.extras_json) ? c.extras_json : [];
       const names = items
@@ -549,7 +549,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
           x?.name ? `${x.qty && x.qty > 1 ? `${x.qty}× ` : ""}${x.name}` : null,
         )
         .filter(Boolean);
-      if (names.length) cafeLabel = `Café — ${names.join(", ")}`;
+      if (names.length) cafeLabel = `Bar — ${names.join(", ")}`;
     } catch {
       /* keep default */
     }
@@ -570,7 +570,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
 
 /**
  * The client's most recently CREATED upcoming confirmed booking — the class a
- * post-booking café order should attach to when the model doesn't pass an
+ * post-booking bar order should attach to when the model doesn't pass an
  * explicit booking_id (the Wave flow books server-side in the webhook, so the
  * model never sees that id; it just knows "the class they just paid for").
  */
@@ -777,7 +777,7 @@ export async function activeAwaitingPlanOrder(clientId: string): Promise<PlanOrd
   return res.rows[0] ?? null;
 }
 
-// ---------- café-only orders (menu order alongside a membership booking) ----------
+// ---------- bar-only orders (menu order alongside a membership booking) ----------
 
 export interface CafeOrder {
   id: string;
@@ -858,7 +858,7 @@ export async function markCafeOrderPaid(id: string): Promise<CafeOrder | null> {
   return transitionCafeOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED"]);
 }
 
-/** The client's live unpaid café link, for the per-message dynamic context. */
+/** The client's live unpaid bar link, for the per-message dynamic context. */
 export async function activeAwaitingCafeOrder(clientId: string): Promise<CafeOrder | null> {
   const res = await pool.query(
     `select * from pending_cafe_orders
@@ -874,7 +874,7 @@ export async function findCafeOrderById(id: string): Promise<CafeOrder | null> {
   return res.rows[0] ?? null;
 }
 
-/** One active café link per client — expire any previous one. */
+/** One active bar link per client — expire any previous one. */
 export async function expireActiveCafeOrders(clientId: string): Promise<void> {
   await pool.query(
     `update pending_cafe_orders set status = 'EXPIRED', updated_at = now()
@@ -883,7 +883,7 @@ export async function expireActiveCafeOrders(clientId: string): Promise<void> {
   );
 }
 
-/** TTL sweep — café links past expiry → EXPIRED. */
+/** TTL sweep — bar links past expiry → EXPIRED. */
 export async function expireStaleCafeOrders(): Promise<number> {
   const res = await pool.query(
     `update pending_cafe_orders set status = 'EXPIRED', updated_at = now()

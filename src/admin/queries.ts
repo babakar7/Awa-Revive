@@ -84,7 +84,7 @@ export async function listBookings(status?: string, limit = 100): Promise<any[]>
 }
 
 /**
- * Commandes café payées, rattachées à une résa. "today" = cours du jour
+ * Commandes bar payées, rattachées à une résa. "today" = cours du jour
  * (c'est le moment où la commande doit être préparée), "upcoming" = cours à
  * venir. Dakar = UTC year-round, so current_date is the local business day.
  */

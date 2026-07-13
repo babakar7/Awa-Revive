@@ -101,7 +101,7 @@ function layout(title: string, active: string, body: string): string {
     ["/admin", "Vue d'ensemble"],
     ["/admin/conversations", "Conversations"],
     ["/admin/bookings", "Réservations"],
-    ["/admin/orders", "Commandes ☕"],
+    ["/admin/orders", "Bar ☕"],
     ["/admin/handoffs", "Handoffs"],
     ["/admin/reviews", "À reprendre 🔁"],
     ["/admin/crm", "CRM 🗂"],
@@ -320,7 +320,7 @@ ${thread || `<p class="muted">Aucun message.</p>`}`;
           .map((b) => {
             const extras =
               b.extras_amount_xof > 0
-                ? `<div class="muted">+ café : ${fmtFcfa(b.extras_amount_xof)}</div>`
+                ? `<div class="muted">+ bar : ${fmtFcfa(b.extras_amount_xof)}</div>`
                 : "";
             return `<tr>
 <td>${fmtDate(b.created_at)}</td>
@@ -357,7 +357,7 @@ ${thread || `<p class="muted">Aucun message.</p>`}`;
         reply.type("text/html").send(layout("Réservations", "/admin/bookings", body));
       });
 
-      // ---------- Commandes café ----------
+      // ---------- Commandes bar ----------
       admin.get("/orders", async (_req, reply) => {
         const { today, upcoming } = await q.listCafeOrders();
 
@@ -393,14 +393,14 @@ ${thread || `<p class="muted">Aucun message.</p>`}`;
 <h2>☕ Commandes du jour ${today.length ? `(${today.length})` : ""}</h2>
 <div class="stat-grid">
 <div class="stat"><span class="muted">Commandes aujourd'hui</span><b>${today.length}</b></div>
-<div class="stat"><span class="muted">Total café du jour</span><b>${fmtFcfa(cafeTotal)}</b></div>
+<div class="stat"><span class="muted">Total bar du jour</span><b>${fmtFcfa(cafeTotal)}</b></div>
 </div>
 ${prepList ? `<div class="card" style="margin-top:.8rem">À préparer : ${prepList}</div>` : ""}
 <div class="card" style="margin-top:.8rem">
 ${
   today.length
     ? `<table><tr><th>Cours</th><th>Client</th><th>Commande</th><th>Montant</th></tr>${today.map(orderRow).join("")}</table>`
-    : `<span class="muted">Aucune commande café pour aujourd'hui.</span>`
+    : `<span class="muted">Aucune commande bar pour aujourd'hui.</span>`
 }
 </div>
 
@@ -413,7 +413,7 @@ ${
 }
 </div>
 <p class="muted">Seules les commandes payées (résa confirmée) apparaissent ici.</p>`;
-        reply.type("text/html").send(layout("Commandes café", "/admin/orders", body));
+        reply.type("text/html").send(layout("Commandes bar", "/admin/orders", body));
       });
 
       // ---------- Handoffs ----------

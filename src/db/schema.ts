@@ -48,7 +48,7 @@ alter table pending_bookings
 alter table pending_bookings
   add column if not exists benefit_transaction_id text;
 
--- Café order bundled into the booking payment. extras_json is the
+-- Bar order bundled into the booking payment. extras_json is the
 -- server-resolved snapshot (names + unit prices frozen at order time);
 -- amount_xof stays the GRAND total (class + extras).
 alter table pending_bookings
@@ -152,11 +152,11 @@ create index if not exists idx_plan_orders_client_status
 alter table pending_plan_orders
   add column if not exists starts_at timestamptz;
 
--- Café-only Wave orders: a menu order attached to a booking the client paid
--- with their abonnement (that flow has no payment link, so the café can't ride
+-- Bar-only Wave orders: a menu order attached to a booking the client paid
+-- with their abonnement (that flow has no payment link, so the bar can't ride
 -- along — this is its own small Wave link). No Wix booking is ever created
 -- here; on payment we only notify reception to prepare it. Prices come from
--- cafe-menu.md server-side, exactly like the bundled café path.
+-- cafe-menu.md server-side, exactly like the bundled bar path.
 -- Statuts : DRAFT → AWAITING_PAYMENT → PAID ; AWAITING_PAYMENT → EXPIRED → PAID.
 create table if not exists pending_cafe_orders (
   id uuid primary key default gen_random_uuid(),

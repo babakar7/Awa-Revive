@@ -86,13 +86,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "create_payment_link",
     description:
-      "Create a Wave payment link for a specific class slot (the CLASS only — never the café). Re-verifies the " +
+      "Create a Wave payment link for a specific class slot (the CLASS only — never the bar). Re-verifies the " +
       "slot is still open, cancels any previous unpaid link for this client, and returns the payment URL, amount " +
       "and expiry to relay to the client. Supports group bookings: set participants > 1 to book several spots " +
       "under the same name with ONE payment link for the total (price × participants). Call this as soon as the " +
-      "client clearly chose a slot and you know their first name — do NOT ask about the menu first. The café " +
+      "client clearly chose a slot and you know their first name — do NOT ask about the menu first. The bar " +
       "menu is offered automatically AFTER the booking is confirmed (its own separate link via " +
-      "create_cafe_payment_link); nothing café-related goes on this link.",
+      "create_cafe_payment_link); nothing bar-related goes on this link.",
     input_schema: {
       type: "object",
       properties: {
@@ -221,10 +221,10 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "create_cafe_payment_link",
     description:
       "Create a Wave payment link for a MENU order attached to a class the client has ALREADY booked (paid by " +
-      "Wave or by abonnement — the café always rides on its own separate small link, it is never bundled into " +
+      "Wave or by abonnement — the bar always rides on its own separate small link, it is never bundled into " +
       "the class link). Use it whenever the client wants something from the menu once their class is confirmed: " +
       "the studio automatically offers the menu right after every booking, and this tool turns their order into a " +
-      "café-only link. Leave linked_booking_id empty to attach to the class they just booked (the default), or " +
+      "bar-only link. Leave linked_booking_id empty to attach to the class they just booked (the default), or " +
       "pass a specific booking_id from get_my_bookings / book_with_membership if the client has several upcoming " +
       "bookings and you must disambiguate. The server prices everything from the menu file and returns the link + " +
       "breakdown. Also works with NO class booking at all when the client explicitly asks to order from the menu " +
@@ -236,7 +236,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         linked_booking_id: {
           type: "string",
           description:
-            "Optional booking_id of the confirmed class this café order accompanies (from get_my_bookings or " +
+            "Optional booking_id of the confirmed class this bar order accompanies (from get_my_bookings or " +
             "book_with_membership). Omit to use the client's most recent upcoming booking.",
         },
         extras: {
@@ -390,7 +390,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "send_receipt",
     description:
       "Send the client a studio-branded payment receipt IMAGE for a recent Wave payment (class, " +
-      "abonnement, or café). Call this when they ask for a reçu / receipt / justificatif de paiement. " +
+      "abonnement, or bar). Call this when they ask for a reçu / receipt / justificatif de paiement. " +
       "Amounts come from the server only. If they ask for a formal company invoice (facture " +
       "officielle / entreprise / SIRET), use handoff_to_human instead — this tool is not a legal invoice. " +
       "Optional receipt_id to pick among several recent payments; omit to auto-send the single latest " +
@@ -700,7 +700,7 @@ export async function executeTool(
       await repo.updateClientName(client.id, clientName);
 
       // 5. DRAFT booking → Wave session → AWAITING_PAYMENT. Class only — the
-      //    café is never bundled here; it gets its own link after the booking
+      //    bar is never bundled here; it gets its own link after the booking
       //    is confirmed (create_cafe_payment_link).
       const totalXof = service.priceXof * participants;
       const draft = await repo.createDraftBooking({
@@ -744,14 +744,14 @@ export async function executeTool(
         slot_start_dakar: fmtDakar(fresh.startDate),
         note:
           "Relay the link to the client (class only). Spot(s) confirmed only once paid; confirmation arrives " +
-          "automatically on WhatsApp, and the café menu is offered right after that — do NOT bring up the menu now.",
+          "automatically on WhatsApp, and the bar menu is offered right after that — do NOT bring up the menu now.",
       });
     }
 
     case "create_cafe_payment_link": {
       const linkedBookingId = String(input.linked_booking_id ?? "").trim();
 
-      // The café preferably rides on one of THIS client's own confirmed,
+      // The bar preferably rides on one of THIS client's own confirmed,
       // still-upcoming bookings (Wave- OR membership-paid). An explicit id is
       // checked for ownership (same stance as cancel_booking); with no id we
       // default to the class they most recently booked — the Wave flow books
@@ -785,11 +785,11 @@ export async function executeTool(
         });
       }
       if (resolved.totalXof <= 0) {
-        return JSON.stringify({ error: "empty_order", message: "The café order is empty." });
+        return JSON.stringify({ error: "empty_order", message: "The bar order is empty." });
       }
       const orderNote = String(input.order_note ?? "").slice(0, 200).trim() || null;
 
-      // One active café link per client at a time.
+      // One active bar link per client at a time.
       await repo.expireActiveCafeOrders(client.id);
       const draft = await repo.createDraftCafeOrder({
         clientId: client.id,
@@ -825,10 +825,10 @@ export async function executeTool(
         slot_start_dakar: booking ? fmtDakar(String(booking.slot_start)) : undefined,
         standalone_order: booking ? undefined : true,
         note: booking
-          ? "Relay the link — this covers ONLY the café order (the class itself is already booked and paid, " +
+          ? "Relay the link — this covers ONLY the bar order (the class itself is already booked and paid, " +
             "nothing more to pay for it). State the items and total. Ready after the class unless the note says " +
             "otherwise. Confirmation arrives automatically on WhatsApp once paid."
-          : "Relay the link — standalone café order, no class attached. State the items and total, and say the " +
+          : "Relay the link — standalone bar order, no class attached. State the items and total, and say the " +
             "order is picked up at the counter (ready as soon as possible unless the note says otherwise). " +
             "Confirmation arrives automatically on WhatsApp once paid.",
       });
@@ -1155,7 +1155,7 @@ export async function executeTool(
             "Confirm to the client with class, date/time, how many spots and that it used their plan (mention remaining_sessions), " +
             "and remind them cancellation is free up to 16h before the class (after that the session is due) — no payment needed. " +
             (tip ? `Also include this pre-class tip VERBATIM: ${tip} ` : "") +
-            "Do NOT mention or propose the café menu in your confirmation: the system automatically shows the " +
+            "Do NOT mention or propose the bar menu in your confirmation: the system automatically shows the " +
             "menu list right after your message. When the client then picks an item, use create_cafe_payment_link " +
             "with this booking_id.",
         });
@@ -1420,7 +1420,7 @@ export async function executeTool(
           `  Cours : ${booking.service_name} — ${fmtDakar(String(booking.slot_start))}\n` +
           `  Montant : ${booking.amount_xof} FCFA (${booking.participants} place(s))\n` +
           (booking.extras_amount_xof > 0
-            ? `  Dont commande café : ${booking.extras_amount_xof} FCFA (${formatExtrasOneLine(
+            ? `  Dont commande bar : ${booking.extras_amount_xof} FCFA (${formatExtrasOneLine(
                 extrasFromJson(booking.extras_json),
               )}) — vérifier qu'elle n'a pas déjà été servie.\n`
             : "") +
@@ -1438,7 +1438,7 @@ export async function executeTool(
         amount_fcfa: booking.amount_xof,
         cafe_order_refund_note:
           booking.extras_amount_xof > 0
-            ? `The refund total includes their café order (${booking.extras_amount_xof} FCFA) — mention it.`
+            ? `The refund total includes their bar order (${booking.extras_amount_xof} FCFA) — mention it.`
             : undefined,
         note:
           "Cancelled. Tell the client to CONTACT RECEPTION themselves (give this number) to arrange " +
@@ -1830,7 +1830,7 @@ export async function executeTool(
           sent: false,
           error: "no_recent_payments",
           message:
-            "No recent Wave payments found for this client (class, plan, or café in the last 90 days). " +
+            "No recent Wave payments found for this client (class, plan, or bar in the last 90 days). " +
             "Tell them politely you don't have a payment to print a receipt for; if they need a formal " +
             "invoice from the studio, use handoff_to_human. Do NOT invent amounts.",
         });

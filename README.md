@@ -110,18 +110,18 @@ PAID ──slot gone or Wix error──────────────► R
 - One active payment link per client — creating a new one expires the previous.
 - `event_id`s coming from the model are validated against a server-side cache of slots actually shown to that client (prompt-injection stance, SPEC §9). Prices always come from the Wix catalog, never from model output.
 
-## Café orders
+## Bar orders
 
-Awa can bundle a café order (smoothies, matcha, food) into a class booking: one Wave link covers class + café, the client confirmation lists the items, and reception is notified (email + WhatsApp) to prepare the order — by default ready after the class.
+Awa can bundle a bar order (smoothies, matcha, food) into a class booking: one Wave link covers class + bar, the client confirmation lists the items, and reception is notified (email + WhatsApp) to prepare the order — by default ready after the class.
 
-- **Menu source of truth: [cafe-menu.md](cafe-menu.md)** — owner-editable, parsed by the server at boot (restart/redeploy to apply). Item lines are `- ID | Name | price | description`; never change an existing ID (prices are always resolved server-side from this file, the model only passes ids — same anti-injection stance as slots). A broken file (duplicate id, bad price) fails the boot loudly; a missing file just disables café ordering.
-- v1 limitations: no bundling with membership bookings (no payment link) and no café-only orders — both are counter-only, Awa says so.
+- **Menu source of truth: [cafe-menu.md](cafe-menu.md)** — owner-editable, parsed by the server at boot (restart/redeploy to apply). Item lines are `- ID | Name | price | description`; never change an existing ID (prices are always resolved server-side from this file, the model only passes ids — same anti-injection stance as slots). A broken file (duplicate id, bad price) fails the boot loudly; a missing file just disables bar ordering.
+- v1 limitations: no bundling with membership bookings (no payment link) and no bar-only orders — both are counter-only, Awa says so.
 
 ## Operations
 
 ```bash
 npm run summary     # daily plain-text summary: bookings, REFUNDS NEEDED, handoffs, expired links
-npm test            # unit tests: signature verifiers, state machine, café menu, messages
+npm test            # unit tests: signature verifiers, state machine, bar menu, messages
 npm run test:integration   # payment-path integration tests — needs Docker running
                            # (throwaway Postgres container; Wix/Wave/Meta mocked, no real API touched)
 npm run build && npm start   # production

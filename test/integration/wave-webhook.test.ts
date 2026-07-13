@@ -103,7 +103,7 @@ describe("happy path", () => {
     expect(texts[0]).toContain("ta place est confirmée");
     expect(texts[0]).toContain("Pilates Reformer");
 
-    // Book-first / menu-after: right after the confirmation, the café menu is
+    // Book-first / menu-after: right after the confirmation, the bar menu is
     // offered as a native interactive list of the incontournables (not a text).
     const cafeOffer = await waitFor(
       async () => {
@@ -112,7 +112,7 @@ describe("happy path", () => {
           .find((c) => c.body?.to === client.wa_phone && c.body?.type === "interactive");
         return i ?? null;
       },
-      "café menu offer (interactive)",
+      "bar menu offer (interactive)",
     );
     expect(JSON.stringify(cafeOffer.body)).toContain("Jant Bi"); // a favourite row
 
@@ -129,7 +129,7 @@ describe("happy path", () => {
       `select count(*)::int as n from conversations where client_id = $1 and role = 'assistant'`,
       [client.id],
     );
-    expect(turns.rows[0].n).toBe(3); // confirmation + café menu offer + email ask
+    expect(turns.rows[0].n).toBe(3); // confirmation + bar menu offer + email ask
     const c = await pool.query(`select email_prompted_at from clients where id = $1`, [client.id]);
     expect(c.rows[0].email_prompted_at).not.toBeNull();
 

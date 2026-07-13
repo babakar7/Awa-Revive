@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * Café menu — owner-editable cafe-menu.md is the single source of truth.
+ * Bar menu — owner-editable cafe-menu.md is the single source of truth.
  * Same anti-injection stance as slot_cache: the model passes item ids and
  * quantities only; every price is resolved server-side from this file.
  * Loaded once at boot; restart/redeploy to pick up edits (like business-info).
@@ -75,7 +75,7 @@ function loadCafeMenu(): CafeMenu {
     return {
       items: new Map(),
       promptText:
-        "(cafe-menu.md not found — café ordering is disabled; if asked, say the café menu is unavailable right now)",
+        "(cafe-menu.md not found — bar ordering is disabled; if asked, say the bar menu is unavailable right now)",
     };
   }
 }

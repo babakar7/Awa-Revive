@@ -36,7 +36,7 @@ describe("renderReceiptImage", () => {
     const buf = renderReceiptImage({
       title: "Reçu de paiement",
       clientName: null,
-      itemLabel: "Café — Jant Bi",
+      itemLabel: "Bar — Jant Bi",
       amountXof: 3000,
       paymentRef: "abc",
       paidVia: "Wave",

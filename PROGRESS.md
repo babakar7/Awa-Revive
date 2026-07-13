@@ -1,11 +1,12 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026**. Compléments : `README.md` (setup,
+> Dernière mise à jour : **13 juillet 2026** (rebrand café → **bar** côté produit).
+> Compléments : `README.md` (setup,
 > archi détaillée), `PHASE2.md` (backlog priorisé), `WIX-WEBHOOK-PLAN.md`
 > (chantier EN VEILLE — ne pas implémenter), `business-info.md` (source de
-> vérité métier d'Awa, chargée au boot), `cafe-menu.md` (menu du café, source
-> de vérité des prix café, chargé au boot).
+> vérité métier d'Awa, chargée au boot), `cafe-menu.md` (menu du bar, source
+> de vérité des prix bar, chargé au boot).
 
 ## 1. Le projet en une minute
 
@@ -69,7 +70,7 @@ src/
     wave.ts           checkout session (+ Wave-Signature sortante, OBLIGATOIRE sur ce compte), verif webhook
     wix.ts            services (cache 10 min), dispos, contacts, bookings (create/confirm/decline/cancel),
                       Benefit Programs (findEligibleBenefit / redeem / revert) — voir §4
-    cafeMenu.ts       menu café : parse cafe-menu.md au boot (prix côté serveur uniquement),
+    cafeMenu.ts       menu du bar : parse cafe-menu.md au boot (prix côté serveur uniquement),
                       computeExtras (résolution ids+qty → lignes tarifées, rejet des ids inconnus)
     notify.ts         notifyReception() : email Brevo + WhatsApp réception, fire-and-forget
                       (retourne AVANT l'envoi) ; fallback template si fenêtre 24h fermée (131047)
@@ -185,21 +186,21 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     à récupérer. Clés dans `.env` (OM_SANDBOX_*). Reprendre ici quand le token
     passe ; architecture cible = clone du chemin Wave (webhook NOTIFICATION ou
     vérif de statut avant confirmation).
-13. **Menu café (10/07)** : commande café adossée à une résa, dans le MÊME lien
-    Wave (`amount_xof` = grand total cours + café). `cafe-menu.md` (éditable par
+13. **Menu du bar (10/07)** : commande bar adossée à une résa, dans le MÊME lien
+    Wave (`amount_xof` = grand total cours + bar). `cafe-menu.md` (éditable par
     le propriétaire : `- ID | Nom | prix | description`, IDs stables, lu AU BOOT
     comme business-info ; fichier invalide = boot en échec, fichier absent =
-    café désactivé proprement) est la source de vérité des prix — même posture
+    bar désactivé proprement) est la source de vérité des prix — même posture
     anti-injection que slot_cache : le modèle ne passe que des `item_id` + `qty`
     (param `extras` de create_payment_link, max 15 lignes, qty 1-10) et le
     serveur résout tout via `computeExtras` (id inconnu → rejet avec la liste
     des ids valides, pas de clamp silencieux). Stockage sur la ligne booking :
     `extras_json`, `extras_amount_xof`, `order_note` (timing, lait, allergies —
     défaut « prête après le cours »). Après paiement : notification réception
-    « ☕ Commande café payée » + détail dans la confirmation client (fr/en/wo) ;
+    « ☕ Commande bar payée » + détail dans la confirmation client (fr/en/wo) ;
     en cas de remboursement, la note réception précise que la commande ne doit
     PAS être préparée, et cancel_booking signale que le total remboursé inclut
-    le café. Règles prompt : pas de café sans résa ni sur résa par abonnement
+    le bar. Règles prompt : pas de bar sans résa ni sur résa par abonnement
     (pas de lien → comptoir), proposition UNE seule fois par résa, menu présenté
     progressivement (jamais en bloc), modification avant paiement = nouveau lien
     (l'ancien est annulé), après paiement → comptoir. `get_my_bookings` expose
@@ -251,7 +252,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     un alias court `choice_id` (sha256 tronqué, colonne `slot_cache.choice_key`)
     car les `event_id` dépassent la limite de 200 car. des ids de ligne WhatsApp ;
     `create_payment_link`/`book_with_membership` acceptent l'un ou l'autre. Flux
-    café sans va-et-vient : **1 clic = 1 article, jamais « combien ? »** ; les
+    bar sans va-et-vient : **1 clic = 1 article, jamais « combien ? »** ; les
     quantités passent par le texte libre (« mets-en 2 »). Le clic reste OPTIONNEL,
     le texte libre toujours accepté. `buildInteractivePayload` est pur et testé.
 17. **Fenêtres de dates pré-calculées (10/07)** — bug réel : Awa proposait « la
@@ -314,18 +315,18 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       sur les seules résas Awa).
     - **Menu aux abonnés** (nouveau tool `create_cafe_payment_link` + table
       `pending_cafe_orders`) : une résa par abonnement n'a pas de lien de
-      paiement, donc le café voyage désormais dans SON PROPRE petit lien Wave
-      (café seul). Awa propose le menu APRÈS book_with_membership (qui renvoie
-      maintenant `booking_id`), et si le client commande, crée le lien café —
+      paiement, donc le bar voyage désormais dans SON PROPRE petit lien Wave
+      (bar seul). Awa propose le menu APRÈS book_with_membership (qui renvoie
+      maintenant `booking_id`), et si le client commande, crée le lien bar —
       prix 100 % serveur via `computeExtras`, rattaché au booking par
       `linked_booking_id` (même contrôle de propriété que cancel_booking : résa
       du client, BOOKED, membership, à venir). AUCUNE création Wix : le webhook
-      Wave route booking → plan → café order ([wave.ts](src/webhooks/wave.ts)
-      `processCafePayment`), marque PAID, notifie la réception « ☕ commande café
+      Wave route booking → plan → bar order ([wave.ts](src/webhooks/wave.ts)
+      `processCafePayment`), marque PAID, notifie la réception « ☕ commande bar
       payée (résa abonnement) » et envoie la confirmation client
-      (`cafeConfirmationMessage`, fr/en/wo). TTL/expiration : un lien café actif
+      (`cafeConfirmationMessage`, fr/en/wo). TTL/expiration : un lien bar actif
       par client (`expireActiveCafeOrders`), sweep TTL dans le sweeper 60 s.
-      Toujours pas de café sans AUCUNE résa (comptoir).
+      Toujours pas de bar sans AUCUNE résa (comptoir).
     - **Rappel 16h abonnement** : les confirmations Wave l'affichaient déjà
       (`confirmationMessage`), pas les résas par abonnement (rédigées par le
       modèle). La note de succès de book_with_membership demande maintenant à
@@ -346,23 +347,23 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     d'habitude. Si le client a déjà nommé un cours/une heure, l'habitude est
     ignorée. 5 tests unitaires (106 au total).
 
-21. **Book-first, menu-after — le café n'est PLUS jamais dans le lien du cours (10/07)**.
+21. **Book-first, menu-after — le bar n'est PLUS jamais dans le lien du cours (10/07)**.
     Changement de fond après un bug observé en prod : Awa sautait parfois la
     proposition de menu (conflit de prompt « crée le lien tout de suite » vs
     « propose le menu avant le lien ») et bundlait un catalogue de catégories.
     Cause racine : la proposition n'était QU'UNE règle de prompt, non enforced,
     et elle se percutait avec la règle dure de création du lien. Nouveau modèle,
     unifié avec le flux abonnement : **on réserve/paie le cours d'abord, on
-    propose le café ensuite, en lien Wave SÉPARÉ.**
+    propose le bar ensuite, en lien Wave SÉPARÉ.**
     - `create_payment_link` = cours SEUL : params `extras`/`order_note` retirés,
-      bloc extras supprimé, le lien ne porte plus jamais de café
+      bloc extras supprimé, le lien ne porte plus jamais de bar
       ([tools.ts](src/agent/tools.ts)). Plus aucune tension avec la règle dure.
     - **Flux Wave** : après paiement confirmé, le webhook envoie la confirmation
       PUIS propose le menu automatiquement — present_options 2 boutons
       [Voir le menu 🥤 (cafe_after_booking_yes)] / [Non merci 🙏🏾 (…_no)]
       ([wave.ts](src/webhooks/wave.ts) `proposeCafeMenuAfterBooking`, copy fr/en/wo,
       non bloquant, tour loggé). Le tap revient dans le modèle, qui présente les
-      incontournables puis crée le lien café. Guard : sauté si la résa portait
+      incontournables puis crée le lien bar. Guard : sauté si la résa portait
       déjà des extras (legacy).
     - `create_cafe_payment_link` ouvert aux résas **Wave OU abonnement** (garde =
       résa du client, BOOKED, à venir — la contrainte `membership` a sauté).
@@ -372,13 +373,13 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       jamais ce booking_id.
     - **Flux abonnement inchangé** : Awa déclenche l'offre elle-même dans le tour
       (book_with_membership renvoie booking_id → menu → create_cafe_payment_link).
-    - Compromis assumé (validé produit) : la conversion café baisse (2ᵉ paiement
+    - Compromis assumé (validé produit) : la conversion bar baisse (2ᵉ paiement
       Wave) mais le chemin de réservation n'a plus aucune friction et le bug de
       skip disparaît par construction. Build + 106 tests OK.
-    - ⚠️ Reste : le lien café-seul en attente n'est PAS surfacé dans le contexte
+    - ⚠️ Reste : le lien bar-seul en attente n'est PAS surfacé dans le contexte
       dynamique (comme avant pour l'abonnement) — si le client demande « c'est
-      toujours valable ? » pour un lien café, Awa n'a pas l'info live. À ajouter
-      si le café devient très fréquent.
+      toujours valable ? » pour un lien bar, Awa n'a pas l'info live. À ajouter
+      si le bar devient très fréquent.
     - **Addendum (10/07 soir)** : test réel → dans le flux abonnement, le modèle
       posait ENCORE une question texte (« tu veux quelque chose du menu ? ») au
       lieu de montrer la liste, malgré le prompt (il imite ses vieilles tournures
@@ -387,7 +388,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       DEUX flux** : webhook Wave après la confirmation de paiement, et agent loop
       après un book_with_membership réussi ([index.ts](src/agent/index.ts) —
       flags `membershipBooked`/`cafeMenuShown`, envoi post-réponse, anti-doublon
-      si le modèle a déjà montré des items café). Copy partagée dans
+      si le modèle a déjà montré des items bar). Copy partagée dans
       [cafeOffer.ts](src/lib/cafeOffer.ts) (`sendCafeMenuOffer`, fr/en/wo). Le
       prompt et la note de book_with_membership disent maintenant au modèle de NE
       PAS proposer le menu lui-même.
@@ -449,7 +450,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     - 9 tests unitaires (118 au total). E2E à faire : demander « le planning »
       en réel et vérifier image + suivi (et le rendu des polices sur Railway).
 
-24. **Quatuor UX (11/07)** — images entrantes lisibles, café sans résa, dates
+24. **Quatuor UX (11/07)** — images entrantes lisibles, bar sans résa, dates
     explicites, reçu/facture.
     - **Awa lit les images** ([imageInput.ts](src/lib/imageInput.ts)) : un message
       `image` est téléchargé via l'API média Meta (réutilise
@@ -466,7 +467,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       « j'ai payé, regarde 📷 » ; Awa reconnaît la capture, explique que la
       confirmation est automatique, ne confirme JAMAIS une résa sur capture
       (seul le webhook signé compte — invariant paiement-d'abord inchangé).
-    - **Commande café SANS résa, sur demande explicite** (décision produit
+    - **Commande bar SANS résa, sur demande explicite** (décision produit
       Babakar 11/07) : `create_cafe_payment_link` sans résa à venir crée
       désormais une commande autonome (`linked_booking_id` null — la colonne
       était déjà nullable) au lieu de refuser ; retrait au comptoir, « prête
@@ -487,12 +488,12 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       montre au client son propre historique ; toute facture formelle vient de
       la réception).
     - 9 tests unitaires ajoutés (127 au total : parsing image + légende,
-      `imageTurnText`, confirmations café standalone fr/en/wo) ; intégration
+      `imageTurnText`, confirmations bar standalone fr/en/wo) ; intégration
       14/14 verte. E2E à faire : envoyer une vraie capture Wave à Awa, et une
-      commande café sans résa payée en réel.
+      commande bar sans résa payée en réel.
 
 25. **Quatuor UX bis (11/07)** — liste d'attente, annulation des résas studio,
-    coachs visibles, lien café dans le contexte.
+    coachs visibles, lien bar dans le contexte.
     - **Liste d'attente sur cours complet** ([waitlistSweep.ts](src/domain/waitlistSweep.ts),
       table `waitlist_entries`) : sur un créneau plein que le client veut quand
       même, Awa propose la liste d'attente (outils `join_waitlist` /
@@ -525,9 +526,9 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       champ `coach` dans check_availability, règle prompt : le nom du coach ne
       vient QUE de là (jamais inventé), coachs différents par créneau = le dire,
       « je veux le cours de X » = filtrer les slots par ce champ.
-    - **Lien café dans le contexte dynamique** (le ⚠️ de §4.21 soldé) :
+    - **Lien bar dans le contexte dynamique** (le ⚠️ de §4.21 soldé) :
       `activeAwaitingCafeOrder` injecté à chaque message (articles, total,
-      minutes restantes, lien, résa liée ou commande comptoir) + sweep TTL café
+      minutes restantes, lien, résa liée ou commande comptoir) + sweep TTL bar
       dans le lazy sweep de l'agent. « Mon lien smoothie est encore bon ? » a
       maintenant une réponse sûre.
     - 4 tests unitaires ajoutés (131 au total) ; intégration 14/14 verte.
@@ -841,7 +842,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       SAUTER l'invitation — one-shot pourtant consommé à l'injection.** Fix : le
       message est désormais envoyé PAR LE SERVEUR juste après la réponse d'Awa
       ([agent/index.ts](src/agent/index.ts)), même pattern « le serveur envoie,
-      jamais le modèle » que le café post-résa. Le flag `email_prompted_at`
+      jamais le modèle » que le bar post-résa. Le flag `email_prompted_at`
       n'est armé qu'APRÈS un envoi réussi (un `sendText` en échec ne brûle pas
       la chance unique). Le message vit dans [lib/linkAsk.ts](src/lib/linkAsk.ts)
       (`emailAskMessage`, FR/EN/WO), partagé avec la proposition post-paiement
@@ -1104,7 +1105,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
     - **#18 reçu image À LA DEMANDE** ([receiptImage.ts](src/lib/receiptImage.ts),
       outil `send_receipt`) : canvas même stack que le planning ; montants
       serveur (`recentReceiptCandidates` : BOOKED wave, plans PAID/ACTIVATED,
-      café PAID, 90 j). Multi-paiements → liste de choix. PAS d'auto-envoi
+      bar PAID, 90 j). Multi-paiements → liste de choix. PAS d'auto-envoi
       post-paiement. Facture officielle/entreprise → handoff inchangé.
     - **#9 waitlist template en SECOURS** : free-text d'abord ; sur 131047 +
       `WA_WAITLIST_TEMPLATE` → `sendTemplate` (2 vars, `toTemplateParam`) ;
@@ -1164,8 +1165,8 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   début du cours » (reason `class_started`, fr/en/wo) au lieu de « souci
   technique ». Reste : rembourser les 10 FCFA de Syndel (session
   cos-25xy8a9s81dc2, booking 3a3753e3-89b4-4342-9002-3bc89661e3fe).
-  Même jour : **dashboard admin `/admin`** (voir §6) et **menu café** — Awa
-  prend des commandes café dans le même lien Wave que la résa, prix depuis
+  Même jour : **dashboard admin `/admin`** (voir §6) et **menu du bar** — Awa
+  prend des commandes bar dans le même lien Wave que la résa, prix depuis
   `cafe-menu.md` côté serveur uniquement (voir §4.13).
 - **10/07 (après-midi)** : **revue de code complète + durcissement du chemin
   de paiement** (§4.14) — le plus grave : un crash pendant le traitement d'un
@@ -1191,7 +1192,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   activé** (repo `babakar7/Awa-Revive`, branche `main`) — voir §7.
   Même jour (soir) : **email réception basculé SMTP → Brevo** (Railway bloque le
   SMTP) + **2e canal WhatsApp réception** avec repli template hors fenêtre 24h
-  (§4.6) ; **messages interactifs cliquables** `present_options` + flux café
+  (§4.6) ; **messages interactifs cliquables** `present_options` + flux bar
   1 clic = 1 article (§4.16) ; **fix « semaine prochaine »** = fenêtres de dates
   pré-calculées côté serveur (§4.17). **Décision transcription vocale** : la
   clientèle écrit surtout en fr/en (wolof marginal) → OpenAI `gpt-4o-mini-transcribe`
@@ -1207,8 +1208,8 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   ajoutés (94 au total) ; intégration 14/14 verte.
 - **10/07 (nuit, suite)** : **get_my_bookings élargi** (résas comptoir/site via
   contactId Wix, dédup, lecture seule), **menu proposé aux abonnés** (lien Wave
-  café-seul `create_cafe_payment_link` + table `pending_cafe_orders`, route
-  webhook café, confirmation client), **rappel 16h ajouté aux résas abonnement**
+  bar-seul `create_cafe_payment_link` + table `pending_cafe_orders`, route
+  webhook bar, confirmation client), **rappel 16h ajouté aux résas abonnement**
   (§4.19). 7 tests unitaires ajoutés (101 au total) ; intégration 14/14 verte.
   ⚠️ La forme de la réponse extended-bookings (get_my_bookings élargi) reste à
   confirmer sur de vraies données Wix.
@@ -1221,7 +1222,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   30 min, repli texte). 12 tests ajoutés (118 au total).
 - **11/07** : **quatuor UX** (§4.24) — **Awa lit les images** (description par
   le modèle injectée `[image reçue]`, règle « capture ≠ preuve de paiement »),
-  **café sans résa** sur demande explicite (commande autonome, retrait
+  **bar sans résa** sur demande explicite (commande autonome, retrait
   comptoir), **dates explicites** (7 jours nommés + règle date littérale dans
   le contexte dynamique), **reçu/facture → handoff**. 9 tests ajoutés (127 au
   total) ; intégration 14/14 verte.
@@ -1229,7 +1230,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   cours complet (join/leave_waitlist, sweep 5 min, relance one-shot, pas de
   template = fenêtre 24h assumée), **annulation des résas studio** par Awa
   (id `studio:`, 16h, argent via réception), **coachs visibles** dans
-  check_availability (slot.resource.name, vérifié live), **lien café dans le
+  check_availability (slot.resource.name, vérifié live), **lien bar dans le
   contexte dynamique**. 4 tests ajoutés (131 au total) ; intégration 14/14
   verte.
 - **13/07** : **sept UX** (§4.37) — pages paiement wa.me, tips pré-cours par
@@ -1272,8 +1273,8 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   de doublon) ; y répondre → Awa enchaîne sur le renouvellement.
 - [ ] Re-test groupe : 5 places Fusion (le cap Wix est maintenant 8).
 - [ ] Test optionnel du refus < 16h (seul chemin annulation pas observé en réel).
-- [ ] Commande café adossée à une résa (extras dans le lien Wave) — flux
-  jamais encore validé E2E ; vérifier aussi l'email réception « commande café
+- [ ] Commande bar adossée à une résa (extras dans le lien Wave) — flux
+  jamais encore validé E2E ; vérifier aussi l'email réception « commande bar
   payée » et le détail dans la confirmation client.
 - [ ] Relance lien expiré : laisser expirer un lien de 10 FCFA sans payer →
   UNE relance ~1 min après le TTL, puis répondre « oui » et vérifier qu'Awa
@@ -1282,8 +1283,8 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   décrit ce qu'elle voit SANS confirmer la résa (la confirmation reste le
   webhook) ; envoyer une photo quelconque → réponse naturelle ; vérifier le
   repli poli sur une image illisible.
-- [ ] Café sans résa : demander un smoothie sans réserver de cours → lien Wave
-  café seul, confirmation « à récupérer au comptoir », email réception « sans
+- [ ] Bar sans résa : demander un smoothie sans réserver de cours → lien Wave
+  bar seul, confirmation « à récupérer au comptoir », email réception « sans
   réservation ».
 - [ ] `/admin/profile` (§34, jamais testé E2E) : éditer description/adresse/
   horaires → vérifier le reflet dans le profil WhatsApp Business réel (app ou
@@ -1299,7 +1300,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   « vérifier remboursement/re-crédit » + message client vers la réception.
 - [ ] Coach : « c'est qui le coach d'Aquabike ? » → nom réel depuis les
   créneaux (yves SAGNA attendu), jamais inventé.
-- [ ] Lien café en attente : créer un lien café, demander « il est encore
+- [ ] Lien bar en attente : créer un lien bar, demander « il est encore
   valable ? » → réponse ferme avec les minutes restantes.
 - [ ] Report en un geste : déplacer une résa abonnement (re-crédit + re-résa
   même tour) et une résa Wave (OK explicite avant annulation).
@@ -1311,7 +1312,7 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   (11/07, cas Marie §4.26)** : filtre corrigé (`contactDetails.contactId`),
   pagination ajoutée ; reste à voir une résa studio À VENIR s'afficher en réel.
 - [ ] Menu aux abonnés : réserver par abonnement puis commander un smoothie →
-  lien Wave café-seul, paiement, confirmation client + email réception «☕ résa
+  lien Wave bar-seul, paiement, confirmation client + email réception «☕ résa
   abonnement».
 - [ ] Résa en un tap : après ≥2 résas d'un même cours/jour/heure, un nouveau
   « je veux réserver » doit proposer le raccourci « comme d'habitude ? » ; sur

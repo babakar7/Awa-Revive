@@ -78,19 +78,19 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
   Wix notifie désormais lui-même, le polling 5 min (synchro silencieuse) +
   la re-vérification live de `get_my_bookings` suffisent.
 
-## Café (commande groupée à la réservation — ✅ FAIT juillet 2026)
+## Bar (commande groupée à la réservation — ✅ FAIT juillet 2026)
 
-> v1 livrée : Awa propose une fois, légèrement, d'ajouter une commande café à
+> v1 livrée : Awa propose une fois, légèrement, d'ajouter une commande bar à
 > la réservation ; la commande est fondue dans le même lien Wave ; menu éditable
 > dans `cafe-menu.md` (prix résolus côté serveur, jamais par l'IA) ; confirmation
 > client avec le détail + "prête après la séance" ; notification réception
 > (email + WhatsApp). Restes pour plus tard :
 
-- ~~🔧 **Café + abonnement**~~ → **FAIT (10/07/2026)** : après une résa par
-  abonnement, Awa propose le menu et crée un petit lien Wave café-seul
+- ~~🔧 **Bar + abonnement**~~ → **FAIT (10/07/2026)** : après une résa par
+  abonnement, Awa propose le menu et crée un petit lien Wave bar-seul
   (`create_cafe_payment_link`, table `pending_cafe_orders`) rattaché au booking ;
   paiement → réception notifiée + confirmation client. Aucune création Wix.
-- 🧪 **Commande café sans réservation** via Awa (aujourd'hui : comptoir).
+- 🧪 **Commande bar sans réservation** via Awa (aujourd'hui : comptoir).
 - 🧪 **Menu en photos** : envoyer les pages du menu en images (sendImage +
   hébergement des visuels) au lieu du texte progressif seul.
 

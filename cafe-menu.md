@@ -1,4 +1,4 @@
-# Revive — Menu du café (source de vérité pour Awa)
+# Revive — Menu du bar (source de vérité pour Awa)
 
 <!--
   Ce fichier est LU PAR LE SERVEUR : les prix facturés dans les liens Wave
@@ -69,7 +69,7 @@ du client et la noter dans la commande (order_note).
 - MATCHA_PISTACHE | Iced Matcha Pistache | 4000 | Matcha, vanille & crème de pistache. Notre chouchou.
 - MATCHA_MANGUE | Iced Matcha Mangue | 4000 | Matcha, vanille & mangue, fruité et frais.
 - MATCHA_MADD | Iced Matcha Madd | 4000 | Matcha & madd — la touche 100% sénégalaise. Local.
-- MATCHA_CAFE | Iced Matcha Café | 4000 | Matcha & espresso : le meilleur des deux mondes.
+- MATCHA_CAFE | Iced Matcha Bar | 4000 | Matcha & espresso : le meilleur des deux mondes.
 - SUPP_MATCHA_TAPIOCA | Supplément perles de tapioca | 500 | à ajouter à un matcha
 
 ## À MANGER — HEALTHY BITES

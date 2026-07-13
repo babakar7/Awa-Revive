@@ -12,7 +12,7 @@ import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
 export interface ReceiptData {
   title: string; // e.g. "Reçu de paiement"
   clientName: string | null;
-  /** Main line: class name, plan name, or café summary */
+  /** Main line: class name, plan name, or bar summary */
   itemLabel: string;
   /** Optional second line (slot datetime, etc.) */
   detailLine?: string | null;

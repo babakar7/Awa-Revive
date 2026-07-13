@@ -24,7 +24,7 @@ const SUPPORTED_MEDIA_TYPES: ImageMediaType[] = [
   "image/webp",
 ];
 
-const DESCRIBE_PROMPT = `Cette image a été envoyée par un client sur le WhatsApp d'un studio de fitness/bien-être à Dakar (réservations de cours, paiements Wave, menu café). Décris-la en français, de façon factuelle et compacte (2 à 6 phrases) :
+const DESCRIBE_PROMPT = `Cette image a été envoyée par un client sur le WhatsApp d'un studio de fitness/bien-être à Dakar (réservations de cours, paiements Wave, menu du bar). Décris-la en français, de façon factuelle et compacte (2 à 6 phrases) :
 - retranscris TOUT le texte visible important (montants, dates, heures, noms, numéros de transaction, destinataires) ;
 - si c'est une capture d'écran (paiement Wave, conversation, erreur), dis-le explicitement et détaille ce qu'elle montre ;
 - si c'est une photo (lieu, document, personne, objet), décris ce qu'on voit de pertinent.

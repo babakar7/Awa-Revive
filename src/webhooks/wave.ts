@@ -174,29 +174,29 @@ async function fulfillPaidBooking(bookingId: string, log: any): Promise<void> {
     await sendText(client.wa_phone, confirmation);
     await repo.addTurn(booking.client_id, "assistant", confirmation);
 
-    // Book-first, menu-after: now that the class is confirmed, offer the café
-    // menu as its own (separate) order. Skipped if a café was somehow already
+    // Book-first, menu-after: now that the class is confirmed, offer the bar
+    // menu as its own (separate) order. Skipped if a bar was somehow already
     // attached to this booking. Non-blocking — a proposal hiccup must never
     // break the confirmed booking.
     if (extras.length === 0) {
       await sendCafeMenuOffer({ waPhone: client.wa_phone, clientId: booking.client_id, lang, log });
     }
 
-    // Café order → tell the team to prepare it (email + WhatsApp reception).
+    // Bar order → tell the team to prepare it (email + WhatsApp reception).
     // Never let a notification problem break the rest of the flow.
     if (extras.length > 0) {
       try {
         notifyReception(
-          `☕ Commande café payée — ${booking.extras_amount_xof} FCFA`,
-          `Un client a payé une commande café avec sa réservation :\n` +
+          `☕ Commande bar payée — ${booking.extras_amount_xof} FCFA`,
+          `Un client a payé une commande bar avec sa réservation :\n` +
             `  Client : ${client?.name ?? "?"} (+${String(client.wa_phone).replace(/^\+/, "")})\n` +
             extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
             `\n  À servir : ${booking.order_note ?? "prête après le cours"}\n` +
             `  Cours : ${serviceLabel} — ${new Date(booking.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })}\n` +
-            `  Total café : ${booking.extras_amount_xof} FCFA (payé, inclus dans le paiement Wave)`,
+            `  Total bar : ${booking.extras_amount_xof} FCFA (payé, inclus dans le paiement Wave)`,
         );
       } catch (err) {
-        log.error({ err, bookingId: booking.id }, "Café order notification failed");
+        log.error({ err, bookingId: booking.id }, "Bar order notification failed");
       }
     }
 
@@ -308,8 +308,8 @@ async function processPlanPayment(order: any, log: any): Promise<void> {
 }
 
 /**
- * Café-only order paid via Wave (menu order alongside a membership booking —
- * that flow has no payment link, so the café got its own). No Wix booking to
+ * Bar-only order paid via Wave (menu order alongside a membership booking —
+ * that flow has no payment link, so the bar got its own). No Wix booking to
  * create: we only mark it paid, tell reception to prepare it, and confirm to
  * the client. Same payment-first stance — reception acts only after the
  * verified webhook.
@@ -317,7 +317,7 @@ async function processPlanPayment(order: any, log: any): Promise<void> {
 async function processCafePayment(order: any, log: any): Promise<void> {
   const paid = await repo.markCafeOrderPaid(order.id);
   if (!paid) {
-    log.info({ cafeOrderId: order.id, status: order.status }, "Café order not payable — skipping");
+    log.info({ cafeOrderId: order.id, status: order.status }, "Bar order not payable — skipping");
     return;
   }
 
@@ -333,19 +333,19 @@ async function processCafePayment(order: any, log: any): Promise<void> {
   try {
     notifyReception(
       standalone
-        ? `☕ Commande café payée (sans réservation) — ${order.amount_xof} FCFA`
-        : `☕ Commande café payée (résa existante) — ${order.amount_xof} FCFA`,
+        ? `☕ Commande bar payée (sans réservation) — ${order.amount_xof} FCFA`
+        : `☕ Commande bar payée (résa existante) — ${order.amount_xof} FCFA`,
       (standalone
-        ? `Un client a payé une commande café seule (aucun cours associé — retrait au comptoir) :\n`
-        : `Un client a payé une commande café qui accompagne une réservation existante :\n`) +
+        ? `Un client a payé une commande bar seule (aucun cours associé — retrait au comptoir) :\n`
+        : `Un client a payé une commande bar qui accompagne une réservation existante :\n`) +
         `  Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
         extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
         `\n  À servir : ${order.order_note ?? (standalone ? "dès que possible" : "prête après le cours")}\n` +
         (standalone ? "" : `  Cours associé : ${order.service_name ?? "?"} — ${slotLabel}\n`) +
-        `  Total café : ${order.amount_xof} FCFA (payé via Wave)`,
+        `  Total bar : ${order.amount_xof} FCFA (payé via Wave)`,
     );
   } catch (err) {
-    log.error({ err, cafeOrderId: order.id }, "Café order notification failed");
+    log.error({ err, cafeOrderId: order.id }, "Bar order notification failed");
   }
 
   const msg = cafeConfirmationMessage(lang, extras, order.order_note, order.service_name);
@@ -353,7 +353,7 @@ async function processCafePayment(order: any, log: any): Promise<void> {
     await sendText(client.wa_phone, msg);
     await repo.addTurn(order.client_id, "assistant", msg);
   } catch (err) {
-    log.error({ err, cafeOrderId: order.id }, "Failed to send café confirmation");
+    log.error({ err, cafeOrderId: order.id }, "Failed to send bar confirmation");
   }
 }
 
@@ -372,19 +372,19 @@ export function cafeConfirmationMessage(
   switch (lang) {
     case "en":
       return (
-        `✅ Payment received — your café order is confirmed!\n\n` +
+        `✅ Payment received — your bar order is confirmed!\n\n` +
         `☕ Your order:\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? defaultNote.en}\n\n` +
         `See you soon! 💪🏾`
       );
     case "wo":
       return (
-        `✅ Fey bi jot na — sa commande café dëgg na!\n\n` +
+        `✅ Fey bi jot na — sa commande bar dëgg na!\n\n` +
         `☕ Sa commande:\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? defaultNote.wo}\n\n` +
         `Ba beneen yoon! 💪🏾`
       );
     default:
       return (
-        `✅ Paiement reçu — ta commande café est confirmée !\n\n` +
+        `✅ Paiement reçu — ta commande bar est confirmée !\n\n` +
         `☕ Ta commande :\n${formatExtrasMultiline(extras)}\n→ ${orderNote ?? defaultNote.fr}\n\n` +
         `À très vite ! 💪🏾`
       );
@@ -529,7 +529,7 @@ async function markRefund(
       `  Cours : ${bookingRow?.service_name ?? "?"} — ${bookingRow ? new Date(bookingRow.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE }) : "?"}\n` +
       `  Montant : ${bookingRow?.amount_xof ?? "?"} FCFA\n` +
       (bookingRow && bookingRow.extras_amount_xof > 0
-        ? `  Dont commande café : ${bookingRow.extras_amount_xof} FCFA (incluse dans le montant ci-dessus — la commande ne doit PAS être préparée).\n`
+        ? `  Dont commande bar : ${bookingRow.extras_amount_xof} FCFA (incluse dans le montant ci-dessus — la commande ne doit PAS être préparée).\n`
         : "") +
       `  Session Wave : ${bookingRow?.wave_session_id ?? "?"}\n` +
       `  Booking id : ${bookingId}\n\n` +
@@ -575,7 +575,7 @@ export function confirmationMessage(
         `✅ Payment received — your spot is confirmed!\n\n` +
         `${serviceName}\n📅 ${formatSlot(slotStart, "en-GB")}\n📍 ${config.STUDIO_ADDRESS}\n\n` +
         (hasCafe
-          ? `☕ Your café order (already paid):\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "ready after your class"}\n\n`
+          ? `☕ Your bar order (already paid):\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "ready after your class"}\n\n`
           : "") +
         tipBlock +
         `ℹ️ Free cancellation up to 16 hours before class — after that, the session is due.\n\n` +
@@ -586,7 +586,7 @@ export function confirmationMessage(
         `✅ Fey bi jot na — sa palass dëgg na!\n\n` +
         `${serviceName}\n📅 ${formatSlot(slotStart, "fr-FR")}\n📍 ${config.STUDIO_ADDRESS}\n\n` +
         (hasCafe
-          ? `☕ Sa commande café (fey nga ko ba noppi):\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "dina pare ginnaaw sa cours"}\n\n`
+          ? `☕ Sa commande bar (fey nga ko ba noppi):\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "dina pare ginnaaw sa cours"}\n\n`
           : "") +
         tipBlock +
         `ℹ️ Man nga annuler ba 16 waxtu laata cours bi ; su weesoo loolu, séance bi dina jar.\n\n` +
@@ -597,7 +597,7 @@ export function confirmationMessage(
         `✅ Paiement reçu — ta place est confirmée !\n\n` +
         `${serviceName}\n📅 ${formatSlot(slotStart, "fr-FR")}\n📍 ${config.STUDIO_ADDRESS}\n\n` +
         (hasCafe
-          ? `☕ Ta commande café (déjà payée) :\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "prête après ton cours"}\n\n`
+          ? `☕ Ta commande bar (déjà payée) :\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "prête après ton cours"}\n\n`
           : "") +
         tipBlock +
         `ℹ️ Annulation gratuite jusqu'à 16h avant le cours ; passé ce délai, la séance est due.\n\n` +

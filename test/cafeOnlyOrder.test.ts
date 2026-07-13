@@ -7,11 +7,11 @@ const EXTRAS: ExtraLine[] = [
   { id: "MATCHA_VANILLE", name: "Iced Matcha Vanille", qty: 1, unitPriceXof: 3500, lineTotalXof: 3500 },
 ];
 
-describe("cafeConfirmationMessage (café-only order, membership booking)", () => {
+describe("cafeConfirmationMessage (bar-only order, membership booking)", () => {
   it.each([
-    ["fr", "ta commande café est confirmée", "prête après ton cours (Pilates Fusion)"],
-    ["en", "your café order is confirmed", "ready after your class (Pilates Fusion)"],
-    ["wo", "sa commande café dëgg na", "dina pare ginnaaw sa cours (Pilates Fusion)"],
+    ["fr", "ta commande bar est confirmée", "prête après ton cours (Pilates Fusion)"],
+    ["en", "your bar order is confirmed", "ready after your class (Pilates Fusion)"],
+    ["wo", "sa commande bar dëgg na", "dina pare ginnaaw sa cours (Pilates Fusion)"],
   ])("%s: confirms, lists items and states default timing with the class name", (lang, marker, note) => {
     const msg = cafeConfirmationMessage(lang, EXTRAS, null, "Pilates Fusion");
     expect(msg).toContain(marker);
