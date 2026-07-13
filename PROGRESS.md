@@ -1261,7 +1261,12 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   Puis **Orange Money / Max It** (§4.12) : extract fulfillment, client Sonatel,
   webhook + verify-by-lookup, 3 boutons de paiement, env Railway, paiements
   réels 100 F OK (OM + Max It), `om:create-link` + warm token. Plan :
-  `ORANGE-MONEY-PLAN.md`.
+  `ORANGE-MONEY-PLAN.md`. Puis **règle séance découverte** (business-info) :
+  à un NOUVEAU client qui demande une séance découverte/essai, Awa propose le
+  pack d'essai du catalogue (« Pack Découverte », vérifié live via list_plans +
+  covers_classes) au lieu d'une séance à la carte — constat prod 13/07, une
+  cliente découverte s'est vu vendre une à-la-carte 12 000 F sans mention du
+  pack.
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —

@@ -42,6 +42,25 @@ mémorisée. (Idem prix et créneaux : outils uniquement.)
   - Intense : si la coach donne son aval.
 
 
+## Séance découverte / essai (nouveaux clients)
+
+- Quand un client NOUVEAU (pas d'abonnement actif, pas d'historique connu chez
+  Revive) demande une « séance découverte », un « essai », ou dit vouloir
+  « tester » / « découvrir » un cours : ne lui vends PAS une séance à la carte.
+  L'offre prévue pour ça est le **pack d'essai du catalogue** (« Pack
+  Découverte » dans list_plans) — propose-le d'abord, avec son prix et sa durée
+  tels que renvoyés par list_plans.
+- Vérifie TOUJOURS via list_plans que ce pack existe encore et quels cours il
+  couvre (covers_classes). S'il n'existe plus, ou s'il ne couvre pas le cours
+  voulu, reviens simplement à la séance à la carte normale.
+- Déroulé : vendre le pack (create_plan_payment_link) → une fois le pack actif,
+  réserver le cours demandé avec book_with_membership (la séance se décompte du
+  pack).
+- Ce pack est un essai UNIQUE : jamais proposé en renouvellement ni à un client
+  qui l'a déjà eu (suis les flags du contexte). Un client qui insiste pour une
+  simple séance à la carte a bien sûr le droit — l'offre découverte se propose,
+  elle ne s'impose pas.
+
 ## À apporter / tenue
 
 - Cours aquatiques (Aquabike, Aquagym, Natation, Bébé Nageur) : maillot de bain ou lycra
