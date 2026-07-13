@@ -9,10 +9,33 @@ import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import { startOmTokenKeepAlive } from "./lib/orangeMoney.js";
+import { notifyReception } from "./lib/notify.js";
 import { buildServer } from "./server.js";
 
 async function main() {
   assertConfig();
+
+  // Last-resort safety nets (mono-instance: an unhandled error = full downtime).
+  // uncaughtException leaves the process in an undefined state → notify + let
+  // Railway restart us. unhandledRejection is usually a benign background send
+  // (a dropped `void sendText(...).catch`) → log loudly, do NOT take the bot down.
+  process.on("uncaughtException", (err) => {
+    console.error("FATAL uncaughtException:", err);
+    try {
+      notifyReception(
+        "⚠️ Crash technique (uncaughtException)",
+        `Awa a rencontré une erreur fatale et redémarre.\n${String(err?.stack ?? err).slice(0, 600)}`,
+      );
+    } catch {
+      /* notify must never itself throw here */
+    }
+    // Let the notification flush before Railway restarts us.
+    setTimeout(() => process.exit(1), 2000).unref();
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("unhandledRejection (logged, not fatal):", reason);
+  });
+
   await migrate();
 
   // Warm OM OAuth so the first client payment is not blocked by Sonatel token latency.

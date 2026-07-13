@@ -13,7 +13,13 @@ import { downloadWhatsAppMedia } from "./transcribe.js";
  * as a CLAIM, never as proof — only the signed Wave webhook confirms a payment.
  */
 
-const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
+// Timeout + retries so a hung describe-image call can't block the per-client
+// message queue (same reasoning as the agent loop's client).
+const anthropic = new Anthropic({
+  apiKey: config.ANTHROPIC_API_KEY,
+  timeout: 60_000,
+  maxRetries: 2,
+});
 
 type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 

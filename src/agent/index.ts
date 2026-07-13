@@ -11,7 +11,15 @@ import { SYSTEM_PROMPT, dynamicContext } from "./systemPrompt.js";
 import { capabilityMenuKind, isVagueOpener } from "../lib/capabilityMenu.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
 
-const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
+// Explicit timeout + retries: without them the SDK default is a ~10 min per-request
+// timeout, and since messages are serialized per client (see lib/serialize),
+// one hung Anthropic call would block every later message from that client for
+// minutes. 60s × 2 retries is plenty for `effort: low` replies.
+const anthropic = new Anthropic({
+  apiKey: config.ANTHROPIC_API_KEY,
+  timeout: 60_000,
+  maxRetries: 2,
+});
 
 const MAX_TOOL_ITERATIONS = 8;
 
