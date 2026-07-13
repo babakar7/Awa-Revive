@@ -188,6 +188,13 @@ export async function handleInboundText(args: {
   // so it retries on the next message until it actually lands.
   const unlinkedNeverAsked = shouldOfferLinking(memberships, client);
   const hasActivePaymentLink = !!(activeBooking || activePlanOrder || activeCafeOrder);
+  // First contact = Awa has never replied to this client before (the current
+  // inbound turn is already persisted at this point, so we look for a prior
+  // ASSISTANT turn, not an empty history). Drives the mandatory "I'm an AI
+  // assistant" self-introduction — see dynamicContext(): clients were being
+  // disappointed to learn only later that Awa is a bot, and on a "bonjour" the
+  // capability menu otherwise fires with no disclosure at all.
+  const isFirstContact = !history.some((t) => t.role === "assistant");
   // Tiered capability menu on vague openers (incl. returning clients), once per ~24h.
   const capabilityMenu = capabilityMenuKind({
     isVague: isVagueOpener(args.text),
@@ -220,6 +227,7 @@ export async function handleInboundText(args: {
         habit,
         upcomingBookingsCount,
         capabilityMenu,
+        firstContact: isFirstContact,
       }),
     },
   ];

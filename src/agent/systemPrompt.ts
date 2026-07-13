@@ -207,6 +207,8 @@ export function dynamicContext(args: {
    * "upcoming" | "onboarding" | null (none).
    */
   capabilityMenu?: "upcoming" | "onboarding" | null;
+  /** Awa has never replied to this client before — mandate the AI self-intro. */
+  firstContact?: boolean;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -414,6 +416,19 @@ export function dynamicContext(args: {
     lines.push(
       `capability_menu: none — do NOT send the vague-opener capability menus this turn ` +
         `(not a vague opener, already shown within ~24h, linking invite due, active payment link, or other guard).`,
+    );
+  }
+  if (args.firstContact) {
+    lines.push(
+      `FIRST CONTACT: Awa has never replied to this client before — this is the VERY first exchange. ` +
+        `Your reply this turn MUST make explicit, warmly and up front, that Awa is Revive's AUTOMATED AI assistant ` +
+        `(a bot, not a human) — clients get disappointed when they only realise it later, so never let a first ` +
+        `contact pass without this disclosure. ` +
+        (cap
+          ? `Because a capability menu is required this turn, do NOT send a separate text message: fold the introduction ` +
+            `into the present_options BODY instead — e.g. body ` +
+            `"Salut ! Moi c'est Awa, l'assistante IA de Revive 🤖 Que veux-tu faire ?" — keeping the mandated option ids unchanged.`
+          : `Open with the Persona self-introduction greeting ("Moi c'est Awa, l'assistante IA de Revive 🤖 …") before answering their request.`),
     );
   }
   return lines.join("\n");
