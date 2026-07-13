@@ -22,11 +22,24 @@ const anthropic = new Anthropic({
 });
 
 const MAX_TOOL_ITERATIONS = 8;
+const REPLY_MAX_TOKENS = 2048;
+// Retry budget when a reply is truncated (hit max_tokens) — big enough to fit
+// a full multi-slot answer so we never ship a cut-off message or payment link.
+const REPLY_MAX_TOKENS_RETRY = 4096;
 
 // Per-tool-turn cap when replaying past tool activity into the model's context
 // (see the history loop). Enough to carry a verification status or the key
 // ids of a result, without replaying a full class list byte for byte.
 const TOOL_REPLAY_MAXLEN = 700;
+
+/** Concatenate the text blocks of a model response into the reply string. */
+export function extractText(response: Anthropic.Message): string {
+  return response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .trim();
+}
 
 const FALLBACK_REPLY =
   "Désolé, j'ai un souci technique 🙏🏾 Réessaie dans un instant, ou contacte la réception : " +
@@ -292,6 +305,7 @@ export async function handleInboundText(args: {
   let membershipBooked = false;
   let cafeMenuShown = false;
 
+  let lastResponse: Anthropic.Message | null = null;
   try {
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
       // Meta drops the "typing…" bubble after ~25s; re-arm it at every model
@@ -299,19 +313,40 @@ export async function handleInboundText(args: {
       if (i > 0) void sendTypingIndicator(args.waMessageId);
       const response = await anthropic.messages.create({
         model: config.CLAUDE_MODEL,
-        max_tokens: 2048,
+        max_tokens: REPLY_MAX_TOKENS,
         output_config: { effort: "low" },
         system,
         tools: TOOL_DEFINITIONS,
         messages,
       });
+      lastResponse = response;
 
       if (response.stop_reason !== "tool_use") {
-        replyText = response.content
-          .filter((b): b is Anthropic.TextBlock => b.type === "text")
-          .map((b) => b.text)
-          .join("\n")
-          .trim();
+        replyText = extractText(response);
+        // Truncated reply (hit max_tokens): a half-written message — worse, a
+        // half-written payment link — must never reach the client. Retry once
+        // with a bigger budget and keep the fuller result.
+        if (response.stop_reason === "max_tokens") {
+          console.warn("Model reply hit max_tokens — retrying with a larger budget");
+          try {
+            const retry = await anthropic.messages.create({
+              model: config.CLAUDE_MODEL,
+              max_tokens: REPLY_MAX_TOKENS_RETRY,
+              output_config: { effort: "low" },
+              system,
+              tools: TOOL_DEFINITIONS,
+              messages,
+            });
+            if (retry.stop_reason !== "tool_use") {
+              const retried = extractText(retry);
+              if (retried) replyText = retried;
+              if (retry.stop_reason === "max_tokens")
+                console.error("Reply STILL truncated at the larger budget");
+            }
+          } catch (err) {
+            console.error("max_tokens retry failed — keeping the partial reply:", err);
+          }
+        }
         break;
       }
 
@@ -353,6 +388,22 @@ export async function handleInboundText(args: {
         });
       }
       messages.push({ role: "user", content: results });
+    }
+
+    // Iteration cap reached while the model still wanted tools: an action may
+    // have JUST run (a payment link created, a booking made). Force ONE final
+    // reply WITHOUT tools so the client gets the real outcome instead of the
+    // misleading "technical issue" fallback that made Awa deny work she'd done.
+    if (!replyText && !interactiveSent && lastResponse?.stop_reason === "tool_use") {
+      console.warn("Tool-iteration cap reached — forcing a final reply without tools");
+      const final = await anthropic.messages.create({
+        model: config.CLAUDE_MODEL,
+        max_tokens: REPLY_MAX_TOKENS,
+        output_config: { effort: "low" },
+        system,
+        messages,
+      });
+      replyText = extractText(final);
     }
   } catch (err) {
     console.error("Agent loop failed:", err);
