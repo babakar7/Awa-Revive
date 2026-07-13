@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { pool } from "../db/index.js";
+import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import { transition } from "./stateMachine.js";
 
 export interface Client {
@@ -587,7 +588,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
       [clientId],
     ),
     pool.query(
-      `select id, plan_name, amount_xof, wave_session_id, updated_at, created_at
+      `select id, plan_name, amount_xof, wave_session_id, payment_method, updated_at, created_at
          from pending_plan_orders
         where client_id = $1 and status in ('ACTIVATED', 'PAID')
           and updated_at > now() - interval '90 days'
@@ -595,7 +596,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
       [clientId],
     ),
     pool.query(
-      `select id, service_name, extras_json, amount_xof, wave_session_id, updated_at, created_at
+      `select id, service_name, extras_json, amount_xof, wave_session_id, payment_method, updated_at, created_at
          from pending_cafe_orders
         where client_id = $1 and status = 'PAID'
           and updated_at > now() - interval '90 days'
@@ -613,7 +614,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
       detail: b.slot_start ? String(b.slot_start) : null,
       amountXof: b.amount_xof,
       paymentRef: b.wave_session_id || b.id,
-      paidVia: "Wave",
+      paidVia: paymentMethodLabel(b.payment_method),
       paidAt: new Date(b.updated_at ?? b.created_at),
     });
   }
@@ -625,7 +626,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
       detail: null,
       amountXof: p.amount_xof,
       paymentRef: p.wave_session_id || p.id,
-      paidVia: "Wave",
+      paidVia: paymentMethodLabel(p.payment_method),
       paidAt: new Date(p.updated_at ?? p.created_at),
     });
   }
@@ -649,7 +650,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
       detail: c.service_name ? `avec ${c.service_name}` : null,
       amountXof: c.amount_xof,
       paymentRef: c.wave_session_id || c.id,
-      paidVia: "Wave",
+      paidVia: paymentMethodLabel(c.payment_method),
       paidAt: new Date(c.updated_at ?? c.created_at),
     });
   }

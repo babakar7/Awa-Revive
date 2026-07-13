@@ -10,6 +10,7 @@ import {
 } from "../lib/scheduleImage.js";
 import { classTip } from "../lib/classTips.js";
 import { renderReceiptImage, formatXof } from "../lib/receiptImage.js";
+import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
 import {
   CAFE_MENU,
@@ -833,12 +834,7 @@ export async function executeTool(
         session.method,
       );
 
-      const appLabel =
-        session.method === "maxit"
-          ? "Max It"
-          : session.method === "orange_money"
-            ? "Orange Money"
-            : "Wave";
+      const appLabel = paymentMethodLabel(session.method);
       return JSON.stringify({
         payment_link: session.paymentLink,
         payment_method: session.method,
@@ -935,12 +931,7 @@ export async function executeTool(
         session.method,
       );
 
-      const appLabel =
-        session.method === "maxit"
-          ? "Max It"
-          : session.method === "orange_money"
-            ? "Orange Money"
-            : "Wave";
+      const appLabel = paymentMethodLabel(session.method);
       return JSON.stringify({
         payment_link: session.paymentLink,
         payment_method: session.method,
@@ -1077,12 +1068,7 @@ export async function executeTool(
           ? " The client asked to start after their current plan, but no active plan with a future end date was found, so it will start NOW — tell them that."
           : "";
 
-      const appLabel =
-        session.method === "maxit"
-          ? "Max It"
-          : session.method === "orange_money"
-            ? "Orange Money"
-            : "Wave";
+      const appLabel = paymentMethodLabel(session.method);
       // Activation honesty: a pricing-plan order can only be auto-activated for
       // a Wix MEMBER. When no member was resolved (typical for a brand-new
       // client who only has a contact fiche), activation falls to reception
@@ -1382,7 +1368,7 @@ export async function executeTool(
         start: b.slot_start,
         start_dakar: fmtDakar(String(b.slot_start)),
         participants: b.participants,
-        paid_with: b.payment_method === "membership" ? "abonnement" : "wave",
+        paid_with: paymentMethodLabel(b.payment_method),
         booked_via: "awa",
         status: "confirmed",
         cancellable_free_of_charge: hoursUntil(b.slot_start) >= 16 || undefined,

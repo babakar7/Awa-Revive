@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { formatXof, renderReceiptImage } from "../src/lib/receiptImage.js";
+import { paymentMethodLabel } from "../src/lib/paymentMethod.js";
+
+describe("paymentMethodLabel", () => {
+  it("labels every supported payment rail accurately", () => {
+    expect(paymentMethodLabel("wave")).toBe("Wave");
+    expect(paymentMethodLabel("orange_money")).toBe("Orange Money");
+    expect(paymentMethodLabel("maxit")).toBe("Max It");
+    expect(paymentMethodLabel("membership")).toBe("Abonnement");
+  });
+});
 
 describe("formatXof", () => {
   it("formats integer FCFA with spaces", () => {
