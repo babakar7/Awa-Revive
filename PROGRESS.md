@@ -1,8 +1,10 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — **LOT 1 paiement** livré (`6a70364`)
-> ; **poller search OM abandonné** après probe Sonatel (`5df41cb` — pas de
+> Dernière mise à jour : **13 juillet 2026** — **LOT 1 paiement** (`6a70364`) +
+> **LOT 2 boucle/résilience** (`88ba0e3`, `3b6d268`, + parts dans `6a70364`)
+> livrés suite à un audit robustesse 3 axes ; **poller search OM abandonné**
+> après probe Sonatel (`5df41cb` — pas de
 > `metadata.order` en list) ; tests intégration Wave+OM (30) ; Pack Découverte
 > éligibilité ; activation plan B2 no-go.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
@@ -1378,6 +1380,31 @@ test/integration/     30 tests d'intégration (15 Wave + 15 OM/Max It) : Postgre
   [repo.ts](src/domain/repo.ts), [stateMachine.ts](src/domain/stateMachine.ts),
   [schema.ts](src/db/schema.ts), [orangeMoney.ts](src/lib/orangeMoney.ts) /
   [webhooks/orangeMoney.ts](src/webhooks/orangeMoney.ts), [index.ts](src/index.ts).
+- **13/07 — LOT 2 : résilience boucle agent + arrêt propre.** Issu du même audit
+  robustesse (3 axes : paiement, infra/ops, boucle agent). (2.5) Client Anthropic
+  (boucle + describe-image) avec `timeout: 60_000` + `maxRetries: 2` — un appel
+  qui pend ne bloque plus ~10 min la file sérialisée du client (`88ba0e3`).
+  (2.6) Filets `uncaughtException` (notif réception + exit contrôlé, Railway
+  redémarre) / `unhandledRejection` (log, non fatal) — sur mono-instance une
+  erreur non catchée = downtime total (`88ba0e3`). (2.3) Cap `MAX_TOOL_ITERATIONS`
+  atteint alors que le modèle veut encore un outil → un DERNIER appel **sans
+  outils** force une réponse réelle (lien/résa créés inclus) au lieu du
+  « souci technique » mensonger (`3b6d268`). (2.4) `stop_reason: max_tokens`
+  détecté → retry budget élargi (2048→4096) : on ne renvoie plus un message ou un
+  lien de paiement tronqué ; `extractText` extrait + testé (`3b6d268`). (2.1) Drain
+  de la file par client au SIGTERM (`drainQueues`, 25 s) avant exit : un deploy ne
+  tue plus les conversations en cours. (2.2) Dédup WhatsApp **reprenable**
+  (`wasProcessed` + `markProcessed` APRÈS succès + claim `inFlightMessages`
+  synchrone) : un crash en cours de traitement ne perd plus le message (Meta
+  retente) — contrairement à l'ancien mark-before. 2.1/2.2 mergés dans `6a70364`
+  (réconciliation multi-agents : Lot 1 et Lot 2 éditaient `index.ts`/`whatsapp.ts`
+  en parallèle ; commit unique pour ne rien écraser). Fichiers :
+  [agent/index.ts](src/agent/index.ts), [lib/imageInput.ts](src/lib/imageInput.ts),
+  [lib/serialize.ts](src/lib/serialize.ts), [webhooks/whatsapp.ts](src/webhooks/whatsapp.ts),
+  [index.ts](src/index.ts). **Reste de l'audit (non fait)** : Lot 3 (hygiène infra —
+  `/healthz` réel, timeouts pool pg, purge tables non bornées, sanitisation textes
+  client→réception, alerting sweeps, admin ouvert si `ADMIN_USERS` vide) ; Lot 4
+  (doc mono-instance + tests webhook WhatsApp/boucle agent, aujourd'hui à zéro).
 - **13/07 — Poller search OM retiré (`5df41cb`).** Suite probe live : list API
   sans `metadata.order` → auto-reconcile impossible. Code poller supprimé du
   sweep ; chemin OM = **callback + lookup `transactionId` uniquement**. Voir
