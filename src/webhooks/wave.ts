@@ -11,6 +11,7 @@ import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
+import { classTip } from "../lib/classTips.js";
 
 /**
  * Wave webhook handler — the critical path (SPEC §7).
@@ -564,6 +565,10 @@ export function confirmationMessage(
   orderNote?: string | null,
 ): string {
   const hasCafe = !!extras && extras.length > 0;
+  // Keyword tip from classTips (null when unknown — never invent).
+  // Lazy import avoided: classTips is pure and safe at module load.
+  const tip = classTip(serviceName, lang);
+  const tipBlock = tip ? `${tip}\n\n` : "";
   switch (lang) {
     case "en":
       return (
@@ -572,6 +577,7 @@ export function confirmationMessage(
         (hasCafe
           ? `☕ Your café order (already paid):\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "ready after your class"}\n\n`
           : "") +
+        tipBlock +
         `ℹ️ Free cancellation up to 16 hours before class — after that, the session is due.\n\n` +
         `Show this message at reception. See you soon! 💪🏾`
       );
@@ -582,6 +588,7 @@ export function confirmationMessage(
         (hasCafe
           ? `☕ Sa commande café (fey nga ko ba noppi):\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "dina pare ginnaaw sa cours"}\n\n`
           : "") +
+        tipBlock +
         `ℹ️ Man nga annuler ba 16 waxtu laata cours bi ; su weesoo loolu, séance bi dina jar.\n\n` +
         `Wone bataaxal bii ci réception. Ba beneen yoon! 💪🏾`
       );
@@ -592,6 +599,7 @@ export function confirmationMessage(
         (hasCafe
           ? `☕ Ta commande café (déjà payée) :\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "prête après ton cours"}\n\n`
           : "") +
+        tipBlock +
         `ℹ️ Annulation gratuite jusqu'à 16h avant le cours ; passé ce délai, la séance est due.\n\n` +
         `Montre ce message à la réception. À très vite ! 💪🏾`
       );

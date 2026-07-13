@@ -460,6 +460,114 @@ export async function upcomingBooked(clientId: string): Promise<PendingBooking[]
   return res.rows;
 }
 
+/** Count of Awa-booked upcoming classes (cheap flag for dynamic context). */
+export async function countUpcomingBooked(clientId: string): Promise<number> {
+  const res = await pool.query(
+    `select count(*)::int as n from pending_bookings
+      where client_id = $1 and status = 'BOOKED' and slot_start > now()`,
+    [clientId],
+  );
+  return res.rows[0]?.n ?? 0;
+}
+
+/**
+ * Recent paid items eligible for an on-demand receipt image (server-sourced
+ * amounts only). Includes Wave class bookings (BOOKED, amount > 0), activated
+ * plan orders, and paid café orders — last 90 days, max 10 each type.
+ */
+export type ReceiptCandidate = {
+  kind: "booking" | "plan" | "cafe";
+  id: string;
+  label: string;
+  detail: string | null;
+  amountXof: number;
+  paymentRef: string;
+  paidVia: string;
+  paidAt: Date;
+};
+
+export async function recentReceiptCandidates(clientId: string): Promise<ReceiptCandidate[]> {
+  const [bookings, plans, cafes] = await Promise.all([
+    pool.query(
+      `select id, service_name, slot_start, amount_xof, wave_session_id, payment_method, updated_at, created_at
+         from pending_bookings
+        where client_id = $1 and status = 'BOOKED'
+          and (payment_method = 'wave' or amount_xof > 0)
+          and updated_at > now() - interval '90 days'
+        order by updated_at desc limit 10`,
+      [clientId],
+    ),
+    pool.query(
+      `select id, plan_name, amount_xof, wave_session_id, updated_at, created_at
+         from pending_plan_orders
+        where client_id = $1 and status in ('ACTIVATED', 'PAID')
+          and updated_at > now() - interval '90 days'
+        order by updated_at desc limit 10`,
+      [clientId],
+    ),
+    pool.query(
+      `select id, service_name, extras_json, amount_xof, wave_session_id, updated_at, created_at
+         from pending_cafe_orders
+        where client_id = $1 and status = 'PAID'
+          and updated_at > now() - interval '90 days'
+        order by updated_at desc limit 10`,
+      [clientId],
+    ),
+  ]);
+
+  const out: ReceiptCandidate[] = [];
+  for (const b of bookings.rows) {
+    out.push({
+      kind: "booking",
+      id: b.id,
+      label: b.service_name,
+      detail: b.slot_start ? String(b.slot_start) : null,
+      amountXof: b.amount_xof,
+      paymentRef: b.wave_session_id || b.id,
+      paidVia: "Wave",
+      paidAt: new Date(b.updated_at ?? b.created_at),
+    });
+  }
+  for (const p of plans.rows) {
+    out.push({
+      kind: "plan",
+      id: p.id,
+      label: `Abonnement — ${p.plan_name}`,
+      detail: null,
+      amountXof: p.amount_xof,
+      paymentRef: p.wave_session_id || p.id,
+      paidVia: "Wave",
+      paidAt: new Date(p.updated_at ?? p.created_at),
+    });
+  }
+  for (const c of cafes.rows) {
+    let cafeLabel = "Commande café";
+    try {
+      const items = Array.isArray(c.extras_json) ? c.extras_json : [];
+      const names = items
+        .map((x: { name?: string; qty?: number }) =>
+          x?.name ? `${x.qty && x.qty > 1 ? `${x.qty}× ` : ""}${x.name}` : null,
+        )
+        .filter(Boolean);
+      if (names.length) cafeLabel = `Café — ${names.join(", ")}`;
+    } catch {
+      /* keep default */
+    }
+    out.push({
+      kind: "cafe",
+      id: c.id,
+      label: cafeLabel,
+      detail: c.service_name ? `avec ${c.service_name}` : null,
+      amountXof: c.amount_xof,
+      paymentRef: c.wave_session_id || c.id,
+      paidVia: "Wave",
+      paidAt: new Date(c.updated_at ?? c.created_at),
+    });
+  }
+  out.sort((a, b) => b.paidAt.getTime() - a.paidAt.getTime());
+  return out.slice(0, 15);
+}
+
 /**
  * The client's most recently CREATED upcoming confirmed booking — the class a
  * post-booking café order should attach to when the model doesn't pass an

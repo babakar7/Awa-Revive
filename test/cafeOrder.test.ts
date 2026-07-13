@@ -40,3 +40,15 @@ describe("confirmationMessage without a café order (regression)", () => {
     expect(withUndefined).toContain("16");
   });
 });
+
+describe("confirmationMessage pre-class tips (#6)", () => {
+  it("includes a Reformer tip and not for unknown classes", () => {
+    const reformer = confirmationMessage("fr", "Pilates Reformer", SLOT);
+    expect(reformer).toMatch(/chaussettes antidérapantes|tenue de sport/i);
+    const aqua = confirmationMessage("fr", "Aquabike", SLOT);
+    expect(aqua).toMatch(/maillot/i);
+    expect(aqua).not.toMatch(/chaussettes antidérapantes/);
+    const unknown = confirmationMessage("fr", "Impédancemétrie", SLOT);
+    expect(unknown).not.toContain("💡");
+  });
+});

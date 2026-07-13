@@ -7,7 +7,7 @@ import { emailAskMessage, shouldOfferLinking } from "../lib/linkAsk.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
 import { CAFE_MENU } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
-import { SYSTEM_PROMPT, dynamicContext } from "./systemPrompt.js";
+import { SYSTEM_PROMPT, dynamicContext, shouldOfferOnboarding } from "./systemPrompt.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
 
 const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
@@ -110,15 +110,23 @@ export async function handleInboundText(args: {
     repo.expireStalePlanOrders(),
     repo.expireStaleCafeOrders(),
   ]);
-  const [activeBooking, activePlanOrder, activeCafeOrder, memberships, recentRefunds, habit] =
-    await Promise.all([
-      repo.activeAwaitingPayment(client.id),
-      repo.activeAwaitingPlanOrder(client.id),
-      repo.activeAwaitingCafeOrder(client.id),
-      activeMemberships(client),
-      repo.recentRefunds(client.id),
-      repo.bookingHabit(client.id),
-    ]);
+  const [
+    activeBooking,
+    activePlanOrder,
+    activeCafeOrder,
+    memberships,
+    recentRefunds,
+    habit,
+    upcomingBookingsCount,
+  ] = await Promise.all([
+    repo.activeAwaitingPayment(client.id),
+    repo.activeAwaitingPlanOrder(client.id),
+    repo.activeAwaitingCafeOrder(client.id),
+    activeMemberships(client),
+    repo.recentRefunds(client.id),
+    repo.bookingHabit(client.id),
+    repo.countUpcomingBooked(client.id),
+  ]);
 
   const history = await repo.lastTurns(client.id, 20);
 
@@ -136,6 +144,14 @@ export async function handleInboundText(args: {
   // one-shot is email_prompted_at alone, armed only AFTER a successful send,
   // so it retries on the next message until it actually lands.
   const unlinkedNeverAsked = shouldOfferLinking(memberships, client);
+  const assistantTurnCount = history.filter((t) => t.role === "assistant").length;
+  const hasActivePaymentLink = !!(activeBooking || activePlanOrder || activeCafeOrder);
+  const offerOnboarding = shouldOfferOnboarding({
+    unlinkedNeverAsked,
+    hasHabit: !!habit,
+    assistantTurnCount,
+    hasActivePaymentLink,
+  });
 
   const messages: Anthropic.MessageParam[] = [];
   for (const turn of history) {
@@ -173,6 +189,8 @@ export async function handleInboundText(args: {
         unlinkedNeverAsked,
         recentRefunds,
         habit,
+        upcomingBookingsCount,
+        offerOnboarding,
       }),
     },
   ];

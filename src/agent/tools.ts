@@ -8,6 +8,8 @@ import {
   scheduleText,
   type ScheduleEntry,
 } from "../lib/scheduleImage.js";
+import { classTip } from "../lib/classTips.js";
+import { renderReceiptImage, formatXof } from "../lib/receiptImage.js";
 import {
   CAFE_MENU,
   computeExtras,
@@ -385,12 +387,34 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "send_receipt",
+    description:
+      "Send the client a studio-branded payment receipt IMAGE for a recent Wave payment (class, " +
+      "abonnement, or café). Call this when they ask for a reçu / receipt / justificatif de paiement. " +
+      "Amounts come from the server only. If they ask for a formal company invoice (facture " +
+      "officielle / entreprise / SIRET), use handoff_to_human instead — this tool is not a legal invoice. " +
+      "Optional receipt_id to pick among several recent payments; omit to auto-send the single latest " +
+      "or return a list of choices when there are several.",
+    input_schema: {
+      type: "object",
+      properties: {
+        receipt_id: {
+          type: "string",
+          description:
+            "Id of a candidate from a previous send_receipt result (booking/plan/cafe id). Omit on first call.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "handoff_to_human",
     description:
       "Escalate the conversation to the human reception team. Triggers: the client wants to call or speak to " +
       "a person (e.g. \"je peux vous appeler ?\"), complaints, refunds beyond what cancel_booking handles, " +
       "cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
-      "medical questions, anything off-script. Records the handoff and returns the reception WhatsApp number " +
+      "medical questions, formal company invoices (facture officielle / entreprise — simple reçus use " +
+      "send_receipt), anything off-script. Records the handoff and returns the reception WhatsApp number " +
       "to give the client immediately.",
     input_schema: {
       type: "object",
@@ -1113,6 +1137,7 @@ export async function executeTool(
         });
         // Sessions were just deducted — the cached balance is stale.
         invalidateMembershipCache(client.id);
+        const tip = classTip(service.name, client.language);
         return JSON.stringify({
           booked: true,
           booking_id: membershipBooking.id,
@@ -1129,6 +1154,7 @@ export async function executeTool(
               : "Booked and confirmed using the client's abonnement (one session deducted). ") +
             "Confirm to the client with class, date/time, how many spots and that it used their plan (mention remaining_sessions), " +
             "and remind them cancellation is free up to 16h before the class (after that the session is due) — no payment needed. " +
+            (tip ? `Also include this pre-class tip VERBATIM: ${tip} ` : "") +
             "Do NOT mention or propose the café menu in your confirmation: the system automatically shows the " +
             "menu list right after your message. When the client then picks an item, use create_cafe_payment_link " +
             "with this booking_id.",
@@ -1795,6 +1821,109 @@ export async function executeTool(
             "number. Their active plans are listed above (details/balance via check_membership) — offer " +
             "to book their next class right away, on the plan when it covers the class.",
       });
+    }
+
+    case "send_receipt": {
+      const candidates = await repo.recentReceiptCandidates(client.id);
+      if (candidates.length === 0) {
+        return JSON.stringify({
+          sent: false,
+          error: "no_recent_payments",
+          message:
+            "No recent Wave payments found for this client (class, plan, or café in the last 90 days). " +
+            "Tell them politely you don't have a payment to print a receipt for; if they need a formal " +
+            "invoice from the studio, use handoff_to_human. Do NOT invent amounts.",
+        });
+      }
+      const wantedId = input.receipt_id ? String(input.receipt_id).trim() : "";
+      let chosen = wantedId ? candidates.find((c) => c.id === wantedId) : undefined;
+      if (wantedId && !chosen) {
+        return JSON.stringify({
+          sent: false,
+          error: "unknown_receipt_id",
+          candidates: candidates.map((c) => ({
+            receipt_id: c.id,
+            kind: c.kind,
+            label: c.label,
+            amount_xof: c.amountXof,
+            amount_label: formatXof(c.amountXof),
+          })),
+          message: "That receipt_id is not in the client's recent payments. Ask which one they want.",
+        });
+      }
+      if (!chosen && candidates.length > 1) {
+        return JSON.stringify({
+          sent: false,
+          needs_choice: true,
+          candidates: candidates.map((c) => ({
+            receipt_id: c.id,
+            kind: c.kind,
+            label: c.label,
+            detail: c.detail,
+            amount_xof: c.amountXof,
+            amount_label: formatXof(c.amountXof),
+            paid_at: c.paidAt.toISOString(),
+          })),
+          message:
+            "Several recent payments — ask the client which one (or present_options) then call send_receipt " +
+            "again with that receipt_id. Do NOT invent amounts; use the list above.",
+        });
+      }
+      chosen = chosen ?? candidates[0];
+      let detailLine = chosen.detail;
+      if (chosen.kind === "booking" && chosen.detail) {
+        const d = new Date(chosen.detail);
+        if (!Number.isNaN(d.getTime())) {
+          detailLine = d.toLocaleString("fr-FR", {
+            timeZone: config.TIMEZONE,
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        }
+      }
+      try {
+        const png = renderReceiptImage({
+          title: "Reçu de paiement",
+          clientName: client.name,
+          itemLabel: chosen.label,
+          detailLine,
+          amountXof: chosen.amountXof,
+          paymentRef: chosen.paymentRef,
+          paidVia: chosen.paidVia,
+          paidAt: chosen.paidAt,
+        });
+        await sendImage(
+          client.wa_phone,
+          png,
+          `Reçu — ${chosen.label} · ${formatXof(chosen.amountXof)}`,
+        );
+        await repo.addTurn(
+          client.id,
+          "assistant",
+          `[image envoyée : reçu ${chosen.kind} ${chosen.id} — ${chosen.label} ${formatXof(chosen.amountXof)}]`,
+        );
+        return JSON.stringify({
+          sent: true,
+          receipt_id: chosen.id,
+          kind: chosen.kind,
+          label: chosen.label,
+          amount_xof: chosen.amountXof,
+          note:
+            "Receipt image already delivered. Confirm briefly in the client's language that this is their " +
+            "payment proof (not a formal company invoice). If they need a facture officielle, handoff_to_human.",
+        });
+      } catch (err) {
+        console.error("send_receipt failed:", err);
+        return JSON.stringify({
+          sent: false,
+          error: "receipt_send_failed",
+          message:
+            "Could not render or send the receipt image. Apologize briefly and offer handoff_to_human for a formal receipt.",
+        });
+      }
     }
 
     case "handoff_to_human": {

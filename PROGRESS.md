@@ -1,7 +1,7 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **10 juillet 2026**. Compléments : `README.md` (setup,
+> Dernière mise à jour : **13 juillet 2026**. Compléments : `README.md` (setup,
 > archi détaillée), `PHASE2.md` (backlog priorisé), `WIX-WEBHOOK-PLAN.md`
 > (chantier EN VEILLE — ne pas implémenter), `business-info.md` (source de
 > vérité métier d'Awa, chargée au boot), `cafe-menu.md` (menu du café, source
@@ -1091,6 +1091,38 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
       `renewalNudgeCandidates` prend `renewablePlanIds: Set` et exclut le reste
       (testé). 217 tests.
 
+37. **Sept améliorations UX (13/07)** — plan révisé Babakar (audit UX + revue
+    code). **#13 photos menu ABANDONNÉ** (liste WhatsApp sans image ; catalogue
+    Commerce = 2e source de prix). Livré :
+    - **#12 pages paiement → wa.me** ([server.ts](src/server.ts)) : bouton
+      `https://wa.me/221789536676` SANS préfill `?text=` (Awa ne confirme jamais
+      sur parole client). Note confirmation automatique conservée.
+    - **#6 tips pré-cours** ([classTips.ts](src/lib/classTips.ts)) : matching
+      par MOTS-CLÉS (reformer/pilates/fusion/yoga/inversion ; aqua/natation ;
+      boxe) — jamais de noms de cours en dur. Branché dans
+      `confirmationMessage` + note `book_with_membership`. Inconnu → null.
+    - **#18 reçu image À LA DEMANDE** ([receiptImage.ts](src/lib/receiptImage.ts),
+      outil `send_receipt`) : canvas même stack que le planning ; montants
+      serveur (`recentReceiptCandidates` : BOOKED wave, plans PAID/ACTIVATED,
+      café PAID, 90 j). Multi-paiements → liste de choix. PAS d'auto-envoi
+      post-paiement. Facture officielle/entreprise → handoff inchangé.
+    - **#9 waitlist template en SECOURS** : free-text d'abord ; sur 131047 +
+      `WA_WAITLIST_TEMPLATE` → `sendTemplate` (2 vars, `toTemplateParam`) ;
+      NOTIFY_FAILED seulement si les deux échouent. Env vide = comportement
+      inchangé. **Babakar crée le template Meta puis pose l'env après
+      approbation** (leçon renewal).
+    - **#7 « Mes prochains cours »** : `countUpcomingBooked` + flag dans
+      `dynamicContext` ; present_options sur ouverture vague si ≥1 résa Awa.
+    - **#15 micro-onboarding anti-clash** : `shouldOfferOnboarding` pure —
+      exclus si `unlinkedNeverAsked` (liaison prime), si habitude, si lien de
+      paiement actif, si déjà ≥1 tour assistant. Options ≤5 mappées aux outils
+      existants (pas « Relier mon compte »).
+    - **#17 domaine custom** : ops seul — CNAME Wix DNS → Railway custom
+      domain ; `BASE_URL=https://bookings.revive.sn` (exemple) ; **webhooks
+      Meta/Wave restent sur l'hôte Railway** (pas de ré-inscription). Pages
+      paiement restent sur ce service (pas le site Wix).
+    - 240 tests unitaires + 14 intégration verts.
+
 ## 5. Chronologie condensée
 
 - **03/07** : build initial complet (spec → prod Railway), premier paiement
@@ -1200,6 +1232,11 @@ test/integration/     14 tests d'intégration du chemin de paiement : Postgres j
   check_availability (slot.resource.name, vérifié live), **lien café dans le
   contexte dynamique**. 4 tests ajoutés (131 au total) ; intégration 14/14
   verte.
+- **13/07** : **sept UX** (§4.37) — pages paiement wa.me, tips pré-cours par
+  mots-clés, reçu image à la demande (`send_receipt`), waitlist template
+  fallback 131047 (dormant sans env), raccourci mes prochains cours,
+  micro-onboarding anti-clash liaison/habitude, runbook domaine custom.
+  240 unit + 14 intégration.
 - **12/07** : **boucle de résultat** (§31, aucun client ne repart en silence :
   filets déterministes + classificateur LLM + files admin + digest quotidien),
   puis **proposition de liaison dès le 1er contact d'un numéro inconnu** (§32 —

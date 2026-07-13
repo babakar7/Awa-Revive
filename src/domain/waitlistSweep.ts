@@ -1,5 +1,6 @@
 import { config } from "../config.js";
-import { sendText } from "../lib/whatsapp.js";
+import { sendText, sendTemplate } from "../lib/whatsapp.js";
+import { toTemplateParam } from "../lib/notify.js";
 import * as wix from "../lib/wix.js";
 import * as repo from "./repo.js";
 
@@ -11,10 +12,10 @@ import * as repo from "./repo.js";
  * double nudge is spam). No booking is created here: the client replies and
  * the normal payment-first flow (fresh check_availability included) applies.
  *
- * 24h-window caveat (accepted product trade-off, 11/07): the nudge is plain
- * text — if the client's last inbound message is older than 24h Meta rejects
- * it (131047) and the entry is marked NOTIFY_FAILED. First come, first served:
- * every waiter on the slot is notified.
+ * 24h-window: free-text first; on Meta 131047, if WA_WAITLIST_TEMPLATE is set,
+ * fall back to that template (same pattern as notify.ts reception WhatsApp).
+ * NEVER both (template only after free-text was refused). NOTIFY_FAILED only
+ * when both fail (or free-text fails and no template is configured).
  */
 
 function formatSlot(date: Date, locale: string): string {
@@ -52,6 +53,25 @@ export function waitlistNudgeMessage(
   }
 }
 
+/** Pure: should we attempt the Utility template after a free-text failure? */
+export function shouldFallbackWaitlistTemplate(
+  err: unknown,
+  templateName: string,
+): boolean {
+  return !!templateName && String(err).includes("131047");
+}
+
+/** Template body params: class name + date/time label (sanitized). Pure. */
+export function waitlistTemplateParams(
+  serviceName: string,
+  slotStart: Date,
+): [string, string] {
+  return [
+    toTemplateParam(serviceName, 60),
+    toTemplateParam(formatSlot(slotStart, "fr-FR"), 60),
+  ];
+}
+
 /** Check freed spots and send the pending nudges. Returns how many were sent. */
 export async function sweepWaitlist(log: {
   info: (o: unknown, m?: string) => void;
@@ -78,14 +98,47 @@ export async function sweepWaitlist(log: {
     if (!openByEvent.has(entry.event_id)) continue;
     // Claim BEFORE sending — one-shot per entry even across concurrent sweeps.
     if (!(await repo.claimWaitlistNotify(entry.id))) continue;
+    const msg = waitlistNudgeMessage(
+      entry.language,
+      entry.service_name,
+      new Date(entry.slot_start),
+    );
     try {
-      const msg = waitlistNudgeMessage(entry.language, entry.service_name, new Date(entry.slot_start));
       await sendText(entry.wa_phone, msg);
       await repo.addTurn(entry.client_id, "assistant", msg);
       sent++;
       log.info({ waitlistId: entry.id, event: entry.event_id }, "Waitlist nudge sent");
     } catch (err) {
-      // Typical cause: 24h window closed (Meta 131047). Never retried.
+      // Free-text refused (typically 24h window / 131047) → optional template.
+      if (shouldFallbackWaitlistTemplate(err, config.WA_WAITLIST_TEMPLATE)) {
+        try {
+          const [p1, p2] = waitlistTemplateParams(
+            entry.service_name,
+            new Date(entry.slot_start),
+          );
+          await sendTemplate(
+            entry.wa_phone,
+            config.WA_WAITLIST_TEMPLATE,
+            config.WA_WAITLIST_TEMPLATE_LANG,
+            [p1, p2],
+          );
+          // Same free-text body logged so Awa has context when the client replies.
+          await repo.addTurn(entry.client_id, "assistant", msg);
+          sent++;
+          log.info(
+            { waitlistId: entry.id, event: entry.event_id },
+            "Waitlist nudge sent via template (131047 fallback)",
+          );
+          continue;
+        } catch (tmplErr) {
+          await repo.markWaitlistNotifyFailed(entry.id).catch(() => {});
+          log.error(
+            { err: tmplErr, waitlistId: entry.id },
+            "Waitlist template fallback failed",
+          );
+          continue;
+        }
+      }
       await repo.markWaitlistNotifyFailed(entry.id).catch(() => {});
       log.error({ err, waitlistId: entry.id }, "Waitlist nudge failed");
     }

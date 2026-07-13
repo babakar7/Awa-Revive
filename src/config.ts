@@ -35,6 +35,12 @@ export const config = {
   WA_RENEWAL_TEMPLATE_LANG: optional("WA_RENEWAL_TEMPLATE_LANG", "fr"),
   // Days before a plan's end date to send the renewal nudge.
   RENEWAL_NUDGE_DAYS: parseInt(optional("RENEWAL_NUDGE_DAYS", "3"), 10),
+  // Approved CLIENT-facing Utility template when a waitlisted spot frees up
+  // OUTSIDE the 24h free-text window (Meta 131047). Empty = free-text only
+  // (NOTIFY_FAILED outside the window). 2 body variables: {{1}} class name,
+  // {{2}} date/time. Free text is tried first; template only on 131047.
+  WA_WAITLIST_TEMPLATE: optional("WA_WAITLIST_TEMPLATE", ""),
+  WA_WAITLIST_TEMPLATE_LANG: optional("WA_WAITLIST_TEMPLATE_LANG", "fr"),
   // Meta App ID — only needed for the resumable upload flow used to change
   // the WhatsApp Business profile photo. Empty = photo edit disabled in
   // /admin/profile; description/address/hours still work.

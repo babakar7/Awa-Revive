@@ -151,10 +151,17 @@ You CAN reschedule, as a guided cancel + rebook in ONE conversation — never pr
 - cancellation refused by the 16h rule where the client insists on an exceptional situation,
 - partial group cancellations (removing some spots but not all),
 - medical questions or injuries,
-- requests for a receipt or invoice (reçu, facture) — the Wave app shows the client their own payment record, but any formal receipt/invoice comes from reception,
+- requests for a formal company invoice (facture officielle, facture entreprise, SIRET) — use handoff. For a simple payment proof (reçu / receipt / justificatif), use send_receipt instead (image generated server-side from their real payments; never invent amounts),
 - anything clearly outside booking classes.
 After calling the tool, give the client the reception WhatsApp number it returns, in their language.
 MANDATORY: whenever you cannot satisfy the client's need — even partially, even because it's out of scope — you MUST call handoff_to_human before answering. Never end with a bare "je ne peux pas" or a spoken "contacte la réception" without the tool call: the tool is what actually notifies the team (saying it without calling it means nobody is told, and the client is lost in silence). And always give the client something concrete: the reception number plus, when possible, an alternative you CAN do.
+
+# Receipts (send_receipt)
+- When the client asks for a reçu / receipt / justificatif de paiement / proof of payment: call send_receipt. The tool loads real recent payments from the server (never invent amounts or dates). If it returns needs_choice, list the options or present_options then call again with receipt_id. If no_recent_payments, say so kindly. Formal facture for a company → handoff_to_human only.
+
+# First-session menu & shortcuts (present_options)
+- Micro-onboarding: ONLY when the context flag "offer_onboarding: true" is set AND the client's message is vague (salut / hello / help / what can you do) with no clear intent. Then send present_options with up to 5 options: Réserver un cours · Voir le planning · Mon abonnement · Commander au café · Parler à la réception (map to normal tools / handoff). NEVER show this menu when offer_onboarding is false — especially never when the system is about to send the account-linking invite, and never when a booking habit shortcut applies.
+- "Mes prochains cours": ONLY when the context shows upcoming_bookings_count ≥ 1 AND the client is vague or asks for help / their bookings. Offer present_options [Mes prochains cours] [Réserver] [Autre]; on tap Mes prochains cours → get_my_bookings immediately. Free text ("mes cours", "mes résas") still works. Never spam this on every message; never when they already named a class/time.
 
 # Context notes
 - Messages prefixed "[note vocale]" are automatic transcriptions of the client's voice notes — treat them as the client's own words. Transcriptions can contain small errors: if a critical detail looks off (date, time, name, number of spots), confirm it briefly before acting on it.
@@ -183,6 +190,13 @@ export function dynamicContext(args: {
   unlinkedNeverAsked?: boolean;
   recentRefunds: PendingBooking[];
   habit?: BookingHabit | null;
+  /** Count of upcoming BOOKED rows via Awa (not studio-only). */
+  upcomingBookingsCount?: number;
+  /**
+   * Server-computed: show first-session capability menu on vague openers.
+   * False when linking invite is due, habit shortcut applies, mid-payment, etc.
+   */
+  offerOnboarding?: boolean;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -366,8 +380,50 @@ export function dynamicContext(args: {
         `It is ONLY a shortcut: on "Oui", run check_availability for "${h.service_name}" over the next-7-days window, ` +
         `find the OPEN slot on the next ${days[h.weekday]} at ${time}, and continue the normal flow (name, menu, link) — ` +
         `if that slot is full or absent, say so and offer the nearest alternatives. NEVER create a link straight from the ` +
-        `habit without a fresh check_availability. If the client already named a class/time, ignore the habit entirely.`,
+        `habit without a fresh check_availability. If the client already named a class/time, ignore the habit entirely. ` +
+        `When a habit applies, do NOT show micro-onboarding.`,
+    );
+  }
+  const upcoming = args.upcomingBookingsCount ?? 0;
+  lines.push(
+    `upcoming_bookings_count (Awa BOOKED, slot in the future): ${upcoming}. ` +
+      (upcoming > 0
+        ? `On a vague opener or "mes cours" / help request, you MAY offer present_options ` +
+          `[Mes prochains cours (id: my_bookings)] [Réserver (id: book)] [Autre (id: other)] — ` +
+          `on my_bookings, call get_my_bookings immediately. Never spam this every turn.`
+        : `No upcoming Awa bookings flagged — do not offer the "Mes prochains cours" shortcut ` +
+          `(they may still have studio bookings; get_my_bookings remains correct if they ask).`),
+  );
+  if (args.offerOnboarding) {
+    lines.push(
+      `offer_onboarding: true — this client is early in the conversation, account-linking invite is NOT due, ` +
+        `no booking habit, no active payment/verification in flight. On a VAGUE opener only ("salut", "hello", ` +
+        `"help", "tu fais quoi ?"), you MAY send present_options (≤5): ` +
+        `Réserver un cours · Voir le planning · Mon abonnement · Commander au café · Parler à la réception. ` +
+        `Do NOT add "Relier mon compte". Clear intent → skip the menu and use tools.`,
+    );
+  } else {
+    lines.push(
+      `offer_onboarding: false — do NOT send the first-session capability menu this turn ` +
+        `(linking invite may take priority, habit shortcut, mid-flow, or not a first-session context).`,
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * Pure predicate for the first-session capability menu. Unit-tested.
+ * Mutually exclusive with account-linking invite and booking-habit shortcut.
+ */
+export function shouldOfferOnboarding(args: {
+  unlinkedNeverAsked: boolean;
+  hasHabit: boolean;
+  assistantTurnCount: number;
+  hasActivePaymentLink: boolean;
+}): boolean {
+  if (args.unlinkedNeverAsked) return false;
+  if (args.hasHabit) return false;
+  if (args.hasActivePaymentLink) return false;
+  // "Few" assistant turns: first conversation only (0 prior Awa replies in history).
+  return args.assistantTurnCount === 0;
 }
