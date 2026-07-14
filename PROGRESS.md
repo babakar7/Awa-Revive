@@ -1185,9 +1185,15 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   accent/casse-insensible, **pas de regex utilisateur** = anti-ReDoS ; anti
   dos-à-dos : supprime le rappel si un cours du même motif s'est terminé ≤ N min
   avant, ex. « vélos déjà à l'eau ») et `fixed_schedule` (jour(s) + HH:MM,
-  Dakar = UTC). Destinataire = numéro fixe (gardien) ou **coach du cours**
-  (résolu par `slot.coach` → `staff_contacts.name`, muet possible pour Yass
-  toujours au studio). Effectif coach = `totalSpots − openSpots` (Wix ; « ? » si
+  Dakar = UTC). Destinataire = numéro fixe (gardien) ou **coach du cours**.
+  **Contact coach depuis Wix** : `listStaffResources()` lit
+  `/bookings/v1/resources/query` (id/name/**phone**/email, filtré tags `staff` —
+  les 7 coachs ont un numéro, l'entrée `business` est exclue) ; le slot porte
+  `coachId`, le sweep résout le téléphone par id puis par nom. Un `staff_contacts`
+  de même nom reste prioritaire pour **muter** un coach ou surcharger son numéro
+  (Wix = annuaire par défaut, admin = surcouche). Filtres de règle :
+  `class_pattern` (contient), `exclude_pattern` (ne contient pas, ex. `reformer`),
+  `group_only`. Effectif coach = `totalSpots − openSpots` (Wix ; « ? » si
   la capacité n'est pas exposée — **à vérifier en prod**). Option **`group_only`**
   (case « cours collectifs uniquement ») : ne cible que les services Wix de type
   CLASS/COURSE ; seul un `APPOINTMENT` explicite est exclu (type inconnu = gardé,
