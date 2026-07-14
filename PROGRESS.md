@@ -1212,6 +1212,18 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     planning Wix ne renvoie plus la séance précédente déjà commencée.
   - **Sweep dans la boucle 60 s** (précision 15 min avant → granularité ≤ 1 min),
     try/catch isolé pour ne jamais bloquer l'expiration/réconciliation.
+  - **Un seul message pour des cours enchaînés** (`buildChain`, `chainKeyFor`) :
+    quand un même destinataire enchaîne des cours dos à dos (écart ≤
+    `suppress_gap_minutes`), UN message couvre tout le bloc via le placeholder
+    **`{classes}`** (liste nom + heure + effectif), les suivants sont
+    `suppressed`. Chaînage **par destinataire** : pour une règle coach, seul le
+    MÊME coach chaîne (le cours du coach A ne supprime pas celui du coach B — la
+    suppression est scoped par `chainKeyFor` = coachId/nom ; le repli log ne
+    s'applique qu'aux règles à numéro fixe). Placeholders simples = 1er cours
+    (rétro-compat).
+  - **Bouton « Envoyer un test »** : envoie TOUJOURS vers `NOTIF_TEST_PHONE`
+    (défaut `+221774982711`, le numéro de Babakar), jamais le vrai gardien/coach.
+    Valeurs d'exemple (dont `{classes}` à 2 cours). Dédup `test:{uuid}`.
   - **Café → WhatsApp prioritaire** : `notifyReception(subject, body,
     { whatsappFirst:true })` — WhatsApp d'abord, email en secours SI l'envoi WA
     échoue (uniquement pour le bar ; remboursements/handoffs/crash gardent le
@@ -1227,10 +1239,16 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     (lang `en`) était configuré avant — remplacé (réversible via
     `railway variables --set`, tâche agent, pas le gérant). Hors fenêtre 24h sans
     template valide = échec 131047 **mais visible au journal** (avant : silencieux).
+  - **Config prod au 14/07** (données en DB, éditables via l'admin) : 2 règles —
+    « Aquabikes à l'eau » (numéro fixe gardien, gap 60) et « Effectif coach —
+    cours collectifs » (tous cours collectifs SAUF reformer, 4 h avant, au coach
+    du cours via Wix, gap 30 = un message par bloc enchaîné). Contact staff :
+    **Yass mutée** (toujours au studio). Les 7 coachs Wix ont un numéro.
   - Fichiers : `domain/notificationRules.ts` (pur, testé), `notificationRepo.ts`
-    (CRUD + claim + journal), `notificationSweep.ts` (sweep + cache planning),
-    `admin/notificationsPage.ts` + routes `/admin/notifications`. Logique pure
-    couverte par `test/notificationRules.test.ts`.
+    (CRUD + claim + journal), `notificationSweep.ts` (sweep + cache planning +
+    contacts coach Wix), `admin/notificationsPage.ts` + routes
+    `/admin/notifications`. Logique pure couverte par
+    `test/notificationRules.test.ts` (28 cas).
 
 - **4.33 — Création de compte en un aller-retour + escalade réception honnête
   (14/07, incident Rama).** Cliente nouvelle : Awa l'invite (« envoie-moi ton
