@@ -7,6 +7,7 @@ import { runReviewSweep, maybeSendDailyDigest } from "./domain/conversationRevie
 import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
+import { sweepStaffNotifications } from "./domain/notificationSweep.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import {
   reconcileStuckPlanOrders,
@@ -76,6 +77,15 @@ async function main() {
       if (escalated > 0) app.log.info({ escalated }, "Stale link requests handed to reception");
     } catch (err) {
       app.log.error({ err }, "Expiry/reconciliation sweep failed");
+    }
+    // Staff notifications (guardian/coach reminders, fixed schedules). Own
+    // try/catch: a Wix/notification hiccup must never block expiry work above.
+    // Needs ≤1-min granularity (15-min-before precision) → the 60s loop.
+    try {
+      const notified = await sweepStaffNotifications(app.log);
+      if (notified > 0) app.log.info({ notified }, "Staff notifications sent");
+    } catch (err) {
+      app.log.error({ err }, "Staff-notification sweep failed");
     }
   }, 60 * 1000);
   sweeper.unref();

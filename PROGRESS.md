@@ -1,10 +1,11 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **13 juillet 2026** — handoffs réception en un clic
-> (`wa.me` contextualisé avec prénom + motif, dernier appui Envoyer explicite),
-> après le lot **exactitude & fermeture**. LOT 1+2 robustesse paiement/boucle ;
-> poller OM abandonné.
+> Dernière mise à jour : **14 juillet 2026** — moteur de notifications staff
+> (rappels gardien/coach éditables via `/admin/notifications`, café → WhatsApp
+> prioritaire), cf. §4.32. Avant : handoffs réception en un clic (`wa.me`
+> contextualisé avec prénom + motif), lot **exactitude & fermeture**, LOT 1+2
+> robustesse paiement/boucle ; poller OM abandonné.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
@@ -1175,6 +1176,47 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
       Meta/Wave restent sur l'hôte Railway** (pas de ré-inscription). Pages
       paiement restent sur ce service (pas le site Wix).
     - 240 tests unitaires + 14 intégration verts.
+
+- **4.32 — Moteur de notifications staff (14/07).** Rappels automatiques
+  éditables depuis `/admin/notifications`, **aucun nom de cours ni numéro en
+  dur** : le gérant saisit des *règles* (table `notification_rules`) et des
+  *contacts staff* (`staff_contacts`). Deux types de règle : `class_reminder`
+  (X min avant chaque cours dont le nom **contient** un motif — substring
+  accent/casse-insensible, **pas de regex utilisateur** = anti-ReDoS ; anti
+  dos-à-dos : supprime le rappel si un cours du même motif s'est terminé ≤ N min
+  avant, ex. « vélos déjà à l'eau ») et `fixed_schedule` (jour(s) + HH:MM,
+  Dakar = UTC). Destinataire = numéro fixe (gardien) ou **coach du cours**
+  (résolu par `slot.coach` → `staff_contacts.name`, muet possible pour Yass
+  toujours au studio). Effectif coach = `totalSpots − openSpots` (Wix ; « ? » si
+  la capacité n'est pas exposée — **à vérifier en prod**).
+  - **Décision serveur only** (invariant CLAUDE.md) : le modèle n'intervient
+    jamais ; planning via `wix.queryAvailabilityMulti` (cache module 5 min,
+    fallback dernier cache valide), horloge côté serveur.
+  - **Claim-before-send durci** (`notification_log`, clé unique partielle
+    `dedup_key`) : contrairement aux relances marketing où « un envoi perdu est
+    OK », ici un rappel manqué (« mettre les vélos à l'eau ») est pire qu'un
+    doublon → une ligne coincée en `claimed` est **reprise après 2 min**
+    (crash/5xx entre claim et envoi). 131047 sans template = `failed` (pas de
+    retry, visible au journal) ; erreur transitoire = reste `claimed` pour le
+    bail. Repli anti dos-à-dos aussi via `notification_log.event_end` quand le
+    planning Wix ne renvoie plus la séance précédente déjà commencée.
+  - **Sweep dans la boucle 60 s** (précision 15 min avant → granularité ≤ 1 min),
+    try/catch isolé pour ne jamais bloquer l'expiration/réconciliation.
+  - **Café → WhatsApp prioritaire** : `notifyReception(subject, body,
+    { whatsappFirst:true })` — WhatsApp d'abord, email en secours SI l'envoi WA
+    échoue (uniquement pour le bar ; remboursements/handoffs/crash gardent le
+    dual-channel, l'email restant le canal fiable). `sendWhatsAppNotification`
+    renvoie désormais `'sent' | 'sent_template'` ; chaque envoi réception est
+    journalisé (`source='reception'`) et apparaît dans `/admin/notifications`.
+  - **Template** : un seul Utility générique 2 variables (`WA_RECEPTION_TEMPLATE`)
+    sert réception + gardien + coachs. Tant qu'il n'est pas approuvé, les envois
+    staff hors fenêtre 24h échouent en 131047 **mais sont visibles au journal**
+    (avant : silencieux). Une fois approuvé, poser `WA_RECEPTION_TEMPLATE` via
+    `railway variables --set` (tâche agent, pas le gérant).
+  - Fichiers : `domain/notificationRules.ts` (pur, testé), `notificationRepo.ts`
+    (CRUD + claim + journal), `notificationSweep.ts` (sweep + cache planning),
+    `admin/notificationsPage.ts` + routes `/admin/notifications`. Logique pure
+    couverte par `test/notificationRules.test.ts`.
 
 ## 5. Chronologie condensée
 

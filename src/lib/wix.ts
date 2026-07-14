@@ -145,6 +145,13 @@ export interface WixSlot {
   startDate: string; // ISO
   endDate: string; // ISO
   openSpots: number;
+  /**
+   * Total capacity of the session, used for the coach headcount
+   * (booked = totalSpots − openSpots). 0 when Wix doesn't expose it — callers
+   * must render the headcount as "?" rather than a wrong number. LIVE PROBE:
+   * the exact field name on the availability entry is verified in prod.
+   */
+  totalSpots: number;
   /** Coach assigned to this session (slot.resource.name) — verified live 11/07. */
   coach: string | null;
   /** Full slot object exactly as returned by Wix — passed back on Create Booking. */
@@ -193,6 +200,9 @@ export async function queryAvailabilityMulti(
       startDate: e.slot.startDate,
       endDate: e.slot.endDate,
       openSpots: Number(e.openSpots ?? 0),
+      // Availability entries carry capacity as `totalSpots`; fall back to a few
+      // spellings so a schema tweak degrades to "?" (0) instead of a wrong count.
+      totalSpots: Number(e.totalSpots ?? e.slot?.totalSpots ?? e.slot?.capacity ?? 0),
       coach: typeof e.slot.resource?.name === "string" ? e.slot.resource.name : null,
       raw: e.slot,
     }));

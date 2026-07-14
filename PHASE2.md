@@ -61,6 +61,15 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
 > approuvés — c'était un non-goal Phase 1. Les items suivants en dépendent tous.
 
 - 🔥 **Rappels de séance** (J-1 et/ou H-2) avec la politique d'annulation 16h.
+  NB : l'infra existe déjà (moteur de notifications staff, §4.32 PROGRESS), mais
+  cibler les **clients** demande un template Meta client-facing dédié + une
+  résolution client (≠ règles staff actuelles). Idées adjacentes reposant sur le
+  même moteur : **digest matinal réception** (cours + effectifs + café à
+  préparer), **résumé ventes bar en fin de journée**, **alerte coach quand un
+  cours se remplit** (place franchie), règle « sortir les vélos de l'eau » le
+  soir (le gérant peut déjà la créer en `fixed_schedule`). Garde-fou à prévoir
+  si les coachs se mettent à répondre au bot : **liste d'exclusion staff** (un
+  numéro du répertoire ne devrait pas être traité comme un client).
 - ~~🔥 **Notifications d'annulation**~~ → **ABANDONNÉ (juillet 2026)** : la
   réception coche "notifier le client" dans Wix au moment d'annuler — Wix est
   le canal officiel. Awa ne message plus le client sur annulation ; le sweep

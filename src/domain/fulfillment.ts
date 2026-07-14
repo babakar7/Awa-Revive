@@ -175,6 +175,7 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
           `\n  À servir : ${booking.order_note ?? "prête après le cours"}\n` +
           `  Cours : ${serviceLabel} — ${new Date(booking.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })}\n` +
           `  Total bar : ${booking.extras_amount_xof} FCFA (payé, inclus dans le paiement)`,
+        { whatsappFirst: true },
       );
     } catch (err) {
       log.error({ err, bookingId: booking.id }, "Bar order notification failed");
@@ -388,6 +389,7 @@ export async function fulfillCafeOrder(cafeOrderId: string, log: PaymentLog): Pr
         `\n  À servir : ${order.order_note ?? (standalone ? "dès que possible" : "prête après le cours")}\n` +
         (standalone ? "" : `  Cours associé : ${order.service_name ?? "?"} — ${slotLabel}\n`) +
         `  Total bar : ${order.amount_xof} FCFA (payé)`,
+      { whatsappFirst: true },
     );
   } catch (err) {
     log.error({ err, cafeOrderId: order.id }, "Bar order notification failed");

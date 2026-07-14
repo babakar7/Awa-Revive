@@ -1,5 +1,6 @@
 import { config } from "../config.js";
 import { sendTemplate, sendText } from "./whatsapp.js";
+import { recordReceptionLog } from "../domain/notificationRepo.js";
 
 /**
  * Automatic notifications to the reception team — handoffs, refunds,
@@ -100,21 +101,26 @@ export function toTemplateParam(text: string, maxLength = 550): string {
   return flat.length > maxLength ? `${flat.slice(0, maxLength - 1)}…` : flat;
 }
 
+/** Which delivery path a WhatsApp notification took (for the admin log). */
+export type WhatsAppSendPath = "sent" | "sent_template";
+
 /**
  * Send one WhatsApp notification to an arbitrary number. Free-form text first
  * (full detail, free); if the 24h window is closed (Meta error 131047) and the
  * reception Utility template is configured, fall back to it so the message
- * still lands (billed per message). Any other error propagates.
+ * still lands (billed per message). Any other error propagates. Returns which
+ * path won so the caller can log "sent" vs "sent_template".
  */
 export async function sendWhatsAppNotification(
   toPhone: string,
   subject: string,
   body: string,
-): Promise<void> {
+): Promise<WhatsAppSendPath> {
   // The Cloud API expects a wa_id-style number (digits only, no "+").
   const to = toPhone.replace(/\D/g, "");
   try {
     await sendText(to, `🔔 *[Awa] ${subject}*\n\n${body}`);
+    return "sent";
   } catch (err) {
     if (!config.WA_RECEPTION_TEMPLATE || !String(err).includes("131047")) throw err;
     console.warn(
@@ -124,6 +130,7 @@ export async function sendWhatsAppNotification(
       toTemplateParam(subject, 120),
       toTemplateParam(body),
     ]);
+    return "sent_template";
   }
 }
 
@@ -131,8 +138,11 @@ export async function sendWhatsAppNotification(
  * Send one WhatsApp message to reception. Exported for the test script; app
  * code should use notifyReception().
  */
-export async function sendReceptionWhatsApp(subject: string, body: string): Promise<void> {
-  await sendWhatsAppNotification(config.RECEPTION_PHONE, subject, body);
+export async function sendReceptionWhatsApp(
+  subject: string,
+  body: string,
+): Promise<WhatsAppSendPath> {
+  return sendWhatsAppNotification(config.RECEPTION_PHONE, subject, body);
 }
 
 /**
@@ -163,13 +173,52 @@ export function notifyNewConversation(args: {
     );
 }
 
+export interface NotifyReceptionOpts {
+  /**
+   * Café/bar orders: reception lives on WhatsApp, so make WhatsApp the primary
+   * channel and only fall back to email if the WhatsApp send ultimately fails.
+   * Left off (default) for money/escalation paths (refunds, handoffs, crash
+   * alerts), which keep the belt-and-braces dual-channel send — email is still
+   * the reliable channel there while the reception template is pending.
+   */
+  whatsappFirst?: boolean;
+}
+
 /**
- * Fire-and-forget notification to reception (email + WhatsApp). Returns
- * immediately — the sends happen in the background so they can never delay
- * a reply to the client (an awaited send once blocked a WhatsApp answer for
- * 2 minutes).
+ * Fire-and-forget notification to reception. Returns immediately — the sends
+ * happen in the background so they can never delay a reply to the client (an
+ * awaited send once blocked a WhatsApp answer for 2 minutes). Every WhatsApp
+ * attempt is journaled to notification_log so it shows on /admin/notifications.
  */
-export function notifyReception(subject: string, body: string): void {
+export function notifyReception(
+  subject: string,
+  body: string,
+  opts: NotifyReceptionOpts = {},
+): void {
+  const logBody = `${subject}\n${body}`;
+
+  if (opts.whatsappFirst) {
+    // WhatsApp primary; email only as a safety net if WhatsApp fails.
+    sendReceptionWhatsApp(subject, body)
+      .then((path) => {
+        console.log(`[notify] Reception notified on WhatsApp (${path}): ${subject}`);
+        void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null);
+      })
+      .catch((err) => {
+        console.error(`[notify] Café WhatsApp to reception failed (${subject}):`, err);
+        void recordReceptionLog(config.RECEPTION_PHONE, logBody, "failed", String(err).slice(0, 300));
+        if (emailNotificationsEnabled()) {
+          sendReceptionEmail(subject, body)
+            .then(() => console.log(`[notify] Reception emailed (WhatsApp fallback): ${subject}`))
+            .catch((e) => console.error(`[notify] Email fallback also failed (${subject}):`, e));
+        } else {
+          console.warn(`[notify] BREVO_API_KEY not set — no email fallback for: ${subject}`);
+        }
+      });
+    return;
+  }
+
+  // Default: independent dual-channel (email is the reliable leg for critical paths).
   if (!emailNotificationsEnabled()) {
     console.warn(`[notify] BREVO_API_KEY not set — reception NOT emailed: ${subject}`);
   } else {
@@ -179,12 +228,16 @@ export function notifyReception(subject: string, body: string): void {
   }
 
   sendReceptionWhatsApp(subject, body)
-    .then(() => console.log(`[notify] Reception notified on WhatsApp: ${subject}`))
-    .catch((err) =>
+    .then((path) => {
+      console.log(`[notify] Reception notified on WhatsApp (${path}): ${subject}`);
+      void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null);
+    })
+    .catch((err) => {
       console.error(
         `[notify] Failed to WhatsApp reception (${subject}) — if the error is 131047, ` +
           `reception hasn't messaged Awa in 24h (window closed):`,
         err,
-      ),
-    );
+      );
+      void recordReceptionLog(config.RECEPTION_PHONE, logBody, "failed", String(err).slice(0, 300));
+    });
 }

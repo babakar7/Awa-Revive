@@ -291,3 +291,84 @@ export async function saveLocalWhatsAppProfile(
     [fields.description, fields.address, fields.hours, by],
   );
 }
+
+// ---------- notifications (/admin/notifications) — read-only ----------
+
+export interface NotificationRuleRow {
+  id: string;
+  label: string;
+  kind: string;
+  enabled: boolean;
+  class_pattern: string | null;
+  lead_minutes: number | null;
+  suppress_gap_minutes: number | null;
+  recipient_kind: string;
+  recipient_phone: string | null;
+  days_of_week: string | null;
+  send_time: string | null;
+  message_template: string;
+}
+
+export async function listNotificationRules(): Promise<NotificationRuleRow[]> {
+  const res = await pool.query(
+    `select id, label, kind, enabled, class_pattern, lead_minutes, suppress_gap_minutes,
+            recipient_kind, recipient_phone, days_of_week, send_time, message_template
+       from notification_rules order by created_at`,
+  );
+  return res.rows;
+}
+
+export interface StaffContactRow {
+  id: string;
+  name: string;
+  phone: string;
+  role: string;
+  muted: boolean;
+}
+
+export async function listStaffContacts(): Promise<StaffContactRow[]> {
+  const res = await pool.query(
+    `select id, name, phone, role, muted from staff_contacts order by role, name`,
+  );
+  return res.rows;
+}
+
+export interface NotificationLogRow {
+  id: string;
+  rule_id: string | null;
+  source: string;
+  recipient_phone: string | null;
+  body: string | null;
+  event_start: Date | null;
+  status: string;
+  error: string | null;
+  created_at: Date;
+}
+
+export async function listNotificationLog(limit = 100): Promise<NotificationLogRow[]> {
+  const res = await pool.query(
+    `select id, rule_id, source, recipient_phone, body, event_start, status, error, created_at
+       from notification_log
+      where status <> 'claimed'
+      order by created_at desc limit $1`,
+    [limit],
+  );
+  return res.rows;
+}
+
+/** Most recent finished log line per rule, for the "last: sent 12 min ago" column. */
+export async function lastLogPerRule(): Promise<
+  Map<string, { status: string; error: string | null; created_at: Date }>
+> {
+  const res = await pool.query(
+    `select distinct on (rule_id) rule_id, status, error, created_at
+       from notification_log
+      where rule_id is not null and status <> 'claimed'
+      order by rule_id, created_at desc`,
+  );
+  const map = new Map<string, { status: string; error: string | null; created_at: Date }>();
+  for (const r of res.rows) {
+    map.set(r.rule_id, { status: r.status, error: r.error, created_at: r.created_at });
+  }
+  return map;
+}

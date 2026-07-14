@@ -35,6 +35,11 @@ import {
 import * as links from "../domain/linkRequests.js";
 import * as reviews from "../domain/conversationReview.js";
 import { renderTestChecklist } from "./testChecklist.js";
+import { renderNotificationsPage } from "./notificationsPage.js";
+import * as nrepo from "../domain/notificationRepo.js";
+import { cachedCoachNames } from "../domain/notificationSweep.js";
+import { renderMessage, STAFF_FOOTER, type NotificationRule } from "../domain/notificationRules.js";
+import { sendWhatsAppNotification } from "../lib/notify.js";
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
 async function activePlansByContact(): Promise<Map<string, string[]>> {
@@ -105,6 +110,7 @@ function layout(title: string, active: string, body: string): string {
     ["/admin/handoffs", "Handoffs"],
     ["/admin/reviews", "À reprendre 🔁"],
     ["/admin/crm", "CRM 🗂"],
+    ["/admin/notifications", "Notifs 🔔"],
     ["/admin/profile", "Profil 📱"],
     ["/admin/tests", "À tester 🧪"],
   ]
@@ -158,6 +164,32 @@ a.rowlink:hover{background:#faf8f4}
 <header><h1>🤖 Awa — admin</h1><nav>${tabs}</nav></header>
 <main>${body}</main>
 </body></html>`;
+}
+
+/** Sample values used by the "Envoyer un test" button so the message reads real. */
+const TEST_VARS: Record<string, string> = {
+  class_name: "Aquabike",
+  date: "samedi 18 juillet",
+  start_time: "10:00",
+  end_time: "10:45",
+  coach: "Awa",
+  booked_count: "8",
+  open_spots: "2",
+  total_spots: "10",
+};
+
+/**
+ * Where a test send should go: the rule's own number, or — for a coach rule
+ * with no fixed number — the first non-muted (else any) staff contact, so the
+ * owner can preview it on a real phone. Null when there's no candidate.
+ */
+function testRecipient(
+  rule: NotificationRule,
+  contacts: { phone: string; muted: boolean }[],
+): string | null {
+  if (rule.recipient_phone) return rule.recipient_phone;
+  const active = contacts.find((c) => !c.muted) ?? contacts[0];
+  return active?.phone ?? null;
 }
 
 /** "il y a Xh" style relative time for lists. */
@@ -1094,6 +1126,188 @@ ${photoSection}
         }
 
         return reply.redirect("/admin/profile?done=1", 303);
+      });
+
+      // ---------- Notifications automatiques (rappels staff, journal) ----------
+      const NOTIF_BANNERS: Record<string, string> = {
+        created: "Règle créée.",
+        updated: "Règle mise à jour.",
+        deleted: "Règle supprimée.",
+        toggled: "Règle mise en pause / réactivée.",
+        tested: "Message de test envoyé (voir le journal).",
+        "test-failed": "Envoi de test échoué — voir le journal.",
+        "contact-added": "Contact ajouté.",
+        "contact-deleted": "Contact supprimé.",
+        "contact-muted": "Contact muté / réactivé.",
+      };
+
+      function banner(done?: string, err?: string): string {
+        if (done && NOTIF_BANNERS[done]) {
+          return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${escapeHtml(NOTIF_BANNERS[done])}</span></div>`;
+        }
+        if (err) return `<div class="card warn">⚠️ ${escapeHtml(err)}</div>`;
+        return "";
+      }
+
+      /** Build a RuleInput from a posted form, normalizing per-kind fields. */
+      function parseRuleInput(b: Record<string, string>): nrepo.RuleInput | { error: string } {
+        const label = String(b.label ?? "").trim();
+        const kind = b.kind === "fixed_schedule" ? "fixed_schedule" : "class_reminder";
+        const message = String(b.message_template ?? "").trim();
+        if (!label) return { error: "le nom de la règle est obligatoire" };
+        if (!message) return { error: "le message est obligatoire" };
+        const intOrNull = (v: unknown) => {
+          const n = parseInt(String(v ?? "").trim(), 10);
+          return Number.isFinite(n) ? n : null;
+        };
+        const recipientKind = b.recipient_kind === "coach" ? "coach" : "phone";
+        const phone = String(b.recipient_phone ?? "").trim() || null;
+
+        if (kind === "class_reminder") {
+          if (intOrNull(b.lead_minutes) === null)
+            return { error: "les minutes avant le cours sont obligatoires" };
+          if (recipientKind === "phone" && !phone)
+            return { error: "un numéro destinataire est requis (ou choisir « coach »)" };
+          return {
+            label,
+            kind,
+            class_pattern: String(b.class_pattern ?? "").trim() || null,
+            lead_minutes: intOrNull(b.lead_minutes),
+            suppress_gap_minutes: intOrNull(b.suppress_gap_minutes),
+            recipient_kind: recipientKind,
+            recipient_phone: recipientKind === "coach" ? null : phone,
+            days_of_week: null,
+            send_time: null,
+            message_template: message,
+          };
+        }
+        // fixed_schedule
+        const days = String(b.days_of_week ?? "").trim();
+        const time = String(b.send_time ?? "").trim();
+        if (!days) return { error: "les jours sont obligatoires (ex : 6 pour samedi)" };
+        if (!/^\d{1,2}:\d{2}$/.test(time)) return { error: "heure invalide (format HH:MM)" };
+        if (!phone) return { error: "un numéro destinataire est requis" };
+        return {
+          label,
+          kind,
+          class_pattern: null,
+          lead_minutes: null,
+          suppress_gap_minutes: null,
+          recipient_kind: "phone",
+          recipient_phone: phone,
+          days_of_week: days,
+          send_time: time,
+          message_template: message,
+        };
+      }
+
+      admin.get("/notifications", async (req, reply) => {
+        const editId = (req.query as any)?.edit as string | undefined;
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const [rules, contacts, log, lastByRule] = await Promise.all([
+          q.listNotificationRules(),
+          q.listStaffContacts(),
+          q.listNotificationLog(100),
+          q.lastLogPerRule(),
+        ]);
+        const editRule = editId ? (rules.find((r) => r.id === editId) ?? null) : null;
+        const body = renderNotificationsPage({
+          rules,
+          contacts,
+          log,
+          lastByRule,
+          coachHints: cachedCoachNames(),
+          editRule,
+          banner: banner(done, err),
+        });
+        reply.type("text/html").send(layout("Notifications", "/admin/notifications", body));
+      });
+
+      admin.post("/notifications/rules", async (req, reply) => {
+        const parsed = parseRuleInput((req.body ?? {}) as Record<string, string>);
+        if ("error" in parsed) {
+          return reply.redirect(`/admin/notifications?err=${encodeURIComponent(parsed.error)}`, 303);
+        }
+        await nrepo.createRule(parsed);
+        req.log.info({ by: req.adminUser, label: parsed.label }, "Notification rule created");
+        return reply.redirect("/admin/notifications?done=created", 303);
+      });
+
+      admin.post("/notifications/rules/:id/update", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const parsed = parseRuleInput((req.body ?? {}) as Record<string, string>);
+        if ("error" in parsed) {
+          return reply.redirect(`/admin/notifications?edit=${id}&err=${encodeURIComponent(parsed.error)}`, 303);
+        }
+        await nrepo.updateRule(id, parsed);
+        req.log.info({ by: req.adminUser, ruleId: id }, "Notification rule updated");
+        return reply.redirect("/admin/notifications?done=updated", 303);
+      });
+
+      admin.post("/notifications/rules/:id/toggle", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const rule = await nrepo.getRule(id);
+        if (rule) await nrepo.setRuleEnabled(id, !rule.enabled);
+        return reply.redirect("/admin/notifications?done=toggled", 303);
+      });
+
+      admin.post("/notifications/rules/:id/delete", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        await nrepo.deleteRule(id);
+        req.log.info({ by: req.adminUser, ruleId: id }, "Notification rule deleted");
+        return reply.redirect("/admin/notifications?done=deleted", 303);
+      });
+
+      // Send the rule's message NOW with sample values (logged source='test',
+      // its own dedup key so it never blocks a real occurrence).
+      admin.post("/notifications/rules/:id/test", async (req, reply) => {
+        const rule = await nrepo.getRule((req.params as { id: string }).id);
+        if (!rule) return reply.redirect("/admin/notifications?err=règle introuvable", 303);
+        const phone = testRecipient(rule, await nrepo.listStaffContacts());
+        if (!phone) {
+          return reply.redirect(
+            `/admin/notifications?err=${encodeURIComponent("aucun numéro pour tester (règle coach sans contact)")}`,
+            303,
+          );
+        }
+        const body = `${renderMessage(rule.message_template, TEST_VARS)}\n\n${STAFF_FOOTER}`;
+        try {
+          const path = await sendWhatsAppNotification(phone, `[TEST] ${rule.label}`, body);
+          await nrepo.recordTestLog(phone, body, path, null);
+          return reply.redirect("/admin/notifications?done=tested", 303);
+        } catch (e) {
+          await nrepo.recordTestLog(phone, body, "failed", String(e).slice(0, 300));
+          req.log.error({ err: e, ruleId: rule.id }, "Notification test send failed");
+          return reply.redirect("/admin/notifications?done=test-failed", 303);
+        }
+      });
+
+      admin.post("/notifications/contacts", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const res = await nrepo.createContact({
+          name: String(b.name ?? "").trim(),
+          phone: String(b.phone ?? "").trim(),
+          role: String(b.role ?? "").trim() || "staff",
+          muted: b.muted === "1",
+        });
+        if (!res.ok) return reply.redirect(`/admin/notifications?err=${encodeURIComponent(res.error ?? "erreur")}`, 303);
+        req.log.info({ by: req.adminUser, name: b.name }, "Staff contact added");
+        return reply.redirect("/admin/notifications?done=contact-added", 303);
+      });
+
+      admin.post("/notifications/contacts/:id/mute", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const contacts = await nrepo.listStaffContacts();
+        const c = contacts.find((x) => x.id === id);
+        if (c) await nrepo.setContactMuted(id, !c.muted);
+        return reply.redirect("/admin/notifications?done=contact-muted", 303);
+      });
+
+      admin.post("/notifications/contacts/:id/delete", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        await nrepo.deleteContact(id);
+        return reply.redirect("/admin/notifications?done=contact-deleted", 303);
       });
 
       // ---------- Actions de pointage (aucune action monétaire) ----------

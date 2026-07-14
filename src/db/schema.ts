@@ -371,4 +371,77 @@ create table if not exists whatsapp_profile (
   updated_by text,
   updated_at timestamptz not null default now()
 );
+
+-- Moteur de notifications staff (rappels automatiques éditables depuis
+-- /admin/notifications). AUCUN nom de cours ni numéro en dur dans le code :
+-- les règles et contacts sont saisis par le gérant. Tout est décidé côté
+-- serveur (planning Wix + horloge), le modèle n'intervient jamais.
+
+-- Répertoire staff : gardien, coachs, réception. Pour un coach, "name" DOIT
+-- correspondre au nom de la ressource Wix (slot.coach) pour la résolution
+-- automatique du destinataire. muted = jamais notifié (ex : Yass, toujours au
+-- studio) — l'occurrence est quand même journalisée en 'suppressed'.
+create table if not exists staff_contacts (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  phone text not null,
+  role text not null default 'staff',
+  muted boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+-- Règles de notification. kind :
+--   'class_reminder'  → X min avant chaque cours dont le nom contient
+--                       class_pattern (vide = tous), au gardien (phone) ou au
+--                       coach du cours (recipient_kind). suppress_gap_minutes :
+--                       ne pas notifier si un cours du même motif s'est terminé
+--                       <= N min avant (enchaînement dos à dos).
+--   'fixed_schedule'  → chaque jour de days_of_week (CSV 0-6, 0=dimanche) à
+--                       send_time (HH:MM, Dakar = UTC toute l'année).
+create table if not exists notification_rules (
+  id uuid primary key default gen_random_uuid(),
+  label text not null,
+  kind text not null,
+  enabled boolean not null default true,
+  class_pattern text,
+  lead_minutes int,
+  suppress_gap_minutes int,
+  recipient_kind text not null default 'phone',
+  recipient_phone text,
+  days_of_week text,
+  send_time text,
+  message_template text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Journal de tout envoi (règle, réception, test). dedup_key = clé de claim
+-- (unique partiel) : une occurrence n'est jamais envoyée deux fois, même après
+-- redémarrage ou sweeps concurrents. status :
+--   claimed → réservé, envoi pas encore confirmé (reclaimable après 2 min si
+--             coincé : un envoi perdu pour « mettre les vélos à l'eau » est pire
+--             qu'un doublon, contrairement aux relances marketing) ;
+--   sent | sent_template | failed | suppressed.
+create table if not exists notification_log (
+  id bigserial primary key,
+  rule_id uuid,
+  source text not null,
+  dedup_key text,
+  recipient_phone text,
+  body text,
+  event_start timestamptz,
+  event_end timestamptz,
+  status text not null,
+  error text,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists idx_notification_log_dedup
+  on notification_log (dedup_key) where dedup_key is not null;
+create index if not exists idx_notification_log_created
+  on notification_log (created_at desc);
+-- Repli anti-doublon dos à dos : retrouver la fin des cours déjà notifiés d'une
+-- règle quand le planning Wix ne renvoie plus la séance précédente (déjà commencée).
+create index if not exists idx_notification_log_rule_event
+  on notification_log (rule_id, event_start);
 `;
