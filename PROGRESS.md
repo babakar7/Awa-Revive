@@ -1213,10 +1213,14 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     renvoie désormais `'sent' | 'sent_template'` ; chaque envoi réception est
     journalisé (`source='reception'`) et apparaît dans `/admin/notifications`.
   - **Template** : un seul Utility générique 2 variables (`WA_RECEPTION_TEMPLATE`)
-    sert réception + gardien + coachs. Tant qu'il n'est pas approuvé, les envois
-    staff hors fenêtre 24h échouent en 131047 **mais sont visibles au journal**
-    (avant : silencieux). Une fois approuvé, poser `WA_RECEPTION_TEMPLATE` via
-    `railway variables --set` (tâche agent, pas le gérant).
+    sert réception + gardien + coachs. **APPROUVÉ + posé en prod le 14/07** :
+    `WA_RECEPTION_TEMPLATE=awa_notification`, `WA_RECEPTION_TEMPLATE_LANG=en`
+    (Babakar a créé le template en ANGLAIS → le code langue doit être `en`, sinon
+    échec Meta ; les variables {{1}}/{{2}} restent en français = habillage anglais
+    + contenu FR, cosmétique). Un ancien template `awa_reception_notif_interne`
+    (lang `en`) était configuré avant — remplacé (réversible via
+    `railway variables --set`, tâche agent, pas le gérant). Hors fenêtre 24h sans
+    template valide = échec 131047 **mais visible au journal** (avant : silencieux).
   - Fichiers : `domain/notificationRules.ts` (pur, testé), `notificationRepo.ts`
     (CRUD + claim + journal), `notificationSweep.ts` (sweep + cache planning),
     `admin/notificationsPage.ts` + routes `/admin/notifications`. Logique pure
