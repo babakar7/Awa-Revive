@@ -25,6 +25,7 @@ const baseRule: NotificationRule = {
   days_of_week: null,
   send_time: null,
   message_template: "L'aquabike de {start_time} — {booked_count} inscrits",
+  group_only: false,
 };
 
 const slot = (over: Partial<SlotWithName>): SlotWithName => ({
@@ -36,6 +37,7 @@ const slot = (over: Partial<SlotWithName>): SlotWithName => ({
   openSpots: 2,
   totalSpots: 10,
   coach: "Awa",
+  isGroup: true,
   ...over,
 });
 
@@ -81,6 +83,26 @@ describe("dueClassReminders — due window", () => {
   it("ignores classes whose name doesn't match the pattern", () => {
     const s = slot({ serviceName: "Pilates" });
     expect(dueClassReminders(baseRule, [s], new Date("2026-07-15T09:45:00Z"))).toHaveLength(0);
+  });
+});
+
+describe("dueClassReminders — group_only", () => {
+  const now = new Date("2026-07-15T09:45:00Z");
+  // A coach-headcount style rule: no name filter, group classes only.
+  const rule = { ...baseRule, class_pattern: "", suppress_gap_minutes: null, group_only: true };
+
+  it("keeps group classes and drops 1-on-1 appointments", () => {
+    const group = slot({ eventId: "g", serviceName: "Aquabike", isGroup: true });
+    const appt = slot({ eventId: "a", serviceName: "Massage", isGroup: false });
+    const due = dueClassReminders(rule, [group, appt], now);
+    expect(due).toHaveLength(1);
+    expect(due[0].slot.eventId).toBe("g");
+  });
+
+  it("group_only=false keeps everything (individual sessions included)", () => {
+    const appt = slot({ eventId: "a", serviceName: "Massage", isGroup: false });
+    const due = dueClassReminders({ ...rule, group_only: false }, [appt], now);
+    expect(due).toHaveLength(1);
   });
 });
 

@@ -411,9 +411,14 @@ create table if not exists notification_rules (
   days_of_week text,
   send_time text,
   message_template text not null default '',
+  -- class_reminder : ne cibler que les cours collectifs (type Wix CLASS/COURSE),
+  -- pas les rendez-vous individuels (APPOINTMENT). Défaut false = tous.
+  group_only boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table notification_rules
+  add column if not exists group_only boolean not null default false;
 
 -- Journal de tout envoi (règle, réception, test). dedup_key = clé de claim
 -- (unique partiel) : une occurrence n'est jamais envoyée deux fois, même après

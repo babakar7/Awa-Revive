@@ -79,7 +79,8 @@ function daysLabel(csv: string | null): string {
 
 function ruleSummary(r: NotificationRuleRow): string {
   if (r.kind === "class_reminder") {
-    const pat = r.class_pattern?.trim() ? `« ${esc(r.class_pattern)} »` : "tous les cours";
+    let pat = r.class_pattern?.trim() ? `« ${esc(r.class_pattern)} »` : "tous les cours";
+    if (r.group_only) pat += " (collectifs)";
     const gap = r.suppress_gap_minutes ? ` · anti dos-à-dos ${r.suppress_gap_minutes} min` : "";
     const to =
       r.recipient_kind === "coach" ? "coach du cours" : `+${esc((r.recipient_phone ?? "").replace(/^\+/, ""))}`;
@@ -123,6 +124,10 @@ function ruleForm(edit: NotificationRuleRow | null): string {
         <input name="suppress_gap_minutes" type="number" min="0" max="240" value="${v(edit?.suppress_gap_minutes)}" placeholder="15" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
       </label>
     </div>
+    <label style="display:flex;align-items:center;gap:.4rem;margin-top:.5rem">
+      <input type="checkbox" name="group_only" value="1"${edit?.group_only ? " checked" : ""}>
+      Cours collectifs uniquement <span class="muted">(exclut les rendez-vous individuels)</span>
+    </label>
     <label style="display:block;margin-top:.5rem">Destinataire
       <select name="recipient_kind" id="rkind-select" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
         <option value="phone"${sel("phone", rkind)}>Un numéro fixe (gardien…)</option>

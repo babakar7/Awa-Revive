@@ -1188,7 +1188,11 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   Dakar = UTC). Destinataire = numéro fixe (gardien) ou **coach du cours**
   (résolu par `slot.coach` → `staff_contacts.name`, muet possible pour Yass
   toujours au studio). Effectif coach = `totalSpots − openSpots` (Wix ; « ? » si
-  la capacité n'est pas exposée — **à vérifier en prod**).
+  la capacité n'est pas exposée — **à vérifier en prod**). Option **`group_only`**
+  (case « cours collectifs uniquement ») : ne cible que les services Wix de type
+  CLASS/COURSE ; seul un `APPOINTMENT` explicite est exclu (type inconnu = gardé,
+  pour ne jamais tout couper en silence si Wix change de schéma). Sert la règle
+  effectif-coach pour ne pas notifier les rendez-vous individuels (massages…).
   - **Décision serveur only** (invariant CLAUDE.md) : le modèle n'intervient
     jamais ; planning via `wix.queryAvailabilityMulti` (cache module 5 min,
     fallback dernier cache valide), horloge côté serveur.

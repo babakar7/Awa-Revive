@@ -49,6 +49,7 @@ async function getSchedule(log: SweepLog): Promise<SlotWithName[]> {
   try {
     const services = await wix.listServices();
     const nameById = new Map(services.map((s) => [s.id, s.name]));
+    const typeById = new Map(services.map((s) => [s.id, s.type]));
     const now = Date.now();
     const from = new Date(now - 6 * 60 * 60 * 1000).toISOString();
     const to = new Date(now + 26 * 60 * 60 * 1000).toISOString();
@@ -62,6 +63,9 @@ async function getSchedule(log: SweepLog): Promise<SlotWithName[]> {
       openSpots: s.openSpots,
       totalSpots: s.totalSpots,
       coach: s.coach,
+      // Only an explicit APPOINTMENT is non-group; unknown types stay group so
+      // a group_only rule never silently drops everything on a Wix schema tweak.
+      isGroup: (typeById.get(s.serviceId) ?? "") !== "APPOINTMENT",
     }));
     scheduleCache = { at: Date.now(), slots: enriched };
     return enriched;

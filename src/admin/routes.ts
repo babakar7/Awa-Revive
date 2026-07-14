@@ -1179,6 +1179,7 @@ ${photoSection}
             days_of_week: null,
             send_time: null,
             message_template: message,
+            group_only: b.group_only === "1",
           };
         }
         // fixed_schedule
@@ -1198,6 +1199,7 @@ ${photoSection}
           days_of_week: days,
           send_time: time,
           message_template: message,
+          group_only: false,
         };
       }
 

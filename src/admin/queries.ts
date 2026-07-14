@@ -307,12 +307,13 @@ export interface NotificationRuleRow {
   days_of_week: string | null;
   send_time: string | null;
   message_template: string;
+  group_only: boolean;
 }
 
 export async function listNotificationRules(): Promise<NotificationRuleRow[]> {
   const res = await pool.query(
     `select id, label, kind, enabled, class_pattern, lead_minutes, suppress_gap_minutes,
-            recipient_kind, recipient_phone, days_of_week, send_time, message_template
+            recipient_kind, recipient_phone, days_of_week, send_time, message_template, group_only
        from notification_rules order by created_at`,
   );
   return res.rows;

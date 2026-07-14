@@ -20,7 +20,7 @@ export interface StaffContact {
 }
 
 const RULE_COLUMNS = `id, label, kind, enabled, class_pattern, lead_minutes, suppress_gap_minutes,
-  recipient_kind, recipient_phone, days_of_week, send_time, message_template`;
+  recipient_kind, recipient_phone, days_of_week, send_time, message_template, group_only`;
 
 function rowToRule(r: any): NotificationRule {
   return {
@@ -36,6 +36,7 @@ function rowToRule(r: any): NotificationRule {
     days_of_week: r.days_of_week,
     send_time: r.send_time,
     message_template: r.message_template,
+    group_only: r.group_only,
   };
 }
 
@@ -59,14 +60,15 @@ export interface RuleInput {
   days_of_week: string | null;
   send_time: string | null;
   message_template: string;
+  group_only: boolean;
 }
 
 export async function createRule(input: RuleInput): Promise<void> {
   await pool.query(
     `insert into notification_rules
        (label, kind, class_pattern, lead_minutes, suppress_gap_minutes,
-        recipient_kind, recipient_phone, days_of_week, send_time, message_template)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        recipient_kind, recipient_phone, days_of_week, send_time, message_template, group_only)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
       input.label,
       input.kind,
@@ -78,6 +80,7 @@ export async function createRule(input: RuleInput): Promise<void> {
       input.days_of_week,
       input.send_time,
       input.message_template,
+      input.group_only,
     ],
   );
 }
@@ -87,7 +90,7 @@ export async function updateRule(id: string, input: RuleInput): Promise<void> {
     `update notification_rules set
        label=$2, kind=$3, class_pattern=$4, lead_minutes=$5, suppress_gap_minutes=$6,
        recipient_kind=$7, recipient_phone=$8, days_of_week=$9, send_time=$10,
-       message_template=$11, updated_at=now()
+       message_template=$11, group_only=$12, updated_at=now()
      where id=$1`,
     [
       id,
@@ -101,6 +104,7 @@ export async function updateRule(id: string, input: RuleInput): Promise<void> {
       input.days_of_week,
       input.send_time,
       input.message_template,
+      input.group_only,
     ],
   );
 }

@@ -69,6 +69,12 @@ export interface WixService {
   maxParticipantsPerBooking: number;
   /** Pricing plans connected to this service in Wix (plans that can pay for it). */
   pricingPlanIds: string[];
+  /**
+   * Wix service type — "CLASS" / "COURSE" (group) or "APPOINTMENT" (1-on-1).
+   * The canonical group-vs-private signal for the staff-notification rules.
+   * Uppercased; "" when Wix doesn't return it.
+   */
+  type: string;
 }
 
 let servicesCache: { fetchedAt: number; services: WixService[] } | null = null;
@@ -93,6 +99,7 @@ export async function listServices(): Promise<WixService[]> {
         pricingPlanIds: Array.isArray(s?.payment?.pricingPlanIds)
           ? s.payment.pricingPlanIds.map(String)
           : [],
+        type: String(s?.type ?? "").toUpperCase(),
       };
     });
   servicesCache = { fetchedAt: Date.now(), services };

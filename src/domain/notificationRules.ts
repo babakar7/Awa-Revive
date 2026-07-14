@@ -23,6 +23,8 @@ export interface NotificationRule {
   days_of_week: string | null;
   send_time: string | null;
   message_template: string;
+  /** class_reminder only: restrict to group classes (skip 1-on-1 appointments). */
+  group_only: boolean;
 }
 
 /** A Wix availability slot enriched with its service name (the sweep joins it). */
@@ -35,6 +37,12 @@ export interface SlotWithName {
   openSpots: number;
   totalSpots: number; // 0 when Wix doesn't expose capacity → booked_count = "?"
   coach: string | null;
+  /**
+   * Is this a group class (Wix type CLASS/COURSE) vs a 1-on-1 appointment? The
+   * sweep sets it from the service type; only an explicit APPOINTMENT is false,
+   * so an unknown type stays a group (never silently dropped by group_only).
+   */
+  isGroup: boolean;
 }
 
 /** Footer appended to EVERY staff send (never typed into a rule template). */
@@ -95,7 +103,10 @@ export function dueClassReminders(
   const lead = (rule.lead_minutes ?? 0) * 60_000;
   const gap = (rule.suppress_gap_minutes ?? 0) * 60_000;
   const nowMs = now.getTime();
-  const matching = slots.filter((s) => matchesPattern(s.serviceName, rule.class_pattern));
+  const matching = slots.filter(
+    (s) =>
+      matchesPattern(s.serviceName, rule.class_pattern) && (!rule.group_only || s.isGroup),
+  );
   const out: DueClassReminder[] = [];
 
   for (const slot of matching) {
