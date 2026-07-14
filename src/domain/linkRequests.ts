@@ -236,7 +236,7 @@ export async function getByIdForAdmin(id: string): Promise<ReceptionQueueEntry |
 
 // ---------- notification réception (voie de repli) ----------
 
-const HANDOFF_PREFIX = "Abonnement introuvable — client affirme en avoir un";
+const HANDOFF_PREFIX = "Compte non relié — liaison/création à finaliser";
 
 /**
  * Préviens la réception qu'une liaison attend dans le dashboard. Dédup à deux
@@ -248,6 +248,7 @@ export async function notifyLinkNeedsReception(
   request: Pick<LinkRequest, "id" | "client_id" | "reception_notified_at">,
   client: { name: string | null; wa_phone: string },
   detail: string,
+  claimedEmail?: string | null,
 ): Promise<void> {
   try {
     if (request.reception_notified_at) return;
@@ -258,13 +259,19 @@ export async function notifyLinkNeedsReception(
     );
     if (await repo.recentHandoffExists(request.client_id, HANDOFF_PREFIX, 24)) return;
     await repo.recordHandoff(request.client_id, `${HANDOFF_PREFIX} (${detail})`);
+    // Email déclaré : ce qui permet à la réception de savoir quoi rattacher à la
+    // fiche — Awa ne devine jamais un abonnement (prod 14/07 Rama : nouvelle
+    // cliente sans abonnement, l'ancien texte « abonnement introuvable » était
+    // trompeur).
+    const emailLine = claimedEmail ? `  Email déclaré : ${claimedEmail}\n` : "";
     notifyReception(
       "🔗 Liaison de compte en attente — 1 clic dans le dashboard",
-      `Un client affirme avoir un abonnement/compte, mais Awa ne peut pas le relier : ${detail}.\n` +
-        `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n\n` +
-        `À faire (1 clic) : ${config.BASE_URL}/admin/crm → section « Liaisons en attente » → ` +
-        `vérifier la fiche proposée puis « Lier cette fiche ». Awa reconnaîtra son abonnement ` +
-        `immédiatement.\n\n` +
+      `Un client a voulu relier ou créer son compte Revive, mais Awa n'a pas pu finaliser : ${detail}.\n` +
+        `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
+        emailLine +
+        `\nÀ faire (1 clic) : ${config.BASE_URL}/admin/crm → section « Liaisons en attente » → ` +
+        `vérifier/créer la fiche puis « Lier cette fiche ». Awa reconnaîtra le compte (et un ` +
+        `éventuel abonnement) immédiatement.\n\n` +
         `Awa a prévenu le client que l'équipe s'en occupe.`,
     );
   } catch (err) {
@@ -300,13 +307,19 @@ export async function escalateStaleLinkRequests(): Promise<number> {
   const res = await pool.query(
     `update link_requests lr
         set status = 'NEEDS_RECEPTION',
-            detail = coalesce(lr.detail, 'client silencieux — vérification email jamais aboutie'),
+            detail = coalesce(
+              lr.detail,
+              case when lr.emails_sent = 0
+                then 'le client a donné un email mais la vérification n''a jamais démarré'
+                else 'client silencieux — vérification email jamais terminée'
+              end),
             code_hash = null, updated_at = now()
        from clients c
       where c.id = lr.client_id
         and lr.status in ('AWAITING_EMAIL','AWAITING_CODE')
         and lr.updated_at < now() - ($1 || ' minutes')::interval
       returning lr.id, lr.client_id, lr.reception_notified_at, lr.detail,
+                coalesce(lr.claimed_email, c.claimed_email) as claimed_email,
                 c.name, c.wa_phone`,
     [String(STALE_AFTER_MINUTES)],
   );
@@ -315,6 +328,7 @@ export async function escalateStaleLinkRequests(): Promise<number> {
       { id: row.id, client_id: row.client_id, reception_notified_at: row.reception_notified_at },
       { name: row.name, wa_phone: row.wa_phone },
       row.detail,
+      row.claimed_email,
     );
   }
   return res.rowCount ?? 0;

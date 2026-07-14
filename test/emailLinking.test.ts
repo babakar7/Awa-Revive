@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appendPhoneItems, resolveEmailCandidate } from "../src/lib/wix.js";
+import { decideNoneCandidateAction } from "../src/agent/tools.js";
 
 function contact(id: string, phones: string[] = []) {
   return {
@@ -41,6 +42,23 @@ describe("resolveEmailCandidate", () => {
       kind: "ambiguous",
       count: 2,
     });
+  });
+});
+
+describe("decideNoneCandidateAction (email matches no fiche)", () => {
+  it("name known → send the code straight away (one round-trip, prod 14/07 Rama)", () => {
+    // Client sent name+email together in reply to the creation invitation: the
+    // model passes client_name on the FIRST call, no 'do you confirm?' detour.
+    expect(decideNoneCandidateAction(false, "Rama Thiam Ndiaye")).toBe("send_code");
+    expect(decideNoneCandidateAction(true, "Rama Thiam Ndiaye")).toBe("send_code");
+  });
+
+  it("no name, no create intent → offer to create the account", () => {
+    expect(decideNoneCandidateAction(false, "")).toBe("offer_creation");
+  });
+
+  it("wants to create but forgot the name → ask for it", () => {
+    expect(decideNoneCandidateAction(true, "")).toBe("name_required");
   });
 });
 

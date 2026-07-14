@@ -4,13 +4,17 @@ import type { LinkRequest, LinkRequestStatus } from "../src/domain/linkRequests.
 
 const NOW = new Date("2026-07-11T12:00:00Z");
 
-function req(status: LinkRequestStatus, codeExpiresAt: Date | null): LinkRequest {
+function req(
+  status: LinkRequestStatus,
+  codeExpiresAt: Date | null,
+  wixContactId: string | null = "w1",
+): LinkRequest {
   return {
     id: "r1",
     client_id: "c1",
     claimed_email: "a@b.com",
     claimed_name: null,
-    wix_contact_id: "w1",
+    wix_contact_id: wixContactId,
     code_hash: "x",
     code_expires_at: codeExpiresAt,
     attempts: 0,
@@ -51,5 +55,11 @@ describe("verificationBlocksPayment", () => {
 
   it("does NOT block if code_expires_at is missing", () => {
     expect(verificationBlocksPayment(req("AWAITING_CODE", null), NOW)).toBe(false);
+  });
+
+  it("does NOT block a NEW-account verification (wix_contact_id null) even with a live code", () => {
+    // A fresh fiche can't hold an abonnement, so there's nothing to protect —
+    // holding the sale would strand a paying new client (prod 14/07 Rama).
+    expect(verificationBlocksPayment(req("AWAITING_CODE", inFuture, null), NOW)).toBe(false);
   });
 });

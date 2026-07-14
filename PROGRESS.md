@@ -1222,6 +1222,38 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     `admin/notificationsPage.ts` + routes `/admin/notifications`. Logique pure
     couverte par `test/notificationRules.test.ts`.
 
+- **4.33 — Création de compte en un aller-retour + escalade réception honnête
+  (14/07, incident Rama).** Cliente nouvelle : Awa l'invite (« envoie-moi ton
+  nom et ton email et je t'en crée un »), Rama répond nom + email d'un coup, mais
+  `request_email_verification` appelé SANS `client_name` → réponse
+  `email_not_found_offer_creation` qui exige une 2ᵉ confirmation. Le message
+  redemandant « oui ? » était noyé dans le volet réservation ; Rama n'a répondu
+  qu'à la résa → le fil création est retombé, **aucun code envoyé, aucun compte
+  créé** (`emails_sent = 0`). 30 min après, le sweep a escaladé la demande vide
+  en réception avec le texte trompeur **« Abonnement introuvable — client affirme
+  en avoir un »** (Rama n'a jamais parlé d'abonnement). Trois correctifs :
+  - **Un aller-retour** (`decideNoneCandidateAction`, pur/testé) : si le nom est
+    connu (client_name fourni, même sans `create_account:true`), le code part
+    directement. La double confirmation ne reste que quand le nom manque. Tool
+    description mise à jour : passer `client_name` dès le 1er appel quand le
+    client a envoyé nom + email ensemble.
+  - **Le paiement n'est plus bloqué pendant une vérif de compte NEUF**
+    (`verificationBlocksPayment` : `wix_contact_id` null ⇒ pas d'abonnement à
+    protéger). Sans ça, le fix ci-dessus aurait bloqué le lien de paiement de
+    Rama. Un doublon de fiche (résa auto-crée une fiche pendant le code en vol)
+    reste absorbé par `planVerifiedMerge` post-vérification.
+  - **Escalade honnête** (`linkRequests.ts`) : `HANDOFF_PREFIX` neutre (« Compte
+    non relié — liaison/création à finaliser »), corps sans mention d'abonnement,
+    **email déclaré inclus** pour que la réception sache quoi rattacher. Détail du
+    sweep distingué : « vérification jamais démarrée » si `emails_sent = 0` vs
+    « jamais terminée » sinon.
+  - Tests : `verificationGuard` (compte neuf non bloquant), `emailLinking`
+    (`decideNoneCandidateAction`), intégration `linkEscalation` (détails du sweep).
+  - **Remédiation prod Rama** : fiche Wix créée/complétée par un agent (email
+    `ramathiamndiaye@hotmail.com` ajouté), demande passée LINKED, handoff clos ;
+    Babakar re-booke lui-même. Résa Sculpt sam. 18/07 10:15 (2 pers., 24 000 F
+    Max It) avait bien abouti — seule la création de compte avait échoué.
+
 ## 5. Chronologie condensée
 
 - **13/07 — Handoffs réception en un clic.** Tous les parcours où le client doit

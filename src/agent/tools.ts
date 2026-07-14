@@ -127,11 +127,34 @@ async function createClientPaymentSession(args: {
  * Does NOT block AWAITING_EMAIL (a claimer who ignored the offer can still buy)
  * nor an expired code (a >10-min silence shouldn't hold the sale; the >30-min
  * sweep escalates to reception separately).
+ * Does NOT block a NEW-account verification either (wix_contact_id null): a
+ * fresh fiche can't hold an abonnement, so there's nothing to protect — holding
+ * the sale would just strand a paying new client mid-booking (prod 14/07 Rama).
  */
 export function verificationBlocksPayment(request: LinkRequest | null, now: Date): boolean {
   if (!request || request.status !== "AWAITING_CODE") return false;
+  if (!request.wix_contact_id) return false; // create-account path — no plan to cover this
   if (!request.code_expires_at) return false;
   return new Date(request.code_expires_at).getTime() > now.getTime();
+}
+
+/**
+ * When an email matches NO existing Wix fiche, decide the next step:
+ *  - "send_code": a name is known → create the account straight away (email the
+ *    code now). This fires as soon as name+email are both present — including
+ *    the very first call when the client sent them together in reply to the
+ *    creation invitation. No second "do you confirm?" round-trip (prod 14/07
+ *    Rama: the double confirm let the thread fall through, no code was sent).
+ *  - "name_required": the client asked to create but no name yet → ask for it.
+ *  - "offer_creation": no name and no create intent → offer to create, or let
+ *    them re-send a different email if they expected an existing account.
+ */
+export function decideNoneCandidateAction(
+  wantsCreate: boolean,
+  clientName: string,
+): "send_code" | "name_required" | "offer_creation" {
+  if (clientName) return "send_code";
+  return wantsCreate ? "name_required" : "offer_creation";
 }
 
 const VERIFICATION_PENDING_RESULT = JSON.stringify({
@@ -434,10 +457,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Verify a client's email by code, to either LINK an existing Revive account or CREATE a new one. The " +
       "server sends a 6-digit code TO THAT INBOX; the client reads it from their email and types it here " +
       "(submit_verification_code). Use whenever a client shares an email — after a failed check_membership " +
-      "claim, the post-payment linking question, or the account invitation. If the email matches no Wix " +
-      "account, the server tells you so (status email_not_found_offer_creation) WITHOUT sending a code — " +
-      "offer to create a fresh account; if the client agrees, call again with create_account:true AND " +
-      "client_name (their full name), which sends the code and, once verified, creates the account. If the " +
+      "claim, the post-payment linking question, or the account invitation. If the client sent their full " +
+      "name AND email together (e.g. answering the 'send me your name and email and I'll create one' " +
+      "invitation), pass BOTH email and client_name on the FIRST call — the server then emails the code " +
+      "straight away (no 'do you confirm?' round-trip). Only omit client_name when the client expected an " +
+      "EXISTING account: then, if the email matches no Wix account, the server replies " +
+      "email_not_found_offer_creation WITHOUT sending a code — offer to create a fresh account; if the " +
+      "client agrees, call again with create_account:true AND client_name (their full name). If the " +
       "client says they have no email or can't access it, call with client_has_no_email:true instead — " +
       "reception takes over (the client does NOT need to call). You never see the code: it only exists in " +
       "the client's inbox.",
@@ -628,12 +654,18 @@ function hoursUntil(ts: Date | string): number {
  * notified by linkRequests.notifyLinkNeedsReception.
  */
 async function escalateLinkRequest(
-  request: Pick<links.LinkRequest, "id" | "client_id" | "reception_notified_at">,
+  request: Pick<links.LinkRequest, "id" | "client_id" | "reception_notified_at"> &
+    Partial<Pick<links.LinkRequest, "claimed_email">>,
   client: Client,
   detail: string,
 ): Promise<void> {
   await links.markNeedsReception(request.id, detail);
-  await links.notifyLinkNeedsReception(request, client, detail);
+  await links.notifyLinkNeedsReception(
+    request,
+    client,
+    detail,
+    request.claimed_email ?? client.claimed_email,
+  );
 }
 
 /**
@@ -1764,20 +1796,9 @@ export async function executeTool(
         case "none": {
           const wantsCreate = input.create_account === true;
           const clientName = String(input.client_name ?? "").slice(0, 80).trim();
-          if (!wantsCreate) {
-            // No fiche carries this email — DON'T escalate. Offer to create a
-            // fresh account (client_name + create_account:true on the next
-            // call), or let them re-try another email if they expected one.
-            return JSON.stringify({
-              status: "email_not_found_offer_creation",
-              message:
-                "No existing Revive account carries this email. Ask the client: do they want you to CREATE a " +
-                "new account with this email? If yes, get their full name and call request_email_verification " +
-                "again with create_account:true and client_name. If they expected an existing account, they " +
-                "can re-send a different email instead. (No code was sent yet.)",
-            });
-          }
-          if (!clientName) {
+          // No fiche carries this email — DON'T escalate.
+          const action = decideNoneCandidateAction(wantsCreate, clientName);
+          if (action === "name_required") {
             return JSON.stringify({
               status: "name_required",
               message:
@@ -1785,6 +1806,17 @@ export async function executeTool(
                 "create_account:true and client_name.",
             });
           }
+          if (action === "offer_creation") {
+            return JSON.stringify({
+              status: "email_not_found_offer_creation",
+              message:
+                "No existing Revive account carries this email. Ask the client: do they want you to CREATE a " +
+                "new account with this email? If yes, get their full name and call request_email_verification " +
+                "again with client_name (create_account:true). If they expected an existing account, they " +
+                "can re-send a different email instead. (No code was sent yet.)",
+            });
+          }
+          // action === "send_code": name is known → create the account now.
           const code = links.generateCode();
           // wix_contact_id null = create-account marker: the fiche is created at
           // submit_verification_code time, once the email is proven by code.

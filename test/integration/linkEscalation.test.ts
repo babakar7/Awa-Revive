@@ -17,18 +17,22 @@ async function seedRequest(
   clientId: string,
   status: string,
   stale: boolean,
+  emailsSent = 0,
 ): Promise<string> {
   const res = await pool.query(
-    `insert into link_requests (client_id, status, updated_at)
-     values ($1, $2, ${stale ? STALE : "now()"})
+    `insert into link_requests (client_id, status, emails_sent, updated_at)
+     values ($1, $2, $3, ${stale ? STALE : "now()"})
      returning id`,
-    [clientId, status],
+    [clientId, status, emailsSent],
   );
   return res.rows[0].id;
 }
 
 const statusOf = async (id: string): Promise<string> =>
   (await pool.query(`select status from link_requests where id = $1`, [id])).rows[0].status;
+
+const detailOf = async (id: string): Promise<string> =>
+  (await pool.query(`select detail from link_requests where id = $1`, [id])).rows[0].detail;
 
 beforeAll(async () => {
   await migrate();
@@ -70,5 +74,25 @@ describe("escalateStaleLinkRequests — already-linked guard", () => {
     await escalateStaleLinkRequests();
 
     expect(await statusOf(fresh)).toBe("AWAITING_EMAIL");
+  });
+
+  it("detail says 'jamais démarré' when no code was ever sent (emails_sent = 0)", async () => {
+    // Prod 14/07 Rama: an email was given but no code sent — the escalation
+    // must not claim the verification was attempted-and-failed.
+    const client = await seedClient({ wa_phone: "221774444444" });
+    const pending = await seedRequest(client.id, "AWAITING_EMAIL", true, 0);
+
+    await escalateStaleLinkRequests();
+
+    expect(await detailOf(pending)).toContain("jamais démarré");
+  });
+
+  it("detail says 'jamais terminée' when a code was sent but never confirmed", async () => {
+    const client = await seedClient({ wa_phone: "221775555555" });
+    const pending = await seedRequest(client.id, "AWAITING_CODE", true, 1);
+
+    await escalateStaleLinkRequests();
+
+    expect(await detailOf(pending)).toContain("jamais terminée");
   });
 });
