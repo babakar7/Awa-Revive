@@ -8,6 +8,7 @@ import {
   dueClassReminders,
   fixedDedupKey,
   isFixedScheduleDue,
+  normalizeName,
   renderMessage,
   STAFF_FOOTER,
   type NotificationRule,
@@ -34,7 +35,12 @@ interface SweepLog {
 // ---------- schedule cache (one Wix call / 5 min, shared by every rule) ----------
 
 const SCHEDULE_TTL_MS = 5 * 60 * 1000;
-let scheduleCache: { at: number; slots: SlotWithName[] } | null = null;
+let scheduleCache: {
+  at: number;
+  slots: SlotWithName[];
+  coachById: Map<string, wix.WixStaffResource>;
+  coachByName: Map<string, wix.WixStaffResource>;
+} | null = null;
 
 /**
  * Upcoming class sessions enriched with their service name. Cached 5 min; on a
@@ -47,7 +53,7 @@ async function getSchedule(log: SweepLog): Promise<SlotWithName[]> {
     return scheduleCache.slots;
   }
   try {
-    const services = await wix.listServices();
+    const [services, staff] = await Promise.all([wix.listServices(), wix.listStaffResources()]);
     const nameById = new Map(services.map((s) => [s.id, s.name]));
     const typeById = new Map(services.map((s) => [s.id, s.type]));
     const now = Date.now();
@@ -63,11 +69,14 @@ async function getSchedule(log: SweepLog): Promise<SlotWithName[]> {
       openSpots: s.openSpots,
       totalSpots: s.totalSpots,
       coach: s.coach,
+      coachId: s.coachId,
       // Only an explicit APPOINTMENT is non-group; unknown types stay group so
       // a group_only rule never silently drops everything on a Wix schema tweak.
       isGroup: (typeById.get(s.serviceId) ?? "") !== "APPOINTMENT",
     }));
-    scheduleCache = { at: Date.now(), slots: enriched };
+    const coachById = new Map(staff.map((r) => [r.id, r]));
+    const coachByName = new Map(staff.map((r) => [normalizeName(r.name), r]));
+    scheduleCache = { at: Date.now(), slots: enriched, coachById, coachByName };
     return enriched;
   } catch (err) {
     if (scheduleCache) {
@@ -76,6 +85,17 @@ async function getSchedule(log: SweepLog): Promise<SlotWithName[]> {
     }
     throw err;
   }
+}
+
+/**
+ * Coach phone straight from Wix (resource id first, then name) — the directory
+ * of record. An admin staff_contacts entry can still override the phone or mute.
+ */
+function wixCoachPhone(slot: SlotWithName): string | null {
+  if (!scheduleCache) return null;
+  const byId = slot.coachId ? scheduleCache.coachById.get(slot.coachId) : undefined;
+  const byName = slot.coach ? scheduleCache.coachByName.get(normalizeName(slot.coach)) : undefined;
+  return byId?.phone ?? byName?.phone ?? null;
 }
 
 /** Distinct coach names in the current schedule cache — an admin-page hint. */
@@ -172,18 +192,20 @@ async function runClassRule(
     // Resolve the recipient.
     let phone: string | null = null;
     if (rule.recipient_kind === "coach") {
+      // Wix is the directory of record; an admin staff_contacts entry (same
+      // name) can mute the coach or override the phone.
       const contact = await nrepo.findStaffByName(slot.coach);
-      if (!contact) {
+      if (contact?.muted) {
+        await nrepo.finishLog(dedupKey, "suppressed", { body: `coach muet : ${contact.name}` });
+        continue;
+      }
+      phone = contact?.phone ?? wixCoachPhone(slot);
+      if (!phone) {
         await nrepo.finishLog(dedupKey, "failed", {
-          error: `aucun contact staff pour le coach "${slot.coach ?? "?"}"`,
+          error: `aucun numéro pour le coach "${slot.coach ?? "?"}" (ni Wix ni répertoire)`,
         });
         continue;
       }
-      if (contact.muted) {
-        await nrepo.finishLog(dedupKey, "suppressed", { body: `contact muet : ${contact.name}` });
-        continue;
-      }
-      phone = contact.phone;
     } else {
       phone = rule.recipient_phone;
       if (!phone) {

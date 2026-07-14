@@ -3,6 +3,7 @@ import {
   classDedupKey,
   dakarDateStr,
   dueClassReminders,
+  excludes,
   fixedDedupKey,
   isFixedScheduleDue,
   matchesPattern,
@@ -18,6 +19,7 @@ const baseRule: NotificationRule = {
   kind: "class_reminder",
   enabled: true,
   class_pattern: "aquabike",
+  exclude_pattern: null,
   lead_minutes: 15,
   suppress_gap_minutes: 15,
   recipient_kind: "phone",
@@ -37,6 +39,7 @@ const slot = (over: Partial<SlotWithName>): SlotWithName => ({
   openSpots: 2,
   totalSpots: 10,
   coach: "Awa",
+  coachId: "coach-1",
   isGroup: true,
   ...over,
 });
@@ -83,6 +86,31 @@ describe("dueClassReminders — due window", () => {
   it("ignores classes whose name doesn't match the pattern", () => {
     const s = slot({ serviceName: "Pilates" });
     expect(dueClassReminders(baseRule, [s], new Date("2026-07-15T09:45:00Z"))).toHaveLength(0);
+  });
+});
+
+describe("excludes / exclude_pattern", () => {
+  it("empty pattern excludes nothing; a match excludes (accent/case-insensitive)", () => {
+    expect(excludes("Pilates Reformer (Intense)", null)).toBe(false);
+    expect(excludes("Pilates Reformer (Intense)", "")).toBe(false);
+    expect(excludes("Pilates Reformer (Intense)", "reformer")).toBe(true);
+    expect(excludes("Pilates Mat", "reformer")).toBe(false);
+  });
+
+  it("drops excluded classes while keeping the rest (all group except reformer)", () => {
+    const now = new Date("2026-07-15T09:45:00Z");
+    const rule = {
+      ...baseRule,
+      class_pattern: "",
+      exclude_pattern: "reformer",
+      suppress_gap_minutes: null,
+      group_only: true,
+    };
+    const aqua = slot({ eventId: "a", serviceName: "Aquabike" });
+    const reformer = slot({ eventId: "r", serviceName: "Pilates Reformer (Sculpt)" });
+    const yoga = slot({ eventId: "y", serviceName: "Power Yoga" });
+    const due = dueClassReminders(rule, [aqua, reformer, yoga], now);
+    expect(due.map((d) => d.slot.eventId).sort()).toEqual(["a", "y"]);
   });
 });
 

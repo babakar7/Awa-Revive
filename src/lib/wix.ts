@@ -161,6 +161,9 @@ export interface WixSlot {
   totalSpots: number;
   /** Coach assigned to this session (slot.resource.name) — verified live 11/07. */
   coach: string | null;
+  /** Wix resource id of the coach (slot.resource.id) — resolves to a phone via
+   *  listStaffResources(); more reliable than matching on the name. */
+  coachId: string | null;
   /** Full slot object exactly as returned by Wix — passed back on Create Booking. */
   raw: unknown;
 }
@@ -211,8 +214,44 @@ export async function queryAvailabilityMulti(
       // spellings so a schema tweak degrades to "?" (0) instead of a wrong count.
       totalSpots: Number(e.totalSpots ?? e.slot?.totalSpots ?? e.slot?.capacity ?? 0),
       coach: typeof e.slot.resource?.name === "string" ? e.slot.resource.name : null,
+      coachId: typeof e.slot.resource?.id === "string" ? e.slot.resource.id : null,
       raw: e.slot,
     }));
+}
+
+// ---------- staff resources (coaches, with contact details) ----------
+
+export interface WixStaffResource {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+}
+
+let staffCache: { fetchedAt: number; staff: WixStaffResource[] } | null = null;
+
+/**
+ * Staff resources (coaches) with their contact details — the source of truth
+ * for coach phone numbers in the staff-notification engine. Keeps only entries
+ * tagged "staff" (excludes rooms/equipment). Cached 10 min like the catalog.
+ */
+export async function listStaffResources(): Promise<WixStaffResource[]> {
+  if (staffCache && Date.now() - staffCache.fetchedAt < SERVICES_TTL_MS) {
+    return staffCache.staff;
+  }
+  const data = await wixPost("/bookings/v1/resources/query", { query: {} });
+  const staff: WixStaffResource[] = (data?.resources ?? [])
+    .filter(
+      (r: any) => !Array.isArray(r?.tags) || r.tags.length === 0 || r.tags.includes("staff"),
+    )
+    .map((r: any) => ({
+      id: String(r.id),
+      name: String(r.name ?? ""),
+      phone: typeof r.phone === "string" && r.phone.trim() ? r.phone.trim() : null,
+      email: typeof r.email === "string" && r.email.trim() ? r.email.trim() : null,
+    }));
+  staffCache = { fetchedAt: Date.now(), staff };
+  return staff;
 }
 
 /** Fetch the current state of one specific class event (whatever its capacity). */

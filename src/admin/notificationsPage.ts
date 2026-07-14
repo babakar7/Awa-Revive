@@ -81,6 +81,7 @@ function ruleSummary(r: NotificationRuleRow): string {
   if (r.kind === "class_reminder") {
     let pat = r.class_pattern?.trim() ? `« ${esc(r.class_pattern)} »` : "tous les cours";
     if (r.group_only) pat += " (collectifs)";
+    if (r.exclude_pattern?.trim()) pat += ` sauf « ${esc(r.exclude_pattern)} »`;
     const gap = r.suppress_gap_minutes ? ` · anti dos-à-dos ${r.suppress_gap_minutes} min` : "";
     const to =
       r.recipient_kind === "coach" ? "coach du cours" : `+${esc((r.recipient_phone ?? "").replace(/^\+/, ""))}`;
@@ -116,6 +117,9 @@ function ruleForm(edit: NotificationRuleRow | null): string {
     <div style="display:flex;gap:.6rem;flex-wrap:wrap">
       <label style="flex:1;min-width:160px">Motif du nom de cours <span class="muted">(vide = tous)</span>
         <input name="class_pattern" value="${v(edit?.class_pattern)}" placeholder="aquabike" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+      </label>
+      <label style="flex:1;min-width:160px">Exclure les cours contenant <span class="muted">(vide = aucun)</span>
+        <input name="exclude_pattern" value="${v(edit?.exclude_pattern)}" placeholder="reformer" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
       </label>
       <label style="min-width:120px">Minutes avant
         <input name="lead_minutes" type="number" min="0" max="1440" value="${v(edit?.lead_minutes)}" placeholder="15" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">

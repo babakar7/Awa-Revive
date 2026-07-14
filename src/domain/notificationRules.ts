@@ -16,6 +16,8 @@ export interface NotificationRule {
   kind: "class_reminder" | "fixed_schedule";
   enabled: boolean;
   class_pattern: string | null;
+  /** Substring to EXCLUDE (e.g. "reformer") — matched slots are dropped. */
+  exclude_pattern: string | null;
   lead_minutes: number | null;
   suppress_gap_minutes: number | null;
   recipient_kind: "phone" | "coach";
@@ -37,6 +39,7 @@ export interface SlotWithName {
   openSpots: number;
   totalSpots: number; // 0 when Wix doesn't expose capacity → booked_count = "?"
   coach: string | null;
+  coachId: string | null;
   /**
    * Is this a group class (Wix type CLASS/COURSE) vs a 1-on-1 appointment? The
    * sweep sets it from the service type; only an explicit APPOINTMENT is false,
@@ -75,6 +78,17 @@ export function matchesPattern(serviceName: string, pattern: string | null): boo
   return normalizeName(serviceName).includes(normalizeName(p));
 }
 
+/**
+ * Should this class be EXCLUDED by a rule's exclude_pattern? Empty/blank pattern
+ * excludes nothing (the opposite default of matchesPattern). Same substring,
+ * accent/case-insensitive matching — e.g. "reformer" drops "Pilates Reformer".
+ */
+export function excludes(serviceName: string, pattern: string | null): boolean {
+  const p = (pattern ?? "").trim();
+  if (p === "" || p.length > MAX_PATTERN_LEN) return false;
+  return normalizeName(serviceName).includes(normalizeName(p));
+}
+
 /** One due class occurrence for a rule (to send, or suppressed with a reason). */
 export interface DueClassReminder {
   slot: SlotWithName;
@@ -105,7 +119,9 @@ export function dueClassReminders(
   const nowMs = now.getTime();
   const matching = slots.filter(
     (s) =>
-      matchesPattern(s.serviceName, rule.class_pattern) && (!rule.group_only || s.isGroup),
+      matchesPattern(s.serviceName, rule.class_pattern) &&
+      (!rule.group_only || s.isGroup) &&
+      !excludes(s.serviceName, rule.exclude_pattern),
   );
   const out: DueClassReminder[] = [];
 

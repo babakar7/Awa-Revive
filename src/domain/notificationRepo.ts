@@ -19,8 +19,9 @@ export interface StaffContact {
   muted: boolean;
 }
 
-const RULE_COLUMNS = `id, label, kind, enabled, class_pattern, lead_minutes, suppress_gap_minutes,
-  recipient_kind, recipient_phone, days_of_week, send_time, message_template, group_only`;
+const RULE_COLUMNS = `id, label, kind, enabled, class_pattern, exclude_pattern, lead_minutes,
+  suppress_gap_minutes, recipient_kind, recipient_phone, days_of_week, send_time,
+  message_template, group_only`;
 
 function rowToRule(r: any): NotificationRule {
   return {
@@ -29,6 +30,7 @@ function rowToRule(r: any): NotificationRule {
     kind: r.kind,
     enabled: r.enabled,
     class_pattern: r.class_pattern,
+    exclude_pattern: r.exclude_pattern,
     lead_minutes: r.lead_minutes,
     suppress_gap_minutes: r.suppress_gap_minutes,
     recipient_kind: r.recipient_kind,
@@ -53,6 +55,7 @@ export interface RuleInput {
   label: string;
   kind: "class_reminder" | "fixed_schedule";
   class_pattern: string | null;
+  exclude_pattern: string | null;
   lead_minutes: number | null;
   suppress_gap_minutes: number | null;
   recipient_kind: "phone" | "coach";
@@ -66,13 +69,14 @@ export interface RuleInput {
 export async function createRule(input: RuleInput): Promise<void> {
   await pool.query(
     `insert into notification_rules
-       (label, kind, class_pattern, lead_minutes, suppress_gap_minutes,
+       (label, kind, class_pattern, exclude_pattern, lead_minutes, suppress_gap_minutes,
         recipient_kind, recipient_phone, days_of_week, send_time, message_template, group_only)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [
       input.label,
       input.kind,
       input.class_pattern,
+      input.exclude_pattern,
       input.lead_minutes,
       input.suppress_gap_minutes,
       input.recipient_kind,
@@ -88,15 +92,16 @@ export async function createRule(input: RuleInput): Promise<void> {
 export async function updateRule(id: string, input: RuleInput): Promise<void> {
   await pool.query(
     `update notification_rules set
-       label=$2, kind=$3, class_pattern=$4, lead_minutes=$5, suppress_gap_minutes=$6,
-       recipient_kind=$7, recipient_phone=$8, days_of_week=$9, send_time=$10,
-       message_template=$11, group_only=$12, updated_at=now()
+       label=$2, kind=$3, class_pattern=$4, exclude_pattern=$5, lead_minutes=$6,
+       suppress_gap_minutes=$7, recipient_kind=$8, recipient_phone=$9, days_of_week=$10,
+       send_time=$11, message_template=$12, group_only=$13, updated_at=now()
      where id=$1`,
     [
       id,
       input.label,
       input.kind,
       input.class_pattern,
+      input.exclude_pattern,
       input.lead_minutes,
       input.suppress_gap_minutes,
       input.recipient_kind,

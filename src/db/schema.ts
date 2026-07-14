@@ -404,6 +404,7 @@ create table if not exists notification_rules (
   kind text not null,
   enabled boolean not null default true,
   class_pattern text,
+  exclude_pattern text,
   lead_minutes int,
   suppress_gap_minutes int,
   recipient_kind text not null default 'phone',
@@ -419,6 +420,8 @@ create table if not exists notification_rules (
 );
 alter table notification_rules
   add column if not exists group_only boolean not null default false;
+alter table notification_rules
+  add column if not exists exclude_pattern text;
 
 -- Journal de tout envoi (règle, réception, test). dedup_key = clé de claim
 -- (unique partiel) : une occurrence n'est jamais envoyée deux fois, même après

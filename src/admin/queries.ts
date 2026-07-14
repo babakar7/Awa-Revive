@@ -300,6 +300,7 @@ export interface NotificationRuleRow {
   kind: string;
   enabled: boolean;
   class_pattern: string | null;
+  exclude_pattern: string | null;
   lead_minutes: number | null;
   suppress_gap_minutes: number | null;
   recipient_kind: string;
@@ -312,8 +313,9 @@ export interface NotificationRuleRow {
 
 export async function listNotificationRules(): Promise<NotificationRuleRow[]> {
   const res = await pool.query(
-    `select id, label, kind, enabled, class_pattern, lead_minutes, suppress_gap_minutes,
-            recipient_kind, recipient_phone, days_of_week, send_time, message_template, group_only
+    `select id, label, kind, enabled, class_pattern, exclude_pattern, lead_minutes,
+            suppress_gap_minutes, recipient_kind, recipient_phone, days_of_week, send_time,
+            message_template, group_only
        from notification_rules order by created_at`,
   );
   return res.rows;
