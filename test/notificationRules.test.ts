@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildChain,
   classDedupKey,
   dakarDateStr,
   dueClassReminders,
@@ -178,6 +179,56 @@ describe("dueClassReminders — back-to-back suppression", () => {
     const rule = { ...baseRule, suppress_gap_minutes: null };
     const due = dueClassReminders(rule, [first, second], now);
     expect(due.every((d) => !d.suppressed)).toBe(true);
+  });
+});
+
+describe("coach chaining (one message for consecutive same-coach classes)", () => {
+  // Coach rule: all group classes, 4h lead, chain within 30 min, to the coach.
+  const coachRule: NotificationRule = {
+    ...baseRule,
+    class_pattern: "",
+    lead_minutes: 240,
+    suppress_gap_minutes: 30,
+    recipient_kind: "coach",
+    recipient_phone: null,
+    group_only: true,
+  };
+  // Awa teaches 10:00-10:45 then 11:00-11:45 (15-min gap, back-to-back).
+  const a1 = slot({ eventId: "a1", coachId: "awa", coach: "Awa", serviceName: "Aquabike", startDate: "2026-07-15T10:00:00Z", endDate: "2026-07-15T10:45:00Z" });
+  const a2 = slot({ eventId: "a2", coachId: "awa", coach: "Awa", serviceName: "Power Yoga", startDate: "2026-07-15T11:00:00Z", endDate: "2026-07-15T11:45:00Z" });
+  // Different coach Bee teaches 11:00 too — must NOT be chained with Awa.
+  const b1 = slot({ eventId: "b1", coachId: "bee", coach: "Bee", serviceName: "Cardio", startDate: "2026-07-15T11:00:00Z", endDate: "2026-07-15T11:45:00Z" });
+
+  it("suppresses the coach's follow-on class (only the first fires)", () => {
+    // 4h before the 11:00 class = 07:00; at that moment a2 is due, and Awa's
+    // 10:00 class ended 11:45 earlier... check at a time both would be in window.
+    // Simplest: evaluate at 4h before a2 (07:00) — a2 due, a1's end (10:45) is
+    // within 30 min of a2's start (11:00) → a2 suppressed.
+    const due = dueClassReminders(coachRule, [a1, a2], new Date("2026-07-15T07:00:00Z"));
+    const a2due = due.find((d) => d.slot.eventId === "a2");
+    expect(a2due?.suppressed).toBe(true);
+  });
+
+  it("does NOT suppress a different coach's class in the same time window", () => {
+    const due = dueClassReminders(coachRule, [a1, a2, b1], new Date("2026-07-15T07:00:00Z"));
+    const b1due = due.find((d) => d.slot.eventId === "b1");
+    expect(b1due?.suppressed).toBe(false); // Bee is a different person
+  });
+
+  it("buildChain groups the coach's consecutive block, not other coaches", () => {
+    const chain = buildChain(coachRule, [a1, a2, b1], a1);
+    expect(chain.map((s) => s.eventId)).toEqual(["a1", "a2"]);
+  });
+
+  it("buildChain stops at a gap larger than the threshold", () => {
+    const far = slot({ eventId: "a3", coachId: "awa", coach: "Awa", startDate: "2026-07-15T14:00:00Z", endDate: "2026-07-15T14:45:00Z" });
+    const chain = buildChain(coachRule, [a1, a2, far], a1);
+    expect(chain.map((s) => s.eventId)).toEqual(["a1", "a2"]); // a3 is 2h+ later
+  });
+
+  it("gap off → chain is just the single class", () => {
+    const chain = buildChain({ ...coachRule, suppress_gap_minutes: null }, [a1, a2], a1);
+    expect(chain.map((s) => s.eventId)).toEqual(["a1"]);
   });
 });
 

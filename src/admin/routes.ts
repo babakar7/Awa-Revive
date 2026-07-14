@@ -176,6 +176,7 @@ const TEST_VARS: Record<string, string> = {
   booked_count: "8",
   open_spots: "2",
   total_spots: "10",
+  classes: "• Aquabike à 10:00 — 8 inscrit(s)\n• Power Yoga à 11:00 — 5 inscrit(s)",
 };
 
 /**

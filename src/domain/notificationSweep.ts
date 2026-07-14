@@ -3,6 +3,7 @@ import { sendWhatsAppNotification } from "../lib/notify.js";
 import * as wix from "../lib/wix.js";
 import * as nrepo from "./notificationRepo.js";
 import {
+  buildChain,
   classDedupKey,
   dakarDateStr,
   dueClassReminders,
@@ -123,17 +124,35 @@ function fmtDay(iso: string): string {
   });
 }
 
-function classVars(slot: SlotWithName): Record<string, string> {
-  const booked = slot.totalSpots > 0 ? String(slot.totalSpots - slot.openSpots) : "?";
+function bookedCount(slot: SlotWithName): string {
+  return slot.totalSpots > 0 ? String(slot.totalSpots - slot.openSpots) : "?";
+}
+
+/** One line per class for the {classes} placeholder of a chained reminder. */
+function classesList(chain: SlotWithName[]): string {
+  return chain
+    .map((s) => `• ${s.serviceName || "cours"} à ${fmtTime(s.startDate)} — ${bookedCount(s)} inscrit(s)`)
+    .join("\n");
+}
+
+/**
+ * Placeholders for a reminder. Single-class fields ({class_name}, {start_time},
+ * {booked_count}…) reflect the FIRST class of the chain (backward-compatible);
+ * {classes} lists every class in a back-to-back block, so one message can cover
+ * them all instead of pinging once per class.
+ */
+function classVars(chain: SlotWithName[]): Record<string, string> {
+  const slot = chain[0];
   return {
     class_name: slot.serviceName || "le cours",
     date: fmtDay(slot.startDate),
     start_time: fmtTime(slot.startDate),
     end_time: fmtTime(slot.endDate),
     coach: slot.coach ?? "",
-    booked_count: booked,
+    booked_count: bookedCount(slot),
     open_spots: String(slot.openSpots),
     total_spots: slot.totalSpots > 0 ? String(slot.totalSpots) : "?",
+    classes: classesList(chain),
   };
 }
 
@@ -218,7 +237,11 @@ async function runClassRule(
       }
     }
 
-    const body = withFooter(renderMessage(rule.message_template, classVars(slot)));
+    // This is a chain-start (a preceding same-recipient class within the gap
+    // would have been suppressed above); cover the whole back-to-back block in
+    // one message via {classes}.
+    const chain = buildChain(rule, slots, slot);
+    const body = withFooter(renderMessage(rule.message_template, classVars(chain)));
     if (await deliver(dedupKey, phone, rule.label, body, log)) sent++;
   }
   return sent;

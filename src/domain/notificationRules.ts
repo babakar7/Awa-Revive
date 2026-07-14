@@ -133,13 +133,23 @@ export function dueClassReminders(
 
     let suppressed = false;
     if (gap > 0) {
+      // Chaining is per-recipient: for a coach rule, only the SAME coach's
+      // preceding class chains (coach A's class must not suppress coach B's);
+      // for a phone rule, every matching class shares the one recipient.
+      const key = chainKeyFor(rule, slot);
       const windowStart = start - gap;
       const endedInGap = (endMs: number) =>
         !Number.isNaN(endMs) && endMs <= start && endMs >= windowStart;
       const fromSchedule = matching.some(
-        (other) => other !== slot && endedInGap(new Date(other.endDate).getTime()),
+        (other) =>
+          other !== slot &&
+          chainKeyFor(rule, other) === key &&
+          endedInGap(new Date(other.endDate).getTime()),
       );
-      const fromLog = priorEndsMs.some((endMs) => endedInGap(endMs));
+      // Log fallback only for phone rules (single recipient) — a rule-wide list
+      // of prior ends can't tell coaches apart, and coach leads are long enough
+      // that the preceding session is still in the schedule window anyway.
+      const fromLog = key === "" && priorEndsMs.some((endMs) => endedInGap(endMs));
       suppressed = fromSchedule || fromLog;
     }
     out.push({
@@ -149,6 +159,65 @@ export function dueClassReminders(
     });
   }
   return out;
+}
+
+/**
+ * The chaining/suppression key for a slot under a rule: for a coach rule, the
+ * coach's identity (id, else normalized name) — so only that coach's classes
+ * chain; for a phone rule, "" (all matching classes go to the same number).
+ */
+export function chainKeyFor(rule: NotificationRule, slot: SlotWithName): string {
+  if (rule.recipient_kind === "coach") {
+    return slot.coachId ?? normalizeName(slot.coach ?? "");
+  }
+  return "";
+}
+
+/**
+ * The consecutive block a due reminder should cover, starting at `firstSlot`:
+ * same chain key (same coach for a coach rule), each class starting within the
+ * rule's gap of the previous one's end. Returns [firstSlot] when gap is off or
+ * nothing follows. Lets one message list a whole back-to-back block instead of
+ * pinging the coach once per class.
+ */
+export function buildChain(
+  rule: NotificationRule,
+  slots: SlotWithName[],
+  firstSlot: SlotWithName,
+): SlotWithName[] {
+  const gap = (rule.suppress_gap_minutes ?? 0) * 60_000;
+  if (gap <= 0) return [firstSlot];
+  const key = chainKeyFor(rule, firstSlot);
+  const firstStart = new Date(firstSlot.startDate).getTime();
+  const forward = slots
+    .filter(
+      (s) =>
+        matchesPattern(s.serviceName, rule.class_pattern) &&
+        (!rule.group_only || s.isGroup) &&
+        !excludes(s.serviceName, rule.exclude_pattern) &&
+        chainKeyFor(rule, s) === key &&
+        new Date(s.startDate).getTime() >= firstStart,
+    )
+    .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+
+  const chain: SlotWithName[] = [];
+  let last: SlotWithName | null = null;
+  for (const s of forward) {
+    if (last === null) {
+      chain.push(s);
+      last = s;
+      continue;
+    }
+    const sStart = new Date(s.startDate).getTime();
+    const lastEnd = new Date(last.endDate).getTime();
+    if (sStart >= lastEnd && sStart - lastEnd <= gap) {
+      chain.push(s);
+      last = s;
+    } else {
+      break;
+    }
+  }
+  return chain.length > 0 ? chain : [firstSlot];
 }
 
 /**
