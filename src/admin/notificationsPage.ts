@@ -195,6 +195,7 @@ export interface NotificationsPageData {
   coachHints: string[];
   editRule: NotificationRuleRow | null;
   banner: string;
+  testPhone: string;
 }
 
 export function renderNotificationsPage(d: NotificationsPageData): string {
@@ -260,6 +261,7 @@ ${templateNote}
 <div class="card">${ruleForm(d.editRule)}</div>
 
 <h2>🔔 Règles (${d.rules.length})</h2>
+<p class="muted">« Test » envoie le message avec des valeurs d'exemple à ${d.testPhone ? `<b>+${esc(d.testPhone.replace(/^\+/, ""))}</b>` : "un numéro non configuré"} (jamais au vrai gardien / coach).</p>
 <div class="card">
 ${d.rules.length ? `<table><tr><th>Règle</th><th>Dernier envoi</th><th></th></tr>${ruleRows}</table>` : `<span class="muted">Aucune règle. Créez-en une ci-dessus.</span>`}
 </div>

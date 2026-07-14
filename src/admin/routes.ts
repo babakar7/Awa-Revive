@@ -38,7 +38,7 @@ import { renderTestChecklist } from "./testChecklist.js";
 import { renderNotificationsPage } from "./notificationsPage.js";
 import * as nrepo from "../domain/notificationRepo.js";
 import { cachedCoachNames } from "../domain/notificationSweep.js";
-import { renderMessage, STAFF_FOOTER, type NotificationRule } from "../domain/notificationRules.js";
+import { renderMessage, STAFF_FOOTER } from "../domain/notificationRules.js";
 import { sendWhatsAppNotification } from "../lib/notify.js";
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
@@ -178,20 +178,6 @@ const TEST_VARS: Record<string, string> = {
   total_spots: "10",
   classes: "• Aquabike à 10:00 — 8 inscrit(s)\n• Power Yoga à 11:00 — 5 inscrit(s)",
 };
-
-/**
- * Where a test send should go: the rule's own number, or — for a coach rule
- * with no fixed number — the first non-muted (else any) staff contact, so the
- * owner can preview it on a real phone. Null when there's no candidate.
- */
-function testRecipient(
-  rule: NotificationRule,
-  contacts: { phone: string; muted: boolean }[],
-): string | null {
-  if (rule.recipient_phone) return rule.recipient_phone;
-  const active = contacts.find((c) => !c.muted) ?? contacts[0];
-  return active?.phone ?? null;
-}
 
 /** "il y a Xh" style relative time for lists. */
 function ago(d: Date | string | null): string {
@@ -1225,6 +1211,7 @@ ${photoSection}
           coachHints: cachedCoachNames(),
           editRule,
           banner: banner(done, err),
+          testPhone: config.NOTIF_TEST_PHONE,
         });
         reply.type("text/html").send(layout("Notifications", "/admin/notifications", body));
       });
@@ -1269,10 +1256,11 @@ ${photoSection}
       admin.post("/notifications/rules/:id/test", async (req, reply) => {
         const rule = await nrepo.getRule((req.params as { id: string }).id);
         if (!rule) return reply.redirect("/admin/notifications?err=règle introuvable", 303);
-        const phone = testRecipient(rule, await nrepo.listStaffContacts());
+        // Tests always go to the admin test number (never the real guardian/coach).
+        const phone = config.NOTIF_TEST_PHONE;
         if (!phone) {
           return reply.redirect(
-            `/admin/notifications?err=${encodeURIComponent("aucun numéro pour tester (règle coach sans contact)")}`,
+            `/admin/notifications?err=${encodeURIComponent("aucun numéro de test configuré (NOTIF_TEST_PHONE)")}`,
             303,
           );
         }
