@@ -1342,6 +1342,35 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     `routes.ts` allège le chrome. Suite possible : découper `routes.ts` en
     dossiers domaine (phase code-only, pas de changement UX).
 
+- **4.35 — Fiabilité des envois hors fenêtre 24h + templates ciblés (15/07).**
+  Déclencheur : des messages « sent » (bouton test) n'arrivaient jamais. Cause :
+  fenêtre 24h fermée → Meta **accepte en 200 puis rejette en asynchrone** via un
+  callback `statuses` qu'on ignorait ; le repli template (sur 131047 **synchrone**)
+  ne se déclenchait pas → échec **invisible** (faux « sent »).
+  - **Template-first pour le staff** (`sendWhatsAppNotification({preferTemplate})`,
+    [notify.ts](src/lib/notify.ts)) : coach/gardien/cuisine/test n'ont quasi jamais
+    de fenêtre ouverte → template d'abord, repli texte libre si échec. Appliqué au
+    sweep des règles ([notificationSweep.ts](src/domain/notificationSweep.ts)) et au
+    bouton test. **C'est le correctif qui fait arriver les tests.**
+  - **Webhook `statuses`** ([webhooks/whatsapp.ts](src/webhooks/whatsapp.ts)) :
+    `parseStatuses` + `markLogFailedByWamid` repassent la ligne `notification_log`
+    `sent` → `failed` sur échec async. On stocke le `wamid` à l'envoi (colonne
+    `notification_log.wa_message_id` + index) ; `sendText`/`sendTemplate` renvoient
+    le wamid. Fini les faux « sent ».
+  - **Ticket cuisine = template `ticket_cuisine` + bouton URL dynamique**
+    « Marquer prête » (5 variables ; `sendTemplateWithUrlButton`), template-first,
+    repli texte libre. **Le lien magique passe à `/livraison/:token`** (recherche
+    par hash du token, plus d'id dans l'URL) pour la variable unique du bouton Meta.
+  - **Templates Meta** (créés par Babakar, **corps FR sous code langue `en`**) :
+    `livraison_prete` (client, 2 var) et `ticket_cuisine` (cuisine, 5 var + bouton).
+    Env Railway posés : `WA_DELIVERY_READY_TEMPLATE`, `WA_KITCHEN_TICKET_TEMPLATE`
+    (LANG par défaut `en`). Dégradation propre tant que Meta n'a pas approuvé
+    (repli texte libre / badge « 📞 Appeler le client »). Rappel :
+    `awa_notification` reste le template générique fourre-tout (contenu arbitraire
+    des règles staff). Détail préférences : mémoire `meta-templates-english`.
+  - Tests : `parseStatuses`, `kitchenTemplateParams` (ordre exact des 5 variables),
+    route token-only, flip async `markLogFailedByWamid`.
+
 ## 5. Chronologie condensée
 
 - **13/07 — Handoffs réception en un clic.** Tous les parcours où le client doit
