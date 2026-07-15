@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { toTemplateParam } from "../src/lib/notify.js";
+import { stripStaffFooter, toTemplateParam } from "../src/lib/notify.js";
+import { STAFF_FOOTER } from "../src/domain/notificationRules.js";
+
+describe("stripStaffFooter", () => {
+  it("drops the staff footer so the template's own signature isn't doubled", () => {
+    const body = `Aquabike à 10:00 : 8 inscrit(s) — vélos à l'eau 🚴\n\n${STAFF_FOOTER}`;
+    expect(stripStaffFooter(body)).toBe("Aquabike à 10:00 : 8 inscrit(s) — vélos à l'eau 🚴");
+  });
+
+  it("leaves a body without footer untouched, and never returns empty", () => {
+    expect(stripStaffFooter("Juste un message")).toBe("Juste un message");
+    expect(stripStaffFooter(STAFF_FOOTER)).toBe(STAFF_FOOTER); // footer-only stays
+  });
+});
 
 describe("toTemplateParam", () => {
   it("flattens newlines into ' | ' separators", () => {

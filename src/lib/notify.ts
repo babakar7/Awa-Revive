@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import { sendTemplate, sendText } from "./whatsapp.js";
 import { recordReceptionLog } from "../domain/notificationRepo.js";
+import { STAFF_FOOTER } from "../domain/notificationRules.js";
 
 /**
  * Automatic notifications to the reception team — handoffs, refunds,
@@ -105,6 +106,18 @@ export function toTemplateParam(text: string, maxLength = 550): string {
 export type WhatsAppSendPath = "sent" | "sent_template";
 
 /**
+ * Drop the staff free-text footer before injecting a body into the Utility
+ * template: the template's FIXED text already ends with its own « message
+ * automatique — merci de ne pas répondre » signature, so keeping the footer
+ * doubles the mention (seen on the test button, 15/07). Free-text sends keep
+ * the footer — they have no template signature. Pure, exported for tests.
+ */
+export function stripStaffFooter(body: string): string {
+  const stripped = body.replace(STAFF_FOOTER, "").trim();
+  return stripped || body;
+}
+
+/**
  * Send one WhatsApp notification to an arbitrary number. Free-form text first
  * (full detail, free); if the 24h window is closed (Meta error 131047) and the
  * reception Utility template is configured, fall back to it so the message
@@ -122,7 +135,7 @@ export async function sendWhatsAppNotification(
   const templateParams = () =>
     sendTemplate(to, config.WA_RECEPTION_TEMPLATE, config.WA_RECEPTION_TEMPLATE_LANG, [
       toTemplateParam(subject, 120),
-      toTemplateParam(body),
+      toTemplateParam(stripStaffFooter(body)),
     ]);
   // Staff recipients (coach/guardian/kitchen/test) almost never have an open
   // 24h window, and free-text out-of-window can be accepted (200) then dropped
