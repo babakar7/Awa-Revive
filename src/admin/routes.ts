@@ -4,7 +4,16 @@ import { pool } from "../db/index.js";
 import { transition } from "../domain/stateMachine.js";
 import * as repo from "../domain/repo.js";
 import { extrasFromJson, CAFE_MENU, computeExtras } from "../lib/cafeMenu.js";
-import { adminAuthHook } from "./auth.js";
+import {
+  adminAuthHook,
+  adminUsers,
+  clearSessionCookieHeader,
+  mintSessionToken,
+  safeNextPath,
+  sessionCookieHeader,
+  verifyCredentials,
+} from "./auth.js";
+import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
 import {
   attemptClientNotify,
@@ -92,10 +101,87 @@ const TEST_VARS: Record<string, string> = {
   classes: "• Aquabike à 10:00 — 8 inscrit(s)\n• Power Yoga à 11:00 — 5 inscrit(s)",
 };
 
+function renderLoginPage(opts: { error?: string; next?: string }): string {
+  const next = safeNextPath(opts.next);
+  const err = opts.error
+    ? `<div class="err">⚠️ ${escLogin(opts.error)}</div>`
+    : "";
+  return `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Connexion — Awa admin</title>
+<style>
+:root{color-scheme:light}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f6f3ee;color:#1f2328;padding:1rem}
+.card{background:#fff;border:1px solid #e4ddd3;border-radius:14px;padding:1.5rem;width:100%;max-width:380px;box-shadow:0 8px 24px rgba(31,35,40,.06)}
+h1{font-size:1.15rem;margin:0 0 .3rem}
+p{color:#6e7781;font-size:.9rem;margin:0 0 1.1rem}
+label{display:block;font-size:.82rem;font-weight:600;margin:.7rem 0 .3rem;color:#424a53}
+input{width:100%;padding:.55rem .75rem;border:1px solid #e4ddd3;border-radius:8px;font-size:1rem}
+button{margin-top:1rem;width:100%;background:#1a7f37;color:#fff;border:none;border-radius:8px;padding:.65rem;font-size:.95rem;font-weight:600;cursor:pointer}
+button:hover{background:#166f30}
+.err{background:#fff8f0;border:1px solid #f0d8b6;border-radius:8px;padding:.55rem .7rem;margin-bottom:.9rem;font-size:.88rem}
+.muted{color:#6e7781;font-size:.78rem;margin-top:1rem;text-align:center}
+</style></head>
+<body>
+<div class="card">
+  <h1>🤖 Awa — admin</h1>
+  <p>Connexion réception · une session dure 30 jours</p>
+  ${err}
+  <form method="post" action="/admin/login">
+    <input type="hidden" name="next" value="${escLogin(next)}">
+    <label for="user">Identifiant</label>
+    <input id="user" name="username" autocomplete="username" required autofocus>
+    <label for="pass">Mot de passe</label>
+    <input id="pass" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Se connecter</button>
+  </form>
+  <p class="muted">Le navigateur se souvient de toi — plus de popup à chaque visite.</p>
+</div>
+</body></html>`;
+}
+
 export function registerAdmin(app: FastifyInstance): void {
   app.register(
     async (admin) => {
       admin.addHook("onRequest", adminAuthHook);
+
+      // ---------- Login (public — hook skips /login) ----------
+      admin.get("/login", async (req, reply) => {
+        const next = (req.query as { next?: string })?.next;
+        reply
+          .type("text/html")
+          .header("Cache-Control", "no-store")
+          .send(renderLoginPage({ next }));
+      });
+
+      admin.post("/login", async (req, reply) => {
+        const body = (req.body ?? {}) as Record<string, string>;
+        const username = String(body.username ?? "").trim();
+        const password = String(body.password ?? "");
+        const next = safeNextPath(body.next);
+        const user = verifyCredentials(username, password, adminUsers());
+        if (!user) {
+          reply
+            .code(401)
+            .type("text/html")
+            .header("Cache-Control", "no-store")
+            .send(renderLoginPage({ error: "Identifiant ou mot de passe incorrect.", next }));
+          return;
+        }
+        const token = mintSessionToken(user);
+        reply
+          .header("Set-Cookie", sessionCookieHeader(token))
+          .redirect(next, 303);
+      });
+
+      admin.post("/logout", async (_req, reply) => {
+        reply
+          .header("Set-Cookie", clearSessionCookieHeader())
+          .redirect("/admin/login", 303);
+      });
 
       // ---------- À tester (checklist de recette) ----------
       admin.get("/tests", async (_req, reply) => {

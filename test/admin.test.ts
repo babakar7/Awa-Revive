@@ -1,6 +1,21 @@
-import { describe, expect, it } from "vitest";
-import { parseAdminUsers, verifyBasicAuth, FALLBACK_USERS } from "../src/admin/auth.js";
+import { describe, expect, it, beforeAll } from "vitest";
+import {
+  parseAdminUsers,
+  verifyBasicAuth,
+  FALLBACK_USERS,
+  mintSessionToken,
+  verifySessionToken,
+  safeNextPath,
+  parseCookies,
+  SESSION_TTL_MS,
+} from "../src/admin/auth.js";
 import { escapeHtml } from "../src/admin/routes.js";
+
+// Session HMAC needs config.DATABASE_URL — tests load dotenv or empty; pin env.
+beforeAll(() => {
+  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
+  process.env.BASE_URL ??= "https://example.test";
+});
 
 function basic(user: string, pass: string): string {
   return `Basic ${Buffer.from(`${user}:${pass}`, "utf8").toString("base64")}`;
@@ -91,5 +106,42 @@ describe("admin — escapeHtml (client text is untrusted)", () => {
     expect(escapeHtml(null)).toBe("");
     expect(escapeHtml(undefined)).toBe("");
     expect(escapeHtml(42)).toBe("42");
+  });
+});
+
+describe("admin session cookie", () => {
+  const users = parseAdminUsers("babakar:secret1,reception:secret2");
+
+  it("mints a token that verifies for the same user", () => {
+    const token = mintSessionToken("babakar");
+    expect(verifySessionToken(token, users)).toBe("babakar");
+  });
+
+  it("rejects tampered tokens and unknown users", () => {
+    const token = mintSessionToken("babakar");
+    expect(verifySessionToken(token + "x", users)).toBeNull();
+    expect(verifySessionToken(token, parseAdminUsers("other:x"))).toBeNull();
+    expect(verifySessionToken(undefined, users)).toBeNull();
+  });
+
+  it("rejects expired tokens", () => {
+    const token = mintSessionToken("babakar", Date.now() - SESSION_TTL_MS - 1000);
+    expect(verifySessionToken(token, users)).toBeNull();
+  });
+
+  it("safeNextPath only allows /admin paths", () => {
+    expect(safeNextPath("/admin/bookings")).toBe("/admin/bookings");
+    expect(safeNextPath("/admin")).toBe("/admin");
+    expect(safeNextPath("https://evil.test")).toBe("/admin");
+    expect(safeNextPath("//evil.test")).toBe("/admin");
+    expect(safeNextPath("/elsewhere")).toBe("/admin");
+  });
+
+  it("parseCookies reads multiple cookies", () => {
+    expect(parseCookies("a=1; awa_admin_session=tok%2B; b=c")).toEqual({
+      a: "1",
+      awa_admin_session: "tok+",
+      b: "c",
+    });
   });
 });

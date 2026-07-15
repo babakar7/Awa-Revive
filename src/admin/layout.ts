@@ -90,7 +90,10 @@ const CSS = `
 body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#f6f3ee;color:#1f2328}
 .shell{display:flex;min-height:100vh;align-items:stretch}
 .sidebar{width:220px;flex-shrink:0;background:#1f2328;color:#fff;padding:.85rem .65rem 1.5rem;display:flex;flex-direction:column;gap:.15rem}
-.sidebar .brand{font-size:.95rem;font-weight:700;padding:.35rem .55rem .7rem;letter-spacing:.01em}
+.sidebar .brand{font-size:.95rem;font-weight:700;padding:.35rem .55rem .5rem;letter-spacing:.01em}
+.sidebar .logout{margin-top:auto;padding-top:.8rem}
+.sidebar .logout button{width:100%;background:transparent;border:1px solid #39414a;color:#c9d1d9;border-radius:7px;padding:.4rem .55rem;font-size:.8rem;cursor:pointer}
+.sidebar .logout button:hover{background:#39414a;color:#fff}
 .sidebar a{color:#c9d1d9;text-decoration:none;padding:.4rem .55rem;border-radius:7px;font-size:.88rem;display:flex;align-items:center;justify-content:space-between;gap:.4rem}
 .sidebar a.active,.sidebar a:hover{background:#39414a;color:#fff}
 .nav-section{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:#8b949e;padding:.75rem .55rem .25rem;font-weight:600}
@@ -167,6 +170,9 @@ ${refresh}
 <aside class="sidebar">
   <div class="brand">🤖 Awa</div>
   ${navHtml(active, badges)}
+  <form class="logout" method="post" action="/admin/logout">
+    <button type="submit">Se déconnecter</button>
+  </form>
 </aside>
 <div class="main-wrap">
   <div class="topbar">
