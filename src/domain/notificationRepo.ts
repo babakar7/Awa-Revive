@@ -287,15 +287,34 @@ export async function recordDeliveryLog(
   body: string,
   status: LogStatus,
   error: string | null,
+  waMessageId: string | null = null,
 ): Promise<void> {
   try {
     await pool.query(
-      `insert into notification_log (source, recipient_phone, body, status, error)
-       values ('delivery', $1, $2, $3, $4)`,
-      [recipientPhone, body, status, error],
+      `insert into notification_log (source, recipient_phone, body, status, error, wa_message_id)
+       values ('delivery', $1, $2, $3, $4, $5)`,
+      [recipientPhone, body, status, error, waMessageId],
     );
   } catch {
     /* logging must never break a notification */
+  }
+}
+
+/**
+ * The `statuses` webhook saw Meta drop a message it had accepted (200): flip the
+ * matching log row from sent/sent_template → failed so the false "sent" doesn't
+ * hide a miss. No-op if the wamid isn't one we logged. Never throws.
+ */
+export async function markLogFailedByWamid(waMessageId: string, error: string): Promise<number> {
+  try {
+    const res = await pool.query(
+      `update notification_log set status = 'failed', error = $2
+        where wa_message_id = $1 and status in ('sent','sent_template')`,
+      [waMessageId, error.slice(0, 300)],
+    );
+    return res.rowCount ?? 0;
+  } catch {
+    return 0;
   }
 }
 

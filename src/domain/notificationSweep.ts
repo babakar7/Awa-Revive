@@ -170,7 +170,8 @@ async function deliver(
   log: SweepLog,
 ): Promise<boolean> {
   try {
-    const path = await sendWhatsAppNotification(phone, subject, body);
+    // Staff (coach/guardian/fixed) are ~always outside the 24h window → template-first.
+    const path = await sendWhatsAppNotification(phone, subject, body, { preferTemplate: true });
     await nrepo.finishLog(dedupKey, path, { recipientPhone: phone, body });
     return true;
   } catch (err) {

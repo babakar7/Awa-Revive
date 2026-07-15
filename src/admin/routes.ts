@@ -1256,7 +1256,10 @@ ${photoSection}
         }
         const body = `${renderMessage(rule.message_template, TEST_VARS)}\n\n${STAFF_FOOTER}`;
         try {
-          const path = await sendWhatsAppNotification(phone, `[TEST] ${rule.label}`, body);
+          // Test goes to a staff number (out-of-window) → template-first, like the real send.
+          const path = await sendWhatsAppNotification(phone, `[TEST] ${rule.label}`, body, {
+            preferTemplate: true,
+          });
           await nrepo.recordTestLog(phone, body, path, null);
           return reply.redirect("/admin/notifications?done=tested", 303);
         } catch (e) {

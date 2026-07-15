@@ -441,8 +441,15 @@ create table if not exists notification_log (
   event_end timestamptz,
   status text not null,
   error text,
+  -- wamid Meta renvoyé a l'envoi : permet au webhook statuses de repasser une
+  -- ligne sent vers failed quand Meta signale un echec en asynchrone (fenetre
+  -- 24h fermee acceptee en 200 puis rejetee) — sinon l echec est invisible.
+  wa_message_id text,
   created_at timestamptz not null default now()
 );
+alter table notification_log add column if not exists wa_message_id text;
+create index if not exists idx_notification_log_wamid
+  on notification_log (wa_message_id) where wa_message_id is not null;
 
 create unique index if not exists idx_notification_log_dedup
   on notification_log (dedup_key) where dedup_key is not null;

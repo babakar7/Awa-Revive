@@ -23,8 +23,10 @@ export function verifyWhatsAppSignature(
   return crypto.timingSafeEqual(Buffer.from(received, "utf8"), Buffer.from(expected, "utf8"));
 }
 
-/** POST a message payload to the Cloud API with retries (429/5xx/network). */
-async function postMessage(payload: Record<string, unknown>): Promise<void> {
+/** POST a message payload to the Cloud API with retries (429/5xx/network).
+ *  Returns the Meta message id (wamid) so callers can log it — the `statuses`
+ *  webhook later maps an async failure back to that id. */
+async function postMessage(payload: Record<string, unknown>): Promise<string | null> {
   const url = `${GRAPH_BASE}/${config.WA_PHONE_NUMBER_ID}/messages`;
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -38,7 +40,10 @@ async function postMessage(payload: Record<string, unknown>): Promise<void> {
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
       });
-      if (res.ok) return;
+      if (res.ok) {
+        const data: any = await res.json().catch(() => null);
+        return data?.messages?.[0]?.id ?? null;
+      }
       const text = await res.text();
       lastError = new Error(`WhatsApp send failed (${res.status}): ${text}`);
       // 4xx other than 429 won't succeed on retry
@@ -51,9 +56,9 @@ async function postMessage(payload: Record<string, unknown>): Promise<void> {
   throw lastError;
 }
 
-/** Send a plain text message (Phase 1: text only, inside the 24h window). */
-export async function sendText(to: string, body: string): Promise<void> {
-  await postMessage({
+/** Send a plain text message (inside the 24h window). Returns the wamid. */
+export async function sendText(to: string, body: string): Promise<string | null> {
+  return postMessage({
     messaging_product: "whatsapp",
     recipient_type: "individual",
     to,
@@ -72,8 +77,8 @@ export async function sendTemplate(
   name: string,
   languageCode: string,
   bodyParams: string[],
-): Promise<void> {
-  await postMessage({
+): Promise<string | null> {
+  return postMessage({
     messaging_product: "whatsapp",
     recipient_type: "individual",
     to,
@@ -85,6 +90,39 @@ export async function sendTemplate(
         {
           type: "body",
           parameters: bodyParams.map((text) => ({ type: "text", text })),
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * Send a template that has a DYNAMIC URL button (the first — index "0" — button
+ * component). `urlButtonParam` fills the {{1}} suffix of the button's URL (e.g.
+ * the magic-link token). Body params fill {{1}}, {{2}}… as usual. Returns wamid.
+ */
+export async function sendTemplateWithUrlButton(
+  to: string,
+  name: string,
+  languageCode: string,
+  bodyParams: string[],
+  urlButtonParam: string,
+): Promise<string | null> {
+  return postMessage({
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "template",
+    template: {
+      name,
+      language: { code: languageCode },
+      components: [
+        { type: "body", parameters: bodyParams.map((text) => ({ type: "text", text })) },
+        {
+          type: "button",
+          sub_type: "url",
+          index: "0",
+          parameters: [{ type: "text", text: urlButtonParam }],
         },
       ],
     },
@@ -389,6 +427,40 @@ export interface InboundMessage {
  * Extract inbound messages from a webhook payload. Ignores statuses
  * (delivery receipts) and anything that isn't an individual message.
  */
+/** A delivery-status callback from Meta (sent/delivered/read/failed). */
+export interface StatusUpdate {
+  wamid: string;
+  status: string;
+  errorCode?: number;
+  errorTitle?: string;
+}
+
+/**
+ * Parse the `statuses` callbacks Meta posts to the same webhook. We only act on
+ * `failed` (to correct a log row that Meta accepted with 200 then dropped), but
+ * all are returned for completeness.
+ */
+export function parseStatuses(payload: any): StatusUpdate[] {
+  const out: StatusUpdate[] = [];
+  for (const entry of payload?.entry ?? []) {
+    for (const change of entry?.changes ?? []) {
+      const value = change?.value;
+      if (!value?.statuses) continue;
+      for (const s of value.statuses) {
+        if (!s?.id || !s?.status) continue;
+        const err = Array.isArray(s.errors) ? s.errors[0] : undefined;
+        out.push({
+          wamid: s.id,
+          status: s.status,
+          errorCode: err?.code,
+          errorTitle: err?.title ?? err?.message,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 export function parseInboundMessages(payload: any): InboundMessage[] {
   const out: InboundMessage[] = [];
   for (const entry of payload?.entry ?? []) {

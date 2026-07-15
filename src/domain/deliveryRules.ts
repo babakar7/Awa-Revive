@@ -76,8 +76,8 @@ export function verifyReadyToken(candidate: string, storedHash: string): boolean
   return b.length === a.length && crypto.timingSafeEqual(a, b);
 }
 
-export function magicLinkUrl(baseUrl: string, id: string, token: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/livraison/${id}/${token}`;
+export function magicLinkUrl(baseUrl: string, token: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/livraison/${token}`;
 }
 
 // ---------- admin form parsing ----------
@@ -146,11 +146,28 @@ export function shouldFallbackDeliveryTemplate(err: unknown, templateName: strin
   return !!templateName && String(err).includes("131047");
 }
 
-/** Template body params: {{1}} first name, {{2}} order summary + amount (sanitized). */
+/** Client template body params: {{1}} first name, {{2}} order summary + amount. */
 export function deliveryTemplateParams(o: DeliveryOrderView): [string, string] {
   return [
     toTemplateParam(firstName(o.client_name) || o.client_name || "client", 60),
     toTemplateParam(`${formatExtrasOneLine(o.items)} — ${o.amount_xof} FCFA`, 200),
+  ];
+}
+
+/**
+ * Kitchen ticket template body params: {{1}} client name, {{2}} phone,
+ * {{3}} address, {{4}} items one-line, {{5}} total. The URL button's own {{1}}
+ * (the token) is passed separately by the sender.
+ */
+export function kitchenTemplateParams(
+  o: DeliveryOrderView,
+): [string, string, string, string, string] {
+  return [
+    toTemplateParam(o.client_name, 60),
+    toTemplateParam(`+${o.client_phone}`, 20),
+    toTemplateParam(o.address, 90),
+    toTemplateParam(formatExtrasOneLine(o.items), 200),
+    toTemplateParam(String(o.amount_xof), 12),
   ];
 }
 

@@ -108,6 +108,19 @@ export async function findDeliveryOrder(id: string): Promise<DeliveryOrder | nul
   return (res.rows[0] as DeliveryOrder) ?? null;
 }
 
+/**
+ * Look up an order by its magic-link token (the public route has only the
+ * token, no id — cleaner URL for the Meta button, and nothing enumerable). We
+ * match on the stored HASH, so the cleartext token is never queried or logged.
+ */
+export async function findDeliveryOrderByToken(token: string): Promise<DeliveryOrder | null> {
+  if (!token) return null;
+  const res = await pool.query(`select * from delivery_orders where ready_token_hash = $1`, [
+    hashReadyToken(String(token)),
+  ]);
+  return (res.rows[0] as DeliveryOrder) ?? null;
+}
+
 // ---------- status transitions (atomic) ----------
 
 async function transition(

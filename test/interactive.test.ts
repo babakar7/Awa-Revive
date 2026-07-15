@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInteractivePayload, parseInboundMessages } from "../src/lib/whatsapp.js";
+import { buildInteractivePayload, parseInboundMessages, parseStatuses } from "../src/lib/whatsapp.js";
 import { slotChoiceKey } from "../src/domain/repo.js";
 
 describe("buildInteractivePayload", () => {
@@ -192,6 +192,36 @@ describe("parseInboundMessages — interactive replies", () => {
       }),
     );
     expect(msg).toMatchObject({ type: "image", mediaId: "media_789", caption: undefined });
+  });
+});
+
+describe("parseStatuses", () => {
+  const payload = (statuses: unknown) => ({
+    entry: [{ changes: [{ field: "statuses", value: { statuses } }] }],
+  });
+
+  it("extracts a failed status with its error code/title", () => {
+    const out = parseStatuses(
+      payload([
+        {
+          id: "wamid.ABC",
+          status: "failed",
+          errors: [{ code: 131047, title: "Re-engagement message" }],
+        },
+      ]),
+    );
+    expect(out).toEqual([
+      { wamid: "wamid.ABC", status: "failed", errorCode: 131047, errorTitle: "Re-engagement message" },
+    ]);
+  });
+
+  it("returns sent/delivered too, and ignores rows without an id", () => {
+    const out = parseStatuses(payload([{ id: "wamid.OK", status: "delivered" }, { status: "read" }]));
+    expect(out).toEqual([{ wamid: "wamid.OK", status: "delivered", errorCode: undefined, errorTitle: undefined }]);
+  });
+
+  it("is empty for an inbound-message payload (no statuses)", () => {
+    expect(parseStatuses({ entry: [{ changes: [{ field: "messages", value: { messages: [] } }] }] })).toEqual([]);
   });
 });
 

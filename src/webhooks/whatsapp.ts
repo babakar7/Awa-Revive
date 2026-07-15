@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { config } from "../config.js";
-import { verifyWhatsAppSignature, parseInboundMessages, sendText } from "../lib/whatsapp.js";
+import { verifyWhatsAppSignature, parseInboundMessages, parseStatuses, sendText } from "../lib/whatsapp.js";
+import { markLogFailedByWamid } from "../domain/notificationRepo.js";
 import {
   handleInboundText,
   handleUnsupportedMedia,
@@ -34,6 +35,16 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
     if (!rawBody || !verifyWhatsAppSignature(rawBody, signature, config.WA_APP_SECRET)) {
       req.log.warn({ signature }, "WhatsApp webhook: invalid signature");
       return reply.code(401).send("Invalid signature");
+    }
+
+    // Delivery-status callbacks: Meta accepted a message (200) then dropped it
+    // asynchronously (typically a closed 24h window) — flip the false "sent"
+    // log row to "failed" so the miss is visible instead of silent.
+    for (const s of parseStatuses(req.body)) {
+      if (s.status !== "failed") continue;
+      const reason = `${s.errorCode ?? "?"} ${s.errorTitle ?? "delivery failed"}`;
+      const n = await markLogFailedByWamid(s.wamid, reason).catch(() => 0);
+      if (n > 0) req.log.warn({ wamid: s.wamid, reason }, "WhatsApp async delivery failure recorded");
     }
 
     const messages = parseInboundMessages(req.body);

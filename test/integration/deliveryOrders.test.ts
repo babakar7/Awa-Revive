@@ -4,6 +4,7 @@ import { buildServer } from "../../src/server.js";
 import { pool, migrate } from "../../src/db/index.js";
 import { config } from "../../src/config.js";
 import { sweepDeliveries } from "../../src/domain/deliveryNotify.js";
+import { markLogFailedByWamid, recordDeliveryLog } from "../../src/domain/notificationRepo.js";
 import { hashReadyToken, newReadyToken } from "../../src/domain/deliveryRules.js";
 import { makeFetchMock, type FetchMock, truncateAll, waitFor, settle } from "./helpers.js";
 
@@ -68,10 +69,10 @@ async function createOrder(overrides: Record<string, string> = {}): Promise<stri
 }
 
 /** Newest-first: the mock accumulates texts across a test, so the latest kitchen
- *  message (e.g. after a renotify/rotate) is at the end. */
+ *  message (e.g. after a renotify/rotate) is at the end. Token-only URL. */
 function magicLinkFrom(texts: string[]): string {
   for (let i = texts.length - 1; i >= 0; i--) {
-    const m = texts[i].match(/\/livraison\/[0-9a-f-]+\/[0-9a-f]+/);
+    const m = texts[i].match(/\/livraison\/[0-9a-f]+/);
     if (m) return m[0];
   }
   throw new Error(`no magic link in: ${JSON.stringify(texts)}`);
@@ -89,7 +90,8 @@ describe("delivery order creation → kitchen notify", () => {
     expect(["sent", "sent_template"]).toContain(order.kitchen_notify_status);
 
     const link = magicLinkFrom(mock.waTextsTo("221770000099"));
-    expect(link).toContain(`/livraison/${id}/`);
+    expect(link).toMatch(/\/livraison\/[0-9a-f]{32}$/);
+    void id;
   });
 
   it("with no cuisine contact, routes the ticket to reception with a warning", async () => {
@@ -134,7 +136,7 @@ describe("magic link", () => {
   it("rejects a wrong token with 404 and does not mutate", async () => {
     await seedKitchenContact();
     const id = await createOrder();
-    const bad = `/livraison/${id}/${"0".repeat(32)}`;
+    const bad = `/livraison/${"0".repeat(32)}`;
     const get = await app.inject({ method: "GET", url: bad });
     expect(get.statusCode).toBe(404);
     const post = await app.inject({ method: "POST", url: bad });
@@ -185,5 +187,24 @@ describe("SLA alert sweep", () => {
     // One-shot: a second sweep does not re-alert this order.
     const n2 = await sweepDeliveries(noopLog);
     expect(n2).toBe(0);
+  });
+});
+
+describe("async delivery-failure correction (statuses webhook)", () => {
+  it("flips a logged 'sent' row to 'failed' when Meta reports the wamid failed", async () => {
+    const wamid = "wamid.TEST123";
+    await recordDeliveryLog("221770009988", "[livraison test] prête", "sent", null, wamid);
+
+    const flipped = await markLogFailedByWamid(wamid, "131047 Re-engagement message");
+    expect(flipped).toBe(1);
+
+    const row = (
+      await pool.query(`select status, error from notification_log where wa_message_id = $1`, [wamid])
+    ).rows[0];
+    expect(row.status).toBe("failed");
+    expect(row.error).toContain("131047");
+
+    // Unknown wamid → no-op.
+    expect(await markLogFailedByWamid("wamid.UNKNOWN", "x")).toBe(0);
   });
 });

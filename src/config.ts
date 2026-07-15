@@ -54,6 +54,14 @@ export const config = {
   // is French — Meta doesn't check that content matches the declared language.
   WA_DELIVERY_READY_TEMPLATE: optional("WA_DELIVERY_READY_TEMPLATE", ""),
   WA_DELIVERY_READY_TEMPLATE_LANG: optional("WA_DELIVERY_READY_TEMPLATE_LANG", "en"),
+  // Approved KITCHEN ticket template with a dynamic URL button ("Marquer prête").
+  // Kitchen staff are ~always outside the 24h window, so this is sent template-
+  // FIRST (free-text fallback only if unset/unapproved). 5 body variables:
+  // {{1}} client name, {{2}} phone, {{3}} address, {{4}} items one-line,
+  // {{5}} total FCFA; the URL button's own {{1}} = the magic-link token. FR body
+  // under the `en` language code (same convention as the others).
+  WA_KITCHEN_TICKET_TEMPLATE: optional("WA_KITCHEN_TICKET_TEMPLATE", ""),
+  WA_KITCHEN_TICKET_TEMPLATE_LANG: optional("WA_KITCHEN_TICKET_TEMPLATE_LANG", "en"),
   // Minutes after a delivery order is created before reception gets a "late"
   // alert (snapshotted per order at creation, so orders in flight keep their SLA).
   DELIVERY_SLA_MINUTES: parseInt(optional("DELIVERY_SLA_MINUTES", "20"), 10),

@@ -1,8 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { formatExtrasMultiline } from "./lib/cafeMenu.js";
-import { verifyReadyToken } from "./domain/deliveryRules.js";
 import { attemptClientNotify } from "./domain/deliveryNotify.js";
-import { findDeliveryOrder, markReady, orderItems, type DeliveryOrder } from "./domain/deliveryRepo.js";
+import { findDeliveryOrderByToken, markReady, orderItems, type DeliveryOrder } from "./domain/deliveryRepo.js";
 
 /**
  * Public, no-auth "mark ready" page the kitchen opens from its WhatsApp ticket.
@@ -10,9 +9,9 @@ import { findDeliveryOrder, markReady, orderItems, type DeliveryOrder } from "./
  * SECURITY / OPS invariants:
  *  - GET is READ-ONLY. WhatsApp and other clients PREFETCH links for previews;
  *    a mutating GET would mark orders ready on preview. Only the POST mutates.
- *  - The token is validated in constant time against the stored HASH (the
- *    cleartext token is never persisted). Any invalid id/token → the SAME 404,
- *    so the page never distinguishes "unknown order" from "wrong token".
+ *  - The URL carries ONLY the token (no order id — nothing enumerable). The
+ *    order is found by the token's stored HASH; the cleartext is never queried
+ *    or logged. Any unknown/expired token → a uniform 404.
  *  - The page shows a home address + order — hardened headers (no-store,
  *    noindex, no-referrer, DENY framing, tight CSP), and terminal states don't
  *    repeat the address. Links older than 48h are refused.
@@ -62,7 +61,7 @@ const notFound = () =>
   shell("Lien invalide", `<h1>Lien invalide ou expiré</h1><p class="muted">Ce lien ne correspond à aucune commande active.</p>`);
 
 /** Read-only order card with the big "mark ready" button (IN_KITCHEN only). */
-function orderCard(order: DeliveryOrder, id: string, token: string): string {
+function orderCard(order: DeliveryOrder, token: string): string {
   const items = formatExtrasMultiline(orderItems(order));
   if (order.status === "IN_KITCHEN") {
     return shell(
@@ -71,7 +70,7 @@ function orderCard(order: DeliveryOrder, id: string, token: string): string {
 <p class="muted">${esc(order.client_name)} — ${esc(order.address)}</p>
 <div class="items">${esc(items)}</div>
 <p class="total">Total : ${esc(order.amount_xof)} FCFA <span class="muted">(à encaisser à la livraison)</span></p>
-<form method="post" action="/livraison/${esc(id)}/${esc(token)}"><button type="submit">✅ Marquer prête</button></form>`,
+<form method="post" action="/livraison/${esc(token)}"><button type="submit">✅ Marquer prête</button></form>`,
     );
   }
   // Terminal / already-ready: no address repeated.
@@ -83,39 +82,38 @@ function orderCard(order: DeliveryOrder, id: string, token: string): string {
 }
 
 export function registerDeliveryPublic(app: FastifyInstance): void {
-  const load = async (id: string, token: string): Promise<DeliveryOrder | null> => {
-    const order = await findDeliveryOrder(id);
+  const load = async (token: string): Promise<DeliveryOrder | null> => {
+    const order = await findDeliveryOrderByToken(token);
     if (!order) return null;
-    if (!verifyReadyToken(token, order.ready_token_hash)) return null;
     if (Date.now() - new Date(order.created_at).getTime() > LINK_MAX_AGE_MS) return null;
     return order;
   };
 
   // READ-ONLY — never mutates (WhatsApp prefetches this for link previews).
-  app.get("/livraison/:id/:token", async (req, reply) => {
+  app.get("/livraison/:token", async (req, reply) => {
     harden(reply);
-    const { id, token } = req.params as { id: string; token: string };
-    const order = await load(id, token);
+    const { token } = req.params as { token: string };
+    const order = await load(token);
     reply.type("text/html");
-    return reply.code(order ? 200 : 404).send(order ? orderCard(order, id, token) : notFound());
+    return reply.code(order ? 200 : 404).send(order ? orderCard(order, token) : notFound());
   });
 
   // The mutation: mark ready + trigger the client ping, then 303 → GET.
-  app.post("/livraison/:id/:token", async (req, reply) => {
+  app.post("/livraison/:token", async (req, reply) => {
     harden(reply);
-    const { id, token } = req.params as { id: string; token: string };
-    const order = await load(id, token);
+    const { token } = req.params as { token: string };
+    const order = await load(token);
     if (!order) {
       reply.type("text/html");
       return reply.code(404).send(notFound());
     }
-    const updated = await markReady(id, "kitchen-link");
+    const updated = await markReady(order.id, "kitchen-link");
     if (updated) {
       // Fire-and-forget: the sweep reconciles if this attempt fails/crashes.
-      void attemptClientNotify(id, req.log);
-      req.log.info({ order: id }, "Delivery order marked ready via kitchen magic link");
+      void attemptClientNotify(order.id, req.log);
+      req.log.info({ order: order.id }, "Delivery order marked ready via kitchen magic link");
     }
     // Redirect to the read-only view (idempotent; no form re-submit on refresh).
-    return reply.redirect(`/livraison/${id}/${token}`, 303);
+    return reply.redirect(`/livraison/${token}`, 303);
   });
 }

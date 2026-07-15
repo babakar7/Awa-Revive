@@ -6,6 +6,7 @@ import {
   deliveryTemplateParams,
   hashReadyToken,
   kitchenMessage,
+  kitchenTemplateParams,
   magicLinkUrl,
   newReadyToken,
   normalizeDeliveryPhone,
@@ -98,9 +99,9 @@ describe("magic-link token", () => {
     expect(verifyReadyToken("short", hash)).toBe(false); // length mismatch
     expect(verifyReadyToken(token, "not-hex-!!")).toBe(false); // garbage stored hash
   });
-  it("magicLinkUrl joins base + id + token with no double slash", () => {
-    expect(magicLinkUrl("https://x.app/", "abc", "tok")).toBe("https://x.app/livraison/abc/tok");
-    expect(magicLinkUrl("https://x.app", "abc", "tok")).toBe("https://x.app/livraison/abc/tok");
+  it("magicLinkUrl joins base + token with no double slash", () => {
+    expect(magicLinkUrl("https://x.app/", "tok")).toBe("https://x.app/livraison/tok");
+    expect(magicLinkUrl("https://x.app", "tok")).toBe("https://x.app/livraison/tok");
   });
 });
 
@@ -126,6 +127,19 @@ describe("message bodies", () => {
     expect(params[0]).toBe("Rama");
     expect(params[1]).not.toMatch(/\n/);
     expect(params[1]).toContain("9500 FCFA");
+  });
+
+  it("kitchenTemplateParams keep the exact 5-variable order of the Meta template", () => {
+    // Order MUST match ticket_cuisine: {{1}} name {{2}} phone {{3}} address {{4}} items {{5}} total.
+    const params = kitchenTemplateParams(ORDER);
+    expect(params).toEqual([
+      "Rama Thiam Ndiaye",
+      "+221771234567",
+      "Almadies, villa 12",
+      "2× Jant Bi + 1× Iced Matcha Vanille",
+      "9500",
+    ]);
+    for (const p of params) expect(p).not.toMatch(/\n/);
   });
 });
 

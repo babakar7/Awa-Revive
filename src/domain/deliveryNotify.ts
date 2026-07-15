@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { sendText, sendTemplate } from "../lib/whatsapp.js";
+import { sendText, sendTemplate, sendTemplateWithUrlButton } from "../lib/whatsapp.js";
 import { notifyReception, sendWhatsAppNotification } from "../lib/notify.js";
 import * as repo from "./repo.js";
 import { normalizeName } from "./notificationRules.js";
@@ -8,6 +8,7 @@ import {
   aggregateKitchenOutcome,
   deliveryTemplateParams,
   kitchenMessage,
+  kitchenTemplateParams,
   magicLinkUrl,
   readyClientMessage,
   shouldFallbackDeliveryTemplate,
@@ -53,6 +54,49 @@ function viewOf(o: DeliveryOrder): DeliveryOrderView {
 }
 
 /**
+ * Send the kitchen ticket to ONE recipient. Kitchen staff are ~always outside
+ * the 24h window, so we send the `ticket_cuisine` TEMPLATE first (with its
+ * dynamic URL button = the magic-link token); if that template isn't configured
+ * or errors, we fall back to free-text (which itself falls back to the generic
+ * reception template on 131047). The template wamid is logged so the statuses
+ * webhook can catch an async failure.
+ */
+async function sendKitchenTo(
+  phone: string,
+  view: DeliveryOrderView,
+  token: string,
+  magicLink: string,
+  tag: string,
+  log: Log,
+): Promise<"sent" | "sent_template" | "failed"> {
+  const { subject, body } = kitchenMessage(view, magicLink);
+  if (config.WA_KITCHEN_TICKET_TEMPLATE) {
+    try {
+      const wamid = await sendTemplateWithUrlButton(
+        phone.replace(/\D/g, ""),
+        config.WA_KITCHEN_TICKET_TEMPLATE,
+        config.WA_KITCHEN_TICKET_TEMPLATE_LANG,
+        kitchenTemplateParams(view),
+        token,
+      );
+      await recordDeliveryLog(phone, `${tag} (ticket) ${body}`, "sent_template", null, wamid);
+      return "sent_template";
+    } catch (err) {
+      log.error({ err, phone }, "Kitchen ticket template failed — falling back to free-text");
+    }
+  }
+  try {
+    const path = await sendWhatsAppNotification(phone, subject, body);
+    await recordDeliveryLog(phone, `${tag} ${body}`, path, null);
+    return path;
+  } catch (err) {
+    await recordDeliveryLog(phone, `${tag} ${body}`, "failed", String(err).slice(0, 300));
+    log.error({ err, phone }, "Delivery kitchen send failed");
+    return "failed";
+  }
+}
+
+/**
  * Notify the kitchen for one order (already claimed by the caller). Sends to
  * every `cuisine` contact — or to reception with a warning if none exists — and
  * records the aggregate outcome. `token` is the current magic-link token
@@ -65,8 +109,7 @@ export async function notifyKitchenForOrder(
 ): Promise<void> {
   const tag = `[livraison ${order.id.slice(0, 8)}]`;
   const view = viewOf(order);
-  const magicLink = magicLinkUrl(config.BASE_URL, order.id, token);
-  const { subject, body } = kitchenMessage(view, magicLink);
+  const magicLink = magicLinkUrl(config.BASE_URL, token);
 
   const contacts = (await listStaffContacts()).filter(
     (c) => normalizeName(c.role) === KITCHEN_ROLE && !c.muted,
@@ -82,6 +125,7 @@ export async function notifyKitchenForOrder(
 
   if (kitchen.length === 0) {
     // No kitchen contact: route the ticket to reception so it's never lost.
+    const { subject, body } = kitchenMessage(view, magicLink);
     const warnBody =
       `⚠️ Aucun contact « cuisine » dans le répertoire (/admin/notifications) — ` +
       `commande envoyée à la réception :\n\n${body}`;
@@ -97,17 +141,7 @@ export async function notifyKitchenForOrder(
   }
 
   const outcomes = await Promise.all(
-    kitchen.map(async (c) => {
-      try {
-        const path = await sendWhatsAppNotification(c.phone, subject, body);
-        await recordDeliveryLog(c.phone, `${tag} ${body}`, path, null);
-        return path; // 'sent' | 'sent_template'
-      } catch (err) {
-        await recordDeliveryLog(c.phone, `${tag} ${body}`, "failed", String(err).slice(0, 300));
-        log.error({ err, order: order.id, phone: c.phone }, "Delivery kitchen send failed");
-        return "failed" as const;
-      }
-    }),
+    kitchen.map((c) => sendKitchenTo(c.phone, view, token, magicLink, tag, log)),
   );
 
   const status = aggregateKitchenOutcome(outcomes);
@@ -116,6 +150,7 @@ export async function notifyKitchenForOrder(
 
   if (!reached) {
     // Every kitchen contact failed — escalate so someone acts.
+    const { body } = kitchenMessage(view, magicLink);
     notifyReception(
       "⚠️ Cuisine NON notifiée — commande livraison",
       `L'envoi à la cuisine a échoué pour la commande de ${order.client_name} (+${order.client_phone}).\n\n${body}`,
@@ -138,21 +173,21 @@ export async function notifyClientOrderReady(order: DeliveryOrder, log: Log): Pr
   const msg = readyClientMessage(lang, view);
 
   try {
-    await sendText(order.client_phone, msg);
-    await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "sent", null);
+    const wamid = await sendText(order.client_phone, msg);
+    await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "sent", null, wamid);
     await setClientNotifyOutcome(order.id, "sent");
     if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
     return;
   } catch (err) {
     if (shouldFallbackDeliveryTemplate(err, config.WA_DELIVERY_READY_TEMPLATE)) {
       try {
-        await sendTemplate(
+        const wamid = await sendTemplate(
           order.client_phone,
           config.WA_DELIVERY_READY_TEMPLATE,
           config.WA_DELIVERY_READY_TEMPLATE_LANG,
           deliveryTemplateParams(view),
         );
-        await recordDeliveryLog(order.client_phone, `${tag} (template) ${msg}`, "sent_template", null);
+        await recordDeliveryLog(order.client_phone, `${tag} (template) ${msg}`, "sent_template", null, wamid);
         await setClientNotifyOutcome(order.id, "sent_template");
         if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
         return;

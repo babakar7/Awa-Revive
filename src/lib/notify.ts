@@ -115,9 +115,27 @@ export async function sendWhatsAppNotification(
   toPhone: string,
   subject: string,
   body: string,
+  opts: { preferTemplate?: boolean } = {},
 ): Promise<WhatsAppSendPath> {
   // The Cloud API expects a wa_id-style number (digits only, no "+").
   const to = toPhone.replace(/\D/g, "");
+  const templateParams = () =>
+    sendTemplate(to, config.WA_RECEPTION_TEMPLATE, config.WA_RECEPTION_TEMPLATE_LANG, [
+      toTemplateParam(subject, 120),
+      toTemplateParam(body),
+    ]);
+  // Staff recipients (coach/guardian/kitchen/test) almost never have an open
+  // 24h window, and free-text out-of-window can be accepted (200) then dropped
+  // asynchronously — an invisible miss. For them we send the template FIRST;
+  // only if it fails do we try free-text (window might actually be open).
+  if (opts.preferTemplate && config.WA_RECEPTION_TEMPLATE) {
+    try {
+      await templateParams();
+      return "sent_template";
+    } catch (err) {
+      console.warn(`[notify] template-first failed for ${to}, trying free-text:`, err);
+    }
+  }
   try {
     await sendText(to, `🔔 *[Awa] ${subject}*\n\n${body}`);
     return "sent";
@@ -126,10 +144,7 @@ export async function sendWhatsAppNotification(
     console.warn(
       `[notify] 24h window closed for ${to} — falling back to template "${config.WA_RECEPTION_TEMPLATE}"`,
     );
-    await sendTemplate(to, config.WA_RECEPTION_TEMPLATE, config.WA_RECEPTION_TEMPLATE_LANG, [
-      toTemplateParam(subject, 120),
-      toTemplateParam(body),
-    ]);
+    await templateParams();
     return "sent_template";
   }
 }
