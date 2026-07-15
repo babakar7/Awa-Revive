@@ -62,6 +62,11 @@ export function buildServer() {
     return reply.code(ok ? 200 : 503).send({ ok });
   });
 
+  // Root → admin dashboard, so the custom domain (awa.revive.sn) lands straight
+  // on it (then /admin/login if no session). Webhooks/payment/magic-link paths
+  // are explicit, so this only affects a bare "/" hit.
+  app.get("/", async (_req, reply) => reply.redirect("/admin", 302));
+
   registerWhatsAppWebhook(app);
   registerWaveWebhook(app);
   registerOrangeMoneyWebhook(app);
