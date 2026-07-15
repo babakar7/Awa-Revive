@@ -603,11 +603,14 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "get_class_schedule",
     description:
       "Send the client the studio's WEEKLY class schedule (Monday→Sunday grid, no dates) as an image, generated " +
-      "live from the Wix catalog — this tool renders AND delivers it itself. Use it when the client asks for the " +
-      "overall planning/schedule/timetable of the studio ('le planning des cours', 'vos horaires', 'the schedule') " +
-      "WITHOUT naming one class. For the slots of ONE specific class (or to actually book), keep using " +
-      "check_availability — the weekly grid carries no dates and no open-spot counts. If the image cannot be sent, " +
-      "the tool returns the schedule as text for you to relay.",
+      "live from the Wix catalog — this tool renders AND delivers it itself. Use it whenever the client wants an " +
+      "OVERVIEW of the studio's classes WITHOUT naming one: 'le planning des cours', 'vos horaires', 'the schedule', " +
+      "AND any request to see ALL the slots at once or asking whether a site/page lists them ('avez-vous un site " +
+      "avec tous les créneaux', 'je peux voir tous les créneaux ?', 'la liste complète des cours', 'c'est quoi le " +
+      "programme de la semaine'). In that case CALL THIS TOOL (it sends the planning image) — you may ALSO share the " +
+      "online planning link from <business_info> in the same reply. For the slots of ONE specific class (or to " +
+      "actually book), keep using check_availability — the weekly grid carries no dates and no open-spot counts. If " +
+      "the image cannot be sent, the tool returns the schedule as text for you to relay.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
 ];
