@@ -3,6 +3,7 @@ import { registerWhatsAppWebhook } from "./webhooks/whatsapp.js";
 import { registerWaveWebhook } from "./webhooks/wave.js";
 import { registerOrangeMoneyWebhook } from "./webhooks/orangeMoney.js";
 import { registerAdmin } from "./admin/routes.js";
+import { registerDeliveryPublic } from "./deliveryPublic.js";
 import { pool } from "./db/index.js";
 
 const HEALTHCHECK_TIMEOUT_MS = 2_000;
@@ -65,6 +66,8 @@ export function buildServer() {
   registerWaveWebhook(app);
   registerOrangeMoneyWebhook(app);
   registerAdmin(app);
+  // Public, no-auth "mark ready" magic-link pages for the kitchen (outside /admin).
+  registerDeliveryPublic(app);
 
   // Minimal "return to WhatsApp" pages for Wave success/error redirects (SPEC §4.3).
   // wa.me link is bare (no ?text= prefill): Awa never confirms a booking from

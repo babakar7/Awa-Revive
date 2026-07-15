@@ -8,6 +8,7 @@ import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { sweepStaffNotifications } from "./domain/notificationSweep.js";
+import { sweepDeliveries } from "./domain/deliveryNotify.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import {
   reconcileStuckPlanOrders,
@@ -86,6 +87,15 @@ async function main() {
       if (notified > 0) app.log.info({ notified }, "Staff notifications sent");
     } catch (err) {
       app.log.error({ err }, "Staff-notification sweep failed");
+    }
+    // Delivery orders: retry pending kitchen/client notifications (crash-safe)
+    // and fire one-shot SLA "late" alerts to reception. Own try/catch. Needs
+    // ≤1-min granularity for the 20-min SLA → the 60s loop.
+    try {
+      const alerted = await sweepDeliveries(app.log);
+      if (alerted > 0) app.log.info({ alerted }, "Delivery SLA alerts sent");
+    } catch (err) {
+      app.log.error({ err }, "Delivery sweep failed");
     }
   }, 60 * 1000);
   sweeper.unref();

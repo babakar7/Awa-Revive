@@ -276,6 +276,29 @@ export async function recordReceptionLog(
   }
 }
 
+/**
+ * Delivery-order notification log entry (source='delivery', no dedup key). Same
+ * best-effort contract as recordReceptionLog — never throws. The order is
+ * referenced inside `body` (e.g. "[livraison abcd1234] …") so these are
+ * auditable in /admin/notifications without a new column on the shared table.
+ */
+export async function recordDeliveryLog(
+  recipientPhone: string,
+  body: string,
+  status: LogStatus,
+  error: string | null,
+): Promise<void> {
+  try {
+    await pool.query(
+      `insert into notification_log (source, recipient_phone, body, status, error)
+       values ('delivery', $1, $2, $3, $4)`,
+      [recipientPhone, body, status, error],
+    );
+  } catch {
+    /* logging must never break a notification */
+  }
+}
+
 /** Test-send log entry (source='test', dedup key test:<uuid> — never blocks a real claim). */
 export async function recordTestLog(
   recipientPhone: string,

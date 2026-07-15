@@ -1282,6 +1282,51 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     Babakar re-booke lui-même. Résa Sculpt sam. 18/07 10:15 (2 pers., 24 000 F
     Max It) avait bien abouti — seule la création de compte avait échoué.
 
+- **4.34 — Livraisons bar (commandes téléphoniques → cuisine → client) (15/07).**
+  Nouvelle feature 100 % serveur+admin (le modèle IA n'intervient nulle part) :
+  la réception saisit une commande passée au téléphone, la cuisine est notifiée,
+  un SLA déclenche une alerte, le client est prévenu quand c'est prêt. **Paiement
+  hors système** (encaissé à la livraison) — on ne mémorise que le montant dû.
+  - **Table dédiée `delivery_orders`** (PAS `pending_cafe_orders`, centré paiement
+    Wave) : statuts `IN_KITCHEN → READY → DELIVERED`, `+CANCELLED`. `items_json` =
+    snapshot figé (prix via `computeExtras` côté serveur à la création, invariant).
+    CHECK sur statut / `amount_xof > 0` / `sla_minutes` 5–180.
+  - **Saisie** : `/admin/livraisons/new` (formulaire, articles groupés par
+    catégorie du menu, `qty_<ID>`, total estimé JS affichage-seul) → board
+    `/admin/livraisons` (auto-refresh 60 s, compte à rebours SLA vert/ambre/rouge,
+    boutons Prête/Livrée/Annuler, historique + prépa moyenne). `layout()` gagne un
+    param optionnel `{refreshSeconds}` (board uniquement, jamais le formulaire).
+  - **Lien magique cuisine** (`src/deliveryPublic.ts`, hors `/admin`, sans auth) :
+    `GET /livraison/:id/:token` **lecture seule** (WhatsApp pré-fetch les liens
+    pour l'aperçu — un GET mutant marquerait prête à l'aperçu), `POST` marque prête
+    + prévient le client, `303 → GET`. Token **jamais stocké** (seul son sha256),
+    comparaison constant-time, **404 uniforme**, garde 48 h, headers durcis
+    (no-store, noindex, no-referrer, DENY, CSP). « 🔁 Renvoyer » **rotate** le token
+    (l'ancien lien meurt).
+  - **Notifs durables-légères** (`kitchen_notify_status` / `client_notify_status` :
+    pending → claimed → sent|sent_template|partial|fallback_reception|failed, cap
+    3 tentatives) : les routes tentent tout de suite, le **sweep 60 s réconcilie**
+    (crash entre commit et envoi ne perd pas la notif). SLA one-shot via
+    `alerted_at` (SET WHERE NULL). Cuisine = `staff_contacts` rôle **exact**
+    `cuisine` (pas de match flou) ; aucun contact → repli réception avec
+    avertissement (`fallback_reception`). Client prêt : `sendText` puis template
+    FR `WA_DELIVERY_READY_TEMPLATE` sur 131047 ; sinon badge « 📞 Appeler le
+    client ». Journalisé `source='delivery'` (visible /admin/notifications).
+  - **Fichiers** : `domain/deliveryRules.ts` (pur, testé), `deliveryRepo.ts` (SQL/
+    claims), `deliveryNotify.ts` (WhatsApp + `sweepDeliveries`), `deliveryPublic.ts`,
+    `admin/livraisonsPage.ts` + routes `/admin/livraisons`. Tests :
+    `test/deliveryOrders.test.ts` (16 purs) + `test/integration/deliveryOrders.test.ts`
+    (création+prix, GET-ne-mute-pas, POST prête + 1 seule notif client, mauvais
+    token 404, rotate, SLA one-shot, repli réception).
+  - **Ops (à faire par Babakar / agent)** : créer un contact rôle **exact**
+    `cuisine` dans /admin/notifications ; créer le template Meta `livraison_prete`
+    (Utility, 2 variables `{{1}}` prénom `{{2}}` récap+montant, **corps FR** sous
+    code langue **`en`** — cf. mémoire templates), puis `railway variables --set
+    WA_DELIVERY_READY_TEMPLATE=livraison_prete`. Deux prérequis distincts : fiabilité
+    cuisine hors fenêtre 24 h = `WA_RECEPTION_TEMPLATE` (déjà là) ; fiabilité client =
+    `WA_DELIVERY_READY_TEMPLATE`. Hors périmètre v1 : 2ᵉ alerte à 2×SLA, édition
+    (annuler+recréer), message « livrée » au client, gestion livreur.
+
 ## 5. Chronologie condensée
 
 - **13/07 — Handoffs réception en un clic.** Tous les parcours où le client doit

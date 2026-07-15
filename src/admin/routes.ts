@@ -3,8 +3,20 @@ import { config } from "../config.js";
 import { pool } from "../db/index.js";
 import { transition } from "../domain/stateMachine.js";
 import * as repo from "../domain/repo.js";
-import { extrasFromJson } from "../lib/cafeMenu.js";
+import { extrasFromJson, CAFE_MENU, computeExtras } from "../lib/cafeMenu.js";
 import { adminAuthHook } from "./auth.js";
+import * as delivery from "../domain/deliveryRepo.js";
+import {
+  attemptClientNotify,
+  notifyKitchenForOrder,
+  renotifyKitchen,
+} from "../domain/deliveryNotify.js";
+import { normalizeDeliveryPhone, parseDeliveryQtyFields } from "../domain/deliveryRules.js";
+import {
+  livraisonsBanner,
+  renderLivraisonForm,
+  renderLivraisonsBoard,
+} from "./livraisonsPage.js";
 import * as q from "./queries.js";
 import {
   auditActiveSubscribers,
@@ -101,12 +113,21 @@ function badge(status: string): string {
   return `<span class="badge" style="background:${color}">${escapeHtml(status)}</span>`;
 }
 
-function layout(title: string, active: string, body: string): string {
+function layout(
+  title: string,
+  active: string,
+  body: string,
+  opts: { refreshSeconds?: number } = {},
+): string {
+  const refresh = opts.refreshSeconds
+    ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">`
+    : "";
   const tabs = [
     ["/admin", "Vue d'ensemble"],
     ["/admin/conversations", "Conversations"],
     ["/admin/bookings", "Réservations"],
     ["/admin/orders", "Bar ☕"],
+    ["/admin/livraisons", "Livraisons 🛵"],
     ["/admin/handoffs", "Handoffs"],
     ["/admin/reviews", "À reprendre 🔁"],
     ["/admin/crm", "CRM 🗂"],
@@ -123,6 +144,7 @@ function layout(title: string, active: string, body: string): string {
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
+${refresh}
 <title>${escapeHtml(title)} — Awa admin</title>
 <style>
 :root{color-scheme:light}
@@ -433,6 +455,109 @@ ${
 </div>
 <p class="muted">Seules les commandes payées (résa confirmée) apparaissent ici.</p>`;
         reply.type("text/html").send(layout("Commandes bar", "/admin/orders", body));
+      });
+
+      // ---------- Livraisons (commandes bar à livrer) ----------
+      admin.get("/livraisons", async (req, reply) => {
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const [open, recent, stats] = await Promise.all([
+          delivery.listOpenDeliveryOrders(),
+          delivery.recentClosedDeliveryOrders(20),
+          delivery.deliveryStats(),
+        ]);
+        const body = renderLivraisonsBoard({
+          open,
+          recent,
+          stats,
+          banner: livraisonsBanner(done, err),
+        });
+        // Auto-refresh only on the board (never on the create form).
+        reply.type("text/html").send(layout("Livraisons", "/admin/livraisons", body, { refreshSeconds: 60 }));
+      });
+
+      admin.get("/livraisons/new", async (req, reply) => {
+        const err = (req.query as any)?.err as string | undefined;
+        const body = renderLivraisonForm(CAFE_MENU.items, livraisonsBanner(undefined, err));
+        reply.type("text/html").send(layout("Nouvelle livraison", "/admin/livraisons", body));
+      });
+
+      admin.post("/livraisons", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const name = String(b.client_name ?? "").trim();
+        const address = String(b.address ?? "").trim();
+        const note = String(b.note ?? "").trim() || null;
+        const phone = normalizeDeliveryPhone(String(b.client_phone ?? ""));
+        const backErr = (msg: string) => reply.redirect(`/admin/livraisons/new?err=${encodeURIComponent(msg)}`, 303);
+        if (!name) return backErr("le nom du client est obligatoire");
+        if (!phone) return backErr("numéro de téléphone invalide");
+        if (!address) return backErr("l'adresse de livraison est obligatoire");
+        const parsed = parseDeliveryQtyFields(b);
+        if ("error" in parsed) return backErr(parsed.error);
+        // Prices/total resolved server-side from the menu (never trusted from the form).
+        const priced = computeExtras(CAFE_MENU.items, parsed.entries);
+        if (!priced.ok) return backErr(priced.message);
+        const slaRaw = parseInt(String(b.sla_minutes ?? "").trim(), 10);
+        const sla = Number.isFinite(slaRaw) && slaRaw >= 5 && slaRaw <= 180 ? slaRaw : config.DELIVERY_SLA_MINUTES;
+
+        const { order, token } = await delivery.createDeliveryOrder({
+          client_name: name,
+          client_phone: phone,
+          address,
+          note,
+          items: priced.lines,
+          amount_xof: priced.totalXof,
+          sla_minutes: sla,
+          created_by: req.adminUser ?? null,
+        });
+        req.log.info({ order: order.id, by: req.adminUser }, "Delivery order created");
+        // Notify the kitchen now (await so the banner is truthful). Claim first
+        // so a concurrent sweep can't double-send.
+        let kitchenOk = false;
+        const claimed = await delivery.claimKitchenNotify(order.id);
+        if (claimed) {
+          try {
+            await notifyKitchenForOrder(claimed, token, req.log);
+            const fresh = await delivery.findDeliveryOrder(order.id);
+            kitchenOk = !!fresh && ["sent", "sent_template", "partial", "fallback_reception"].includes(fresh.kitchen_notify_status);
+          } catch (e) {
+            req.log.error({ err: e, order: order.id }, "Delivery kitchen notify threw");
+          }
+        }
+        return reply.redirect(`/admin/livraisons?done=${kitchenOk ? "created" : "created-kitchen-failed"}`, 303);
+      });
+
+      admin.post("/livraisons/:id/ready", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const updated = await delivery.markReady(id, `admin-${req.adminUser ?? "?"}`);
+        if (updated) {
+          req.log.info({ order: id, by: req.adminUser }, "Delivery order marked ready from dashboard");
+          await attemptClientNotify(id, req.log); // await so the board shows the ping outcome
+          return reply.redirect("/admin/livraisons?done=ready", 303);
+        }
+        return reply.redirect("/admin/livraisons?err=commande déjà traitée — recharge la page", 303);
+      });
+
+      admin.post("/livraisons/:id/delivered", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const updated = await delivery.markDelivered(id, `admin-${req.adminUser ?? "?"}`);
+        if (updated) req.log.info({ order: id, by: req.adminUser }, "Delivery order marked delivered");
+        return reply.redirect(updated ? "/admin/livraisons?done=delivered" : "/admin/livraisons?err=commande déjà traitée", 303);
+      });
+
+      admin.post("/livraisons/:id/cancel", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const updated = await delivery.markCancelled(id, `admin-${req.adminUser ?? "?"}`);
+        if (updated) req.log.info({ order: id, by: req.adminUser }, "Delivery order cancelled");
+        return reply.redirect(updated ? "/admin/livraisons?done=cancelled" : "/admin/livraisons?err=commande déjà traitée", 303);
+      });
+
+      admin.post("/livraisons/:id/renotify-kitchen", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const order = await delivery.findDeliveryOrder(id);
+        if (!order) return reply.redirect("/admin/livraisons?err=commande introuvable", 303);
+        const ok = await renotifyKitchen(order, req.log);
+        return reply.redirect(ok ? "/admin/livraisons?done=renotified" : "/admin/livraisons?err=commande déjà prête/close", 303);
       });
 
       // ---------- Handoffs ----------

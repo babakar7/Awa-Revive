@@ -452,4 +452,46 @@ create index if not exists idx_notification_log_created
 -- règle quand le planning Wix ne renvoie plus la séance précédente (déjà commencée).
 create index if not exists idx_notification_log_rule_event
   on notification_log (rule_id, event_start);
+
+-- Commandes bar LIVRAISON : la réception saisit une commande passée au téléphone,
+-- la cuisine est notifiée (WhatsApp + lien magique « ✅ prête »), un SLA déclenche
+-- une alerte réception, et le client est prévenu quand c'est prêt. Paiement HORS
+-- système (encaissé à la livraison) — on ne mémorise que le montant dû.
+-- Statuts : IN_KITCHEN → READY → DELIVERED ; IN_KITCHEN|READY → CANCELLED.
+-- items_json = snapshot figé (shape ExtraLine) : prix résolus côté serveur depuis
+-- cafe-menu.md à la création, jamais rejoués après. Le token du lien magique n'est
+-- JAMAIS stocké : seul son sha256 (ready_token_hash) l'est. Les envois cuisine/
+-- client sont suivis en « pending → sent|sent_template|... » et réconciliés par le
+-- sweep 60 s (un crash entre commit et envoi ne perd pas la notification).
+create table if not exists delivery_orders (
+  id uuid primary key default gen_random_uuid(),
+  client_name text not null,
+  client_phone text not null,            -- digits wa_id (normalisé à l'insert)
+  address text not null,
+  note text,
+  items_json jsonb not null,
+  amount_xof integer not null check (amount_xof > 0),
+  status text not null default 'IN_KITCHEN'
+    check (status in ('IN_KITCHEN','READY','DELIVERED','CANCELLED')),
+  sla_minutes integer not null default 20 check (sla_minutes between 5 and 180),
+  ready_token_hash text not null unique,
+  created_by text,
+  kitchen_notify_status text not null default 'pending',
+  kitchen_notified_at timestamptz,       -- posé seulement si ≥1 vrai contact cuisine atteint
+  kitchen_notify_attempts integer not null default 0,
+  client_notify_status text not null default 'pending',
+  client_notified_at timestamptz,
+  client_notify_attempts integer not null default 0,
+  alerted_at timestamptz,                -- alerte SLA one-shot (SET ... WHERE NULL)
+  ready_at timestamptz,
+  ready_by text,                         -- 'kitchen-link' | 'admin-<user>'
+  delivered_at timestamptz,
+  delivered_by text,
+  cancelled_at timestamptz,
+  cancelled_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_delivery_orders_status
+  on delivery_orders (status, created_at);
 `;
