@@ -256,8 +256,13 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
   return `
 ${d.banner}
 ${templateNote}
+<nav class="jump-nav" aria-label="Sections notifications">
+  <a href="#regles">Règles</a>
+  <a href="#contacts">Contacts staff</a>
+  <a href="#journal">Journal</a>
+</nav>
 
-<h2>➕ ${d.editRule ? "Modifier la règle" : "Nouvelle règle"}</h2>
+<h2 id="regles">➕ ${d.editRule ? "Modifier la règle" : "Nouvelle règle"}</h2>
 <div class="card">${ruleForm(d.editRule)}</div>
 
 <h2>🔔 Règles (${d.rules.length})</h2>
@@ -266,7 +271,7 @@ ${templateNote}
 ${d.rules.length ? `<table><tr><th>Règle</th><th>Dernier envoi</th><th></th></tr>${ruleRows}</table>` : `<span class="muted">Aucune règle. Créez-en une ci-dessus.</span>`}
 </div>
 
-<h2>👥 Répertoire staff (${d.contacts.length})</h2>
+<h2 id="contacts">👥 Répertoire staff (${d.contacts.length})</h2>
 ${coachHint}
 <p class="muted">⚠️ Un numéro ici sera traité comme un client s'il écrit à Awa.</p>
 <div class="card">
@@ -280,7 +285,7 @@ ${coachHint}
 ${d.contacts.length ? `<table><tr><th>Nom</th><th>Numéro</th><th>Rôle</th><th></th></tr>${contactRows}</table>` : `<span class="muted">Aucun contact.</span>`}
 </div>
 
-<h2>📜 Journal (${d.log.length})</h2>
+<h2 id="journal">📜 Journal (${d.log.length})</h2>
 <div class="card">
 ${d.log.length ? `<table><tr><th>Quand</th><th>Source</th><th>Statut</th><th>Destinataire</th><th>Message</th></tr>${logRows}</table>` : `<span class="muted">Rien envoyé pour l'instant.</span>`}
 </div>`;

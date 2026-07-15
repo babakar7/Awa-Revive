@@ -52,6 +52,12 @@ import * as nrepo from "../domain/notificationRepo.js";
 import { cachedCoachNames } from "../domain/notificationSweep.js";
 import { renderMessage, STAFF_FOOTER } from "../domain/notificationRules.js";
 import { sendWhatsAppNotification } from "../lib/notify.js";
+import { ago, badge, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
+import { layout } from "./layout.js";
+import { loadNavBadges } from "./navBadges.js";
+import { renderInbox } from "./inboxPage.js";
+
+export { escapeHtml } from "./helpers.js";
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
 async function activePlansByContact(): Promise<Map<string, string[]>> {
@@ -69,124 +75,9 @@ async function activePlansByContact(): Promise<Map<string, string[]>> {
  * Read-only views + two bookkeeping actions ("remboursement effectué",
  * "abonnement activé"). NEVER any money movement from here: refunds are done
  * by a human in the Wave portal, these buttons only record that fact.
+ *
+ * Chrome (sidebar IA, search, badges) lives in layout.ts; home inbox in inboxPage.ts.
  */
-
-/** Escape ANY DB-sourced content before injecting into HTML (client text!). */
-export function escapeHtml(s: unknown): string {
-  return String(s ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function fmtDate(d: Date | string | null): string {
-  if (!d) return "—";
-  return new Date(d).toLocaleString("fr-FR", {
-    timeZone: config.TIMEZONE,
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function fmtFcfa(n: number): string {
-  return `${Number(n).toLocaleString("fr-FR")} F`;
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  BOOKED: "#1a7f37",
-  ACTIVATED: "#1a7f37",
-  PAID: "#9a6700",
-  AWAITING_PAYMENT: "#0969da",
-  DRAFT: "#6e7781",
-  EXPIRED: "#6e7781",
-  CANCELLED: "#6e7781",
-  REFUND_NEEDED: "#cf222e",
-  REFUNDED: "#8250df",
-};
-
-function badge(status: string): string {
-  const color = STATUS_COLORS[status] ?? "#6e7781";
-  return `<span class="badge" style="background:${color}">${escapeHtml(status)}</span>`;
-}
-
-function layout(
-  title: string,
-  active: string,
-  body: string,
-  opts: { refreshSeconds?: number } = {},
-): string {
-  const refresh = opts.refreshSeconds
-    ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">`
-    : "";
-  const tabs = [
-    ["/admin", "Vue d'ensemble"],
-    ["/admin/conversations", "Conversations"],
-    ["/admin/bookings", "Réservations"],
-    ["/admin/orders", "Bar ☕"],
-    ["/admin/livraisons", "Livraisons 🛵"],
-    ["/admin/handoffs", "Handoffs"],
-    ["/admin/reviews", "À reprendre 🔁"],
-    ["/admin/crm", "CRM 🗂"],
-    ["/admin/notifications", "Notifs 🔔"],
-    ["/admin/profile", "Profil 📱"],
-    ["/admin/tests", "À tester 🧪"],
-  ]
-    .map(
-      ([href, label]) =>
-        `<a href="${href}" class="${href === active ? "active" : ""}">${label}</a>`,
-    )
-    .join("");
-  return `<!doctype html>
-<html lang="fr"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-${refresh}
-<title>${escapeHtml(title)} — Awa admin</title>
-<style>
-:root{color-scheme:light}
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#f6f3ee;color:#1f2328}
-header{background:#1f2328;color:#fff;padding:.7rem 1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
-header h1{font-size:1rem;margin:0;white-space:nowrap}
-nav{display:flex;gap:.25rem;flex-wrap:wrap}
-nav a{color:#c9d1d9;text-decoration:none;padding:.35rem .7rem;border-radius:6px;font-size:.9rem}
-nav a.active,nav a:hover{background:#39414a;color:#fff}
-main{max-width:960px;margin:0 auto;padding:1rem}
-h2{font-size:1.05rem;margin:1.4rem 0 .6rem}
-.card{background:#fff;border:1px solid #e4ddd3;border-radius:10px;padding:.9rem;margin-bottom:.8rem}
-table{width:100%;border-collapse:collapse;font-size:.88rem}
-th,td{text-align:left;padding:.45rem .5rem;border-top:1px solid #eee;vertical-align:top}
-th{border-top:none;color:#6e7781;font-weight:600;font-size:.8rem}
-.badge{color:#fff;border-radius:20px;padding:.1rem .55rem;font-size:.72rem;font-weight:600;white-space:nowrap}
-.muted{color:#6e7781;font-size:.82rem}
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.6rem}
-.stat{background:#fff;border:1px solid #e4ddd3;border-radius:10px;padding:.7rem}
-.stat b{display:block;font-size:1.3rem}
-.bubble{max-width:78%;padding:.55rem .8rem;border-radius:12px;margin:.25rem 0;white-space:pre-wrap;word-break:break-word;font-size:.92rem}
-.user{background:#fff;border:1px solid #e4ddd3;margin-right:auto}
-.assistant{background:#d7f5dc;margin-left:auto}
-.turnrow{display:flex;flex-direction:column}
-details.tool{margin:.15rem 0 .15rem 0;font-size:.78rem;color:#6e7781}
-details.tool pre{white-space:pre-wrap;word-break:break-all;background:#f0ede7;padding:.5rem;border-radius:8px;margin:.3rem 0 0}
-form.inline{display:inline}
-button.act{background:#1a7f37;color:#fff;border:none;border-radius:8px;padding:.45rem .8rem;font-size:.85rem;cursor:pointer}
-button.act:hover{background:#166f30}
-input[type=search]{width:100%;padding:.55rem .8rem;border:1px solid #e4ddd3;border-radius:10px;font-size:.95rem;margin-bottom:.8rem}
-a.rowlink{color:inherit;text-decoration:none;display:block}
-a.rowlink:hover{background:#faf8f4}
-.ok{color:#1a7f37;font-weight:600}
-.warn{background:#fff8f0;border-color:#f0d8b6}
-@media(max-width:640px){ td.hide-sm,th.hide-sm{display:none} }
-</style></head>
-<body>
-<header><h1>🤖 Awa — admin</h1><nav>${tabs}</nav></header>
-<main>${body}</main>
-</body></html>`;
-}
 
 /** Sample values used by the "Envoyer un test" button so the message reads real. */
 const TEST_VARS: Record<string, string> = {
@@ -201,17 +92,6 @@ const TEST_VARS: Record<string, string> = {
   classes: "• Aquabike à 10:00 — 8 inscrit(s)\n• Power Yoga à 11:00 — 5 inscrit(s)",
 };
 
-/** "il y a Xh" style relative time for lists. */
-function ago(d: Date | string | null): string {
-  if (!d) return "—";
-  const mins = Math.round((Date.now() - new Date(d).getTime()) / 60000);
-  if (mins < 1) return "à l'instant";
-  if (mins < 60) return `il y a ${mins} min`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `il y a ${hours} h`;
-  return `il y a ${Math.round(hours / 24)} j`;
-}
-
 export function registerAdmin(app: FastifyInstance): void {
   app.register(
     async (admin) => {
@@ -225,82 +105,53 @@ export function registerAdmin(app: FastifyInstance): void {
           .catch(() => 0);
         reply
           .type("text/html")
-          .send(layout("À tester", "/admin/tests", renderTestChecklist(pendingLinks)));
+          .send(await layout("À tester", "/admin/tests", renderTestChecklist(pendingLinks)));
       });
 
-      // ---------- Vue d'ensemble ----------
+      // ---------- À faire (inbox) ----------
       admin.get("/", async (req, reply) => {
-        const [actions, s] = await Promise.all([q.pendingActions(), q.stats()]);
-
-        const refundRows = actions.refunds
-          .map(
-            (b) => `<tr>
-<td><a href="/admin/conversations/${b.client_id}">${escapeHtml(b.client_name ?? "?")}</a><div class="muted">+${escapeHtml(b.wa_phone)}</div></td>
-<td>${escapeHtml(b.service_name)}<div class="muted">${fmtDate(b.slot_start)} · ${b.participants} place(s)</div></td>
-<td><b>${fmtFcfa(b.amount_xof)}</b><div class="muted">Wave : ${escapeHtml(b.wave_session_id ?? "?")}</div></td>
-<td><form class="inline" method="post" action="/admin/bookings/${b.id}/refund-done" onsubmit="return confirm('Confirmer : le remboursement de ${fmtFcfa(b.amount_xof)} a bien été fait dans le portail Wave ?')"><button class="act">✅ Remboursement effectué</button></form></td>
-</tr>`,
-          )
-          .join("");
-
-        const planRows = actions.planActivations
-          .map(
-            (p) => `<tr>
-<td><a href="/admin/conversations/${p.client_id}">${escapeHtml(p.client_name ?? "?")}</a><div class="muted">+${escapeHtml(p.wa_phone)}</div></td>
-<td>${escapeHtml(p.plan_name)}<div class="muted">payé ${fmtDate(p.updated_at)}</div></td>
-<td><b>${fmtFcfa(p.amount_xof)}</b></td>
-<td><form class="inline" method="post" action="/admin/plan-orders/${p.id}/activated" onsubmit="return confirm('Confirmer : l\\'abonnement a bien été attribué au client dans le dashboard Wix ?')"><button class="act">✅ Abonnement activé</button></form></td>
-</tr>`,
-          )
-          .join("");
-
-        const handoffRows = actions.recentHandoffs
-          .map(
-            (h) => `<tr>
-<td>${ago(h.created_at)}</td>
-<td><a href="/admin/conversations/${h.client_id}">${escapeHtml(h.client_name ?? "?")}</a><div class="muted">+${escapeHtml(h.wa_phone)}</div></td>
-<td>${escapeHtml(h.reason ?? "")}</td>
-</tr>`,
-          )
-          .join("");
-
-        const body = `
-<h2>💸 Remboursements à traiter ${actions.refunds.length ? `(${actions.refunds.length})` : ""}</h2>
-<div class="card ${actions.refunds.length ? "warn" : ""}">
-${
-  actions.refunds.length
-    ? `<p class="muted">1. Rembourser dans le portail Wave Business → 2. cliquer le bouton.</p>
-       <table><tr><th>Client</th><th>Cours</th><th>Montant</th><th></th></tr>${refundRows}</table>`
-    : `<span class="ok">✓ Aucun remboursement en attente</span>`
-}
-</div>
-
-<h2>🎫 Abonnements payés à activer dans Wix ${actions.planActivations.length ? `(${actions.planActivations.length})` : ""}</h2>
-<div class="card ${actions.planActivations.length ? "warn" : ""}">
-${
-  actions.planActivations.length
-    ? `<p class="muted">1. Attribuer la formule au client dans Wix (Abonnements) → 2. cliquer le bouton.</p>
-       <table><tr><th>Client</th><th>Formule</th><th>Montant</th><th></th></tr>${planRows}</table>`
-    : `<span class="ok">✓ Aucun abonnement en attente d'activation</span>`
-}
-</div>
-
-<h2>🙋🏾 Handoffs des 7 derniers jours ${s.handoffsOpen ? `<span class="badge" style="background:#cf222e">${s.handoffsOpen} ouvert(s)</span>` : ""}</h2>
-<div class="card ${s.handoffsOpen ? "warn" : ""}">
-${actions.recentHandoffs.length ? `<table><tr><th>Quand</th><th>Client</th><th>Motif</th></tr>${handoffRows}</table>` : `<span class="muted">Aucun handoff récent.</span>`}
-${s.handoffsOpen ? `<p class="muted" style="margin-bottom:0">Marquer les handoffs traités : <a href="/admin/handoffs">onglet Handoffs</a>.</p>` : ""}
-</div>
-
-<h2>📊 Activité</h2>
-<div class="stat-grid">
-<div class="stat"><span class="muted">Messages reçus aujourd'hui</span><b>${s.msgToday}</b><span class="muted">${s.msg7d} sur 7 j</span></div>
-<div class="stat"><span class="muted">Clients actifs aujourd'hui</span><b>${s.activeClientsToday}</b><span class="muted">${s.activeClients7d} sur 7 j</span></div>
-<div class="stat"><span class="muted">Résas confirmées aujourd'hui</span><b>${s.bookingsToday}</b><span class="muted">${s.bookings7d} sur 7 j</span></div>
-<div class="stat"><span class="muted">Encaissé aujourd'hui</span><b>${fmtFcfa(s.revenueToday)}</b><span class="muted">${fmtFcfa(s.revenue7d)} sur 7 j</span></div>
-</div>
-<p class="muted">Connecté : ${escapeHtml(req.adminUser ?? "?")} · ${new Date().toLocaleString("fr-FR", { timeZone: config.TIMEZONE })}</p>`;
-
-        reply.type("text/html").send(layout("Vue d'ensemble", "/admin", body));
+        const [actions, s, badges, openReviews, openHandoffs, openDeliveries] = await Promise.all([
+          q.pendingActions(),
+          q.stats(),
+          loadNavBadges(),
+          reviews.openReviews().catch(() => [] as Awaited<ReturnType<typeof reviews.openReviews>>),
+          q
+            .listHandoffs(30)
+            .then((rows) => rows.filter((h) => h.status === "OPEN"))
+            .catch(() => [] as any[]),
+          delivery
+            .listOpenDeliveryOrders()
+            .catch(() => [] as Awaited<ReturnType<typeof delivery.listOpenDeliveryOrders>>),
+        ]);
+        const now = Date.now();
+        let late = 0;
+        let kitchenFailed = 0;
+        let clientFailed = 0;
+        for (const o of openDeliveries) {
+          if (o.status === "IN_KITCHEN" && o.kitchen_notify_status === "failed") kitchenFailed++;
+          if (o.status === "IN_KITCHEN") {
+            const slaMs = (o.sla_minutes ?? 20) * 60_000;
+            if (o.alerted_at || now - new Date(o.created_at).getTime() >= slaMs) late++;
+          }
+          if (o.status === "READY" && o.client_notify_status === "failed") clientFailed++;
+        }
+        const body = renderInbox({
+          refunds: actions.refunds,
+          planActivations: actions.planActivations,
+          openHandoffs,
+          openReviews,
+          crmLinks: badges.crmLinks,
+          livraisonAlerts: {
+            late,
+            kitchenFailed,
+            clientFailed,
+            open: openDeliveries.length,
+          },
+          stats: s,
+          badges,
+          adminUser: req.adminUser ?? "?",
+        });
+        reply.type("text/html").send(await layout("À faire", "/admin", body, { badges }));
       });
 
       // ---------- Conversations ----------
@@ -319,7 +170,7 @@ ${s.handoffsOpen ? `<p class="muted" style="margin-bottom:0">Marquer les handoff
         const body = `
 <form method="get" action="/admin/conversations"><input type="search" name="q" placeholder="Rechercher un nom ou un numéro…" value="${escapeHtml(search ?? "")}"></form>
 <div class="card"><table><tr><th>Client</th><th>Dernier message</th><th class="hide-sm">Langue</th></tr>${rows || `<tr><td colspan="3" class="muted">Aucun client trouvé.</td></tr>`}</table></div>`;
-        reply.type("text/html").send(layout("Conversations", "/admin/conversations", body));
+        reply.type("text/html").send(await layout("Conversations", "/admin/conversations", body));
       });
 
       admin.get("/conversations/:clientId", async (req, reply) => {
@@ -347,7 +198,7 @@ ${s.handoffsOpen ? `<p class="muted" style="margin-bottom:0">Marquer les handoff
 ${thread || `<p class="muted">Aucun message.</p>`}`;
         reply
           .type("text/html")
-          .send(layout(client.name ?? client.wa_phone, "/admin/conversations", body));
+          .send(await layout(client.name ?? client.wa_phone, "/admin/conversations", body));
       });
 
       // ---------- Réservations & abonnements ----------
@@ -395,7 +246,7 @@ ${thread || `<p class="muted">Aucun message.</p>`}`;
 <div class="card"><table><tr><th>Créée</th><th>Client</th><th>Cours</th><th>Montant</th><th>Statut</th></tr>${bookingRows || `<tr><td colspan="5" class="muted">Rien.</td></tr>`}</table></div>
 <h2>Abonnements vendus</h2>
 <div class="card"><table><tr><th>Créé</th><th>Client</th><th>Formule</th><th>Montant</th><th>Statut</th></tr>${planRows || `<tr><td colspan="5" class="muted">Rien.</td></tr>`}</table></div>`;
-        reply.type("text/html").send(layout("Réservations", "/admin/bookings", body));
+        reply.type("text/html").send(await layout("Réservations", "/admin/bookings", body));
       });
 
       // ---------- Commandes bar ----------
@@ -454,7 +305,15 @@ ${
 }
 </div>
 <p class="muted">Seules les commandes payées (résa confirmée) apparaissent ici.</p>`;
-        reply.type("text/html").send(layout("Commandes bar", "/admin/orders", body));
+        reply
+          .type("text/html")
+          .send(
+            await layout(
+              "Commandes payées",
+              "/admin/orders",
+              `<p class="subhead">Bar ☕ · commandes rattachées à une résa (paiement Wave / OM). Pour les livraisons téléphoniques → <a href="/admin/livraisons">Livraisons</a>.</p>${body}`,
+            ),
+          );
       });
 
       // ---------- Livraisons (commandes bar à livrer) ----------
@@ -473,13 +332,13 @@ ${
           banner: livraisonsBanner(done, err),
         });
         // Auto-refresh only on the board (never on the create form).
-        reply.type("text/html").send(layout("Livraisons", "/admin/livraisons", body, { refreshSeconds: 60 }));
+        reply.type("text/html").send(await layout("Livraisons", "/admin/livraisons", body, { refreshSeconds: 60 }));
       });
 
       admin.get("/livraisons/new", async (req, reply) => {
         const err = (req.query as any)?.err as string | undefined;
         const body = renderLivraisonForm(CAFE_MENU.items, livraisonsBanner(undefined, err));
-        reply.type("text/html").send(layout("Nouvelle livraison", "/admin/livraisons", body));
+        reply.type("text/html").send(await layout("Nouvelle livraison", "/admin/livraisons", body));
       });
 
       admin.post("/livraisons", async (req, reply) => {
@@ -581,7 +440,7 @@ ${
         const body = `<div class="card ${open ? "warn" : ""}">
 ${open ? `<p class="muted">${open} handoff(s) à traiter — un handoff = un client dont le besoin attend un humain. « Traité » = le client a été recontacté (ou son cas réglé).</p>` : `<p class="muted"><span class="ok">✓ Tous les handoffs sont traités.</span></p>`}
 <table><tr><th>Quand</th><th>Client</th><th>Motif</th><th></th></tr>${rows || `<tr><td colspan="4" class="muted">Aucun handoff.</td></tr>`}</table></div>`;
-        reply.type("text/html").send(layout("Handoffs", "/admin/handoffs", body));
+        reply.type("text/html").send(await layout("Handoffs", "/admin/handoffs", body));
       });
 
       admin.post("/handoffs/:id/done", async (req, reply) => {
@@ -672,7 +531,7 @@ ${openCards || `<div class="card"><span class="ok">✓ Personne à reprendre —
 <div class="card"><details><summary>Voir (contrôle qualité du classement)</summary>
 <table><tr><th>Quand</th><th>Client</th><th>Issue</th><th>Résumé</th></tr>${recentRows || `<tr><td colspan="4" class="muted">Rien de classé encore — le classement tourne toutes les 5 min sur les conversations silencieuses depuis 45 min.</td></tr>`}</table>
 </details></div>`;
-        reply.type("text/html").send(layout("À reprendre", "/admin/reviews", body));
+        reply.type("text/html").send(await layout("À reprendre", "/admin/reviews", body));
       });
 
       const closeReviewRoute = (ignored: boolean) => async (req: any, reply: any) => {
@@ -779,7 +638,7 @@ ${
           })
           .join("");
         const linkSection = linkQueue.length
-          ? `<h2>🔗 Liaisons en attente (${linkQueue.length})</h2>
+          ? `<h2 id="liaisons">🔗 Liaisons en attente (${linkQueue.length})</h2>
 <p class="muted">Ces clients affirment avoir un compte/abonnement mais la vérification par email n'a
 pas abouti. Un clic sur « Lier cette fiche » AJOUTE leur numéro WhatsApp à la fiche choisie (sans
 toucher à l'ancien numéro) — Awa les reconnaît immédiatement et le client est prévenu sur WhatsApp.</p>
@@ -940,7 +799,7 @@ cours : Awa échouera sur elles à leur prochain message.</p>
           )
           .join("");
         const unreachableSection = unreachable.length
-          ? `<h2>🎫 Abonnés injoignables (${unreachable.length})</h2>
+          ? `<h2 id="injoignables">🎫 Abonnés injoignables (${unreachable.length})</h2>
 <p class="muted">Ces clientes paient un abonnement ACTIF mais Awa ne pourra jamais les reconnaître :
 leur fiche n'a pas de numéro utilisable. C'est exactement la population du cas « abonnement
 introuvable » — à compléter dans Wix → Contacts avec leur numéro WhatsApp (+221...), en priorité.</p>
@@ -949,6 +808,12 @@ introuvable » — à compléter dans Wix → Contacts avec leur numéro WhatsAp
 
         const body = `
 ${banner}
+<nav class="jump-nav" aria-label="Sections CRM">
+  <a href="#liaisons">Liaisons${linkQueue.length ? ` (${linkQueue.length})` : ""}</a>
+  <a href="#injoignables">Injoignables${unreachable.length ? ` (${unreachable.length})` : ""}</a>
+  <a href="#doublons">Doublons${audit.duplicates.length ? ` (${audit.duplicates.length})` : ""}</a>
+  <a href="#sans-tel">Sans téléphone${audit.noPhone.length ? ` (${audit.noPhone.length})` : ""}</a>
+</nav>
 <div class="stat-grid">
 <div class="stat"><span class="muted">Fiches contact Wix</span><b>${audit.total}</b></div>
 <div class="stat"><span class="muted">Liaisons en attente</span><b>${linkQueue.length}</b></div>
@@ -956,23 +821,23 @@ ${banner}
 <div class="stat"><span class="muted">Numéros en doublon</span><b>${audit.duplicates.length}</b></div>
 <div class="stat"><span class="muted">Fiches sans téléphone</span><b>${audit.noPhone.length}</b></div>
 </div>
-${linkSection}
-${unreachableSection}
-<h2>👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
+${linkSection || `<h2 id="liaisons">🔗 Liaisons en attente</h2><div class="card"><span class="ok">✓ Aucune liaison en attente.</span></div>`}
+${unreachableSection || `<h2 id="injoignables" class="muted" style="font-size:.9rem">Abonnés injoignables — aucun</h2>`}
+<h2 id="doublons">👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
 <p class="muted">Awa refuse (prudemment) de choisir quand un numéro correspond à plusieurs fiches :
 ces clientes ne sont pas reconnues. Un clic fusionne le groupe — la fiche conservée (✓) est choisie
 automatiquement : compte membre 👤 et abonnement 🎫 d'abord (Wix interdit de les fusionner comme
 sources), sinon numéro international, sinon la plus ancienne. Les fiches fusionnées sont supprimées
 par Wix ; les fiches protégées restent telles quelles.</p>
 ${groupCards || `<div class="card"><span class="ok">✓ Aucun doublon — rien à nettoyer.</span></div>`}
-<h2>📵 Fiches sans téléphone ${audit.noPhone.length ? `(${audit.noPhone.length})` : ""}</h2>
+<h2 id="sans-tel">📵 Fiches sans téléphone ${audit.noPhone.length ? `(${audit.noPhone.length})` : ""}</h2>
 <p class="muted">Invisibles pour Awa (elle reconnaît les clientes par leur numéro WhatsApp).
 À compléter directement dans Wix → Contacts, avec le numéro WhatsApp de la cliente.</p>
 ${noPhoneActiveBlock}
 <div class="card">
 ${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à venir ni abonnement (${noPhoneDormant.length})</summary><table><tr><th>Nom</th><th>Email</th></tr>${noPhoneRows}</table></details>` : audit.noPhone.length === 0 ? `<span class="ok">✓ Toutes les fiches ont un téléphone.</span>` : `<span class="ok">✓ Aucune fiche dormante.</span>`}
 </div>`;
-        reply.type("text/html").send(layout("Hygiène CRM", "/admin/crm", body));
+        reply.type("text/html").send(await layout("CRM", "/admin/crm", body));
       });
 
       admin.post("/crm/merge", async (req, reply) => {
@@ -1175,7 +1040,7 @@ ${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à 
           : `<p class="muted">⚠️ Édition de la photo désactivée (variable d'env <code>WA_APP_ID</code> non configurée).</p>`;
 
         reply.type("text/html").send(
-          layout(
+          await layout(
             "Profil WhatsApp",
             "/admin/profile",
             `<h2>Profil WhatsApp Business</h2>
@@ -1338,7 +1203,7 @@ ${photoSection}
           banner: banner(done, err),
           testPhone: config.NOTIF_TEST_PHONE,
         });
-        reply.type("text/html").send(layout("Notifications", "/admin/notifications", body));
+        reply.type("text/html").send(await layout("Notifications", "/admin/notifications", body));
       });
 
       admin.post("/notifications/rules", async (req, reply) => {

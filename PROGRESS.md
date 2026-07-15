@@ -1,11 +1,10 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **14 juillet 2026** — moteur de notifications staff
-> (rappels gardien/coach éditables via `/admin/notifications`, café → WhatsApp
-> prioritaire), cf. §4.32. Avant : handoffs réception en un clic (`wa.me`
-> contextualisé avec prénom + motif), lot **exactitude & fermeture**, LOT 1+2
-> robustesse paiement/boucle ; poller OM abandonné.
+> Dernière mise à jour : **15 juillet 2026** — **admin IA redesign** (inbox
+> « À faire », sidebar groupée, recherche client globale, badges), cf. §4.34.
+> Avant : notifications staff §4.32, livraisons bar, handoffs `wa.me`, lot
+> exactitude & fermeture.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
@@ -1241,8 +1240,9 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     template valide = échec 131047 **mais visible au journal** (avant : silencieux).
   - **Config prod au 14/07** (données en DB, éditables via l'admin) : 2 règles —
     « Aquabikes à l'eau » (numéro fixe gardien, gap 60) et « Effectif coach —
-    cours collectifs » (tous cours collectifs SAUF reformer, 4 h avant, au coach
-    du cours via Wix, gap 30 = un message par bloc enchaîné). Contact staff :
+    cours collectifs » (tous cours collectifs SAUF reformer, 3 h avant, au coach
+    du cours via Wix, gap 30 = un message par bloc enchaîné). Lead baissé de
+    4 h → 3 h le 15/07 (DB only, `lead_minutes=180`). Contact staff :
     **Yass mutée** (toujours au studio). Les 7 coachs Wix ont un numéro.
   - Fichiers : `domain/notificationRules.ts` (pur, testé), `notificationRepo.ts`
     (CRUD + claim + journal), `notificationSweep.ts` (sweep + cache planning +
@@ -1326,6 +1326,21 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     cuisine hors fenêtre 24 h = `WA_RECEPTION_TEMPLATE` (déjà là) ; fiabilité client =
     `WA_DELIVERY_READY_TEMPLATE`. Hors périmètre v1 : 2ᵉ alerte à 2×SLA, édition
     (annuler+recréer), message « livrée » au client, gestion livreur.
+
+- **4.35 — Admin IA redesign (15/07).** La barre plate à 11 onglets était
+  illisible (ops urgentes = config = archives). Nouveau chrome **inbox-first** :
+  - **`/admin` = « À faire »** : remboursements + abonnements toujours visibles ;
+    handoffs ouverts, reviews, liaisons CRM, livraisons en alerte seulement si
+    non vides ; stats en bas. Actions 1-clic inchangées (pas de mouvement d'argent).
+  - **Sidebar groupée** : Clients (Conversations / Handoffs / À reprendre) ·
+    Studio · Bar (Commandes payées / Livraisons) · CRM · Réglages (Notifs staff /
+    Profil / Tests). Badges rouges (counts soft-fail).
+  - **Recherche client globale** dans le topbar → `/admin/conversations?q=`.
+  - Ancres internes CRM (`#liaisons` …) et Notifs (`#regles` / `#contacts` /
+    `#journal`). URLs stables.
+  - Fichiers : `admin/layout.ts`, `helpers.ts`, `navBadges.ts`, `inboxPage.ts` ;
+    `routes.ts` allège le chrome. Suite possible : découper `routes.ts` en
+    dossiers domaine (phase code-only, pas de changement UX).
 
 ## 5. Chronologie condensée
 
