@@ -69,6 +69,15 @@ import * as quotes from "../domain/quoteRepo.js";
 import { parseQuoteForm } from "../domain/quoteRules.js";
 import { renderQuotePdf } from "../lib/quotePdf.js";
 import { devisBanner, renderQuoteForm, renderQuotesList } from "./devisPage.js";
+import * as giftCards from "../domain/giftCardRepo.js";
+import { parseGiftCardForm } from "../domain/giftCardRules.js";
+import { renderGiftCardImage } from "../lib/giftCardImage.js";
+import {
+  cartesCadeauxBanner,
+  renderGiftCardForm,
+  renderGiftCardsList,
+  renderGiftCardView,
+} from "./cartesCadeauxPage.js";
 import * as links from "../domain/linkRequests.js";
 import * as reviews from "../domain/conversationReview.js";
 import { renderTestChecklist } from "./testChecklist.js";
@@ -700,6 +709,92 @@ ${
           .type("application/pdf")
           .header("content-disposition", `attachment; filename="Devis_${quote.number}.pdf"`)
           .send(pdf);
+      });
+
+      // ---------- Cartes cadeaux (visuel PNG + envoi WhatsApp) ----------
+      admin.get("/cartes-cadeaux", async (req, reply) => {
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const rows = await giftCards.listGiftCards(100);
+        const body = renderGiftCardsList(rows, cartesCadeauxBanner(done, err));
+        reply.type("text/html").send(await layout("Cartes cadeaux", "/admin/cartes-cadeaux", body));
+      });
+
+      admin.get("/cartes-cadeaux/new", async (req, reply) => {
+        const err = (req.query as any)?.err as string | undefined;
+        const body = renderGiftCardForm(cartesCadeauxBanner(undefined, err));
+        reply.type("text/html").send(await layout("Nouvelle carte cadeau", "/admin/cartes-cadeaux", body));
+      });
+
+      admin.post("/cartes-cadeaux", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const parsed = parseGiftCardForm(b);
+        if ("error" in parsed)
+          return reply.redirect(`/admin/cartes-cadeaux/new?err=${encodeURIComponent(parsed.error)}`, 303);
+        const gc = await giftCards.createGiftCard(parsed.data, req.adminUser ?? null);
+        req.log.info({ giftCard: gc.id, by: req.adminUser }, "Gift card created");
+        return reply.redirect(`/admin/cartes-cadeaux/${gc.id}?done=created`, 303);
+      });
+
+      admin.get("/cartes-cadeaux/:id", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const gc = await giftCards.findGiftCard(id);
+        if (!gc) return reply.redirect("/admin/cartes-cadeaux?err=carte introuvable", 303);
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const body = renderGiftCardView(gc, cartesCadeauxBanner(done, err));
+        reply.type("text/html").send(await layout("Carte cadeau", "/admin/cartes-cadeaux", body));
+      });
+
+      admin.get("/cartes-cadeaux/:id/png", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const gc = await giftCards.findGiftCard(id);
+        if (!gc) return reply.code(404).type("text/plain").send("Carte introuvable");
+        const png = await renderGiftCardImage({
+          offerLine1: gc.offer_line1,
+          offerLine2: gc.offer_line2,
+          recipientName: gc.recipient_name,
+          fromName: gc.from_name,
+        });
+        const inline = (req.query as any)?.inline === "1";
+        reply.type("image/png");
+        if (!inline) {
+          const safe = gc.recipient_name.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "carte";
+          reply.header("content-disposition", `attachment; filename="Carte-Cadeau-${safe}.png"`);
+        }
+        return reply.send(png);
+      });
+
+      admin.post("/cartes-cadeaux/:id/send", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const gc = await giftCards.findGiftCard(id);
+        if (!gc) return reply.redirect("/admin/cartes-cadeaux?err=carte introuvable", 303);
+        if (!gc.send_phone)
+          return reply.redirect(`/admin/cartes-cadeaux/${id}?err=${encodeURIComponent("pas de numéro — envoi impossible")}`, 303);
+        const png = await renderGiftCardImage({
+          offerLine1: gc.offer_line1,
+          offerLine2: gc.offer_line2,
+          recipientName: gc.recipient_name,
+          fromName: gc.from_name,
+        });
+        const caption = `Carte Cadeau Revive 🎁 — ${gc.offer_line1}`;
+        const logBody = `[carte cadeau ${gc.recipient_name}] ${caption}`;
+        try {
+          const wamid = await sendImage(gc.send_phone, png, caption);
+          await giftCards.markGiftCardSent(id, "sent");
+          await nrepo.recordGiftCardLog(gc.send_phone, logBody, "sent", null, wamid ?? null);
+          req.log.info({ giftCard: id, by: req.adminUser }, "Gift card sent on WhatsApp");
+          return reply.redirect(`/admin/cartes-cadeaux/${id}?done=sent`, 303);
+        } catch (e) {
+          const windowClosed = String(e).includes("131047");
+          await giftCards.markGiftCardSent(id, windowClosed ? "window_closed" : "failed");
+          await nrepo.recordGiftCardLog(gc.send_phone, logBody, "failed", String(e).slice(0, 300));
+          req.log.error({ err: e, giftCard: id }, "Gift card WhatsApp send failed");
+          const msg = windowClosed
+            ? "fenêtre WhatsApp fermée — le destinataire doit d'abord écrire à Awa, puis réessaie"
+            : "échec de l'envoi WhatsApp — réessaie";
+          return reply.redirect(`/admin/cartes-cadeaux/${id}?err=${encodeURIComponent(msg)}`, 303);
+        }
       });
 
       // ---------- Handoffs ----------

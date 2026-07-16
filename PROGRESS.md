@@ -1427,6 +1427,30 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   - Livraison volontairement minimale (choix Babakar) : téléchargement seul —
     pas d'envoi WhatsApp, pas de lien public, pas de suivi d'acompte.
 
+- **4.38 — Cartes cadeaux admin (16/07).** La réception fabriquait le visuel de
+  carte cadeau à la main dans Canva. Nouvelle section `/admin/cartes-cadeaux`
+  (nav Clients) : formulaire → PNG 1748×1240 généré sur le template de marque,
+  liste + historique, aperçu inline, téléchargement, **envoi WhatsApp** (réutilise
+  `sendImage` + gestion 131047 comme les factures).
+  - Rendu (`lib/giftCardImage.ts`, `@napi-rs/canvas`) : on ne dessine PAS
+    from scratch — on charge `assets/gift-card-template.png` (l'export Canva
+    d'origine avec les 3 zones variables repeintes en crème `250,246,241`) et on
+    pose 3 textes par-dessus. Coordonnées/couleurs mesurées au pixel sur l'export
+    (offre centrée x≈1247, y 420/508 ; POUR (1282,745) ; DE (1300,840) ; offre
+    #353433, valeurs #3a3a3a). Police DejaVu embarquée (approximation assumée,
+    la police Canva exacte n'est pas fournie). Auto-réduction si un texte dépasse.
+    Le template vierge a été fabriqué par un script one-shot (PIL) puis vérifié
+    visuellement contre l'original.
+  - L'offre est **libre** (« Carnet de 5 séances » n'existe pas dans Wix) — aucun
+    couplage list_plans. Objet marketing : table `gift_cards` sans numéro, immuable
+    (pas d'update, comme les factures). L'activation du plan offert au destinataire
+    reste un geste réception dans Wix (hors périmètre). Cohérent avec `isGiftCard`
+    (Awa ne vend pas de cartes cadeaux, 16/07) : c'est un outil interne.
+  - Fichiers : `domain/giftCardRules.ts` (pur, testé) + `giftCardRepo.ts`,
+    `lib/giftCardImage.ts`, `admin/cartesCadeauxPage.ts` + routes, `recordGiftCardLog`
+    (source='gift_card'). Tests purs (parsing) + image (signature PNG, 1 ligne,
+    nom long).
+
 ## 5. Chronologie condensée
 
 - **16/07 — 529 Overloaded : retry applicatif espacé (incident premier contact).**

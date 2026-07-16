@@ -558,4 +558,22 @@ create table if not exists quotes (
   updated_at timestamptz not null default now()
 );
 create index if not exists idx_quotes_created on quotes (created_at desc);
+
+-- Cartes cadeaux : visuel PNG généré par la réception (offre libre + POUR + DE)
+-- sur le template de marque. Objet marketing, PAS comptable (pas de numéro) ;
+-- l'activation du plan offert au destinataire reste un geste manuel dans Wix.
+-- Immuable comme les factures : une erreur = on en refait une (pas d'update).
+create table if not exists gift_cards (
+  id uuid primary key default gen_random_uuid(),
+  offer_line1 text not null,        -- « PACK DECOUVERTE »
+  offer_line2 text,                 -- « 3 SEANCES REFORMER »
+  recipient_name text not null,     -- POUR
+  from_name text not null,          -- DE
+  send_phone text,                  -- digits wa_id ; null = pas d'envoi WhatsApp
+  sent_at timestamptz,
+  sent_status text,                 -- sent | failed | window_closed
+  created_by text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_gift_cards_created on gift_cards (created_at desc);
 `;

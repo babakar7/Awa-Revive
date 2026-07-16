@@ -32,6 +32,7 @@ const NAV: NavSection[] = [
       { href: "/admin/handoffs", label: "Handoffs", badgeKey: "handoffs" },
       { href: "/admin/reviews", label: "À reprendre", badgeKey: "reviews" },
       { href: "/admin/factures", label: "Factures 🧾" },
+      { href: "/admin/cartes-cadeaux", label: "Cartes cadeaux 🎁" },
       // CRM = fiches Wix / liaisons / doublons — same "people" job as conversations,
       // never under Bar (that was only a missing section header in the first layout).
       { href: "/admin/crm", label: "CRM", badgeKey: "crmLinks" },
