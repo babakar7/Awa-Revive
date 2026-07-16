@@ -844,6 +844,19 @@ export function isDiscoveryPlan(name: string): boolean {
   return /découverte|discovery|essai|trial/i.test(name);
 }
 
+/**
+ * Business rule: is this a gift card ("Carte Cadeau") ? Awa must NOT sell gift
+ * cards (they would activate on the buyer's own account instead of being
+ * gifted) — listPlans drops them so they never reach list_plans / getPlan.
+ * They still exist in Wix for manual/website gifting, and clients who already
+ * OWN one keep using it (redemption goes through the benefit pools, not here).
+ * Same name-based approach as isPlanRenewable, which already treats /cadeau/ as
+ * non-renewable.
+ */
+export function isGiftCard(name: string): boolean {
+  return /cadeau|gift/i.test(name);
+}
+
 function periodLabel(duration: any): string | null {
   if (!duration?.count || !duration?.unit) return null;
   const units: Record<string, [string, string]> = {
@@ -871,8 +884,14 @@ export async function listPlans(): Promise<WixPlan[]> {
   });
   if (!res.ok) throw new Error(`Wix plans list failed (${res.status}): ${await res.text()}`);
   const data: any = await res.json();
+  // Visibility model (verified live 16/07): the ONLY reliable "hide from Awa"
+  // signal is `archived` — archive a plan in Wix to pull it from the catalogue.
+  // `public` is NOT usable here: plans sold via Awa but hidden from the website
+  // pricing page are `public:false` (e.g. Pack Découverte). Do NOT filter on
+  // `public` — it would remove the discovery pack and break the trial flow.
+  // (The old `!p.hidden` clause was a no-op: Wix plans have no `hidden` field.)
   const plans: WixPlan[] = (data?.plans ?? [])
-    .filter((p: any) => !p.archived && !p.hidden)
+    .filter((p: any) => !p.archived)
     .map((p: any) => {
       const price = Number(p?.pricing?.price?.value ?? 0);
       const recurring = !!p?.pricing?.subscription;
@@ -890,7 +909,9 @@ export async function listPlans(): Promise<WixPlan[]> {
         renewable: isPlanRenewable(name, durationToDays(duration)),
       } as WixPlan;
     })
-    .filter((p: WixPlan) => p.priceXof > 0);
+    // Sellable by Awa: real price, and not a gift card (never self-sold — see
+    // isGiftCard). Zero-priced promo plans (Invitation, Collab…) are internal.
+    .filter((p: WixPlan) => p.priceXof > 0 && !isGiftCard(p.name));
   plansCache = { fetchedAt: Date.now(), plans };
   return plans;
 }

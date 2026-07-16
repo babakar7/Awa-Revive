@@ -1429,6 +1429,31 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
 
 ## 5. Chronologie condensée
 
+- **16/07 — Audit catalogue plans Wix (suite Pack Découverte).** Revue des 28
+  plans après l'incident découverte. Trois problèmes de même nature + un piège
+  de code :
+  - **Descriptions au prix périmé (corrigées via API Wix).** 3 plans dont la
+    description affichait un prix ≠ du prix réellement facturé (baisse de tarif
+    non répercutée) : Pilates Mat 2x (facturé 80 000, desc disait 150 000),
+    Pilates Reformer 3x (144 000 vs 190 000), Aquafitness 2x (80 000 vs 120 000).
+    Comme `list_plans` transmet `description` au modèle, Awa recevait deux prix
+    contradictoires. Fix : prix retirés des descriptions (le prix vient TOUJOURS
+    du champ catalogue). Vérifié : plus aucun plan vendable n'a de prix en desc.
+  - **Plan de test « test fusion » (50 F, public) archivé** via API — Awa
+    pouvait le proposer.
+  - **Cartes cadeaux retirées de la vente Awa (code).** `isGiftCard()` +
+    `listPlans()` les écarte (elles s'activeraient sur le compte de l'acheteur).
+    Elles restent dans Wix (don manuel/site) et un client qui en possède déjà
+    une continue à l'utiliser (redemption via benefit pools, pas via listPlans).
+  - **⚠️ Piège de visibilité (documenté, NE PAS « corriger »).** Le filtre de
+    `listPlans()` faisait `!p.archived && !p.hidden` : `hidden` n'existe PAS
+    dans l'API Wix (no-op confirmé sur 27/27 plans). Le vrai champ est `public`,
+    MAIS le corriger en « public seulement » ferait disparaître le **Pack
+    Découverte** (`public:false`, vendu via Awa) et casserait le parcours essai.
+    Donc : seul `archived` filtre côté Wix ; pour retirer un plan à Awa on
+    archive (Wix) ou on ajoute un filtre nommé (comme isGiftCard). Clause
+    `!p.hidden` supprimée, intention commentée dans le code.
+
 - **16/07 — Pack Découverte : contenu manquant + anti-spéculation.** Une cliente
   demande le Pack Découverte ; la description Wix ne disait que « Valable 2
   semaines » → Awa répond « nombre de séances non précisé » et **spécule** « en
