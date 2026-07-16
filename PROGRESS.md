@@ -1451,6 +1451,32 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     (source='gift_card'). Tests purs (parsing) + image (signature PNG, 1 ligne,
     nom long).
 
+- **4.39 — Vérité paiements + ajout de places à une résa (16/07).** Audit prod :
+  Awa affirmait à tort « paiement uniquement par Wave » (OM/Max It sont actifs), et
+  2 clients ont voulu « rajouter 2 personnes » à leur résa sans qu'Awa sache le
+  faire (handoff perdu).
+  - **Partie A (vérité paiements)** : le prompt système disait « payment first via
+    Wave », « Payment flow: always Wave », greeting « paiement Wave inclus » — co-cause
+    majeure. Corrigé en « mobile money (Wave, Orange Money ou Max It) » aux 4 endroits
+    ([systemPrompt.ts](src/agent/systemPrompt.ts)) + section Paiement de
+    [business-info.md](business-info.md) (« ne dis JAMAIS Wave uniquement »).
+  - **Partie B (`add_spots_to_booking`)** : nouvel outil. Le client dit « ajouter N
+    personnes » → **nouvelle ligne `pending_bookings` sur le MÊME event** (résa payée
+    et booking Wix jamais touchés) → lien de paiement (Wave/OM/Max It) → le pipeline
+    payment-first crée le booking Wix des places sup à la confirmation. Anti-injection
+    par **propriété du booking_id** (`findClientBooking`), pas de slot_cache. **Pas de
+    règle 16h** (c'est un achat, pas une annulation) mais re-check live des places.
+    `studio:` → orienté vers une résa normale ; abonnement → book_with_membership.
+    Helper pur `validateAddSpots`, handler assemblé par réutilisation
+    (`resolvePaymentMethod`, `wix.getService`/`isSlotStillOpen`, `createDraftBooking`,
+    `createClientPaymentSession`). Prompt l.56 réécrit.
+  - **Pièges** : garde uuid sur booking_id (même bord rugueux dans `cancel_booking`,
+    à traiter un jour) ; le mock d'intégration n'avait pas les endpoints
+    `/bookings/v2/services/query` ni Wave checkout (ajoutés — 1er appel d'`executeTool`
+    depuis un test d'intégration). Sell-out entre lien et paiement → REFUND_NEEDED
+    (pipeline existant). Tests : `addSpots` (pur) + intégration `add-spots` (happy Wave
+    + OM, propriété, statut, cours commencé, places insuffisantes, studio, sell-out).
+
 ## 5. Chronologie condensée
 
 - **16/07 — 529 Overloaded : retry applicatif espacé (incident premier contact).**

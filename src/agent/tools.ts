@@ -157,6 +157,43 @@ export function decideNoneCandidateAction(
   return wantsCreate ? "name_required" : "offer_creation";
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Eligibility for add_spots_to_booking. Pure so it's unit-testable. NO 16h rule:
+ * adding spots is a PURCHASE (not a cancellation) — a class starting in 2h is
+ * fine as long as seats remain (the handler re-checks Wix availability). The
+ * per-service participants cap is enforced in the handler (needs the catalog).
+ */
+export function validateAddSpots(
+  booking: Pick<repo.PendingBooking, "status" | "slot_start" | "wix_booking_id"> | null,
+  extraRaw: unknown,
+  now: Date,
+): { ok: true; extra: number } | { ok: false; error: string; message: string } {
+  if (!booking) {
+    return { ok: false, error: "unknown_booking", message: "No booking of this client matches that id. Re-check with get_my_bookings." };
+  }
+  if (booking.status !== "BOOKED" || !booking.wix_booking_id) {
+    return {
+      ok: false,
+      error: "not_confirmed",
+      message: "That booking isn't a confirmed paid booking — you can only add spots to an already-confirmed one.",
+    };
+  }
+  if (!booking.slot_start || new Date(booking.slot_start).getTime() <= now.getTime()) {
+    return {
+      ok: false,
+      error: "class_already_started",
+      message: "That class has already started — spots can no longer be added. Offer upcoming slots via check_availability.",
+    };
+  }
+  const extra = Math.round(Number(extraRaw));
+  if (!Number.isFinite(extra) || extra < 1 || extra > 10) {
+    return { ok: false, error: "invalid_participants", message: "extra_participants must be a whole number between 1 and 10." };
+  }
+  return { ok: true, extra };
+}
+
 const VERIFICATION_PENDING_RESULT = JSON.stringify({
   error: "verification_pending",
   message:
@@ -613,6 +650,42 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "the image cannot be sent, the tool returns the schedule as text for you to relay.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
+  {
+    name: "add_spots_to_booking",
+    description:
+      "Add extra spots to one of THIS client's existing CONFIRMED bookings — same class, same slot — when a client " +
+      "who already booked wants to add people/places ('rajouter 2 personnes', 'add 2 more spots'). Creates a payment " +
+      "link for ONLY the additional spots; after payment those extra places are confirmed automatically. Get " +
+      "booking_id from get_my_bookings. Does NOT apply to a 'studio:' booking (taken at the counter/website — instead " +
+      "book the extra spots as a normal NEW booking via check_availability + create_payment_link), nor when the " +
+      "client wants the extra spots deducted from their abonnement (use book_with_membership). payment_method: " +
+      "wave | orange_money | maxit — REQUIRED when Orange Money is enabled (present_options the three buttons).",
+    input_schema: {
+      type: "object",
+      properties: {
+        booking_id: { type: "string", description: "id of the client's existing confirmed booking (from get_my_bookings)" },
+        extra_participants: {
+          type: "integer",
+          minimum: 1,
+          maximum: 10,
+          description: "How many spots to ADD (not the new total). 1–10.",
+        },
+        payment_method: {
+          type: "string",
+          enum: ["wave", "orange_money", "maxit"],
+          description: "How the client pays. Required when OM is enabled. Map: pay_wave→wave, pay_om→orange_money, pay_maxit→maxit.",
+        },
+        client_declined_verification: {
+          type: "boolean",
+          description:
+            "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly says " +
+            "they can't access that inbox or prefer to pay now. Otherwise leave absent.",
+        },
+      },
+      required: ["booking_id", "extra_participants"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /**
@@ -897,6 +970,134 @@ export async function executeTool(
           `Relay the link to the client (class only) — tell them to open it in ${appLabel}. ` +
           "Spot(s) confirmed only once paid; confirmation arrives automatically on WhatsApp, and the bar " +
           "menu is offered right after that — do NOT bring up the menu now.",
+      });
+    }
+
+    case "add_spots_to_booking": {
+      const bookingId = String(input.booking_id ?? "").trim();
+
+      // Studio bookings (counter/website) have no local slot to extend.
+      if (bookingId.startsWith("studio:")) {
+        return JSON.stringify({
+          error: "studio_booking_not_extendable",
+          message:
+            "This booking was taken at the counter or on the website, so I can't add to it directly. Book the " +
+            "extra spots as a NEW booking on the same slot instead: check_availability for that class, then " +
+            "create_payment_link with the number of extra people.",
+        });
+      }
+      if (!UUID_RE.test(bookingId)) {
+        return JSON.stringify({
+          error: "unknown_booking",
+          message: "That doesn't look like a booking id. Get it from get_my_bookings.",
+        });
+      }
+
+      // 0. Code-before-payment guard (same as create_payment_link).
+      if (input.client_declined_verification !== true) {
+        const pending = await links.getOpen(client.id);
+        if (verificationBlocksPayment(pending, new Date())) return VERIFICATION_PENDING_RESULT;
+      }
+
+      // 1. Ownership + eligibility (belongs to client, BOOKED, in the future, 1–10).
+      const booking = await repo.findClientBooking(client.id, bookingId);
+      const check = validateAddSpots(booking, input.extra_participants, new Date());
+      if (!check.ok) return JSON.stringify({ error: check.error, message: check.message });
+      const source = booking!;
+      const extra = check.extra;
+
+      // 2. Price from the catalog (never the model) + per-booking cap (the NEW
+      //    booking must satisfy the cap on its own).
+      const service = await wix.getService(source.service_id);
+      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      if (!service.priceXof || service.priceXof <= 0) {
+        return JSON.stringify({
+          error: "no_price",
+          message:
+            "This class has no fixed price configured. Call handoff_to_human so the client receives the prefilled reception link.",
+        });
+      }
+      if (extra > service.maxParticipantsPerBooking) {
+        return JSON.stringify({
+          error: "group_too_large",
+          max_participants_per_booking: service.maxParticipantsPerBooking,
+          message:
+            `This class allows at most ${service.maxParticipantsPerBooking} spot(s) per booking, so I can add at ` +
+            `most that many at once. Offer to add ${service.maxParticipantsPerBooking} now (the rest right after), ` +
+            `or handoff_to_human for the whole group.`,
+        });
+      }
+
+      // 3. Re-verify the SAME slot still has enough open spots for the addition.
+      const slotStart = new Date(source.slot_start).toISOString();
+      const fresh = await wix.isSlotStillOpen(source.service_id, source.event_id, slotStart, extra);
+      if (!fresh) {
+        return JSON.stringify({
+          error: "not_enough_spots",
+          message:
+            `Fewer than ${extra} open spot(s) remain on that slot now. Tell the client, and offer a smaller number ` +
+            `or another slot via check_availability.`,
+        });
+      }
+
+      // 4. One active link per client: expire any DRAFT/AWAITING (never the source BOOKED row).
+      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
+      if (!pay.ok) return JSON.stringify({ error: pay.error, message: pay.message });
+      await repo.expireActiveBookings(client.id);
+
+      // 5. NEW booking on the same event for ONLY the extra spots. The paid row
+      //    and its Wix booking are never touched; the payment-first pipeline
+      //    creates the extra Wix booking on payment.
+      const totalXof = service.priceXof * extra;
+      const draft = await repo.createDraftBooking({
+        clientId: client.id,
+        serviceId: source.service_id,
+        serviceName: service.name,
+        eventId: source.event_id,
+        slotJson: fresh.raw,
+        slotStart: fresh.startDate,
+        slotEnd: fresh.endDate ?? null,
+        amountXof: totalXof,
+        participants: extra,
+        extrasJson: null,
+        extrasAmountXof: 0,
+        orderNote: `Ajout de ${extra} place(s) à la résa ${source.id.slice(0, 8)}`,
+      });
+
+      let session;
+      try {
+        session = await createClientPaymentSession({
+          method: pay.method,
+          amountXof: totalXof,
+          clientReference: draft.id,
+          name: service.name,
+        });
+      } catch (err) {
+        await repo.expireActiveBookings(client.id); // clean up the DRAFT
+        throw err;
+      }
+      await repo.setAwaitingPayment(draft.id, session.sessionId, session.paymentLink, session.expiresAt, session.method);
+
+      const appLabel = paymentMethodLabel(session.method);
+      return JSON.stringify({
+        payment_link: session.paymentLink,
+        payment_method: session.method,
+        payment_app: appLabel,
+        amount_fcfa: totalXof,
+        extra_participants: extra,
+        price_per_person_fcfa: service.priceXof,
+        existing_participants: source.participants,
+        total_after_payment: source.participants + extra,
+        expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
+        class: service.name,
+        slot_start: fresh.startDate,
+        slot_start_dakar: fmtDakar(fresh.startDate),
+        note:
+          `Relay the link — tell them to open it in ${appLabel}. This adds ${extra} spot(s) to their existing ` +
+          `booking (${source.participants} → ${source.participants + extra} in total) — you MAY state the total ` +
+          `("ça te fera ${source.participants + extra} places en tout"). The original booking is untouched; the two ` +
+          `appear separately in get_my_bookings. The automatic confirmation after payment covers ONLY the ${extra} ` +
+          `added spot(s). Do NOT bring up the bar menu now.`,
       });
     }
 

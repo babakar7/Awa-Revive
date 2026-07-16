@@ -240,6 +240,25 @@ export function makeFetchMock(): FetchMock {
       });
     }
 
+    // --- Wix services catalog (price + participants cap) ---
+    if (url.includes("/bookings/v2/services/query")) {
+      return json(200, {
+        services: [
+          {
+            id: wix.serviceId,
+            name: "Pilates Reformer",
+            payment: { fixed: { price: { value: 15000 } } },
+            bookingPolicy: { participantsPolicy: { enabled: true, maxParticipantsPerBooking: 6 } },
+          },
+        ],
+      });
+    }
+
+    // --- Wave checkout session (create payment link) ---
+    if (url.includes("api.wave.com") && url.includes("/v1/checkout/sessions") && method === "POST") {
+      return json(200, { id: `cos-add-${calls.length}`, wave_launch_url: "https://pay.wave.com/c/test" });
+    }
+
     // --- Wix contacts (phone → contact match; none = Wix creates its own) ---
     if (url.includes("/contacts/v4/contacts/query")) {
       return json(200, { contacts: [] });
