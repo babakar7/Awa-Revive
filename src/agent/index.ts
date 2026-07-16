@@ -25,6 +25,40 @@ const anthropic = new Anthropic({
   maxRetries: 2,
 });
 
+// 529 "Overloaded" is a fast-fail transient spike on Anthropic's side: the
+// SDK's own retries (2, sub-second backoff) are often too short to outlive it,
+// and the loop then greeted a brand-new client with the technical fallback
+// (real case 16/07, first message "Bonsoir"). These app-level waits are long
+// enough to ride out a spike, and safe latency-wise: overloaded errors return
+// instantly, so they never stack with the 60s per-attempt timeout above.
+const OVERLOAD_RETRY_DELAYS_MS = [15_000, 30_000];
+
+/** 529 / "overloaded_error" only — timeouts and 5xx must keep failing fast. */
+export function isOverloadedError(err: unknown): boolean {
+  const e = err as { status?: number; error?: { error?: { type?: string } } };
+  return e?.status === 529 || e?.error?.error?.type === "overloaded_error";
+}
+
+/** Run an Anthropic call, sleeping through overload spikes before retrying. */
+export async function withOverloadRetry<T>(
+  fn: () => Promise<T>,
+  onRetry?: () => void,
+  delaysMs: readonly number[] = OVERLOAD_RETRY_DELAYS_MS,
+): Promise<T> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= delaysMs.length || !isOverloadedError(err)) throw err;
+      const delay = delaysMs[attempt++];
+      console.warn(`Anthropic overloaded — waiting ${delay / 1000}s then retrying (${attempt}/${delaysMs.length})`);
+      await new Promise((r) => setTimeout(r, delay));
+      onRetry?.();
+    }
+  }
+}
+
 const MAX_TOOL_ITERATIONS = 8;
 const REPLY_MAX_TOKENS = 2048;
 // Retry budget when a reply is truncated (hit max_tokens) — big enough to fit
@@ -324,14 +358,19 @@ export async function handleInboundText(args: {
       // Meta drops the "typing…" bubble after ~25s; re-arm it at every model
       // round so it survives long tool chains (bookings, cancellations...).
       if (i > 0) void sendTypingIndicator(args.waMessageId);
-      const response = await anthropic.messages.create({
-        model: config.CLAUDE_MODEL,
-        max_tokens: REPLY_MAX_TOKENS,
-        output_config: { effort: "low" },
-        system,
-        tools: TOOL_DEFINITIONS,
-        messages,
-      });
+      const response = await withOverloadRetry(
+        () =>
+          anthropic.messages.create({
+            model: config.CLAUDE_MODEL,
+            max_tokens: REPLY_MAX_TOKENS,
+            output_config: { effort: "low" },
+            system,
+            tools: TOOL_DEFINITIONS,
+            messages,
+          }),
+        // Keep the "typing…" bubble alive so the client sees Awa is still there.
+        () => void sendTypingIndicator(args.waMessageId),
+      );
       lastResponse = response;
 
       if (response.stop_reason !== "tool_use") {
@@ -411,13 +450,17 @@ export async function handleInboundText(args: {
     // misleading "technical issue" fallback that made Awa deny work she'd done.
     if (!replyText && !interactiveSent && lastResponse?.stop_reason === "tool_use") {
       console.warn("Tool-iteration cap reached — forcing a final reply without tools");
-      const final = await anthropic.messages.create({
-        model: config.CLAUDE_MODEL,
-        max_tokens: REPLY_MAX_TOKENS,
-        output_config: { effort: "low" },
-        system,
-        messages,
-      });
+      const final = await withOverloadRetry(
+        () =>
+          anthropic.messages.create({
+            model: config.CLAUDE_MODEL,
+            max_tokens: REPLY_MAX_TOKENS,
+            output_config: { effort: "low" },
+            system,
+            messages,
+          }),
+        () => void sendTypingIndicator(args.waMessageId),
+      );
       replyText = extractText(final);
     }
   } catch (err) {

@@ -1429,6 +1429,19 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
 
 ## 5. Chronologie condensée
 
+- **16/07 — 529 Overloaded : retry applicatif espacé (incident premier contact).**
+  À 18:56, un NOUVEAU client écrit « Bonsoir vous allez bien ? » → 529
+  « Overloaded » Anthropic → les 2 retries du SDK (backoff sub-seconde) n'ont
+  pas survécu au pic → fallback « souci technique » + renvoi réception dès le
+  premier message. Fix (`agent/index.ts`) : `withOverloadRetry` — 2 retries
+  applicatifs espacés (15 s puis 30 s) **uniquement** sur 529/`overloaded_error`
+  (les timeouts et autres 5xx continuent d'échouer vite : ils s'empileraient
+  avec le timeout 60 s/tentative et bloqueraient la file sérialisée du client).
+  Le typing indicator est relancé à chaque retry. Appliqué à la boucle
+  principale et à la réponse finale forcée ; le retry max_tokens garde son
+  appel simple (il a déjà la réponse partielle en secours). Testé (classifier +
+  helper à délais injectés).
+
 - **16/07 — Audit catalogue plans Wix (suite Pack Découverte).** Revue des 28
   plans après l'incident découverte. Trois problèmes de même nature + un piège
   de code :
