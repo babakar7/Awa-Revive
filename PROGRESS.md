@@ -1401,7 +1401,46 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     + intégration (numéros séquentiels + 5 concurrents, validations, pages,
     envoi image + log, sans-numéro).
 
+- **4.37 — Devis admin (16/07).** Nouvelle section `/admin/devis` (nav Studio)
+  pour les prestations privées (privatisation studio, événements type « Pilates
+  & Cookies »). Contrairement aux factures (immuables), un devis est **éditable
+  et re-générable** : formulaire création/édition sans JS client (lignes de
+  prestation en champs indexés `item_label_i`/`item_detail_i`/`item_amount_i`,
+  montant vide = « Inclus / 0 », lignes vides ignorées), statuts
+  Brouillon/Envoyé/Accepté/Expiré, conditions préremplies modifiables
+  (acompte 50 %, Wave/OM, validité, préavis 48h).
+  - Sortie : **PDF téléchargeable** (`lib/quotePdf.ts`, **pdfkit** — nouvelle
+    dépendance, choisie contre pdf-lib pour le word-wrap/`heightOfString` natifs ;
+    polices DejaVu bundlées via `registerFont`, chemins relatifs à
+    `process.cwd()` → toujours lancer depuis la racine). Route
+    `GET /admin/devis/:id/pdf` → `application/pdf` + `content-disposition`
+    `Devis_DEV-YYYY-NNNN.pdf`. Mise en page = modèle Babakar : en-tête violet,
+    cartes PRESTATAIRE/CLIENT, chips date/horaire/participants/lieu, table
+    prestations, bloc TOTAL, conditions, footer. **Piège** : footer positionné
+    trop près de la marge basse → pdfkit créait une page 2 vide ; fix =
+    `lineBreak: false` + remonter le footer dans la marge.
+  - Table `quotes`, numérotation `DEV-YYYY-NNNN` via le même compteur atomique
+    `app_state` que les factures (`nextQuoteNumber`). Total **recalculé serveur**
+    (`quoteTotal`), jamais pris du formulaire. Fichiers : `domain/quoteRules.ts`
+    (pur, testé) + `quoteRepo.ts`, `admin/devisPage.ts` + routes, tests purs
+    (parsing, numérotation, PDF commence par `%PDF-`).
+  - Livraison volontairement minimale (choix Babakar) : téléchargement seul —
+    pas d'envoi WhatsApp, pas de lien public, pas de suivi d'acompte.
+
 ## 5. Chronologie condensée
+
+- **16/07 — Pack Découverte : contenu manquant + anti-spéculation.** Une cliente
+  demande le Pack Découverte ; la description Wix ne disait que « Valable 2
+  semaines » → Awa répond « nombre de séances non précisé » et **spécule** « en
+  général une séance d'essai » (faux : 3 séances / 30 000 F). Fix données :
+  description Wix corrigée (« 3 séances / Valable 2 semaines » — le catalogue
+  reste la source de vérité, rien en dur dans business-info). Fix règle
+  (business-info § découverte) : citer prix + durée + nombre de séances de
+  list_plans, et **interdiction de deviner** le contenu d'un plan quand la
+  description ne le précise pas (proposer de confirmer via la réception).
+  À savoir : au moment de la vente, Wix n'expose PAS le nombre de séances en
+  donnée structurée (les benefits/pools ne sont lisibles que par membre, après
+  achat) — la description du plan est la seule source ; la soigner dans Wix.
 
 - **13/07 — Handoffs réception en un clic.** Tous les parcours où le client doit
   écrire à la réception donnent un `wa.me` vers `RECEPTION_PHONE`, avec message
