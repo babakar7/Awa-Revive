@@ -134,7 +134,7 @@ export async function sendTemplateWithUrlButton(
  * media id (no public URL to host or protect). Throws on failure — callers
  * are expected to fall back to a text version.
  */
-export async function sendImage(to: string, png: Buffer, caption?: string): Promise<void> {
+export async function sendImage(to: string, png: Buffer, caption?: string): Promise<string | null> {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
   form.append("file", new Blob([new Uint8Array(png)], { type: "image/png" }), "planning.png");
@@ -149,7 +149,7 @@ export async function sendImage(to: string, png: Buffer, caption?: string): Prom
   }
   const mediaId = ((await res.json()) as { id?: string })?.id;
   if (!mediaId) throw new Error("WhatsApp media upload returned no id");
-  await postMessage({
+  return postMessage({
     messaging_product: "whatsapp",
     recipient_type: "individual",
     to,

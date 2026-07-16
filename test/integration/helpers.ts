@@ -145,6 +145,11 @@ export function makeFetchMock(): FetchMock {
     calls.push({ url, method, body });
 
     // --- Meta WhatsApp Cloud API ---
+    // Media upload (sendImage) must return an { id } before the message send,
+    // otherwise sendImage throws "media upload returned no id".
+    if (url.includes("graph.facebook.com") && url.endsWith("/media") && method === "POST") {
+      return json(200, { id: `media_test_${calls.length}` });
+    }
     if (url.includes("graph.facebook.com")) {
       return json(200, { messages: [{ id: `wamid.test.${calls.length}` }] });
     }
@@ -330,7 +335,7 @@ export async function truncateAll(): Promise<void> {
   await pool.query(
     `truncate clients, pending_bookings, pending_plan_orders, conversations,
               processed_webhooks, handoffs, slot_cache, delivery_orders,
-              staff_contacts, notification_log cascade`,
+              staff_contacts, notification_log, invoices, app_state cascade`,
   );
 }
 

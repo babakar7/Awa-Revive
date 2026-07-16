@@ -1,0 +1,153 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildServer } from "../../src/server.js";
+import { pool, migrate } from "../../src/db/index.js";
+import { makeFetchMock, type FetchMock, truncateAll, settle } from "./helpers.js";
+
+/**
+ * Admin invoices end-to-end against a real Postgres, all HTTP mocked. Exercises
+ * the atomic per-year numbering, validation, the printable/view pages, and the
+ * WhatsApp image send (media upload → message) with its notification_log entry.
+ */
+
+const AUTH = `Basic ${Buffer.from("revive:revive").toString("base64")}`;
+const YEAR = new Date().getUTCFullYear();
+
+let app: FastifyInstance;
+let mock: FetchMock;
+
+beforeAll(async () => {
+  await migrate();
+  mock = makeFetchMock();
+  mock.install();
+  app = buildServer();
+  await app.ready();
+});
+
+afterAll(async () => {
+  mock.restore();
+  await app.close();
+  await pool.end();
+});
+
+beforeEach(async () => {
+  await truncateAll();
+  mock.reset();
+});
+
+function form(fields: Record<string, string>): string {
+  return new URLSearchParams(fields).toString();
+}
+
+async function createInvoice(over: Record<string, string> = {}): Promise<string> {
+  const res = await app.inject({
+    method: "POST",
+    url: "/admin/factures",
+    headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+    payload: form({
+      client_name: "Aïssatou Ndiaye",
+      client_phone: "771234567",
+      line_label_0: "Pilates Reformer",
+      line_qty_0: "4",
+      line_unit_0: "12000",
+      ...over,
+    }),
+  });
+  expect(res.statusCode).toBe(303);
+  return res.headers.location as string;
+}
+
+describe("invoice creation & numbering", () => {
+  it("mints FAC-YEAR-0001 then 0002, totals server-side", async () => {
+    await createInvoice();
+    await createInvoice();
+    const rows = (await pool.query(`select number, total_xof from invoices order by number`)).rows;
+    expect(rows.map((r) => r.number)).toEqual([`FAC-${YEAR}-0001`, `FAC-${YEAR}-0002`]);
+    expect(rows[0].total_xof).toBe(48000); // 4 × 12000, computed server-side
+  });
+
+  it("assigns 5 distinct numbers under concurrent creation (atomic counter)", async () => {
+    await Promise.all(Array.from({ length: 5 }, () => createInvoice()));
+    const nums = (await pool.query(`select number from invoices`)).rows.map((r) => r.number);
+    expect(new Set(nums).size).toBe(5);
+    const suffixes = nums.map((n) => Number(n.slice(-4))).sort((a, b) => a - b);
+    expect(suffixes).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("rejects empty name, no lines, and bad phone without creating a row", async () => {
+    const post = (fields: Record<string, string>) =>
+      app.inject({
+        method: "POST",
+        url: "/admin/factures",
+        headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+        payload: form(fields),
+      });
+    expect((await post({ client_name: "", line_label_0: "X", line_qty_0: "1", line_unit_0: "1" })).statusCode).toBe(303);
+    expect((await post({ client_name: "X" })).statusCode).toBe(303); // no lines
+    expect(
+      (await post({ client_name: "X", client_phone: "12", line_label_0: "A", line_qty_0: "1", line_unit_0: "5" })).statusCode,
+    ).toBe(303); // bad phone
+    expect((await pool.query(`select count(*) from invoices`)).rows[0].count).toBe("0");
+  });
+});
+
+describe("invoice pages", () => {
+  it("serves list, view, and print; 404 for an unknown id", async () => {
+    const loc = await createInvoice();
+    const view = await app.inject({ method: "GET", url: loc, headers: { authorization: AUTH } });
+    expect(view.statusCode).toBe(200);
+    expect(view.body).toContain(`FAC-${YEAR}-0001`);
+
+    const id = loc.split("/")[3].split("?")[0];
+    const print = await app.inject({ method: "GET", url: `/admin/factures/${id}/print`, headers: { authorization: AUTH } });
+    expect(print.statusCode).toBe(200);
+    expect(print.body).toContain("REVIVE VENTURES");
+    expect(print.body).toContain("FACTURÉ À");
+
+    const list = await app.inject({ method: "GET", url: "/admin/factures", headers: { authorization: AUTH } });
+    expect(list.body).toContain(`FAC-${YEAR}-0001`);
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/admin/factures/00000000-0000-0000-0000-000000000000",
+      headers: { authorization: AUTH },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe("invoice WhatsApp send", () => {
+  it("uploads the image then sends it, and records sent_at + a log", async () => {
+    const loc = await createInvoice();
+    const id = loc.split("/")[3].split("?")[0];
+    mock.reset();
+
+    const res = await app.inject({ method: "POST", url: `/admin/factures/${id}/send`, headers: { authorization: AUTH } });
+    expect(res.statusCode).toBe(303);
+    expect(res.headers.location).toContain("done=sent");
+
+    const media = mock.calls.filter((c) => c.url.includes("graph.facebook.com") && c.url.endsWith("/media"));
+    expect(media.length).toBe(1);
+    const image = mock.calls.filter((c) => c.body?.type === "image" && c.body?.to === "221771234567");
+    expect(image.length).toBe(1);
+
+    const inv = (await pool.query(`select sent_status, sent_at from invoices where id=$1`, [id])).rows[0];
+    expect(inv.sent_status).toBe("sent");
+    expect(inv.sent_at).not.toBeNull();
+
+    const log = (await pool.query(`select count(*) from notification_log where source='invoice'`)).rows[0];
+    expect(Number(log.count)).toBe(1);
+  });
+
+  it("without a phone, does not call WhatsApp and shows an error", async () => {
+    const loc = await createInvoice({ client_phone: "" });
+    const id = loc.split("/")[3].split("?")[0];
+    mock.reset();
+
+    const res = await app.inject({ method: "POST", url: `/admin/factures/${id}/send`, headers: { authorization: AUTH } });
+    expect(res.statusCode).toBe(303);
+    expect(res.headers.location).toContain("err=");
+    await settle();
+    expect(mock.calls.filter((c) => c.url.includes("graph.facebook.com")).length).toBe(0);
+  });
+});

@@ -49,10 +49,26 @@ import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import {
   composeBusinessDescription,
   getBusinessProfile,
+  sendImage,
   sendText,
   updateBusinessProfile,
   uploadProfilePictureHandle,
 } from "../lib/whatsapp.js";
+import * as invoices from "../domain/invoiceRepo.js";
+import { normalizeSourceKind, parseInvoiceLineFields } from "../domain/invoiceRules.js";
+import { renderInvoiceImage } from "../lib/invoiceImage.js";
+import { formatXof } from "../lib/receiptImage.js";
+import {
+  facturesBanner,
+  renderFactureForm,
+  renderFacturePrint,
+  renderFactureView,
+  renderFacturesList,
+} from "./facturesPage.js";
+import * as quotes from "../domain/quoteRepo.js";
+import { parseQuoteForm } from "../domain/quoteRules.js";
+import { renderQuotePdf } from "../lib/quotePdf.js";
+import { devisBanner, renderQuoteForm, renderQuotesList } from "./devisPage.js";
 import * as links from "../domain/linkRequests.js";
 import * as reviews from "../domain/conversationReview.js";
 import { renderTestChecklist } from "./testChecklist.js";
@@ -503,6 +519,187 @@ ${
         if (!order) return reply.redirect("/admin/livraisons?err=commande introuvable", 303);
         const ok = await renotifyKitchen(order, req.log);
         return reply.redirect(ok ? "/admin/livraisons?done=renotified" : "/admin/livraisons?err=commande déjà prête/close", 303);
+      });
+
+      // ---------- Factures (demande client → la réception la crée ici) ----------
+      admin.get("/factures", async (req, reply) => {
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const rows = await invoices.listInvoices(100);
+        const body = renderFacturesList(rows, facturesBanner(done, err));
+        reply.type("text/html").send(await layout("Factures", "/admin/factures", body));
+      });
+
+      admin.get("/factures/new", async (req, reply) => {
+        const err = (req.query as any)?.err as string | undefined;
+        const candidates = await invoices.recentPaidCandidates().catch(() => []);
+        const body = renderFactureForm(candidates, facturesBanner(undefined, err));
+        reply.type("text/html").send(await layout("Nouvelle facture", "/admin/factures", body));
+      });
+
+      admin.post("/factures", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const backErr = (msg: string) => reply.redirect(`/admin/factures/new?err=${encodeURIComponent(msg)}`, 303);
+        const name = String(b.client_name ?? "").trim();
+        if (!name) return backErr("le nom du client est obligatoire");
+        const phoneRaw = String(b.client_phone ?? "").trim();
+        const phone = phoneRaw ? normalizeDeliveryPhone(phoneRaw) : null;
+        if (phoneRaw && !phone) return backErr("numéro de téléphone invalide (laisse vide si aucun)");
+        const parsed = parseInvoiceLineFields(b);
+        if ("error" in parsed) return backErr(parsed.error);
+        const paidAtRaw = String(b.paid_at ?? "").trim();
+        const paidAt = paidAtRaw ? new Date(paidAtRaw) : null;
+        const inv = await invoices.createInvoice({
+          client_name: name,
+          client_phone: phone,
+          client_ref: String(b.client_ref ?? "").trim() || null,
+          lines: parsed.lines,
+          total_xof: parsed.totalXof,
+          note: String(b.note ?? "").trim() || null,
+          source_kind: normalizeSourceKind(b.source_kind),
+          source_id: String(b.source_id ?? "").trim() || null,
+          payment_method: String(b.payment_method ?? "").trim() || null,
+          payment_ref: String(b.payment_ref ?? "").trim() || null,
+          paid_at: paidAt && !isNaN(paidAt.getTime()) ? paidAt : null,
+          created_by: req.adminUser ?? null,
+        });
+        req.log.info({ invoice: inv.id, number: inv.number, by: req.adminUser }, "Invoice created");
+        return reply.redirect(`/admin/factures/${inv.id}?done=created`, 303);
+      });
+
+      admin.get("/factures/:id", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const inv = await invoices.findInvoice(id);
+        if (!inv) return reply.code(404).type("text/plain").send("Facture introuvable");
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const body = renderFactureView(inv, facturesBanner(done, err));
+        reply.type("text/html").send(await layout(`Facture ${inv.number}`, "/admin/factures", body));
+      });
+
+      admin.get("/factures/:id/print", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const inv = await invoices.findInvoice(id);
+        if (!inv) return reply.code(404).type("text/plain").send("Facture introuvable");
+        reply.type("text/html").send(renderFacturePrint(inv));
+      });
+
+      admin.post("/factures/:id/send", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const inv = await invoices.findInvoice(id);
+        if (!inv) return reply.redirect("/admin/factures?err=facture introuvable", 303);
+        if (!inv.client_phone)
+          return reply.redirect(`/admin/factures/${id}?err=${encodeURIComponent("pas de numéro — envoi impossible")}`, 303);
+        const png = renderInvoiceImage({
+          number: inv.number,
+          clientName: inv.client_name,
+          clientRef: inv.client_ref,
+          lines: invoices.invoiceLines(inv),
+          totalXof: inv.total_xof,
+          note: inv.note,
+          paidVia: inv.payment_method,
+          paymentRef: inv.payment_ref,
+          paidAt: inv.paid_at,
+          createdAt: inv.created_at,
+        });
+        const caption = `Facture ${inv.number} — Revive · ${formatXof(inv.total_xof)}`;
+        const logBody = `[facture ${inv.number}] ${caption}`;
+        try {
+          const wamid = await sendImage(inv.client_phone, png, caption);
+          await invoices.markInvoiceSent(id, "sent");
+          await nrepo.recordInvoiceLog(inv.client_phone, logBody, "sent", null, wamid ?? null);
+          req.log.info({ invoice: id, by: req.adminUser }, "Invoice sent on WhatsApp");
+          return reply.redirect(`/admin/factures/${id}?done=sent`, 303);
+        } catch (e) {
+          const windowClosed = String(e).includes("131047");
+          await invoices.markInvoiceSent(id, windowClosed ? "window_closed" : "failed");
+          await nrepo.recordInvoiceLog(inv.client_phone, logBody, "failed", String(e).slice(0, 300));
+          req.log.error({ err: e, invoice: id }, "Invoice WhatsApp send failed");
+          const msg = windowClosed
+            ? "fenêtre WhatsApp fermée — le client doit d'abord écrire à Awa, puis réessaie"
+            : "échec de l'envoi WhatsApp — réessaie";
+          return reply.redirect(`/admin/factures/${id}?err=${encodeURIComponent(msg)}`, 303);
+        }
+      });
+
+      // ---------- Devis (événements privés — création + PDF téléchargeable) ----------
+      admin.get("/devis", async (req, reply) => {
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const rows = await quotes.listQuotes(100);
+        const body = renderQuotesList(rows, devisBanner(done, err));
+        reply.type("text/html").send(await layout("Devis", "/admin/devis", body));
+      });
+
+      admin.get("/devis/new", async (req, reply) => {
+        const err = (req.query as any)?.err as string | undefined;
+        const body = renderQuoteForm(null, devisBanner(undefined, err));
+        reply.type("text/html").send(await layout("Nouveau devis", "/admin/devis", body));
+      });
+
+      admin.post("/devis", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const parsed = parseQuoteForm(b);
+        if ("error" in parsed)
+          return reply.redirect(`/admin/devis/new?err=${encodeURIComponent(parsed.error)}`, 303);
+        const quote = await quotes.createQuote(parsed.data, req.adminUser ?? null);
+        req.log.info({ quote: quote.id, number: quote.number, by: req.adminUser }, "Quote created");
+        return reply.redirect(`/admin/devis/${quote.id}?done=created`, 303);
+      });
+
+      admin.get("/devis/:id", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const quote = await quotes.findQuote(id);
+        if (!quote) return reply.redirect("/admin/devis?err=devis introuvable", 303);
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const body = renderQuoteForm(quote, devisBanner(done, err));
+        reply.type("text/html").send(await layout(`Devis ${quote.number}`, "/admin/devis", body));
+      });
+
+      admin.post("/devis/:id", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const b = (req.body ?? {}) as Record<string, string>;
+        const parsed = parseQuoteForm(b);
+        if ("error" in parsed)
+          return reply.redirect(`/admin/devis/${id}?err=${encodeURIComponent(parsed.error)}`, 303);
+        const updated = await quotes.updateQuote(id, parsed.data);
+        if (!updated) return reply.redirect("/admin/devis?err=devis introuvable", 303);
+        req.log.info({ quote: id, by: req.adminUser }, "Quote updated");
+        return reply.redirect(`/admin/devis/${id}?done=saved`, 303);
+      });
+
+      admin.post("/devis/:id/status", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const b = (req.body ?? {}) as Record<string, string>;
+        const ok = await quotes.setQuoteStatus(id, String(b.status ?? ""));
+        return reply.redirect(ok ? `/admin/devis/${id}?done=status` : "/admin/devis?err=statut invalide", 303);
+      });
+
+      admin.get("/devis/:id/pdf", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const quote = await quotes.findQuote(id);
+        if (!quote) return reply.code(404).type("text/plain").send("Devis introuvable");
+        const pdf = await renderQuotePdf({
+          quoteNumber: quote.number,
+          issuedOn: new Date(quote.issued_on),
+          validityDays: quote.validity_days,
+          clientName: quote.client_name,
+          clientCompany: quote.client_company,
+          clientRole: quote.client_role,
+          eventTitle: quote.event_title,
+          description: quote.description,
+          eventDate: quote.event_date ? new Date(quote.event_date) : null,
+          eventTime: quote.event_time,
+          participants: quote.participants,
+          location: quote.location,
+          items: quotes.quoteItems(quote),
+          conditions: quote.conditions.split("\n").map((l) => l.trim()).filter(Boolean),
+        });
+        reply
+          .type("application/pdf")
+          .header("content-disposition", `attachment; filename="Devis_${quote.number}.pdf"`)
+          .send(pdf);
       });
 
       // ---------- Handoffs ----------

@@ -501,4 +501,61 @@ create table if not exists delivery_orders (
 );
 create index if not exists idx_delivery_orders_status
   on delivery_orders (status, created_at);
+
+-- Factures réception : un client demande une facture (aujourd'hui → handoff, la
+-- réception n'avait aucun outil). Elle la crée ici, l'imprime (PDF navigateur) et
+-- peut l'envoyer au client en image WhatsApp. IMMUABLE une fois émise (intégrité
+-- comptable) : aucune route update/delete — une erreur = on émet une nouvelle
+-- facture (trou de numérotation accepté). lines_json = snapshot figé, totaux
+-- recalculés côté serveur à la création (jamais depuis le formulaire). Pas de TVA.
+create table if not exists invoices (
+  id uuid primary key default gen_random_uuid(),
+  number text unique not null,          -- FAC-YYYY-NNNN (compteur atomique app_state)
+  client_name text not null,
+  client_phone text,                    -- digits wa_id ; null = envoi WhatsApp impossible
+  client_ref text,                      -- société / « à l'attention de » sous le nom
+  lines_json jsonb not null,            -- [{label, qty, unit_xof, total_xof}]
+  total_xof integer not null check (total_xof > 0),
+  note text,
+  source_kind text,                     -- booking | plan | cafe | delivery | manual
+  source_id uuid,
+  payment_method text,
+  payment_ref text,
+  paid_at timestamptz,
+  sent_at timestamptz,
+  sent_status text,                     -- sent | failed | window_closed
+  created_by text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_invoices_created on invoices (created_at desc);
+
+-- Devis événements privés (privatisation studio, cours privés, etc.). Créés
+-- depuis l'admin, modifiables et re-générables en PDF téléchargeable — pas un
+-- document comptable figé comme la facture. Numéro DEV-YYYY-NNNN via compteur
+-- atomique app_state. items_json = lignes de prestation ; amount_xof null =
+-- « Inclus / 0 ». conditions = une puce par ligne. Total recalculé côté serveur
+-- au rendu (jamais stocké seul, jamais pris du formulaire). Pas de TVA.
+create table if not exists quotes (
+  id uuid primary key default gen_random_uuid(),
+  number text unique not null,           -- DEV-YYYY-NNNN
+  client_name text not null,
+  client_company text,                   -- société / structure du client
+  client_role text,                      -- « Fondatrice », « Directrice »…
+  client_phone text,
+  event_title text not null,             -- « Événement privé "Pilates & Cookies" »
+  description text,
+  event_date date,
+  event_time text,                       -- libre : « À partir de 11h (demi-journée) »
+  participants text,                     -- libre : « 7 personnes »
+  location text not null default 'Revive Ventures, Almadies',
+  items_json jsonb not null,             -- [{label, detail, amount_xof|null}]
+  conditions text not null,              -- une condition par ligne
+  validity_days integer not null default 15,
+  issued_on date not null default current_date,
+  status text not null default 'DRAFT',  -- DRAFT | SENT | ACCEPTED | EXPIRED
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_quotes_created on quotes (created_at desc);
 `;

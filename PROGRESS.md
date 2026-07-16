@@ -1371,6 +1371,36 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   - Tests : `parseStatuses`, `kitchenTemplateParams` (ordre exact des 5 variables),
     route token-only, flip async `markLogFailedByWamid`.
 
+- **4.36 — Factures admin (16/07).** Un client qui demande une facture entreprise
+  partait en handoff sans outil. La réception crée désormais la facture dans
+  `/admin/factures` : préremplissage depuis un paiement récent (cours/abo/bar/
+  livraison, `recentPaidCandidates`) ou saisie libre (lignes désignation/qté/PU,
+  totaux **recalculés serveur**). Deux sorties : **page imprimable** autonome
+  (`renderFacturePrint`, PDF via le navigateur) et **image WhatsApp** envoyée au
+  client (`renderInvoiceImage`, même stack canvas + charte que les reçus →
+  `sendImage`). Charte reprise du devis Revive : en-tête « REVIVE VENTURES »,
+  bandeau violet, pastille total. **Pas de TVA, pas d'infos légales** (choix
+  Babakar).
+  - Table `invoices` **immuable** (aucune route update/delete — une erreur = une
+    nouvelle facture). Numérotation `FAC-YYYY-NNNN` via compteur **atomique par an**
+    dans `app_state` (`nextInvoiceNumber`, une seule requête ON CONFLICT = atomique,
+    pas de transaction ; un échec d'insert brûle un numéro, trou assumé).
+  - Envoi : succès → `sent_at`/`sent_status='sent'` + log `source='invoice'` ;
+    131047 → `window_closed` + bandeau « le client doit d'abord écrire à Awa » ;
+    sinon `failed`. `sendImage` renvoie le wamid (comme sendText/Template) → un
+    échec asynchrone est capté par le webhook `statuses` (§4.35).
+  - **Refacto admin (autre agent)** pris en compte : nav dans `NAV` de
+    `admin/layout.ts` (`layout()` est async, `active` = chemin), pas de `tabs`.
+    Onglet Factures dans la section Clients.
+  - **Piège testé** : le mock d'intégration ne renvoyait pas d'`id` pour l'upload
+    `/media` → `sendImage` throw ; branche `/media` ajoutée à `test/integration/helpers.ts`.
+  - Fichiers : `domain/invoiceRules.ts` (pur, testé) + `invoiceRepo.ts`,
+    `lib/invoiceImage.ts` (charte copiée de receiptImage), `admin/facturesPage.ts`
+    + routes `/admin/factures`. Awa (systemPrompt) rassure : « la réception te
+    l'envoie ici sur WhatsApp ». Tests purs (numérotation, parsing lignes, image)
+    + intégration (numéros séquentiels + 5 concurrents, validations, pages,
+    envoi image + log, sans-numéro).
+
 ## 5. Chronologie condensée
 
 - **13/07 — Handoffs réception en un clic.** Tous les parcours où le client doit

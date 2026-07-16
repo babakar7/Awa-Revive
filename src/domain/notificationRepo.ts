@@ -318,6 +318,29 @@ export async function markLogFailedByWamid(waMessageId: string, error: string): 
   }
 }
 
+/**
+ * Invoice-send log entry (source='invoice', no dedup key). Same best-effort
+ * contract as recordDeliveryLog — never throws. The invoice number is inside
+ * `body` so these are auditable in /admin/notifications.
+ */
+export async function recordInvoiceLog(
+  recipientPhone: string,
+  body: string,
+  status: LogStatus,
+  error: string | null,
+  waMessageId: string | null = null,
+): Promise<void> {
+  try {
+    await pool.query(
+      `insert into notification_log (source, recipient_phone, body, status, error, wa_message_id)
+       values ('invoice', $1, $2, $3, $4, $5)`,
+      [recipientPhone, body, status, error, waMessageId],
+    );
+  } catch {
+    /* logging must never break an invoice send */
+  }
+}
+
 /** Test-send log entry (source='test', dedup key test:<uuid> — never blocks a real claim). */
 export async function recordTestLog(
   recipientPhone: string,
