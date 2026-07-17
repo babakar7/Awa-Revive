@@ -50,6 +50,7 @@ const NAV: NavSection[] = [
     links: [
       { href: "/admin/orders", label: "Commandes payées" },
       { href: "/admin/livraisons", label: "Livraisons", badgeKey: "livraisons" },
+      { href: "/admin/menu", label: "Menu bar" },
     ],
   },
   {

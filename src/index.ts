@@ -16,6 +16,7 @@ import {
   reconcileUnnotifiedRefunds,
 } from "./domain/fulfillment.js";
 import { startOmTokenKeepAlive } from "./lib/orangeMoney.js";
+import { initCafeMenu } from "./domain/cafeMenuRepo.js";
 import { notifyReception } from "./lib/notify.js";
 import { drainQueues } from "./lib/serialize.js";
 import { buildServer } from "./server.js";
@@ -45,6 +46,10 @@ async function main() {
   });
 
   await migrate();
+
+  // Load the bar menu snapshot from DB (seeds from cafe-menu.md on first boot).
+  // Before buildServer()/listen so no webhook ever sees an empty menu.
+  await initCafeMenu();
 
   // Warm OM OAuth so the first client payment is not blocked by Sonatel token latency.
   startOmTokenKeepAlive();

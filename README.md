@@ -114,7 +114,7 @@ PAID ──slot gone or Wix error──────────────► R
 
 Awa can bundle a bar order (smoothies, matcha, food) into a class booking: one Wave link covers class + bar, the client confirmation lists the items, and reception is notified (email + WhatsApp) to prepare the order — by default ready after the class.
 
-- **Menu source of truth: [cafe-menu.md](cafe-menu.md)** — owner-editable, parsed by the server at boot (restart/redeploy to apply). Item lines are `- ID | Name | price | description`; never change an existing ID (prices are always resolved server-side from this file, the model only passes ids — same anti-injection stance as slots). A broken file (duplicate id, bad price) fails the boot loudly; a missing file just disables bar ordering.
+- **Menu source of truth: the `cafe_menu_items` table**, edited in the admin (**Bar → Menu bar**, `/admin/menu`) — add / edit / remove items with no redeploy. On the FIRST boot (empty table) it is seeded from [cafe-menu.md](cafe-menu.md); after that the file is ignored. Ids are auto-generated (UPPER_SNAKE slug of the name) and never reused — "removing" an item archives it (`enabled=false`). Prices are always resolved server-side from the table (the model only passes ids — same anti-injection stance as slots). The live menu is an in-memory snapshot refreshed on every admin edit, so Awa's prompt and the delivery form update instantly; the `<cafe_menu>` prompt block is rebuilt only on a menu edit, keeping the Anthropic prompt-cache prefix stable otherwise.
 - v1 limitations: no bundling with membership bookings (no payment link) and no bar-only orders — both are counter-only, Awa says so.
 
 ## Operations

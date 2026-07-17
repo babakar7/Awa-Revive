@@ -1,9 +1,14 @@
-# Revive — Menu du bar (source de vérité pour Awa)
+# Revive — Menu du bar (SEED initial)
 
 <!--
-  Ce fichier est LU PAR LE SERVEUR : les prix facturés dans les liens Wave
-  viennent d'ici, jamais de l'IA. Le serveur doit être redémarré (ou redéployé)
-  pour prendre en compte les modifications.
+  ⚠️ Ce fichier n'est plus la source de vérité vivante. Il sert UNIQUEMENT de
+  seed au tout premier boot (table cafe_menu_items vide → import). Ensuite la
+  vérité vit en DB et s'édite dans l'admin : awa.revive.sn → Bar → Menu bar
+  (ajouter / modifier / retirer un article, sans redéploiement). Éditer ce
+  fichier après le premier boot n'a AUCUN effet.
+
+  Les prix facturés dans les liens Wave viennent toujours du serveur (table),
+  jamais de l'IA.
 
   Format d'une ligne article (obligatoire, sinon la ligne est ignorée) :
     - ID | Nom affiché | prix | description

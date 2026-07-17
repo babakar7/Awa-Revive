@@ -14,10 +14,10 @@ import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import { receptionWhatsAppLink } from "../lib/receptionContact.js";
 import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
 import {
-  CAFE_MENU,
   computeExtras,
   extrasFromJson,
   formatExtrasOneLine,
+  getCafeMenu,
 } from "../lib/cafeMenu.js";
 import * as wix from "../lib/wix.js";
 import { planVerifiedMerge } from "../lib/crmAudit.js";
@@ -1128,7 +1128,7 @@ export async function executeTool(
       }
 
       // Prices come from cafe-menu.md, never from the model.
-      const resolved = computeExtras(CAFE_MENU.items, input.extras);
+      const resolved = computeExtras(getCafeMenu().items, input.extras);
       if (!resolved.ok) {
         return JSON.stringify({
           error: resolved.error,

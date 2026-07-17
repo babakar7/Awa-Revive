@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
-import { CAFE_MENU, extrasFromJson, formatExtrasOneLine } from "../lib/cafeMenu.js";
+import { cafeMenuVersion, extrasFromJson, formatExtrasOneLine, getCafeMenu } from "../lib/cafeMenu.js";
 import type { MembershipContext } from "../lib/membershipContext.js";
 import type { BookingHabit, CafeOrder, PendingBooking, PlanOrder } from "../domain/repo.js";
 
@@ -20,9 +20,13 @@ function loadBusinessInfo(): string {
 /**
  * Stable system prompt (SPEC §6). Kept byte-identical across requests so the
  * prompt-cache prefix holds; anything dynamic (date, client state) goes into a
- * second, uncached system block — see dynamicContext().
+ * second, uncached system block — see dynamicContext(). The only moving part is
+ * the <cafe_menu> block: it now comes from the DB snapshot (editable in
+ * /admin/menu), so systemPrompt() memoizes on cafeMenuVersion() — the string is
+ * identical between edits (cache holds) and rebuilt once per menu edit.
  */
-export const SYSTEM_PROMPT = `You are **Awa**, the AI assistant of **Revive**, a fitness/wellness studio in Dakar, Senegal. You chat with clients on WhatsApp: you answer questions about the studio and you book classes, with payment first via mobile money (Wave, Orange Money or Max It).
+function buildSystemPrompt(): string {
+  return `You are **Awa**, the AI assistant of **Revive**, a fitness/wellness studio in Dakar, Senegal. You chat with clients on WhatsApp: you answer questions about the studio and you book classes, with payment first via mobile money (Wave, Orange Money or Max It).
 
 # Persona
 - Your name is Awa. You are transparent about being an AI assistant — never pretend to be human. If asked, say so simply and without apology.
@@ -45,7 +49,7 @@ ${loadBusinessInfo()}
 </business_info>
 
 <cafe_menu>
-${CAFE_MENU.promptText}
+${getCafeMenu().promptText}
 </cafe_menu>
 
 # Hard rules
@@ -182,6 +186,20 @@ MANDATORY: whenever you cannot satisfy the client's need — even partially, eve
 - The system also sends a one-time nudge when a waitlisted spot frees up ("une place vient de se libérer pour X…" — visible in the history). If the client answers yes, re-run check_availability for that class immediately and, if the slot is still open, go straight to the link (or book_with_membership if covered) — speed matters, other waiters got the same message. If it filled up again meanwhile, say so honestly and offer alternatives or to keep them on the waitlist.
 - Coach questions ("c'est qui le coach ?", "qui donne le cours ?", "je veux le cours de X"): the coach's name comes ONLY from check_availability — each slot carries a coach field, live from Wix. Run it over the relevant window and answer from the slots (coaches can differ per slot — say so when they do). To book with a specific coach, filter the slots by that field. NEVER invent, guess or remember a coach's name.
 - If a message is off-topic small talk, answer briefly and kindly, then steer back to how you can help.`;
+}
+
+let cachedPrompt: { version: number; text: string } | null = null;
+
+/**
+ * The cached stable system prompt. Same string reference between menu edits (so
+ * the Anthropic prompt-cache prefix holds); rebuilt only when the bar menu
+ * changes (cafeMenuVersion bumps).
+ */
+export function systemPrompt(): string {
+  const v = cafeMenuVersion();
+  if (!cachedPrompt || cachedPrompt.version !== v) cachedPrompt = { version: v, text: buildSystemPrompt() };
+  return cachedPrompt.text;
+}
 
 /**
  * Dynamic per-request context. Second system block WITHOUT cache_control, so

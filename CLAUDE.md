@@ -12,8 +12,10 @@ Bookings**, paiement d'abord via **Wave** (mobile money) ou décompte d'un
 2. **[README.md](README.md)** — setup, architecture, variables d'env, simulation
    des paiements.
 3. **[PHASE2.md](PHASE2.md)** — backlog priorisé (ce qui est hors périmètre actuel).
-4. **[business-info.md](business-info.md)** et **[cafe-menu.md](cafe-menu.md)** —
-   sources de vérité métier d'Awa, **lues au boot** (redéployer après édition).
+4. **[business-info.md](business-info.md)** — source de vérité métier d'Awa,
+   **lue au boot** (redéployer après édition). **[cafe-menu.md](cafe-menu.md)** =
+   seed initial du menu bar uniquement ; la vérité vit désormais dans la table
+   `cafe_menu_items`, **éditable via /admin/menu** (plus de redéploiement).
 5. **[WIX-WEBHOOK-PLAN.md](WIX-WEBHOOK-PLAN.md)** — chantier **EN VEILLE**, ne pas
    implémenter sans demande explicite.
 
@@ -23,7 +25,7 @@ Bookings**, paiement d'abord via **Wave** (mobile money) ou décompte d'un
   Wave signé soit vérifié (ou qu'une séance d'abonnement soit décomptée). Le
   point unique de création est le handler webhook Wave ([src/webhooks/wave.ts](src/webhooks/wave.ts)).
 - **Le modèle propose, le serveur décide** : prix TOUJOURS depuis le catalogue Wix
-  ou `cafe-menu.md` (jamais du modèle) ; `event_id`s validés contre `slot_cache`
+  ou la table `cafe_menu_items` (jamais du modèle) ; `event_id`s validés contre `slot_cache`
   (anti prompt-injection) ; règle des 16h et fenêtres de dates recalculées côté
   serveur. Ne jamais déplacer une décision de prix/date/éligibilité vers le prompt.
 - **Ne jamais nommer un cours en dur** dans `business-info.md` ni le prompt : le

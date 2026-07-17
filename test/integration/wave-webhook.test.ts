@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { pool, migrate } from "../../src/db/index.js";
+import { initCafeMenu } from "../../src/domain/cafeMenuRepo.js";
 import { reconcileStuckBookings } from "../../src/webhooks/wave.js";
 import {
   makeFetchMock,
@@ -31,6 +32,7 @@ let mock: FetchMock;
 
 beforeAll(async () => {
   await migrate();
+  await initCafeMenu(); // seed + snapshot so the post-payment cafe offer has favourites
   mock = makeFetchMock();
   mock.install(); // stays installed for the whole suite (see helpers.ts)
   app = buildServer();

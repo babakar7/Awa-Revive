@@ -5,9 +5,9 @@ import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
 import { shouldOfferLinking } from "../lib/linkAsk.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
-import { CAFE_MENU } from "../lib/cafeMenu.js";
+import { getCafeMenu } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
-import { SYSTEM_PROMPT, dynamicContext } from "./systemPrompt.js";
+import { systemPrompt, dynamicContext } from "./systemPrompt.js";
 import { capabilityMenuKind, isVagueOpener } from "../lib/capabilityMenu.js";
 import {
   receptionLinkInstruction,
@@ -318,7 +318,7 @@ export async function handleInboundText(args: {
 
   const system: Anthropic.TextBlockParam[] = [
     // Stable prefix — cached.
-    { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+    { type: "text", text: systemPrompt(), cache_control: { type: "ephemeral" } },
     // Volatile context — after the cache breakpoint.
     {
       type: "text",
@@ -413,7 +413,7 @@ export async function handleInboundText(args: {
             // If the model itself already showed bar items, don't double-send
             // the menu offer below.
             const opts = (block.input as any)?.options;
-            if (Array.isArray(opts) && opts.some((o: any) => CAFE_MENU.items.has(String(o?.id)))) {
+            if (Array.isArray(opts) && opts.some((o: any) => getCafeMenu().items.has(String(o?.id)))) {
               cafeMenuShown = true;
             }
           }

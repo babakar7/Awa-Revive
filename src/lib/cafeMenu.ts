@@ -1,11 +1,10 @@
-import fs from "node:fs";
-import path from "node:path";
-
 /**
- * Bar menu — owner-editable cafe-menu.md is the single source of truth.
- * Same anti-injection stance as slot_cache: the model passes item ids and
- * quantities only; every price is resolved server-side from this file.
- * Loaded once at boot; restart/redeploy to pick up edits (like business-info).
+ * Bar menu — the DB table cafe_menu_items is the single source of truth
+ * (editable via /admin/menu; seeded from cafe-menu.md on first boot). This
+ * module stays pure (no DB, no fs): domain/cafeMenuRepo.ts loads the rows and
+ * PUSHES them here via setCafeMenu(). Same anti-injection stance as slot_cache:
+ * the model passes item ids + quantities only; every price is resolved
+ * server-side from the in-memory snapshot (computeExtras).
  */
 
 export interface CafeMenuItem {
@@ -14,6 +13,13 @@ export interface CafeMenuItem {
   priceXof: number;
   category: string;
   description?: string;
+}
+
+/** A menu row as stored in DB (snapshot input). */
+export interface CafeMenuRow extends CafeMenuItem {
+  favourite: boolean;
+  enabled: boolean;
+  sortOrder: number;
 }
 
 export interface ExtraLine {
@@ -31,11 +37,19 @@ export interface CafeMenu {
 
 const ITEM_LINE = /^-\s*([A-Z0-9_]+)\s*\|\s*([^|]+?)\s*\|\s*(\d+)\s*(?:\|\s*(.*?)\s*)?$/;
 
+const MENU_DISABLED_TEXT =
+  "(le menu du bar est vide — bar ordering is disabled; if asked, say the bar menu is unavailable right now)";
+
+/** The exact prompt line format so the model sees the ids to pass to tools. */
+function itemPromptLine(item: CafeMenuItem): string {
+  return `- id: ${item.id} — ${item.name} — ${item.priceXof} FCFA${item.description ? ` — ${item.description}` : ""}`;
+}
+
 /**
- * Parse the menu file. Item lines follow `- ID | Name | price | description`;
- * every other line (headers, prose) flows verbatim into promptText so the
- * owner can annotate freely. Throws on duplicate ids so a bad edit fails the
- * boot loudly instead of silently mispricing orders.
+ * Parse cafe-menu.md. Item lines follow `- ID | Name | price | description`;
+ * headers/prose flow verbatim into promptText. Throws on duplicate ids or bad
+ * price so a corrupt seed file fails the FIRST boot loudly. Used now only by the
+ * one-shot DB seed (and tests) — the live menu comes from the DB snapshot.
  */
 export function parseCafeMenu(raw: string): CafeMenu {
   const items = new Map<string, CafeMenuItem>();
@@ -58,29 +72,119 @@ export function parseCafeMenu(raw: string): CafeMenu {
     const priceXof = parseInt(priceStr, 10);
     if (!Number.isInteger(priceXof) || priceXof <= 0)
       throw new Error(`cafe-menu.md: invalid price for "${id}": ${priceStr}`);
-    items.set(id, { id, name, priceXof, category, description: description || undefined });
-    // Re-render so the model sees the exact ids to pass to create_payment_link.
-    promptLines.push(
-      `- id: ${id} — ${name} — ${priceXof} FCFA${description ? ` — ${description}` : ""}`,
-    );
+    const item = { id, name, priceXof, category, description: description || undefined };
+    items.set(id, item);
+    promptLines.push(itemPromptLine(item));
   }
   return { items, promptText: promptLines.join("\n") };
 }
 
-function loadCafeMenu(): CafeMenu {
-  try {
-    return parseCafeMenu(fs.readFileSync(path.resolve(process.cwd(), "cafe-menu.md"), "utf8"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; // bad file = fail boot
-    return {
-      items: new Map(),
-      promptText:
-        "(cafe-menu.md not found — bar ordering is disabled; if asked, say the bar menu is unavailable right now)",
-    };
-  }
+/**
+ * Ids favourited by default at seed time — the studio "incontournables". After
+ * the seed the `favourite` column in DB is the source of truth (editable in
+ * /admin/menu). A WhatsApp list caps at 10 rows, so keep the live set ≤ 10.
+ */
+export const FAVOURITE_SEED_IDS: string[] = [
+  "MATCHA_VANILLE",
+  "MATCHA_PISTACHE",
+  "MATCHA_MANGUE",
+  "SMOOTHIE_JANT_BI",
+  "SMOOTHIE_COCO_BEACH",
+  "FRAICHEUR_ZEST_UP",
+  "DETOX_PURIF_VERT",
+  "BRUNCH_MYKONOS",
+  "SALADE_CHICKEN_CRUNCH",
+];
+
+// ---------- in-memory snapshot (pushed by cafeMenuRepo) ----------
+
+function emptyMenu(): CafeMenu {
+  return { items: new Map(), promptText: MENU_DISABLED_TEXT };
 }
 
-export const CAFE_MENU = loadCafeMenu();
+let snapshot: CafeMenu = emptyMenu();
+let favouriteOpts: CafeOption[] = [];
+let menuVersion = 0;
+
+/** The live menu snapshot (sync). Empty until initCafeMenu() runs at boot. */
+export function getCafeMenu(): CafeMenu {
+  return snapshot;
+}
+
+/** Bumped on every setCafeMenu — memo key for systemPrompt(). */
+export function cafeMenuVersion(): number {
+  return menuVersion;
+}
+
+const bySortOrder = (a: CafeMenuRow, b: CafeMenuRow) => a.sortOrder - b.sortOrder;
+
+/**
+ * Pure: render enabled rows to the <cafe_menu> prompt text (## CATEGORY headers
+ * in sort order, then item lines). Disabled rows are excluded; an empty result
+ * yields the "bar disabled" text.
+ */
+export function buildPromptText(rows: CafeMenuRow[]): string {
+  const enabled = rows.filter((r) => r.enabled).sort(bySortOrder);
+  if (enabled.length === 0) return MENU_DISABLED_TEXT;
+  const lines: string[] = [];
+  let category = "";
+  for (const r of enabled) {
+    if (r.category !== category) {
+      category = r.category;
+      lines.push(`## ${category}`);
+    }
+    lines.push(itemPromptLine(r));
+  }
+  return lines.join("\n");
+}
+
+/** Replace the live snapshot from DB rows (enabled ones drive the menu). */
+export function setCafeMenu(rows: CafeMenuRow[]): void {
+  const enabled = rows.filter((r) => r.enabled).sort(bySortOrder);
+  const items = new Map<string, CafeMenuItem>();
+  for (const r of enabled) {
+    items.set(r.id, {
+      id: r.id,
+      name: r.name,
+      priceXof: r.priceXof,
+      category: r.category,
+      description: r.description,
+    });
+  }
+  snapshot = { items, promptText: buildPromptText(rows) };
+  favouriteOpts = enabled
+    .filter((r) => r.favourite)
+    .slice(0, 10)
+    .map((r) => {
+      const pitch = r.description ? ` · ${r.description}` : "";
+      return {
+        id: r.id,
+        title: r.name.slice(0, 24),
+        description: `${r.priceXof} F${pitch}`.slice(0, 72),
+        section: r.category.slice(0, 24),
+      };
+    });
+  menuVersion++;
+}
+
+/**
+ * Turn a display name into a stable menu id (UPPER_SNAKE, accents stripped),
+ * unique against existingIds (including archived) with a _2/_3 suffix on clash.
+ */
+export function slugifyMenuId(name: string, existingIds: Iterable<string>): string {
+  const base =
+    name
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "ITEM";
+  const set = new Set(existingIds);
+  if (!set.has(base)) return base;
+  let n = 2;
+  while (set.has(`${base}_${n}`)) n++;
+  return `${base}_${n}`;
+}
 
 /** A clickable menu row (mirrors present_options option shape). */
 export interface CafeOption {
@@ -91,42 +195,12 @@ export interface CafeOption {
 }
 
 /**
- * The studio "incontournables" — the exact 10 favourites the prompt lists, kept
- * here as the single source of truth so the webhook can show the same list the
- * model shows. A WhatsApp list caps at 10 rows, so keep this ≤ 10.
- */
-const FAVOURITE_IDS: { id: string; section: string }[] = [
-  { id: "MATCHA_VANILLE", section: "🍵 Iced Matcha" },
-  { id: "MATCHA_PISTACHE", section: "🍵 Iced Matcha" },
-  { id: "MATCHA_MANGUE", section: "🍵 Iced Matcha" },
-  { id: "SMOOTHIE_JANT_BI", section: "🥤 Smoothies" },
-  { id: "SMOOTHIE_COCO_BEACH", section: "🥤 Smoothies" },
-  { id: "FRAICHEUR_ZEST_UP", section: "🧊 Fraîcheur & détox" },
-  { id: "DETOX_PURIF_VERT", section: "🧊 Fraîcheur & détox" },
-  { id: "BRUNCH_MYKONOS", section: "🍽️ À manger" },
-  { id: "SALADE_CHICKEN_CRUNCH", section: "🍽️ À manger" },
-];
-
-/**
- * Build the incontournables as present_options rows, priced live from the menu.
- * Ids absent from cafe-menu.md (owner renamed/removed one) are skipped rather
- * than shown broken — returns [] if none resolve (menu unavailable), so callers
- * can decide not to send anything.
+ * The studio "incontournables" as present_options rows, from the live snapshot's
+ * favourite rows (priced from the snapshot). Empty if none/menu unavailable, so
+ * callers can decide not to send anything.
  */
 export function cafeFavouriteOptions(): CafeOption[] {
-  const out: CafeOption[] = [];
-  for (const fav of FAVOURITE_IDS) {
-    const item = CAFE_MENU.items.get(fav.id);
-    if (!item) continue; // defensive: id changed in cafe-menu.md
-    const pitch = item.description ? ` · ${item.description}` : "";
-    out.push({
-      id: item.id,
-      title: item.name.slice(0, 24),
-      description: `${item.priceXof} F${pitch}`.slice(0, 72),
-      section: fav.section,
-    });
-  }
-  return out;
+  return favouriteOpts;
 }
 
 export type ExtrasResult =

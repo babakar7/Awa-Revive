@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import { pool } from "../db/index.js";
 import { transition } from "../domain/stateMachine.js";
 import * as repo from "../domain/repo.js";
-import { extrasFromJson, CAFE_MENU, computeExtras } from "../lib/cafeMenu.js";
+import { extrasFromJson, getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
 import {
   adminAuthHook,
   adminUsers,
@@ -69,6 +69,8 @@ import * as quotes from "../domain/quoteRepo.js";
 import { parseQuoteForm } from "../domain/quoteRules.js";
 import { renderQuotePdf } from "../lib/quotePdf.js";
 import { devisBanner, renderQuoteForm, renderQuotesList } from "./devisPage.js";
+import * as menu from "../domain/cafeMenuRepo.js";
+import { menuBanner, renderMenuPage } from "./menuPage.js";
 import * as giftCards from "../domain/giftCardRepo.js";
 import { parseGiftCardForm } from "../domain/giftCardRules.js";
 import { renderGiftCardImage } from "../lib/giftCardImage.js";
@@ -448,7 +450,7 @@ ${
 
       admin.get("/livraisons/new", async (req, reply) => {
         const err = (req.query as any)?.err as string | undefined;
-        const body = renderLivraisonForm(CAFE_MENU.items, livraisonsBanner(undefined, err));
+        const body = renderLivraisonForm(getCafeMenu().items, livraisonsBanner(undefined, err));
         reply.type("text/html").send(await layout("Nouvelle livraison", "/admin/livraisons", body));
       });
 
@@ -465,7 +467,7 @@ ${
         const parsed = parseDeliveryQtyFields(b);
         if ("error" in parsed) return backErr(parsed.error);
         // Prices/total resolved server-side from the menu (never trusted from the form).
-        const priced = computeExtras(CAFE_MENU.items, parsed.entries);
+        const priced = computeExtras(getCafeMenu().items, parsed.entries);
         if (!priced.ok) return backErr(priced.message);
         const slaRaw = parseInt(String(b.sla_minutes ?? "").trim(), 10);
         const sla = Number.isFinite(slaRaw) && slaRaw >= 5 && slaRaw <= 180 ? slaRaw : config.DELIVERY_SLA_MINUTES;
@@ -709,6 +711,48 @@ ${
           .type("application/pdf")
           .header("content-disposition", `attachment; filename="Devis_${quote.number}.pdf"`)
           .send(pdf);
+      });
+
+      // ---------- Menu bar (éditable — DB source de vérité) ----------
+      admin.get("/menu", async (req, reply) => {
+        const editId = (req.query as any)?.edit as string | undefined;
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const items = await menu.listMenuItems();
+        const body = renderMenuPage({ items, editId, banner: menuBanner(done, err) });
+        reply.type("text/html").send(await layout("Menu bar", "/admin/menu", body));
+      });
+
+      admin.post("/menu/items", async (req, reply) => {
+        const parsed = menu.parseMenuItemForm((req.body ?? {}) as Record<string, string>);
+        if ("error" in parsed)
+          return reply.redirect(`/admin/menu?err=${encodeURIComponent(parsed.error)}`, 303);
+        const { id } = await menu.createMenuItem(parsed);
+        await menu.refreshCafeMenu();
+        req.log.info({ by: req.adminUser, id }, "Menu item created");
+        return reply.redirect("/admin/menu?done=created", 303);
+      });
+
+      admin.post("/menu/items/:id/update", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const parsed = menu.parseMenuItemForm((req.body ?? {}) as Record<string, string>);
+        if ("error" in parsed)
+          return reply.redirect(`/admin/menu?edit=${encodeURIComponent(id)}&err=${encodeURIComponent(parsed.error)}`, 303);
+        const ok = await menu.updateMenuItem(id, parsed);
+        if (!ok) return reply.redirect("/admin/menu?err=article introuvable", 303);
+        await menu.refreshCafeMenu();
+        req.log.info({ by: req.adminUser, id }, "Menu item updated");
+        return reply.redirect("/admin/menu?done=updated", 303);
+      });
+
+      admin.post("/menu/items/:id/toggle", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const item = await menu.getMenuItem(id);
+        if (!item) return reply.redirect("/admin/menu?err=article introuvable", 303);
+        await menu.setMenuItemEnabled(id, !item.enabled);
+        await menu.refreshCafeMenu();
+        req.log.info({ by: req.adminUser, id, enabled: !item.enabled }, "Menu item toggled");
+        return reply.redirect(`/admin/menu?done=${item.enabled ? "retired" : "restored"}`, 303);
       });
 
       // ---------- Cartes cadeaux (visuel PNG + envoi WhatsApp) ----------

@@ -1,13 +1,36 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  CAFE_MENU,
+  buildPromptText,
+  type CafeMenuRow,
   cafeFavouriteOptions,
+  cafeMenuVersion,
   computeExtras,
   extrasFromJson,
+  FAVOURITE_SEED_IDS,
   formatExtrasMultiline,
   formatExtrasOneLine,
+  getCafeMenu,
   parseCafeMenu,
+  setCafeMenu,
+  slugifyMenuId,
 } from "../src/lib/cafeMenu.js";
+import { parseMenuItemForm } from "../src/domain/cafeMenuRepo.js";
+import { systemPrompt } from "../src/agent/systemPrompt.js";
+
+/** The real menu file, parsed as the DB seed would — items are the source. */
+const REAL_MENU = parseCafeMenu(fs.readFileSync("cafe-menu.md", "utf8"));
+
+/** Build snapshot rows from a parsed menu (mirrors the seed → DB → snapshot path). */
+function rowsFromMenu(menu = REAL_MENU, favIds = new Set(FAVOURITE_SEED_IDS)): CafeMenuRow[] {
+  let order = 0;
+  return [...menu.items.values()].map((it) => ({
+    ...it,
+    favourite: favIds.has(it.id),
+    enabled: true,
+    sortOrder: (order += 10),
+  }));
+}
 
 const FIXTURE = `# Menu test
 
@@ -62,12 +85,12 @@ describe("parseCafeMenu", () => {
   });
 });
 
-describe("real cafe-menu.md", () => {
-  it("loads with a sane item count and known ids", () => {
-    expect(CAFE_MENU.items.size).toBeGreaterThanOrEqual(30);
-    expect(CAFE_MENU.items.get("SMOOTHIE_JANT_BI")!.priceXof).toBe(3000);
-    expect(CAFE_MENU.items.get("BRUNCH_MYKONOS")!.priceXof).toBe(7500);
-    expect(CAFE_MENU.items.get("SHOT_BOOST_ENERGY")!.priceXof).toBe(1000);
+describe("real cafe-menu.md (the seed source)", () => {
+  it("parses with a sane item count and known ids/prices", () => {
+    expect(REAL_MENU.items.size).toBeGreaterThanOrEqual(30);
+    expect(REAL_MENU.items.get("SMOOTHIE_JANT_BI")!.priceXof).toBe(3000);
+    expect(REAL_MENU.items.get("BRUNCH_MYKONOS")!.priceXof).toBe(7500);
+    expect(REAL_MENU.items.get("SHOT_BOOST_ENERGY")!.priceXof).toBe(1000);
   });
 });
 
@@ -136,28 +159,116 @@ describe("formatters", () => {
 });
 
 describe("cafeFavouriteOptions (incontournables shown after a booking)", () => {
+  setCafeMenu(rowsFromMenu());
   const favs = cafeFavouriteOptions();
 
-  it("resolves all favourites live from cafe-menu.md", () => {
-    // Every favourite id must exist in the loaded menu, else the after-booking
-    // list would silently show fewer rows. (9 since MATCHA_CAFE was dropped
-    // from the populars on 10/07 — owner call.)
+  it("comes from the snapshot's favourite rows (9 seed favourites, WhatsApp cap 10)", () => {
     expect(favs).toHaveLength(9);
-    expect(favs.length).toBeLessThanOrEqual(10); // WhatsApp list cap
+    expect(favs.length).toBeLessThanOrEqual(10);
   });
 
   it("each row carries a menu id, a title, a priced description and a section", () => {
     for (const row of favs) {
-      expect(CAFE_MENU.items.has(row.id)).toBe(true);
+      expect(getCafeMenu().items.has(row.id)).toBe(true);
       expect(row.title.length).toBeGreaterThan(0);
-      expect(row.description).toMatch(/\d+ F/); // price from the menu file
+      expect(row.description).toMatch(/\d+ F/);
       expect(row.description!.length).toBeLessThanOrEqual(72);
       expect(row.section).toBeTruthy();
     }
   });
 
-  it("prices come from the menu, not hard-coded", () => {
+  it("prices come from the snapshot, not hard-coded", () => {
     const jantBi = favs.find((o) => o.id === "SMOOTHIE_JANT_BI")!;
-    expect(jantBi.description).toContain(`${CAFE_MENU.items.get("SMOOTHIE_JANT_BI")!.priceXof} F`);
+    expect(jantBi.description).toContain(`${getCafeMenu().items.get("SMOOTHIE_JANT_BI")!.priceXof} F`);
+  });
+
+  it("caps at 10 favourites even if more rows are flagged", () => {
+    const rows = rowsFromMenu(REAL_MENU, new Set([...REAL_MENU.items.keys()])); // everything favourite
+    setCafeMenu(rows);
+    expect(cafeFavouriteOptions().length).toBe(10);
+    setCafeMenu(rowsFromMenu()); // restore the seed set for other suites
+  });
+});
+
+describe("setCafeMenu / getCafeMenu snapshot", () => {
+  it("only enabled rows reach the live menu, and the version bumps", () => {
+    const rows = rowsFromMenu();
+    rows[0].enabled = false;
+    const before = cafeMenuVersion();
+    setCafeMenu(rows);
+    expect(cafeMenuVersion()).toBeGreaterThan(before);
+    expect(getCafeMenu().items.has(rows[0].id)).toBe(false);
+    expect(getCafeMenu().items.has(rows[1].id)).toBe(true);
+    setCafeMenu(rowsFromMenu()); // restore
+  });
+});
+
+describe("buildPromptText", () => {
+  const rows: CafeMenuRow[] = [
+    { id: "A", name: "Alpha", priceXof: 3000, category: "SMOOTHIES", description: "x", favourite: false, enabled: true, sortOrder: 10 },
+    { id: "B", name: "Beta", priceXof: 500, category: "SMOOTHIES", favourite: false, enabled: true, sortOrder: 20 } as CafeMenuRow,
+    { id: "C", name: "Gamma", priceXof: 1000, category: "SHOTS", description: undefined, favourite: false, enabled: false, sortOrder: 30 } as CafeMenuRow,
+  ];
+
+  it("renders ## categories and id lines, excluding disabled rows", () => {
+    const t = buildPromptText(rows);
+    expect(t).toContain("## SMOOTHIES");
+    expect(t).toContain("- id: A — Alpha — 3000 FCFA — x");
+    expect(t).toContain("- id: B — Beta — 500 FCFA");
+    expect(t).not.toContain("Gamma"); // disabled
+    expect(t).not.toContain("## SHOTS"); // its only item is disabled
+  });
+
+  it("returns the disabled text for an empty/all-disabled menu", () => {
+    expect(buildPromptText([])).toMatch(/bar ordering is disabled/i);
+  });
+});
+
+describe("slugifyMenuId", () => {
+  it("uppercases, strips accents and non-alphanumerics", () => {
+    expect(slugifyMenuId("Thé Glacé Menthe", [])).toBe("THE_GLACE_MENTHE");
+    expect(slugifyMenuId("Café + Lait!", [])).toBe("CAFE_LAIT");
+  });
+  it("suffixes on collision, including against archived ids", () => {
+    expect(slugifyMenuId("Matcha", ["MATCHA"])).toBe("MATCHA_2");
+    expect(slugifyMenuId("Matcha", ["MATCHA", "MATCHA_2"])).toBe("MATCHA_3");
+  });
+  it("falls back to ITEM for a name with no usable characters", () => {
+    expect(slugifyMenuId("!!!", [])).toBe("ITEM");
+  });
+});
+
+describe("systemPrompt() — memoized on the menu version (prompt cache)", () => {
+  it("returns the SAME string reference between menu edits, and rebuilds after one", () => {
+    setCafeMenu(rowsFromMenu());
+    const a = systemPrompt();
+    const b = systemPrompt();
+    expect(a).toBe(b); // same reference → Anthropic prefix cache holds
+
+    const rows = rowsFromMenu();
+    rows[0] = { ...rows[0], priceXof: rows[0].priceXof + 111 };
+    setCafeMenu(rows);
+    const c = systemPrompt();
+    expect(c).not.toBe(a);
+    expect(c).toContain(`${rows[0].priceXof} FCFA`);
+    setCafeMenu(rowsFromMenu()); // restore
+  });
+});
+
+describe("parseMenuItemForm", () => {
+  const base = { name: "Jus Vert", price_xof: "2500", category: "JUS", description: "pomme, épinard" };
+  it("accepts a valid item and reads the favourite checkbox", () => {
+    const r = parseMenuItemForm({ ...base, favourite: "on" });
+    expect(r).toMatchObject({ name: "Jus Vert", price_xof: 2500, category: "JUS", favourite: true });
+  });
+  it("requires name, category and a valid integer price", () => {
+    expect("error" in parseMenuItemForm({ ...base, name: "" })).toBe(true);
+    expect("error" in parseMenuItemForm({ ...base, category: "" })).toBe(true);
+    expect("error" in parseMenuItemForm({ ...base, price_xof: "0" })).toBe(true);
+    expect("error" in parseMenuItemForm({ ...base, price_xof: "abc" })).toBe(true);
+  });
+  it("defaults favourite to false and empty description to null", () => {
+    const r = parseMenuItemForm({ ...base, description: "" });
+    expect(r).toMatchObject({ favourite: false, description: null });
   });
 });

@@ -576,4 +576,22 @@ create table if not exists gift_cards (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_gift_cards_created on gift_cards (created_at desc);
+
+-- Menu du bar : source de vérité en DB (éditable via /admin/menu). Seedé au
+-- premier boot depuis cafe-menu.md (table vide → import ; ensuite le fichier
+-- n'est plus lu). Un id n'est JAMAIS réutilisé ni supprimé : retirer un article
+-- = enabled=false (les commandes passées référencent l'id dans leurs snapshots
+-- extras_json/items_json). Prix TOUJOURS résolus serveur (computeExtras).
+create table if not exists cafe_menu_items (
+  id text primary key,                       -- slug MAJUSCULES_UNDERSCORE, auto-généré, immuable
+  name text not null,
+  price_xof integer not null check (price_xof > 0),
+  category text not null,
+  description text,
+  favourite boolean not null default false,  -- « incontournables » (liste WhatsApp post-résa, cap 10)
+  enabled boolean not null default true,     -- false = retiré du menu (restaurable)
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 `;

@@ -1482,6 +1482,33 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     (pipeline existant). Tests : `addSpots` (pur) + intégration `add-spots` (happy Wave
     + OM, propriété, statut, cours commencé, places insuffisantes, studio, sell-out).
 
+- **4.39 — Menu bar éditable dans l'admin (17/07).** Le menu café était dans
+  `cafe-menu.md`, parsé au boot → toute modif = redéploiement. Il passe en DB
+  (table `cafe_menu_items`, source de vérité), éditable via `/admin/menu`
+  (nav Bar) : ajouter / modifier / retirer un article, cocher « incontournable »,
+  sans redéploiement.
+  - **Snapshot mémoire** : `lib/cafeMenu.ts` reste pur (plus de `CAFE_MENU`
+    const ni de lecture disque à l'import) ; `domain/cafeMenuRepo.ts` charge la
+    DB et POUSSE le snapshot via `setCafeMenu(rows)`. `getCafeMenu()` (sync)
+    remplace `CAFE_MENU` partout (agent/tools/routes). `computeExtras` inchangé
+    (prix toujours résolus serveur). Chaque mutation admin → `refreshCafeMenu()`
+    avant le redirect (mono-instance Railway → invalidation in-process suffit).
+  - **Prompt caching préservé** : `SYSTEM_PROMPT` const → `systemPrompt()`
+    mémoïsée sur `cafeMenuVersion()` — même référence string entre deux éditions
+    (préfixe cache Anthropic intact), reconstruite une fois par édition.
+  - **Seed** : `initCafeMenu()` au boot (après `migrate()`) importe `cafe-menu.md`
+    si la table est vide (favourite=true pour les 9 `FAVOURITE_SEED_IDS`), puis
+    charge le snapshot. Ensuite le fichier n'est plus lu.
+  - **IDs** auto-générés (slug `MAJUSCULES_UNDERSCORE`, unicité contre TOUS les
+    ids y compris archivés). **Retirer = `enabled=false`** (restaurable, jamais
+    de hard delete) : un id n'est jamais réutilisé → les snapshots figés des
+    commandes passées restent cohérents.
+  - Fichiers : `lib/cafeMenu.ts` (refactor), `domain/cafeMenuRepo.ts` (nouveau),
+    `agent/systemPrompt.ts` (memo), `admin/menuPage.ts` + routes `/admin/menu`,
+    `src/index.ts` (boot). Tests purs (slug, buildPromptText, parseMenuItemForm,
+    systemPrompt memo, favourites via snapshot) + intégration (seed idempotent,
+    CRUD → refresh → snapshot). Docs : CLAUDE.md, README, en-tête cafe-menu.md.
+
 ## 5. Chronologie condensée
 
 - **17/07 — « Nouveau client par défaut » : la question du compte ne vient plus
