@@ -15,7 +15,7 @@ const base = {
 
 const UNLINKED_MARKER = "UNLINKED NUMBER";
 
-describe("emailAskMessage — the one-time ignorable linking invitation", () => {
+describe("emailAskMessage — the one-time linking invitation (post-payment net)", () => {
   it("offers BOTH linking an existing account and creating a new one, in each language", () => {
     for (const lang of ["fr", "en", "wo"]) {
       const msg = emailAskMessage(lang).toLowerCase();
@@ -29,7 +29,7 @@ describe("emailAskMessage — the one-time ignorable linking invitation", () => 
   });
 });
 
-describe("shouldOfferLinking — server decides when to append the invitation", () => {
+describe("shouldOfferLinking — flags an unlinked number (drives the prompt note + post-payment invitation)", () => {
   const client = { email_prompted_at: null, claimed_email: null };
 
   it("offers when the lookup succeeded, number is unlinked, and never asked", () => {
@@ -57,11 +57,13 @@ describe("shouldOfferLinking — server decides when to append the invitation", 
   });
 });
 
-describe("dynamicContext — unlinked-number note (server sends the ask, not Awa)", () => {
-  it("flags the unlinked number and tells the model NOT to write the invitation itself", () => {
+describe("dynamicContext — unlinked-number note (brand-new by default, no proactive ask)", () => {
+  it("flags the unlinked number, sets the brand-new default, and forbids raising the account unprompted", () => {
     const ctx = dynamicContext({ ...base, unlinkedNeverAsked: true });
     expect(ctx).toContain(UNLINKED_MARKER);
-    expect(ctx).toMatch(/do NOT write|automatically/i);
+    expect(ctx).toMatch(/brand-new/i);
+    // No proactive account/email talk — only when it earns its place.
+    expect(ctx).toMatch(/do not bring up/i);
     expect(ctx).toContain("request_email_verification");
     // The model must know it can create an account (verified by code first).
     expect(ctx).toMatch(/create_account/);

@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import { notifyReception, notifyNewConversation } from "../lib/notify.js";
 import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
-import { emailAskMessage, shouldOfferLinking } from "../lib/linkAsk.js";
+import { shouldOfferLinking } from "../lib/linkAsk.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
 import { CAFE_MENU } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
@@ -283,19 +283,16 @@ export async function handleInboundText(args: {
 
   const history = await repo.lastTurnsForReplay(client.id, 30);
 
-  // Account-linking invitation: a subscriber messaging from a number that
-  // isn't on their Wix fiche is invisible to Awa and would be pushed to Wave
-  // for a class their abonnement covers. When the live lookup says the number
-  // matches NO unique contact and the one-shot email prompt hasn't fired yet,
-  // the SERVER appends ONE ignorable "do you already have an account?" message
-  // right after Awa's reply (below). Deterministic, never left to the model —
-  // a prod test (11/07) showed the model dropping a prompt-injected version.
-  // NB: this is NOT gated on "first conversation ever" — that guard was
-  // fragile (a failed send, or the credits-exhausted technical fallback that
-  // persists an assistant turn, permanently burned the single chance, and the
-  // whole existing unlinked client base could never be asked). The durable
-  // one-shot is email_prompted_at alone, armed only AFTER a successful send,
-  // so it retries on the next message until it actually lands.
+  // Unlinked-number signal: a subscriber messaging from a number that isn't on
+  // their Wix fiche is invisible to Awa and could be pushed to Wave for a class
+  // their abonnement covers. `shouldOfferLinking` is true when the live lookup
+  // succeeded, the number matches NO unique contact, and the one-shot email
+  // prompt hasn't fired. It NO LONGER triggers a proactive first-contact
+  // invitation (removed 17/07 — too heavy on a "Salut"); it only drives the
+  // prompt's UNLINKED-NUMBER note so the model treats them as a brand-new client
+  // and raises the account only when useful (claimed membership/history, or a
+  // failed membership booking). The account question still fires automatically
+  // after a first payment from an unlinked number (fulfillment.ts).
   const unlinkedNeverAsked = shouldOfferLinking(memberships, client);
   const hasActivePaymentLink = !!(activeBooking || activePlanOrder || activeCafeOrder);
   // First contact = Awa has never replied to this client before (the current
@@ -485,22 +482,16 @@ export async function handleInboundText(args: {
     await repo.addTurn(client.id, "assistant", replyText);
   }
 
-  // Account-linking invitation: the client's actual request was just answered
-  // — NOW append the one-time, ignorable "do you already have a Revive
-  // account?" message, server-side (see the unlinkedNeverAsked comment above).
-  // Only when a real reply went out (never after the technical-fallback turn,
-  // where it would read as a non-sequitur), and the flag is armed only after a
-  // successful send so a failed delivery keeps the single chance.
-  if (unlinkedNeverAsked && (replyText || interactiveSent) && !usedTechnicalFallback) {
-    try {
-      const ask = emailAskMessage(client.language ?? lang ?? "fr");
-      await sendText(args.waPhone, ask);
-      await repo.addTurn(client.id, "assistant", ask);
-      await repo.markEmailPrompted(client.id);
-    } catch (err) {
-      console.error("First-contact linking ask failed (will retry next msg):", err);
-    }
-  }
+  // NOTE: no proactive account-linking invitation here anymore. Pushing "do you
+  // already have an account?" onto a first "Salut" read as heavy admin friction
+  // (owner feedback 17/07). Default posture is now "brand-new client" — Awa
+  // handles the need first; the account question surfaces only when it earns its
+  // place: the model asks when a claimed membership/history comes up or a
+  // membership booking fails (systemPrompt), and the SAME invitation still fires
+  // server-side after a first payment from an unlinked number
+  // (maybeHandleUnlinkedClient in fulfillment.ts) — the real "useful moment".
+  // `unlinkedNeverAsked` is still computed above: it only feeds the prompt's
+  // UNLINKED-NUMBER context note now, it no longer triggers a send.
 
   // Book-first, menu-after: the class was just booked on the client's plan —
   // show the incontournables NOW, right after the confirmation, server-side

@@ -1281,6 +1281,11 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     `ramathiamndiaye@hotmail.com` ajouté), demande passée LINKED, handoff clos ;
     Babakar re-booke lui-même. Résa Sculpt sam. 18/07 10:15 (2 pers., 24 000 F
     Max It) avait bien abouti — seule la création de compte avait échoué.
+  - **AMENDÉ 17/07** : l'invitation de liaison n'est plus poussée au PREMIER
+    contact (voir chronologie 17/07). Elle reste envoyée automatiquement par le
+    filet post-paiement (`maybeHandleUnlinkedClient`), et le modèle la propose
+    au moment utile. `shouldOfferLinking` inchangé (alimente désormais la note
+    de contexte + le filet Wave, plus un push au 1er message).
 
 - **4.34 — Livraisons bar (commandes téléphoniques → cuisine → client) (15/07).**
   Nouvelle feature 100 % serveur+admin (le modèle IA n'intervient nulle part) :
@@ -1478,6 +1483,23 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     + OM, propriété, statut, cours commencé, places insuffisantes, studio, sell-out).
 
 ## 5. Chronologie condensée
+
+- **17/07 — « Nouveau client par défaut » : la question du compte ne vient plus
+  au premier contact.** Sur un simple « Salut », Awa répondait puis le serveur
+  poussait aussitôt l'invitation compte/email (« Au fait 😊… je t'en crée un »)
+  — trop lourd, feedback gérant. Changement : suppression du push proactif au
+  1er contact (`agent/index.ts`, bloc post-réponse retiré). La posture par défaut
+  d'un numéro inconnu devient **nouveau client jamais venu** (note `UNLINKED
+  NUMBER` reformulée dans `systemPrompt.ts` : « BRAND-NEW by default, do not
+  bring up accounts/email on your own »). Le compte ne remonte plus que quand il
+  sert : (a) le client mentionne un compte/abonnement/historique, (b) une résa
+  via abonnement échoue (`no_matching_contact`), ou (c) **filet post-paiement
+  inchangé** (`maybeHandleUnlinkedClient` envoie la même invitation après le 1er
+  paiement d'un numéro non relié). Aucun garde-fou paiement/booking affaibli
+  (`verificationBlocksPayment`, code-avant-paiement intacts). Auto-présentation
+  IA au 1er contact conservée. Tests `firstContactLink` mis à jour (nouveau
+  contrat de la note ; `shouldOfferLinking`/`emailAskMessage` toujours verrouillés
+  pour le filet Wave).
 
 - **16/07 — 529 Overloaded : retry applicatif espacé (incident premier contact).**
   À 18:56, un NOUVEAU client écrit « Bonsoir vous allez bien ? » → 529
