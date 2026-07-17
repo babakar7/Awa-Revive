@@ -227,9 +227,9 @@ const SECTIONS: Section[] = [
 ];
 
 function prioBadge(prio: Task["prio"]): string {
-  const color = prio === "P0" ? "#cf222e" : "#9a6700";
+  const cls = prio === "P0" ? "badge--red" : "badge--amber";
   const label = prio === "P0" ? "P0 · urgent" : "P1";
-  return `<span class="badge" style="background:${color}">${label}</span>`;
+  return `<span class="badge ${cls}">${label}</span>`;
 }
 
 function taskCard(t: Task): string {
@@ -261,7 +261,7 @@ ${s.tasks.map(taskCard).join("")}`,
 <div class="muted" style="margin-top:.3rem">Coche au fur et à mesure ; l'état est enregistré dans CE navigateur.
 Le numéro d'Awa (prod) : +221 78 953 66 76.</div>
 <div style="margin-top:.6rem"><b><span id="tdone">0</span> / ${total}</b> testé(s)
-<button class="act" style="background:#6e7781;margin-left:.6rem" onclick="tReset()">Tout décocher</button></div>
+<button class="act act--sm act--ghost" style="margin-left:.6rem" onclick="tReset()">Tout décocher</button></div>
 </div>
 ${pendingNote}
 ${sections}

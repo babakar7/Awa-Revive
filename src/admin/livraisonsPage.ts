@@ -29,7 +29,7 @@ const BANNERS: Record<string, string> = {
 
 export function livraisonsBanner(done?: string, err?: string): string {
   if (done && BANNERS[done])
-    return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
+    return `<div class="card success"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
   if (err) return `<div class="card warn">⚠️ ${esc(err)}</div>`;
   return "";
 }
@@ -42,7 +42,7 @@ function minutesSince(d: Date | string): number {
 function slaBadge(o: DeliveryOrder): string {
   if (o.status === "READY") {
     const since = o.ready_at ? minutesSince(o.ready_at) : 0;
-    return `<span style="background:#1a7f37;color:#fff;border-radius:20px;padding:.1rem .55rem;font-size:.72rem;font-weight:600">prête (${since} min)</span>`;
+    return `<span class="badge badge--green">prête (${since} min)</span>`;
   }
   const elapsed = minutesSince(o.created_at);
   const remaining = o.sla_minutes - elapsed;
@@ -58,7 +58,7 @@ function slaBadge(o: DeliveryOrder): string {
     color = "#9a6700";
     label = `reste ${remaining} min`;
   }
-  return `<span style="background:${color};color:#fff;border-radius:20px;padding:.1rem .55rem;font-size:.72rem;font-weight:600;white-space:nowrap">${label}</span>`;
+  return `<span class="badge" style="background:${color}">${label}</span>`;
 }
 
 function kitchenStatusCell(o: DeliveryOrder): string {
@@ -73,7 +73,7 @@ function kitchenStatusCell(o: DeliveryOrder): string {
 
 function inlineForm(action: string, label: string, confirm?: string): string {
   const onsubmit = confirm ? ` onsubmit="return confirm('${esc(confirm)}')"` : "";
-  return `<form method="post" action="${esc(action)}" style="display:inline"${onsubmit}><button class="act" type="submit" style="padding:.35rem .6rem;font-size:.8rem">${esc(label)}</button></form>`;
+  return `<form method="post" action="${esc(action)}" class="inline"${onsubmit}><button class="act act--sm" type="submit">${esc(label)}</button></form>`;
 }
 
 function actionsCell(o: DeliveryOrder): string {
@@ -145,9 +145,9 @@ export function renderLivraisonsBoard(data: BoardData): string {
     ? `<table><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Montant</th><th class="hide-sm">Prépa</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table>`
     : `<p class="muted">Aucune commande récente.</p>`;
   return `${data.banner}
-<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+<div class="row between">
   <h2 style="margin:.4rem 0">Livraisons 🛵</h2>
-  <a href="/admin/livraisons/new" class="act" style="text-decoration:none;padding:.5rem .9rem;border-radius:8px">➕ Nouvelle commande</a>
+  <a href="/admin/livraisons/new" class="act">➕ Nouvelle commande</a>
 </div>
 <div class="stat-grid">
   <div class="stat"><span class="muted">En cours</span><b>${stats.openCount}</b></div>
@@ -178,9 +178,9 @@ export function renderLivraisonForm(items: Map<string, CafeMenuItem>, banner: st
     .map(([cat, list]) => {
       const rows = list
         .map(
-          (it) => `<label style="display:flex;align-items:center;gap:.6rem;padding:.3rem 0;border-top:1px solid #f0ede7">
+          (it) => `<label class="row" style="padding:.3rem 0;border-top:1px solid var(--border-subtle)">
 <span style="flex:1">${esc(it.name)} <span class="muted">— ${esc(it.priceXof)} F</span></span>
-<input type="number" name="qty_${esc(it.id)}" min="0" max="10" value="0" data-price="${esc(it.priceXof)}" style="width:4.5rem;padding:.4rem;border:1px solid #e4ddd3;border-radius:8px" oninput="livTotal()"></label>`,
+<input type="number" name="qty_${esc(it.id)}" min="0" max="10" value="0" data-price="${esc(it.priceXof)}" style="width:4.5rem" oninput="livTotal()"></label>`,
         )
         .join("");
       return `<details class="card"><summary style="font-weight:600;cursor:pointer">${esc(cat || "Autres")} <span class="muted">(${list.length})</span></summary>${rows}</details>`;
@@ -190,20 +190,20 @@ export function renderLivraisonForm(items: Map<string, CafeMenuItem>, banner: st
   return `${banner}
 <h2 style="margin:.4rem 0">➕ Nouvelle commande livraison</h2>
 <p class="muted">Paiement à la livraison — le montant est calculé automatiquement depuis le menu.</p>
-<form method="post" action="/admin/livraisons" style="display:flex;flex-direction:column;gap:.7rem">
-  <div class="card" style="display:flex;flex-direction:column;gap:.6rem">
-    <label>Nom du client<input name="client_name" required style="width:100%;padding:.55rem;border:1px solid #e4ddd3;border-radius:8px"></label>
-    <label>Téléphone (WhatsApp)<input name="client_phone" required placeholder="77 123 45 67 ou +221…" style="width:100%;padding:.55rem;border:1px solid #e4ddd3;border-radius:8px"></label>
-    <label>Adresse de livraison<input name="address" required style="width:100%;padding:.55rem;border:1px solid #e4ddd3;border-radius:8px"></label>
-    <label>Note <span class="muted">(optionnel)</span><input name="note" style="width:100%;padding:.55rem;border:1px solid #e4ddd3;border-radius:8px"></label>
-    <label>Alerte cuisine après (min)<input name="sla_minutes" type="number" min="5" max="180" value="${esc(config.DELIVERY_SLA_MINUTES)}" style="width:6rem;padding:.55rem;border:1px solid #e4ddd3;border-radius:8px"></label>
+<form method="post" action="/admin/livraisons" class="col">
+  <div class="card col">
+    <label>Nom du client<input name="client_name" required></label>
+    <label>Téléphone (WhatsApp)<input name="client_phone" required placeholder="77 123 45 67 ou +221…"></label>
+    <label>Adresse de livraison<input name="address" required></label>
+    <label>Note <span class="muted">(optionnel)</span><input name="note"></label>
+    <label>Alerte cuisine après (min)<input name="sla_minutes" type="number" min="5" max="180" value="${esc(config.DELIVERY_SLA_MINUTES)}" style="width:6rem"></label>
   </div>
   <h2 style="margin:.2rem 0">Articles</h2>
   ${menuUnavailable}
   ${sections}
-  <div style="position:sticky;bottom:0;background:#f6f3ee;padding:.6rem 0;display:flex;align-items:center;gap:1rem">
+  <div class="actionbar">
     <b>Total estimé : <span id="livtotal">0</span> F</b>
-    <button class="act" type="submit" style="padding:.6rem 1.1rem">Créer la commande</button>
+    <button class="act" type="submit">Créer la commande</button>
     <a href="/admin/livraisons">Annuler</a>
   </div>
 </form>

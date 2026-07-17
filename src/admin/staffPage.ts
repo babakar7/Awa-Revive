@@ -37,15 +37,15 @@ const BANNERS: Record<string, string> = {
 
 export function staffBanner(done?: string, err?: string): string {
   if (done && BANNERS[done])
-    return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
+    return `<div class="card success"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
   if (done && done.startsWith("sent:"))
-    return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ Planning envoyé à ${esc(done.slice(5))}.</span></div>`;
+    return `<div class="card success"><span class="ok">✓ Planning envoyé à ${esc(done.slice(5))}.</span></div>`;
   if (done && done.startsWith("sent-all:")) {
     const [, ok, nophone, noshift] = done.split(":");
     let msg = `${ok} planning(s) envoyé(s)`;
     if (Number(nophone) > 0) msg += ` · ${nophone} sans numéro`;
     if (Number(noshift) > 0) msg += ` · ${noshift} sans horaires`;
-    return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${esc(msg)}.</span></div>`;
+    return `<div class="card success"><span class="ok">✓ ${esc(msg)}.</span></div>`;
   }
   if (err === "no-phone")
     return `<div class="card warn">⚠️ Cette employée n'a pas de numéro WhatsApp. Ajoute-le dans le <a href="/admin/notifications#contacts">répertoire staff</a>.</div>`;
@@ -63,8 +63,8 @@ export interface StaffPlanningData {
 
 const scheduleBadge = (s: StaffSchedule) =>
   s.status === "published"
-    ? `<span class="badge" style="background:#1a7f37">publié</span>`
-    : `<span class="badge" style="background:#6e7781">brouillon</span>`;
+    ? `<span class="badge badge--green">publié</span>`
+    : `<span class="badge badge--gray">brouillon</span>`;
 
 export function renderStaffPlanning(data: StaffPlanningData): string {
   const { schedules, current, shifts, staff } = data;
@@ -74,7 +74,7 @@ export function renderStaffPlanning(data: StaffPlanningData): string {
 <h2>Planning du personnel 🗓</h2>
 <div class="card"><p class="muted">Aucun planning pour l'instant.</p>
 <form method="post" action="/admin/staff" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-  <input name="name" required placeholder="Nom du planning (ex. Semaine type)" style="flex:1;min-width:220px;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+  <input name="name" required placeholder="Nom du planning (ex. Semaine type)" style="flex:1;min-width:220px">
   <button class="act" type="submit">Créer un planning</button>
 </form></div>`;
   }
@@ -91,29 +91,29 @@ export function renderStaffPlanning(data: StaffPlanningData): string {
   }).replace(/</g, "\\u003c");
 
   const inlineForm = (action: string, label: string, extra = "", confirm?: string) =>
-    `<form method="post" action="${esc(action)}" style="display:inline"${confirm ? ` onsubmit="return confirm('${esc(confirm)}')"` : ""}>${extra}<button class="act" type="submit" style="padding:.4rem .7rem;font-size:.82rem">${esc(label)}</button></form>`;
+    `<form method="post" action="${esc(action)}" style="display:inline"${confirm ? ` onsubmit="return confirm('${esc(confirm)}')"` : ""}>${extra}<button class="act act--sm" type="submit">${esc(label)}</button></form>`;
 
   return `${data.banner}
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
   <h2 style="margin:.3rem 0">Planning du personnel 🗓</h2>
   <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center">
-    <a class="act" style="text-decoration:none;padding:.4rem .7rem;font-size:.82rem;background:#39414a" href="/admin/staff/${esc(current.id)}/print" target="_blank">🖨 Imprimer</a>
+    <a class="act act--sm act--ghost" href="/admin/staff/${esc(current.id)}/print" target="_blank">🖨 Imprimer</a>
     ${inlineForm(`/admin/staff/${current.id}/send-all`, "📲 Envoyer à toutes", "", `Envoyer « ${current.name} »${isDraft ? " (brouillon)" : ""} à toutes les employées ?`)}
   </div>
 </div>
 
 <div class="card" style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
   <form method="get" action="/admin/staff" style="margin:0">
-    <select name="s" onchange="this.form.submit()" style="padding:.45rem;border:1px solid #e4ddd3;border-radius:8px">${selector}</select>
+    <select name="s" onchange="this.form.submit()" >${selector}</select>
   </form>
   ${scheduleBadge(current)}
   ${inlineForm("/admin/staff/duplicate", "Dupliquer", `<input type="hidden" name="source_id" value="${esc(current.id)}"><input type="hidden" name="name" value="Copie de ${esc(current.name)}">`)}
-  ${inlineForm(`/admin/staff/${current.id}/rename`, "Renommer", `<input name="name" value="${esc(current.name)}" style="padding:.4rem;border:1px solid #e4ddd3;border-radius:8px;width:11rem">`)}
+  ${inlineForm(`/admin/staff/${current.id}/rename`, "Renommer", `<input name="name" value="${esc(current.name)}" style="width:11rem">`)}
   ${isDraft ? inlineForm(`/admin/staff/${current.id}/publish`, "Publier ✅", "", `Publier « ${current.name} » ? Il remplacera le planning de référence.`) : ""}
   ${isDraft ? inlineForm(`/admin/staff/${current.id}/delete`, "Supprimer 🗑", "", `Supprimer « ${current.name} » ?`) : ""}
   <a href="/admin/staff?new=1" style="font-size:.82rem">➕ Nouveau planning</a>
 </div>
-${(data as any).showNewForm ? `<div class="card"><form method="post" action="/admin/staff" style="display:flex;gap:.5rem;flex-wrap:wrap"><input name="name" required placeholder="Nom du planning" style="flex:1;min-width:220px;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px"><button class="act" type="submit">Créer</button></form></div>` : ""}
+${(data as any).showNewForm ? `<div class="card"><form method="post" action="/admin/staff" style="display:flex;gap:.5rem;flex-wrap:wrap"><input name="name" required placeholder="Nom du planning" style="flex:1;min-width:220px"><button class="act" type="submit">Créer</button></form></div>` : ""}
 
 <div id="savebar" style="display:none;position:sticky;top:0;z-index:6;background:#fff8f0;border:1px solid #f0d8b6;border-radius:8px;padding:.5rem .8rem;margin-bottom:.6rem;align-items:center;gap:.8rem">
   <span>⚠ Modifications non enregistrées</span>
@@ -122,7 +122,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
 
 <div class="card" style="overflow-x:auto">
   <p class="muted" style="margin:.1rem 0 .6rem">Clique une case pour saisir l'horaire · glisse un créneau sur une autre case pour le copier · les totaux déduisent la pause 13h30–14h30.</p>
-  <table id="staffgrid" style="min-width:720px"><thead><tr><th>Employée</th>${WEEKDAYS_FR.map((d) => `<th style="text-align:center">${d.slice(0, 3)}</th>`).join("")}<th style="text-align:right">Heures</th></tr></thead>
+  <table id="staffgrid" style="min-width:720px"><thead><tr><th>Employée</th>${WEEKDAYS_FR.map((d) => `<th style="text-align:center">${d.slice(0, 3)}</th>`).join("")}<th class="right">Heures</th></tr></thead>
   <tbody id="gridbody"></tbody>
   <tfoot><tr id="gridfoot" style="font-size:.78rem;color:#6e7781"></tr></tfoot></table>
 </div>
@@ -134,13 +134,13 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   <div style="background:#fff;border-radius:12px;padding:1.1rem;max-width:20rem;width:90%">
     <div id="editortitle" style="font-weight:600;margin-bottom:.6rem"></div>
     <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.6rem">
-      <label style="flex:1">Début<input type="time" id="ed_start" step="300" style="width:100%;padding:.4rem;border:1px solid #e4ddd3;border-radius:8px"></label>
-      <label style="flex:1">Fin<input type="time" id="ed_end" step="300" style="width:100%;padding:.4rem;border:1px solid #e4ddd3;border-radius:8px"></label>
+      <label style="flex:1">Début<input type="time" id="ed_start" step="300" style="width:100%"></label>
+      <label style="flex:1">Fin<input type="time" id="ed_end" step="300" style="width:100%"></label>
     </div>
     <div id="ed_presets" style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.7rem"></div>
     <div style="display:flex;gap:.5rem;justify-content:flex-end">
-      <button type="button" onclick="edRepos()" style="border:1px solid #e4ddd3;background:#fff;border-radius:8px;padding:.4rem .7rem;cursor:pointer">Repos</button>
-      <button type="button" onclick="edClose()" style="border:1px solid #e4ddd3;background:#fff;border-radius:8px;padding:.4rem .7rem;cursor:pointer">Annuler</button>
+      <button type="button" onclick="edRepos()" class="act act--sm act--ghost">Repos</button>
+      <button type="button" onclick="edClose()" class="act act--sm act--ghost">Annuler</button>
       <button type="button" class="act" onclick="edOk()" style="padding:.4rem .9rem">OK</button>
     </div>
   </div>
@@ -225,7 +225,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
     var seen = {}, pres = [];
     Object.keys(ST.cells).forEach(function(k){ var v=ST.cells[k], key=v.s+"-"+v.e; if(!seen[key]){ seen[key]=1; pres.push(v); } });
     document.getElementById("ed_presets").innerHTML = pres.slice(0,6).map(function(v){
-      return "<button type='button' onclick='edPreset("+v.s+","+v.e+")' style='border:1px solid #e4ddd3;background:#faf8f4;border-radius:6px;padding:.2rem .45rem;font-size:.75rem;cursor:pointer'>"+fmt(v.s)+"–"+fmt(v.e)+"</button>";
+      return "<button type='button' onclick='edPreset("+v.s+","+v.e+")' class='act act--sm act--ghost'>"+fmt(v.s)+"–"+fmt(v.e)+"</button>";
     }).join("");
     document.getElementById("celleditor").style.display="flex";
   };

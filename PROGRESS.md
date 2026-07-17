@@ -1542,6 +1542,29 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     message) + intégration (seed idempotent, grille save/rejet, 1-seul-publié,
     duplicate/delete/print, envois).
 
+- **4.40 — Refonte UI de l'admin (17/07).** Design system aux couleurs Revive
+  dans le CSS partagé (`admin/layout.ts`, seule feuille de style) : tokens
+  `:root` (fond crème `#faf7f2`, violet marque `#6b4a6f` = celui des
+  reçus/devis/cartes cadeaux, 4 niveaux de texte, sémantiques vert/rouge/ambre
+  réservés aux statuts), sidebar **aubergine** avec état actif violet, topbar
+  affinée, favicon 🤖. Composants : cartes, stats (chiffres tabulaires), tables
+  (th uppercase, hover), badges par classes (`badge--gray/violet/red/amber/
+  blue/green` — `helpers.badge()` mappe les statuts), boutons `.act` violet +
+  variantes `--sm/--danger/--ghost`, styles de base des inputs natifs (focus
+  ring violet, `accent-color`), bulles de chat d'Awa en violet doux, bannière
+  `.card.success`, utilitaires `.row/.between/.col/.actionbar/.nowrap/.right`.
+  - **Sweep inline → classes** dans les 10 pages (~277 `style="…"` → il en
+    reste ~180, uniquement du layout ponctuel : widths/margins) : suppression
+    des 4 `const INPUT`, boutons/badges/bannières unifiés, `.actionbar` sticky
+    (factures/devis), page login au violet. Pages print (factures/staff) :
+    CSS locaux autonomes non touchés.
+  - **Vérification par screenshots réels** (rendu statique des `renderX()` +
+    `layout({badges})` sans DB → Chrome headless) : dashboard, conversation,
+    livraisons, menu (vue + édition inline), devis, desktop + mobile 390px.
+    Fix mobile : `.card{overflow-x:auto}` (tables défilent dans la carte).
+  - Aucun changement de routes, de champs de formulaire ni de logique ;
+    JS client existant conservé (confirm, totaux live, drag&drop staff).
+
 ## 5. Chronologie condensée
 
 - **17/07 — « Nouveau client par défaut » : la question du compte ne vient plus

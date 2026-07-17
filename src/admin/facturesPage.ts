@@ -48,7 +48,7 @@ const BANNERS: Record<string, string> = {
 
 export function facturesBanner(done?: string, err?: string): string {
   if (done && BANNERS[done])
-    return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
+    return `<div class="card success"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
   if (err) return `<div class="card warn">⚠️ ${esc(err)}</div>`;
   return "";
 }
@@ -56,8 +56,8 @@ export function facturesBanner(done?: string, err?: string): string {
 function sentCell(inv: Invoice): string {
   if (inv.sent_status === "sent") return `<span class="ok">✓ envoyée</span>`;
   if (inv.sent_status === "window_closed")
-    return `<span style="color:#9a6700">fenêtre fermée</span>`;
-  if (inv.sent_status === "failed") return `<span style="color:#cf222e">✗ échec</span>`;
+    return `<span style="color:var(--warn)">fenêtre fermée</span>`;
+  if (inv.sent_status === "failed") return `<span class="muted" style="color:var(--danger)">✗ échec</span>`;
   return `<span class="muted">—</span>`;
 }
 
@@ -71,22 +71,20 @@ export function renderFacturesList(rows: Invoice[], banner: string): string {
 <td>${esc(inv.client_name)}${inv.client_phone ? `<br><span class="muted">+${esc(inv.client_phone)}</span>` : ""}</td>
 <td style="white-space:nowrap">${fcfa(inv.total_xof)}</td>
 <td class="hide-sm">${sentCell(inv)}</td>
-<td><a class="act" style="text-decoration:none;padding:.35rem .6rem;font-size:.8rem" href="/admin/factures/${esc(inv.id)}">Voir</a></td>
+<td><a class="act act--sm act--ghost" href="/admin/factures/${esc(inv.id)}">Voir</a></td>
 </tr>`,
         )
         .join("")}</tbody></table>`
     : `<p class="muted">Aucune facture pour l'instant.</p>`;
   return `${banner}
-<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+<div class="row between">
   <h2 style="margin:.4rem 0">Factures 🧾</h2>
-  <a href="/admin/factures/new" class="act" style="text-decoration:none;padding:.5rem .9rem;border-radius:8px">➕ Nouvelle facture</a>
+  <a href="/admin/factures/new" class="act">➕ Nouvelle facture</a>
 </div>
 <div class="card">${table}</div>`;
 }
 
 // ---------- create form ----------
-
-const INPUT = "width:100%;padding:.55rem;border:1px solid #e4ddd3;border-radius:8px";
 
 export function renderFactureForm(candidates: InvoiceCandidate[], banner: string): string {
   // Candidate data for the prefill picker — embedded once, script-injection guarded.
@@ -115,7 +113,7 @@ export function renderFactureForm(candidates: InvoiceCandidate[], banner: string
     candidates.length
       ? `<div class="card">
     <label>Partir d'un paiement récent <span class="muted">(optionnel — préremplit la facture)</span>
-      <select id="cand" style="${INPUT}">
+      <select id="cand">
         <option value="">— saisie manuelle —</option>
         ${options}
       </select>
@@ -123,20 +121,20 @@ export function renderFactureForm(candidates: InvoiceCandidate[], banner: string
   </div>`
       : ""
   }
-  <div class="card" style="display:flex;flex-direction:column;gap:.6rem">
-    <label>Nom du client / entreprise<input name="client_name" id="client_name" required style="${INPUT}"></label>
-    <label>Téléphone WhatsApp <span class="muted">(optionnel — requis pour l'envoi)</span><input name="client_phone" id="client_phone" placeholder="77 123 45 67 ou +221…" style="${INPUT}"></label>
-    <label>Référence / à l'attention de <span class="muted">(optionnel)</span><input name="client_ref" id="client_ref" placeholder="Société Teranga Conseil SARL" style="${INPUT}"></label>
+  <div class="card col">
+    <label>Nom du client / entreprise<input name="client_name" id="client_name" required></label>
+    <label>Téléphone WhatsApp <span class="muted">(optionnel — requis pour l'envoi)</span><input name="client_phone" id="client_phone" placeholder="77 123 45 67 ou +221…"></label>
+    <label>Référence / à l'attention de <span class="muted">(optionnel)</span><input name="client_ref" id="client_ref" placeholder="Société Teranga Conseil SARL"></label>
   </div>
 
   <h2 style="margin:.2rem 0">Lignes</h2>
   <div class="card">
     <div id="lines"></div>
-    <button type="button" class="act" id="addline" style="background:#39414a;padding:.4rem .8rem;margin-top:.4rem">+ Ajouter une ligne</button>
+    <button type="button" class="act act--sm act--ghost" id="addline" style="margin-top:.4rem">+ Ajouter une ligne</button>
   </div>
 
-  <div class="card" style="display:flex;flex-direction:column;gap:.6rem">
-    <label>Note <span class="muted">(optionnel — bas de facture)</span><input name="note" id="note" style="${INPUT}"></label>
+  <div class="card col">
+    <label>Note <span class="muted">(optionnel — bas de facture)</span><input name="note" id="note"></label>
   </div>
 
   <input type="hidden" name="source_kind" id="source_kind" value="manual">
@@ -145,9 +143,9 @@ export function renderFactureForm(candidates: InvoiceCandidate[], banner: string
   <input type="hidden" name="payment_ref" id="payment_ref" value="">
   <input type="hidden" name="paid_at" id="paid_at" value="">
 
-  <div style="position:sticky;bottom:0;background:#f6f3ee;padding:.6rem 0;display:flex;align-items:center;gap:1rem">
+  <div class="actionbar">
     <b>Total : <span id="factotal">0</span> F</b>
-    <button class="act" type="submit" style="padding:.6rem 1.1rem">Créer la facture</button>
+    <button class="act" type="submit" >Créer la facture</button>
     <a href="/admin/factures">Annuler</a>
   </div>
 </form>
@@ -160,9 +158,9 @@ export function renderFactureForm(candidates: InvoiceCandidate[], banner: string
     var d = document.createElement('div');
     d.style.cssText = 'display:flex;gap:.4rem;margin-bottom:.4rem;align-items:center';
     d.innerHTML =
-      '<input name="line_label_'+i+'" placeholder="Désignation" value="'+(label||'').replace(/"/g,'&quot;')+'" style="flex:1;padding:.45rem;border:1px solid #e4ddd3;border-radius:8px">'+
-      '<input name="line_qty_'+i+'" type="number" min="1" max="99" value="'+(qty||1)+'" title="Qté" style="width:4rem;padding:.45rem;border:1px solid #e4ddd3;border-radius:8px" oninput="factotal()">'+
-      '<input name="line_unit_'+i+'" type="number" min="0" value="'+(unit==null?'':unit)+'" placeholder="PU" title="Prix unitaire" style="width:6rem;padding:.45rem;border:1px solid #e4ddd3;border-radius:8px" oninput="factotal()">'+
+      '<input name="line_label_'+i+'" placeholder="Désignation" value="'+(label||'').replace(/"/g,'&quot;')+'" style="flex:1">'+
+      '<input name="line_qty_'+i+'" type="number" min="1" max="99" value="'+(qty||1)+'" title="Qté" style="width:4rem" oninput="factotal()">'+
+      '<input name="line_unit_'+i+'" type="number" min="0" value="'+(unit==null?'':unit)+'" placeholder="PU" title="Prix unitaire" style="width:6rem" oninput="factotal()">'+
       '<button type="button" title="Retirer" style="border:none;background:transparent;cursor:pointer;font-size:1.1rem">✕</button>';
     d.querySelector('button').onclick = function(){ d.remove(); factotal(); };
     lines.appendChild(d); i++;
@@ -201,9 +199,9 @@ export function renderFactureForm(candidates: InvoiceCandidate[], banner: string
 // ---------- view ----------
 
 function linesTable(lines: InvoiceLine[]): string {
-  return `<table><thead><tr><th>Désignation</th><th style="text-align:right">Qté</th><th style="text-align:right">PU</th><th style="text-align:right">Total</th></tr></thead><tbody>${lines
+  return `<table><thead><tr><th>Désignation</th><th class="right">Qté</th><th class="right">PU</th><th class="right">Total</th></tr></thead><tbody>${lines
     .map(
-      (l) => `<tr><td>${esc(l.label)}</td><td style="text-align:right">${l.qty}</td><td style="text-align:right">${fcfa(l.unit_xof)}</td><td style="text-align:right"><b>${fcfa(l.total_xof)}</b></td></tr>`,
+      (l) => `<tr><td>${esc(l.label)}</td><td class="right">${l.qty}</td><td class="right">${fcfa(l.unit_xof)}</td><td class="right"><b>${fcfa(l.total_xof)}</b></td></tr>`,
     )
     .join("")}</tbody></table>`;
 }
@@ -216,9 +214,9 @@ export function renderFactureView(inv: Invoice, banner: string): string {
        </form>`
     : `<span class="muted">Pas de numéro — envoi WhatsApp impossible</span>`;
   return `${banner}
-<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+<div class="row between">
   <h2 style="margin:.4rem 0">Facture ${esc(inv.number)}</h2>
-  <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+  <div class="row">
     <a class="act" style="text-decoration:none;padding:.5rem .9rem;background:#39414a" href="/admin/factures/${esc(inv.id)}/print" target="_blank">🖨 Imprimer</a>
     ${sendBtn}
   </div>

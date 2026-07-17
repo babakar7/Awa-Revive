@@ -26,12 +26,10 @@ const BANNERS: Record<string, string> = {
 
 export function menuBanner(done?: string, err?: string): string {
   if (done && BANNERS[done])
-    return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
+    return `<div class="card success"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
   if (err) return `<div class="card warn">⚠️ ${esc(err)}</div>`;
   return "";
 }
-
-const INPUT = "padding:.45rem;border:1px solid #e4ddd3;border-radius:8px";
 
 /** Ordered unique categories (for the datalist + group order). */
 function categoriesInOrder(items: MenuItemView[]): string[] {
@@ -46,19 +44,19 @@ function fieldsRow(prefix: string, it: MenuItemView | null, cats: string[]): str
   const catV = it ? esc(it.category) : "";
   const descV = it ? esc(it.description) : "";
   const fav = it?.favourite ? " checked" : "";
-  return `<input name="name" required maxlength="80" value="${nameV}" placeholder="Nom" style="${INPUT};flex:2;min-width:9rem">
-<input name="price_xof" required type="number" min="1" value="${priceV}" placeholder="Prix" style="${INPUT};width:6rem">
-<input name="category" required maxlength="40" list="${prefix}-cats" value="${catV}" placeholder="Catégorie" style="${INPUT};flex:1;min-width:8rem">
-<input name="description" maxlength="200" value="${descV}" placeholder="Description (optionnel)" style="${INPUT};flex:3;min-width:10rem">
+  return `<input name="name" required maxlength="80" value="${nameV}" placeholder="Nom" style="flex:2;min-width:9rem">
+<input name="price_xof" required type="number" min="1" value="${priceV}" placeholder="Prix" style="width:6rem">
+<input name="category" required maxlength="40" list="${prefix}-cats" value="${catV}" placeholder="Catégorie" style="flex:1;min-width:8rem">
+<input name="description" maxlength="200" value="${descV}" placeholder="Description (optionnel)" style="flex:3;min-width:10rem">
 <label style="display:flex;align-items:center;gap:.3rem;white-space:nowrap"><input type="checkbox" name="favourite"${fav}> ⭐</label>
 <datalist id="${prefix}-cats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>`;
 }
 
 function editRow(it: MenuItemView, cats: string[]): string {
   return `<tr><td colspan="5">
-<form method="post" action="/admin/menu/items/${esc(it.id)}/update" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+<form method="post" action="/admin/menu/items/${esc(it.id)}/update" class="row">
   ${fieldsRow("edit", it, cats)}
-  <button class="act" type="submit" style="padding:.45rem .8rem">Enregistrer</button>
+  <button class="act act--sm" type="submit">Enregistrer</button>
   <a href="/admin/menu">Annuler</a>
   <span class="muted" style="font-size:.75rem">id ${esc(it.id)}</span>
 </form></td></tr>`;
@@ -71,9 +69,9 @@ function viewRow(it: MenuItemView): string {
 <td class="hide-sm">${esc(it.description)}</td>
 <td class="hide-sm"><span class="muted" style="font-size:.72rem">${esc(it.id)}</span></td>
 <td style="white-space:nowrap">
-  <a class="act" style="text-decoration:none;padding:.3rem .55rem;font-size:.78rem" href="/admin/menu?edit=${esc(it.id)}">Modifier</a>
+  <a class="act act--sm act--ghost" href="/admin/menu?edit=${esc(it.id)}">Modifier</a>
   <form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" style="display:inline" onsubmit="return confirm('Retirer « ${esc(it.name)} » du menu ?')">
-    <button class="act" type="submit" style="padding:.3rem .55rem;font-size:.78rem">Retirer</button>
+    <button class="act act--sm act--ghost" type="submit">Retirer</button>
   </form>
 </td></tr>`;
 }
@@ -100,7 +98,7 @@ export function renderMenuPage(opts: { items: MenuItemView[]; editId?: string; b
 <div class="card"><table><tbody>${retired
         .map(
           (it) => `<tr><td><b>${esc(it.name)}</b> <span class="muted">— ${esc(it.price_xof)} F · ${esc(it.category)}</span></td>
-<td style="white-space:nowrap"><form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" style="display:inline"><button class="act" type="submit" style="padding:.3rem .55rem;font-size:.78rem">Remettre au menu</button></form></td></tr>`,
+<td style="white-space:nowrap"><form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" style="display:inline"><button class="act act--sm" type="submit">Remettre au menu</button></form></td></tr>`,
         )
         .join("")}</tbody></table></div></details>`
     : "";
@@ -112,9 +110,9 @@ ${groups || `<p class="muted">Menu vide.</p>`}
 ${retiredBlock}
 <h3 style="margin:1.4rem 0 .3rem">➕ Ajouter un article</h3>
 <div class="card">
-  <form method="post" action="/admin/menu/items" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+  <form method="post" action="/admin/menu/items" class="row">
     ${fieldsRow("add", null, cats)}
-    <button class="act" type="submit" style="padding:.5rem .9rem">Ajouter</button>
+    <button class="act" type="submit">Ajouter</button>
   </form>
   <p class="muted" style="font-size:.75rem;margin:.5rem 0 0">⭐ = incontournable (proposé sur WhatsApp après une réservation, max 10). L'ID est généré automatiquement depuis le nom.</p>
 </div>`;

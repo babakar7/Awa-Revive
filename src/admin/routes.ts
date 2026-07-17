@@ -150,7 +150,7 @@ h1{font-size:1.15rem;margin:0 0 .3rem}
 p{color:#6e7781;font-size:.9rem;margin:0 0 1.1rem}
 label{display:block;font-size:.82rem;font-weight:600;margin:.7rem 0 .3rem;color:#424a53}
 input{width:100%;padding:.55rem .75rem;border:1px solid #e4ddd3;border-radius:8px;font-size:1rem}
-button{margin-top:1rem;width:100%;background:#1a7f37;color:#fff;border:none;border-radius:8px;padding:.65rem;font-size:.95rem;font-weight:600;cursor:pointer}
+button{margin-top:1rem;width:100%;background:#6b4a6f;color:#fff;border:none;border-radius:8px;padding:.65rem;font-size:.95rem;font-weight:600;cursor:pointer}
 button:hover{background:#166f30}
 .err{background:#fff8f0;border:1px solid #f0d8b6;border-radius:8px;padding:.55rem .7rem;margin-bottom:.9rem;font-size:.88rem}
 .muted{color:#6e7781;font-size:.78rem;margin-top:1rem;text-align:center}
@@ -903,13 +903,13 @@ ${open ? `<p class="muted">${open} handoff(s) à traiter — un handoff = un cli
         const openCards = open
           .map(
             (r) => `<div class="card ${r.severity === "severe" ? "warn" : ""}">
-${r.severity === "severe" ? `<span class="badge" style="background:#cf222e">🔴 grave</span> ` : ""}${outcomeBadge(r.outcome)} <span class="badge" style="background:#6e7781">${escapeHtml(r.need_category)}</span>
+${r.severity === "severe" ? `<span class="badge badge--red">🔴 grave</span> ` : ""}${outcomeBadge(r.outcome)} <span class="badge badge--gray">${escapeHtml(r.need_category)}</span>
 <div style="margin:.45rem 0"><a href="/admin/conversations/${r.client_id}"><b>${escapeHtml(r.client_name ?? "?")}</b></a> <span class="muted">+${escapeHtml(r.wa_phone)} · ${ago(r.created_at)}</span></div>
 <div>${escapeHtml(r.summary ?? "")}</div>
 ${r.suggested_action ? `<div class="muted" style="margin-top:.25rem">→ ${escapeHtml(r.suggested_action)}</div>` : ""}
 <div style="margin-top:.55rem">
 <form class="inline" method="post" action="/admin/reviews/${r.id}/done"><button class="act">✅ Traité</button></form>
-<form class="inline" method="post" action="/admin/reviews/${r.id}/ignore" style="margin-left:.4rem"><button class="act" style="background:#6e7781">Ignorer</button></form>
+<form class="inline" method="post" action="/admin/reviews/${r.id}/ignore" style="margin-left:.4rem"><button class="act act--sm act--ghost">Ignorer</button></form>
 </div>
 </div>`,
           )
@@ -1001,7 +1001,7 @@ ${openCards || `<div class="card"><span class="ok">✓ Personne à reprendre —
         ]);
 
         const banner = done
-          ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${
+          ? `<div class="card success"><span class="ok">✓ ${
               done === "link"
                 ? "Fiche liée — Awa reconnaît maintenant ce client."
                 : done === "link-nowa"
@@ -1032,7 +1032,7 @@ ${openCards || `<div class="card"><span class="ok">✓ Personne à reprendre —
                 const plans = plansByContact.get(c.id) ?? [];
                 const badges =
                   (plans.length
-                    ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml(plans.join(" · "))}</span>`
+                    ? ` <span class="badge badge--violet">🎫 ${escapeHtml(plans.join(" · "))}</span>`
                     : "") +
                   ` <span class="muted">(match : ${c.matchedBy.join(" + ")})</span>`;
                 return `<tr>
@@ -1057,7 +1057,7 @@ ${
 }
 <form class="inline" method="post" action="/admin/crm/link-dismiss" style="margin-top:.5rem" onsubmit="return confirm('Ignorer cette demande de liaison ?')">
 <input type="hidden" name="request" value="${escapeHtml(r.id)}">
-<button class="act" style="background:#6e7781">Ignorer</button>
+<button class="act act--sm act--ghost">Ignorer</button>
 </form>
 </div>`;
           })
@@ -1084,10 +1084,10 @@ ${linkCards}`
               const plans = plansByContact.get(c.id) ?? [];
               const badges =
                 (memberIds.has(c.id)
-                  ? ` <span class="badge" style="background:#0969da">👤 compte membre</span>`
+                  ? ` <span class="badge badge--blue">👤 compte membre</span>`
                   : "") +
                 (plans.length
-                  ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml(plans.join(" · "))}</span>`
+                  ? ` <span class="badge badge--violet">🎫 ${escapeHtml(plans.join(" · "))}</span>`
                   : "");
               const fate = !plan
                 ? `<span class="muted">—</span>`
@@ -1117,10 +1117,10 @@ ${linkCards}`
 <form class="inline" method="post" action="/admin/crm/merge-dismiss" style="margin-left:.4rem" onsubmit="return confirm('Marquer ce groupe comme traité ?\\n\\nIl disparaîtra de la liste (restaurable), et réapparaîtra tout seul si ses fiches changent.')">
 <input type="hidden" name="key" value="${escapeHtml(g.key)}">
 <input type="hidden" name="group" value="${ids}">
-<button class="act" style="background:#6e7781">✅ Traité dans Wix</button>
+<button class="act act--sm act--ghost">✅ Traité dans Wix</button>
 </form>`;
           const html = `<div class="card ${hasPlan ? "warn" : ""}">
-<b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro${hasPlan ? ` <span class="badge" style="background:#cf222e">abonnée non reconnue</span>` : ""}
+<b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro${hasPlan ? ` <span class="badge badge--red">abonnée non reconnue</span>` : ""}
 <table><tr><th>Fiche</th><th>Numéro(s) enregistré(s)</th><th class="hide-sm">Créée</th><th>Sort</th></tr>${rows}</table>
 <div style="margin-top:.5rem">${action}</div>
 </div>`;
@@ -1159,7 +1159,7 @@ ${priority.sort(byActionable).map((g) => g.html).join("")}`
 <td><form class="inline" method="post" action="/admin/crm/merge-restore">
 <input type="hidden" name="key" value="${escapeHtml(g.key)}">
 <input type="hidden" name="sig" value="${escapeHtml(g.signature)}">
-<button class="act" style="background:#6e7781">Ré-afficher</button>
+<button class="act act--sm act--ghost">Ré-afficher</button>
 </form></td></tr>`,
               )
               .join("")}</table></details></div>`
@@ -1190,13 +1190,13 @@ ${rest.sort(byActionable).map((g) => g.html).join("")}`
         const noPhoneRow = (c: (typeof audit.noPhone)[number]) => {
           const badges =
             (noPhoneActivity.upcoming.has(c.id)
-              ? ` <span class="badge" style="background:#1a7f37">📅 résa à venir</span>`
+              ? ` <span class="badge badge--green">📅 résa à venir</span>`
               : "") +
             (noPhoneActivity.recent.has(c.id)
-              ? ` <span class="badge" style="background:#57606a">📅 résa &lt; 30 j</span>`
+              ? ` <span class="badge badge--gray">📅 résa &lt; 30 j</span>`
               : "") +
             ((plansByContact.get(c.id) ?? []).length
-              ? ` <span class="badge" style="background:#8250df">🎫 ${escapeHtml((plansByContact.get(c.id) ?? []).join(" · "))}</span>`
+              ? ` <span class="badge badge--violet">🎫 ${escapeHtml((plansByContact.get(c.id) ?? []).join(" · "))}</span>`
               : "");
           return `<tr><td>${escapeHtml(c.name)}${badges}</td><td>${escapeHtml(c.email ?? "—")}</td></tr>`;
         };
@@ -1450,7 +1450,7 @@ ${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à 
         const hours = local?.hours ?? "";
 
         const banner = done
-          ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${
+          ? `<div class="card success"><span class="ok">✓ ${
               done === "photo-err"
                 ? "Description/adresse enregistrées. La photo n'a PAS pu être changée (voir ci-dessous)."
                 : "Profil WhatsApp Business mis à jour."
@@ -1477,9 +1477,9 @@ ${
     : ""
 }
 <form method="post" action="/admin/profile" style="display:flex;flex-direction:column;gap:.8rem">
-<label>Description<textarea name="description" rows="5" maxlength="512" style="width:100%;padding:.55rem .8rem;border:1px solid #e4ddd3;border-radius:10px;font:inherit">${escapeHtml(description)}</textarea></label>
-<label>Adresse<input type="text" name="address" maxlength="256" value="${escapeHtml(address)}" style="width:100%;padding:.55rem .8rem;border:1px solid #e4ddd3;border-radius:10px;font:inherit"></label>
-<label>Horaires <span class="muted">(pas de champ dédié côté WhatsApp — ajoutés automatiquement à la fin de la description)</span><textarea name="hours" rows="4" style="width:100%;padding:.55rem .8rem;border:1px solid #e4ddd3;border-radius:10px;font:inherit">${escapeHtml(hours)}</textarea></label>
+<label>Description<textarea name="description" rows="5" maxlength="512" style="width:100%">${escapeHtml(description)}</textarea></label>
+<label>Adresse<input type="text" name="address" maxlength="256" value="${escapeHtml(address)}" style="width:100%"></label>
+<label>Horaires <span class="muted">(pas de champ dédié côté WhatsApp — ajoutés automatiquement à la fin de la description)</span><textarea name="hours" rows="4" style="width:100%">${escapeHtml(hours)}</textarea></label>
 ${photoSection}
 <button class="act" style="align-self:flex-start">Enregistrer</button>
 </form>
@@ -1677,7 +1677,7 @@ ${photoSection}
 
       function banner(done?: string, err?: string): string {
         if (done && NOTIF_BANNERS[done]) {
-          return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${escapeHtml(NOTIF_BANNERS[done])}</span></div>`;
+          return `<div class="card success"><span class="ok">✓ ${escapeHtml(NOTIF_BANNERS[done])}</span></div>`;
         }
         if (err) return `<div class="card warn">⚠️ ${escapeHtml(err)}</div>`;
         return "";

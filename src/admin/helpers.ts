@@ -25,21 +25,22 @@ export function fmtFcfa(n: number): string {
   return `${Number(n).toLocaleString("fr-FR")} F`;
 }
 
-export const STATUS_COLORS: Record<string, string> = {
-  BOOKED: "#1a7f37",
-  ACTIVATED: "#1a7f37",
-  PAID: "#9a6700",
-  AWAITING_PAYMENT: "#0969da",
-  DRAFT: "#6e7781",
-  EXPIRED: "#6e7781",
-  CANCELLED: "#6e7781",
-  REFUND_NEEDED: "#cf222e",
-  REFUNDED: "#8250df",
+/** Status → badge modifier class (colors live in layout.ts CSS tokens). */
+export const STATUS_BADGE_CLASS: Record<string, string> = {
+  BOOKED: "badge--green",
+  ACTIVATED: "badge--green",
+  PAID: "badge--amber",
+  AWAITING_PAYMENT: "badge--blue",
+  DRAFT: "badge--gray",
+  EXPIRED: "badge--gray",
+  CANCELLED: "badge--gray",
+  REFUND_NEEDED: "badge--red",
+  REFUNDED: "badge--violet",
 };
 
 export function badge(status: string): string {
-  const color = STATUS_COLORS[status] ?? "#6e7781";
-  return `<span class="badge" style="background:${color}">${escapeHtml(status)}</span>`;
+  const cls = STATUS_BADGE_CLASS[status] ?? "badge--gray";
+  return `<span class="badge ${cls}">${escapeHtml(status)}</span>`;
 }
 
 /** "il y a Xh" style relative time for lists. */

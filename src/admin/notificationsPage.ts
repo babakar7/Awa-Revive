@@ -101,32 +101,32 @@ function ruleForm(edit: NotificationRuleRow | null): string {
   const sel = (a: string, b: string) => (a === b ? " selected" : "");
   return `
 <form method="post" action="${action}" class="notif-form" style="display:flex;flex-direction:column;gap:.6rem">
-  <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+  <div class="row">
     <label style="flex:1;min-width:200px">Nom de la règle
-      <input name="label" required value="${v(edit?.label)}" placeholder="Aquabikes à l'eau" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+      <input name="label" required value="${v(edit?.label)}" placeholder="Aquabikes à l'eau" style="width:100%">
     </label>
     <label style="min-width:180px">Type
-      <select name="kind" id="kind-select" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+      <select name="kind" id="kind-select" style="width:100%">
         <option value="class_reminder"${sel("class_reminder", kind)}>Avant un cours</option>
         <option value="fixed_schedule"${sel("fixed_schedule", kind)}>Jour + heure fixes</option>
       </select>
     </label>
   </div>
 
-  <fieldset class="kf class-fields" style="border:1px solid #e4ddd3;border-radius:8px;padding:.6rem">
+  <fieldset class="kf class-fields" style="border:1px solid var(--border);border-radius:8px;padding:.6rem">
     <legend class="muted">Avant un cours</legend>
-    <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+    <div class="row">
       <label style="flex:1;min-width:160px">Motif du nom de cours <span class="muted">(vide = tous)</span>
-        <input name="class_pattern" value="${v(edit?.class_pattern)}" placeholder="aquabike" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+        <input name="class_pattern" value="${v(edit?.class_pattern)}" placeholder="aquabike" style="width:100%">
       </label>
       <label style="flex:1;min-width:160px">Exclure les cours contenant <span class="muted">(vide = aucun)</span>
-        <input name="exclude_pattern" value="${v(edit?.exclude_pattern)}" placeholder="reformer" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+        <input name="exclude_pattern" value="${v(edit?.exclude_pattern)}" placeholder="reformer" style="width:100%">
       </label>
       <label style="min-width:120px">Minutes avant
-        <input name="lead_minutes" type="number" min="0" max="1440" value="${v(edit?.lead_minutes)}" placeholder="15" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+        <input name="lead_minutes" type="number" min="0" max="1440" value="${v(edit?.lead_minutes)}" placeholder="15" style="width:100%">
       </label>
       <label style="min-width:150px">Anti dos-à-dos (min) <span class="muted">(vide = off)</span>
-        <input name="suppress_gap_minutes" type="number" min="0" max="240" value="${v(edit?.suppress_gap_minutes)}" placeholder="15" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+        <input name="suppress_gap_minutes" type="number" min="0" max="240" value="${v(edit?.suppress_gap_minutes)}" placeholder="15" style="width:100%">
       </label>
     </div>
     <label style="display:flex;align-items:center;gap:.4rem;margin-top:.5rem">
@@ -134,31 +134,31 @@ function ruleForm(edit: NotificationRuleRow | null): string {
       Cours collectifs uniquement <span class="muted">(exclut les rendez-vous individuels)</span>
     </label>
     <label style="display:block;margin-top:.5rem">Destinataire
-      <select name="recipient_kind" id="rkind-select" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+      <select name="recipient_kind" id="rkind-select" style="width:100%">
         <option value="phone"${sel("phone", rkind)}>Un numéro fixe (gardien…)</option>
         <option value="coach"${sel("coach", rkind)}>Le coach du cours (via répertoire)</option>
       </select>
     </label>
   </fieldset>
 
-  <fieldset class="kf fixed-fields" style="border:1px solid #e4ddd3;border-radius:8px;padding:.6rem">
+  <fieldset class="kf fixed-fields" style="border:1px solid var(--border);border-radius:8px;padding:.6rem">
     <legend class="muted">Jour + heure fixes</legend>
-    <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+    <div class="row">
       <label style="flex:1;min-width:200px">Jours <span class="muted">(0=dim … 6=sam, séparés par des virgules)</span>
-        <input name="days_of_week" value="${v(edit?.days_of_week)}" placeholder="6" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+        <input name="days_of_week" value="${v(edit?.days_of_week)}" placeholder="6" style="width:100%">
       </label>
       <label style="min-width:120px">Heure (HH:MM)
-        <input name="send_time" value="${v(edit?.send_time)}" placeholder="10:00" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+        <input name="send_time" value="${v(edit?.send_time)}" placeholder="10:00" style="width:100%">
       </label>
     </div>
   </fieldset>
 
   <label class="phone-field">Numéro destinataire <span class="muted">(pour un numéro fixe ou une règle horaire)</span>
-    <input name="recipient_phone" value="${v(edit?.recipient_phone)}" placeholder="+224 620 95 51 30" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+    <input name="recipient_phone" value="${v(edit?.recipient_phone)}" placeholder="+224 620 95 51 30" style="width:100%">
   </label>
 
   <label>Message
-    <textarea name="message_template" rows="3" style="width:100%;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px;font:inherit">${v(edit?.message_template)}</textarea>
+    <textarea name="message_template" rows="3" style="width:100%">${v(edit?.message_template)}</textarea>
   </label>
   <p class="muted" style="margin:.1rem 0">Variables : <code>{class_name} {date} {start_time} {end_time} {coach} {booked_count} {open_spots} {total_spots}</code>.
   Ne PAS retaper « ${esc("merci de ne pas répondre")} » : la signature automatique est ajoutée à chaque envoi.</p>
@@ -211,9 +211,9 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
 <td>${lastLine}</td>
 <td style="white-space:nowrap">
   <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/toggle"><button class="act" style="background:${r.enabled ? "#9a6700" : "#1a7f37"}">${r.enabled ? "Pause" : "Activer"}</button></form>
-  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/test" style="margin-left:.3rem"><button class="act" style="background:#0969da">Test</button></form>
+  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/test" style="margin-left:.3rem"><button class="act act--sm act--ghost">Test</button></form>
   <a href="/admin/notifications?edit=${r.id}" style="margin-left:.3rem">Éditer</a>
-  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/delete" style="margin-left:.3rem" onsubmit="return confirm('Supprimer cette règle ?')"><button class="act" style="background:#cf222e">✕</button></form>
+  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/delete" style="margin-left:.3rem" onsubmit="return confirm('Supprimer cette règle ?')"><button class="act act--sm act--danger">✕</button></form>
 </td>
 </tr>`;
     })
@@ -222,12 +222,12 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
   const contactRows = d.contacts
     .map(
       (c) => `<tr${c.muted ? ' style="opacity:.5"' : ""}>
-<td><b>${esc(c.name)}</b> ${c.muted ? `<span class="badge" style="background:#6e7781">muet</span>` : ""}</td>
+<td><b>${esc(c.name)}</b> ${c.muted ? `<span class="badge badge--gray">muet</span>` : ""}</td>
 <td>+${esc(c.phone.replace(/^\+/, ""))}</td>
 <td>${esc(c.role)}</td>
 <td style="white-space:nowrap">
-  <form class="inline" method="post" action="/admin/notifications/contacts/${c.id}/mute"><button class="act" style="background:#6e7781">${c.muted ? "Réactiver" : "Muter"}</button></form>
-  <form class="inline" method="post" action="/admin/notifications/contacts/${c.id}/delete" style="margin-left:.3rem" onsubmit="return confirm('Supprimer ce contact ?')"><button class="act" style="background:#cf222e">✕</button></form>
+  <form class="inline" method="post" action="/admin/notifications/contacts/${c.id}/mute"><button class="act act--sm act--ghost">${c.muted ? "Réactiver" : "Muter"}</button></form>
+  <form class="inline" method="post" action="/admin/notifications/contacts/${c.id}/delete" style="margin-left:.3rem" onsubmit="return confirm('Supprimer ce contact ?')"><button class="act act--sm act--danger">✕</button></form>
 </td>
 </tr>`,
     )
@@ -276,9 +276,9 @@ ${coachHint}
 <p class="muted">⚠️ Un numéro ici sera traité comme un client s'il écrit à Awa.</p>
 <div class="card">
 <form method="post" action="/admin/notifications/contacts" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.7rem">
-  <input name="name" required placeholder="Nom (ex : Gardien, ou nom exact du coach)" style="flex:1;min-width:200px;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
-  <input name="phone" required placeholder="+224 620 95 51 30" style="min-width:170px;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
-  <input name="role" placeholder="gardien / coach" style="min-width:120px;padding:.5rem;border:1px solid #e4ddd3;border-radius:8px">
+  <input name="name" required placeholder="Nom (ex : Gardien, ou nom exact du coach)" style="flex:1;min-width:200px">
+  <input name="phone" required placeholder="+224 620 95 51 30" style="min-width:170px">
+  <input name="role" placeholder="gardien / coach" style="min-width:120px">
   <label style="display:flex;align-items:center;gap:.3rem"><input type="checkbox" name="muted" value="1"> muet</label>
   <button class="act" type="submit">Ajouter</button>
 </form>

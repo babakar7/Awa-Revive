@@ -58,7 +58,7 @@ export function renderInbox(d: InboxData): string {
     .map((r) => {
       const severe =
         r.severity === "severe"
-          ? `<span class="badge" style="background:#cf222e">grave</span> `
+          ? `<span class="badge badge--red">grave</span> `
           : "";
       return `<tr>
 <td>${severe}<a href="/admin/conversations/${r.client_id}"><b>${escapeHtml(r.client_name ?? "?")}</b></a>
@@ -75,7 +75,7 @@ export function renderInbox(d: InboxData): string {
 
   const allClear =
     total === 0
-      ? `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ Rien d'urgent — tout est à jour.</span>
+      ? `<div class="card success"><span class="ok">✓ Rien d'urgent — tout est à jour.</span>
 <p class="muted" style="margin:.4rem 0 0">Cherche un client en haut, ou ouvre une section à gauche.</p></div>`
       : "";
 

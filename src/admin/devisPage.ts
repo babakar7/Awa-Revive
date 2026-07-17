@@ -49,21 +49,20 @@ const BANNERS: Record<string, string> = {
 
 export function devisBanner(done?: string, err?: string): string {
   if (done && BANNERS[done])
-    return `<div class="card" style="border-color:#1a7f37"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
+    return `<div class="card success"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
   if (err) return `<div class="card warn">⚠️ ${esc(err)}</div>`;
   return "";
 }
 
-const STATUS_COLORS: Record<QuoteStatus, string> = {
-  DRAFT: "#6e7781",
-  SENT: "#0969da",
-  ACCEPTED: "#1a7f37",
-  EXPIRED: "#9a6700",
+const STATUS_BADGE: Record<QuoteStatus, string> = {
+  DRAFT: "badge--gray",
+  SENT: "badge--blue",
+  ACCEPTED: "badge--green",
+  EXPIRED: "badge--amber",
 };
 
 function statusBadge(status: QuoteStatus): string {
-  const color = STATUS_COLORS[status] ?? "#6e7781";
-  return `<span class="badge" style="background:${color}">${esc(QUOTE_STATUS_LABELS[status] ?? status)}</span>`;
+  return `<span class="badge ${STATUS_BADGE[status] ?? "badge--gray"}">${esc(QUOTE_STATUS_LABELS[status] ?? status)}</span>`;
 }
 
 /** Expiry = issued_on + validity_days; overdue shown in red. */
@@ -99,25 +98,23 @@ export function renderQuotesList(quotes: Quote[], banner: string): string {
     ? `<table><thead><tr><th>N°</th><th>Événement</th><th>Client</th><th class="hide-sm">Date évén.</th><th>Total</th><th class="hide-sm">Expire le</th><th>Statut</th></tr></thead><tbody>${rows}</tbody></table>`
     : `<p class="muted">Aucun devis pour l'instant.</p>`;
   return `${banner}
-<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+<div class="row between">
   <h2 style="margin:.4rem 0">Devis 📄</h2>
-  <a href="/admin/devis/new" class="act" style="text-decoration:none;padding:.5rem .9rem;border-radius:8px">➕ Nouveau devis</a>
+  <a href="/admin/devis/new" class="act">➕ Nouveau devis</a>
 </div>
 <div class="card">${table}</div>`;
 }
 
 // ---------- form ----------
 
-const INPUT = 'style="width:100%;padding:.55rem;border:1px solid #e4ddd3;border-radius:8px"';
-
 function itemRow(i: number, item: QuoteItem | null): string {
   const label = item ? esc(item.label) : "";
   const detail = item?.detail ? esc(item.detail) : "";
   const amount = item && item.amount_xof != null ? String(item.amount_xof) : "";
   return `<tr>
-<td><input name="item_label_${i}" value="${label}" placeholder="Prestation" style="width:100%;padding:.45rem;border:1px solid #e4ddd3;border-radius:8px"></td>
-<td><input name="item_detail_${i}" value="${detail}" placeholder="Détail (optionnel)" style="width:100%;padding:.45rem;border:1px solid #e4ddd3;border-radius:8px"></td>
-<td><input name="item_amount_${i}" value="${amount}" type="number" min="0" placeholder="vide = inclus" style="width:100%;padding:.45rem;border:1px solid #e4ddd3;border-radius:8px"></td>
+<td><input name="item_label_${i}" value="${label}" placeholder="Prestation" style="width:100%"></td>
+<td><input name="item_detail_${i}" value="${detail}" placeholder="Détail (optionnel)" style="width:100%"></td>
+<td><input name="item_amount_${i}" value="${amount}" type="number" min="0" placeholder="vide = inclus" style="width:100%"></td>
 </tr>`;
 }
 
@@ -147,36 +144,36 @@ export function renderQuoteForm(quote: Quote | null, banner: string): string {
     : "";
 
   const header = isEdit
-    ? `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+    ? `<div class="row between">
   <h2 style="margin:.4rem 0">Devis ${esc(quote!.number)} ${statusBadge(quote!.status)}</h2>
-  <a href="/admin/devis/${esc(quote!.id)}/pdf" class="act" style="text-decoration:none;padding:.5rem .9rem;border-radius:8px">⬇️ Télécharger le PDF</a>
+  <a href="/admin/devis/${esc(quote!.id)}/pdf" class="act">⬇️ Télécharger le PDF</a>
 </div>
-<div class="card" style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center">
+<div class="card row">
   <span class="muted">Statut :</span>${QUOTE_STATUSES.map((s) => inlineStatusForm(quote!.id, s, quote!.status)).join("")}
 </div>`
     : `<h2 style="margin:.4rem 0">➕ Nouveau devis</h2>`;
 
   return `${banner}
 ${header}
-<form method="post" action="${action}" style="display:flex;flex-direction:column;gap:.7rem">
-  <div class="card" style="display:flex;flex-direction:column;gap:.6rem">
+<form method="post" action="${action}" class="col">
+  <div class="card col">
     <b>Client</b>
-    <label>Nom <span class="muted">(requis)</span><input name="client_name" required value="${val(quote?.client_name)}" ${INPUT}></label>
-    <label>Société / structure<input name="client_company" value="${val(quote?.client_company)}" ${INPUT}></label>
-    <label>Rôle <span class="muted">(ex. Fondatrice)</span><input name="client_role" value="${val(quote?.client_role)}" ${INPUT}></label>
-    <label>Téléphone<input name="client_phone" value="${val(quote?.client_phone)}" ${INPUT}></label>
+    <label>Nom <span class="muted">(requis)</span><input name="client_name" required value="${val(quote?.client_name)}"></label>
+    <label>Société / structure<input name="client_company" value="${val(quote?.client_company)}"></label>
+    <label>Rôle <span class="muted">(ex. Fondatrice)</span><input name="client_role" value="${val(quote?.client_role)}"></label>
+    <label>Téléphone<input name="client_phone" value="${val(quote?.client_phone)}"></label>
   </div>
-  <div class="card" style="display:flex;flex-direction:column;gap:.6rem">
+  <div class="card col">
     <b>Événement</b>
-    <label>Titre <span class="muted">(requis)</span><input name="event_title" required value="${val(quote?.event_title)}" placeholder="Événement privé « … »" ${INPUT}></label>
-    <label>Description<textarea name="description" rows="2" ${INPUT}>${val(quote?.description)}</textarea></label>
-    <div style="display:flex;gap:.6rem;flex-wrap:wrap">
-      <label style="flex:1;min-width:8rem">Date<input name="event_date" type="date" value="${val(dateVal)}" ${INPUT}></label>
-      <label style="flex:1;min-width:8rem">Horaire<input name="event_time" value="${val(quote?.event_time)}" placeholder="À partir de 11h" ${INPUT}></label>
+    <label>Titre <span class="muted">(requis)</span><input name="event_title" required value="${val(quote?.event_title)}" placeholder="Événement privé « … »"></label>
+    <label>Description<textarea name="description" rows="2">${val(quote?.description)}</textarea></label>
+    <div class="row">
+      <label style="flex:1;min-width:8rem">Date<input name="event_date" type="date" value="${val(dateVal)}"></label>
+      <label style="flex:1;min-width:8rem">Horaire<input name="event_time" value="${val(quote?.event_time)}" placeholder="À partir de 11h"></label>
     </div>
-    <div style="display:flex;gap:.6rem;flex-wrap:wrap">
-      <label style="flex:1;min-width:8rem">Participants<input name="participants" value="${val(quote?.participants)}" placeholder="7 personnes" ${INPUT}></label>
-      <label style="flex:1;min-width:8rem">Lieu<input name="location" value="${val(quote?.location ?? DEFAULT_LOCATION)}" ${INPUT}></label>
+    <div class="row">
+      <label style="flex:1;min-width:8rem">Participants<input name="participants" value="${val(quote?.participants)}" placeholder="7 personnes"></label>
+      <label style="flex:1;min-width:8rem">Lieu<input name="location" value="${val(quote?.location ?? DEFAULT_LOCATION)}"></label>
     </div>
   </div>
   <div class="card">
@@ -186,11 +183,11 @@ ${header}
   </div>
   <div class="card">
     <label><b>Conditions</b> <span class="muted">(une par ligne)</span>
-    <textarea name="conditions" rows="4" ${INPUT}>${val(quote?.conditions ?? DEFAULT_CONDITIONS)}</textarea></label>
-    <label style="display:block;margin-top:.6rem">Validité (jours)<input name="validity_days" type="number" min="1" max="365" value="${val(quote?.validity_days ?? 15)}" style="width:6rem;padding:.55rem;border:1px solid #e4ddd3;border-radius:8px"></label>
+    <textarea name="conditions" rows="4">${val(quote?.conditions ?? DEFAULT_CONDITIONS)}</textarea></label>
+    <label style="display:block;margin-top:.6rem">Validité (jours)<input name="validity_days" type="number" min="1" max="365" value="${val(quote?.validity_days ?? 15)}" style="width:6rem"></label>
   </div>
-  <div style="display:flex;align-items:center;gap:1rem">
-    <button class="act" type="submit" style="padding:.6rem 1.1rem">${isEdit ? "Enregistrer" : "Créer le devis"}</button>
+  <div class="actionbar">
+    <button class="act" type="submit">${isEdit ? "Enregistrer" : "Créer le devis"}</button>
     <a href="/admin/devis">Annuler</a>
   </div>
 </form>`;
