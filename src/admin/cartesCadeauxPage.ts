@@ -110,7 +110,7 @@ export function renderGiftCardView(gc: GiftCard, banner: string): string {
   <img src="${base}/png?inline=1" alt="Carte cadeau" style="max-width:100%;height:auto;border:1px solid #e8d9d2;border-radius:8px">
 </div>
 <div class="card row">
-  <a class="act" href="${base}/png">⬇️ Télécharger</a>
+  <a class="act act--ghost" href="${base}/png">⬇️ Télécharger</a>
   ${sendBtn}
   <span>${sentCell(gc)}</span>
 </div>`;

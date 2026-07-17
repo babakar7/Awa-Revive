@@ -217,7 +217,7 @@ export function renderFactureView(inv: Invoice, banner: string): string {
 <div class="row between">
   <h2 style="margin:.4rem 0">Facture ${esc(inv.number)}</h2>
   <div class="row">
-    <a class="act" style="text-decoration:none;padding:.5rem .9rem;background:#39414a" href="/admin/factures/${esc(inv.id)}/print" target="_blank">🖨 Imprimer</a>
+    <a class="act act--ghost" href="/admin/factures/${esc(inv.id)}/print" target="_blank">🖨 Imprimer</a>
     ${sendBtn}
   </div>
 </div>

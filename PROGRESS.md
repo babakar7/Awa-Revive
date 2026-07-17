@@ -1564,6 +1564,19 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     Fix mobile : `.card{overflow-x:auto}` (tables défilent dans la carte).
   - Aucun changement de routes, de champs de formulaire ni de logique ;
     JS client existant conservé (confirm, totaux live, drag&drop staff).
+  - **v2 (feedback gérant, même jour)** : (a) fix hover illisible — la règle
+    `main a:hover` gagnait sur la couleur des liens-boutons `<a class="act">`
+    (le hover ne redéclarait que le fond) → chaque état hover de chaque
+    variante redéclare désormais SA couleur, et `main a` exclut `.act` ;
+    (b) **langage de couleurs par rôle** : violet = action principale
+    (créer/enregistrer/envoyer), **vert `.act--ok`** = confirmation d'un fait
+    (✅ Traité, Remboursement effectué, Abonnement activé, Prête, Livrée,
+    Activer, Remettre au menu), ghost = secondaire/écarter (Ignorer, Modifier,
+    Test, Pause, Imprimer, Renvoyer…), rouge = destructif (✕, ✖ Annuler
+    livraison). `livraisonsPage.inlineForm` prend un param `variant` ; boutons
+    de tables densifiés en `.act--sm` ; disabled via `:disabled` (plus
+    d'opacity inline) ; transitions 150 ms. Vérifié par galerie de composants
+    (états normal + hover simulés en dur) + screenshots.
 
 ## 5. Chronologie condensée
 

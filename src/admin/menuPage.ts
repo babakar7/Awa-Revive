@@ -98,7 +98,7 @@ export function renderMenuPage(opts: { items: MenuItemView[]; editId?: string; b
 <div class="card"><table><tbody>${retired
         .map(
           (it) => `<tr><td><b>${esc(it.name)}</b> <span class="muted">— ${esc(it.price_xof)} F · ${esc(it.category)}</span></td>
-<td style="white-space:nowrap"><form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" style="display:inline"><button class="act act--sm" type="submit">Remettre au menu</button></form></td></tr>`,
+<td style="white-space:nowrap"><form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" style="display:inline"><button class="act act--ok act--sm" type="submit">Remettre au menu</button></form></td></tr>`,
         )
         .join("")}</tbody></table></div></details>`
     : "";

@@ -71,9 +71,10 @@ function kitchenStatusCell(o: DeliveryOrder): string {
   return `<span style="color:#cf222e;font-weight:600">✗ cuisine NON notifiée</span>`;
 }
 
-function inlineForm(action: string, label: string, confirm?: string): string {
+function inlineForm(action: string, label: string, confirm?: string, variant = ""): string {
   const onsubmit = confirm ? ` onsubmit="return confirm('${esc(confirm)}')"` : "";
-  return `<form method="post" action="${esc(action)}" class="inline"${onsubmit}><button class="act act--sm" type="submit">${esc(label)}</button></form>`;
+  const cls = variant ? ` act--${variant}` : "";
+  return `<form method="post" action="${esc(action)}" class="inline"${onsubmit}><button class="act act--sm${cls}" type="submit">${esc(label)}</button></form>`;
 }
 
 function actionsCell(o: DeliveryOrder): string {
@@ -81,13 +82,13 @@ function actionsCell(o: DeliveryOrder): string {
   const parts: string[] = [];
   const kitchenBad = ["failed", "partial", "fallback_reception"].includes(o.kitchen_notify_status);
   if (o.status === "IN_KITCHEN") {
-    parts.push(inlineForm(`${base}/ready`, "✅ Prête"));
-    if (kitchenBad) parts.push(inlineForm(`${base}/renotify-kitchen`, "🔁 Renvoyer"));
-    parts.push(inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande ?"));
+    parts.push(inlineForm(`${base}/ready`, "✅ Prête", undefined, "ok"));
+    if (kitchenBad) parts.push(inlineForm(`${base}/renotify-kitchen`, "🔁 Renvoyer", undefined, "ghost"));
+    parts.push(inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande ?", "danger"));
   } else if (o.status === "READY") {
-    parts.push(inlineForm(`${base}/delivered`, "🛵 Livrée"));
+    parts.push(inlineForm(`${base}/delivered`, "🛵 Livrée", undefined, "ok"));
     parts.push(
-      inlineForm(`${base}/cancel`, "✖ Annuler", "Le client a peut-être été prévenu « en route » — annuler quand même ?"),
+      inlineForm(`${base}/cancel`, "✖ Annuler", "Le client a peut-être été prévenu « en route » — annuler quand même ?", "danger"),
     );
   }
   return parts.join(" ");

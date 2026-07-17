@@ -26,7 +26,7 @@ export function renderInbox(d: InboxData): string {
 <td><a href="/admin/conversations/${b.client_id}">${escapeHtml(b.client_name ?? "?")}</a><div class="muted">+${escapeHtml(b.wa_phone)}</div></td>
 <td>${escapeHtml(b.service_name)}<div class="muted">${fmtDate(b.slot_start)} · ${b.participants} place(s)</div></td>
 <td><b>${fmtFcfa(b.amount_xof)}</b><div class="muted">Wave : ${escapeHtml(b.wave_session_id ?? "?")}</div></td>
-<td><form class="inline" method="post" action="/admin/bookings/${b.id}/refund-done" onsubmit="return confirm('Confirmer : le remboursement de ${fmtFcfa(b.amount_xof)} a bien été fait dans le portail Wave ?')"><button class="act">✅ Remboursement effectué</button></form></td>
+<td><form class="inline" method="post" action="/admin/bookings/${b.id}/refund-done" onsubmit="return confirm('Confirmer : le remboursement de ${fmtFcfa(b.amount_xof)} a bien été fait dans le portail Wave ?')"><button class="act act--ok act--sm">✅ Remboursement effectué</button></form></td>
 </tr>`,
     )
     .join("");
@@ -37,7 +37,7 @@ export function renderInbox(d: InboxData): string {
 <td><a href="/admin/conversations/${p.client_id}">${escapeHtml(p.client_name ?? "?")}</a><div class="muted">+${escapeHtml(p.wa_phone)}</div></td>
 <td>${escapeHtml(p.plan_name)}<div class="muted">payé ${fmtDate(p.updated_at)}</div></td>
 <td><b>${fmtFcfa(p.amount_xof)}</b></td>
-<td><form class="inline" method="post" action="/admin/plan-orders/${p.id}/activated" onsubmit="return confirm('Confirmer : l\\'abonnement a bien été attribué au client dans le dashboard Wix ?')"><button class="act">✅ Abonnement activé</button></form></td>
+<td><form class="inline" method="post" action="/admin/plan-orders/${p.id}/activated" onsubmit="return confirm('Confirmer : l\\'abonnement a bien été attribué au client dans le dashboard Wix ?')"><button class="act act--ok act--sm">✅ Abonnement activé</button></form></td>
 </tr>`,
     )
     .join("");
@@ -48,7 +48,7 @@ export function renderInbox(d: InboxData): string {
 <td>${ago(h.created_at)}</td>
 <td><a href="/admin/conversations/${h.client_id}">${escapeHtml(h.client_name ?? "?")}</a><div class="muted">+${escapeHtml(h.wa_phone)}</div></td>
 <td>${escapeHtml(h.reason ?? "")}</td>
-<td><form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act">✅ Traité</button></form></td>
+<td><form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act act--ok act--sm">✅ Traité</button></form></td>
 </tr>`,
     )
     .join("");

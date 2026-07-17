@@ -210,7 +210,7 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
 <td><b>${esc(r.label)}</b><div class="muted">${ruleSummary(r)}</div><div class="muted" style="margin-top:.2rem">📝 ${preview}</div></td>
 <td>${lastLine}</td>
 <td style="white-space:nowrap">
-  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/toggle"><button class="act" style="background:${r.enabled ? "#9a6700" : "#1a7f37"}">${r.enabled ? "Pause" : "Activer"}</button></form>
+  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/toggle"><button class="act act--sm ${r.enabled ? "act--ghost" : "act--ok"}">${r.enabled ? "Pause" : "Activer"}</button></form>
   <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/test" style="margin-left:.3rem"><button class="act act--sm act--ghost">Test</button></form>
   <a href="/admin/notifications?edit=${r.id}" style="margin-left:.3rem">Éditer</a>
   <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/delete" style="margin-left:.3rem" onsubmit="return confirm('Supprimer cette règle ?')"><button class="act act--sm act--danger">✕</button></form>

@@ -120,13 +120,11 @@ function itemRow(i: number, item: QuoteItem | null): string {
 
 function inlineStatusForm(id: string, s: QuoteStatus, current: QuoteStatus): string {
   const isCurrent = s === current;
-  const style = isCurrent
-    ? "padding:.35rem .6rem;font-size:.8rem;opacity:.5;cursor:default"
-    : "padding:.35rem .6rem;font-size:.8rem";
+  const cls = isCurrent ? "act act--sm" : "act act--sm act--ghost";
   const disabled = isCurrent ? " disabled" : "";
-  return `<form method="post" action="/admin/devis/${esc(id)}/status" style="display:inline">
+  return `<form method="post" action="/admin/devis/${esc(id)}/status" class="inline">
 <input type="hidden" name="status" value="${s}">
-<button class="act" type="submit" style="${style}"${disabled}>${esc(QUOTE_STATUS_LABELS[s])}</button></form>`;
+<button class="${cls}" type="submit"${disabled}>${esc(QUOTE_STATUS_LABELS[s])}</button></form>`;
 }
 
 export function renderQuoteForm(quote: Quote | null, banner: string): string {

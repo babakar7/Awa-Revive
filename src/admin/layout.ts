@@ -125,8 +125,8 @@ h1,h2,h3{letter-spacing:-.01em}
 .topbar form{flex:1;min-width:180px;max-width:380px;margin:0 0 0 auto}
 .topbar input[type=search]{width:100%;padding:.42rem .85rem;border:1px solid var(--border);border-radius:20px;font-size:.86rem;margin:0;background:var(--bg)}
 main{max-width:1040px;width:100%;margin:0 auto;padding:1.25rem 1.25rem 3rem}
-main a{color:var(--brand)}
-main a:hover{color:var(--brand-strong)}
+main a:not(.act){color:var(--brand)}
+main a:not(.act):hover{color:var(--brand-strong)}
 h2{font-size:1.02rem;font-weight:600;margin:1.6rem 0 .6rem;scroll-margin-top:4rem}
 h2:first-child{margin-top:.2rem}
 h3{font-size:.92rem;font-weight:600;margin:1.1rem 0 .4rem}
@@ -161,13 +161,18 @@ tr.rowlink{cursor:pointer}
 .subhead{font-size:.82rem;color:var(--muted);margin:-.3rem 0 .8rem}
 
 /* ---------- buttons ---------- */
-button.act,a.act{background:var(--brand);color:#fff;border:none;border-radius:var(--radius);padding:.48rem .9rem;font-size:.85rem;font-weight:550;cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3}
-button.act:hover,a.act:hover{background:var(--brand-strong)}
+button.act,a.act{background:var(--brand);color:#fff;border:none;border-radius:var(--radius);padding:.48rem .9rem;font-size:.85rem;font-weight:550;cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;transition:background-color .15s,color .15s,border-color .15s}
+button.act:hover,a.act:hover{background:var(--brand-strong);color:#fff}
 .act--sm{padding:.3rem .6rem;font-size:.78rem;border-radius:var(--radius-sm)}
-.act--danger{background:var(--danger)}
-.act--danger:hover{background:var(--danger-strong)}
-.act--ghost{background:transparent;color:var(--brand);border:1px solid var(--brand-border)}
-.act--ghost:hover{background:var(--brand-soft);color:var(--brand-strong)}
+button.act.act--ok,a.act.act--ok{background:var(--ok);color:#fff}
+button.act.act--ok:hover,a.act.act--ok:hover{background:#166f30;color:#fff}
+button.act.act--danger,a.act.act--danger{background:var(--danger);color:#fff}
+button.act.act--danger:hover,a.act.act--danger:hover{background:var(--danger-strong);color:#fff}
+button.act.act--ghost,a.act.act--ghost{background:transparent;color:var(--brand);border:1px solid var(--brand-border)}
+button.act.act--ghost:hover,a.act.act--ghost:hover{background:var(--brand-soft);color:var(--brand-strong);border-color:var(--brand)}
+button.act:disabled{opacity:.55;cursor:default}
+button.act:disabled:hover{background:var(--brand)}
+button.act.act--ghost:disabled:hover{background:transparent;color:var(--brand)}
 button.act:focus-visible,a.act:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 
 /* ---------- forms ---------- */

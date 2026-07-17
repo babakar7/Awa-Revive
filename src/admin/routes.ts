@@ -856,7 +856,7 @@ ${
 <td>${escapeHtml(h.reason ?? "")}</td>
 <td>${
               h.status === "OPEN"
-                ? `<form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act">✅ Traité</button></form>`
+                ? `<form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act act--ok act--sm">✅ Traité</button></form>`
                 : `<span class="muted">✓ ${escapeHtml(h.done_by ?? "")}</span>`
             }</td>
 </tr>`,
@@ -908,7 +908,7 @@ ${r.severity === "severe" ? `<span class="badge badge--red">🔴 grave</span> ` 
 <div>${escapeHtml(r.summary ?? "")}</div>
 ${r.suggested_action ? `<div class="muted" style="margin-top:.25rem">→ ${escapeHtml(r.suggested_action)}</div>` : ""}
 <div style="margin-top:.55rem">
-<form class="inline" method="post" action="/admin/reviews/${r.id}/done"><button class="act">✅ Traité</button></form>
+<form class="inline" method="post" action="/admin/reviews/${r.id}/done"><button class="act act--ok act--sm">✅ Traité</button></form>
 <form class="inline" method="post" action="/admin/reviews/${r.id}/ignore" style="margin-left:.4rem"><button class="act act--sm act--ghost">Ignorer</button></form>
 </div>
 </div>`,
@@ -1041,7 +1041,7 @@ ${openCards || `<div class="card"><span class="ok">✓ Personne à reprendre —
 <td><form class="inline" method="post" action="/admin/crm/link" onsubmit="return confirm('Ajouter le numéro WhatsApp +${escapeHtml(r.wa_phone)} à la fiche « ${escapeHtml(c.name).replaceAll("'", "\\'")} » ?')">
 <input type="hidden" name="request" value="${escapeHtml(r.id)}">
 <input type="hidden" name="contact" value="${escapeHtml(c.id)}">
-<button class="act">Lier cette fiche</button>
+<button class="act act--sm">Lier cette fiche</button>
 </form></td>
 </tr>`;
               })
@@ -1111,13 +1111,13 @@ ${linkCards}`
           const action = plan
             ? `<form class="inline" method="post" action="/admin/crm/merge" onsubmit="return confirm('Fusionner ${plan.sourceIds.length} fiche(s) dans « ${escapeHtml(keeper?.name ?? "?").replaceAll("'", "\\'")} » ?\\n\\nLes fiches fusionnées sont SUPPRIMÉES (irréversible).')">
 <input type="hidden" name="group" value="${ids}">
-<button class="act">Fusionner ${plan.sourceIds.length} fiche(s)</button>
+<button class="act act--sm">Fusionner ${plan.sourceIds.length} fiche(s)</button>
 </form>${leftoverNote}`
             : `<span class="muted">⚠️ Rien à fusionner automatiquement : ces fiches sont des comptes membres (Wix interdit de fusionner deux membres). À traiter dans Wix avec la réception.</span>
 <form class="inline" method="post" action="/admin/crm/merge-dismiss" style="margin-left:.4rem" onsubmit="return confirm('Marquer ce groupe comme traité ?\\n\\nIl disparaîtra de la liste (restaurable), et réapparaîtra tout seul si ses fiches changent.')">
 <input type="hidden" name="key" value="${escapeHtml(g.key)}">
 <input type="hidden" name="group" value="${ids}">
-<button class="act act--sm act--ghost">✅ Traité dans Wix</button>
+<button class="act act--ok act--sm">✅ Traité dans Wix</button>
 </form>`;
           const html = `<div class="card ${hasPlan ? "warn" : ""}">
 <b>…${escapeHtml(g.key)}</b> — ${g.contacts.length} fiches pour ce numéro${hasPlan ? ` <span class="badge badge--red">abonnée non reconnue</span>` : ""}
