@@ -354,7 +354,7 @@ export async function truncateAll(): Promise<void> {
   await pool.query(
     `truncate clients, pending_bookings, pending_plan_orders, conversations,
               processed_webhooks, handoffs, slot_cache, delivery_orders,
-              staff_contacts, notification_log, invoices, app_state cascade`,
+              staff_contacts, staff_schedules, notification_log, invoices, app_state cascade`,
   );
 }
 

@@ -1509,6 +1509,39 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     systemPrompt memo, favourites via snapshot) + intégration (seed idempotent,
     CRUD → refresh → snapshot). Docs : CLAUDE.md, README, en-tête cafe-menu.md.
 
+- **4.40 — Planning du personnel (`/admin/staff`, 17/07).** Babakar gère les
+  horaires des 7 employées (accueil/bar/entretien) dans un Word ; il veut éditer,
+  tester des ROTATIONS et envoyer à chacune son planning. Nouvel onglet Studio
+  « Équipe 🗓 ».
+  - **Modèle** : `staff_schedules` (scénarios draft/published) + `staff_shifts`
+    (un créneau CONTINU par personne/jour ; weekday **0=lundi**, ≠ notification_rules
+    où 0=dimanche ; pas de ligne = repos). Employées = `staff_contacts` réutilisé
+    (rôles accueil/bar/entretien ; les coachs Wix restent dehors). **Invariant « un
+    seul publié »** appliqué par un **UPDATE CASE unique** (pas d'index unique
+    partiel — sa vérif par ligne casse pendant l'update multi-lignes). `replaceShifts`
+    = delete + multi-VALUES insert (écrivain unique admin, style sans transaction).
+  - **Pause 13h30–14h30 non payée déduite SEULEMENT si le créneau dépasse 14h30**
+    (décision : une journée finissant à 13h35 garde ses minutes). Totaux hebdo en
+    direct. Feuille de Babakar recalculée : Meryl/Linsey/Syndel 39h25, Ama 33h05,
+    Jacqueline 37h10, Fatou 35h25, Arame 39h25.
+  - **Grille interactive** (vanilla, zéro dépendance) : clic case → éditeur inline
+    (heures + presets + Repos) ; **drag & drop = COPIE** d'un créneau (jamais
+    destructif) ; totaux/effectifs recalculés live ; état sale + `beforeunload` ;
+    « Enregistrer » POST la grille en JSON (validée serveur, autorité sur les
+    totaux). Dupliquer / Renommer / Publier / Supprimer(brouillon). Page imprimable
+    A4 paysage (miroir du Word). **Envoi WhatsApp** par employée + « à toutes »
+    (template-first, garde-fou « numéro manquant » → répertoire ; journalisé
+    `source='staff_planning'`).
+  - **Seed one-shot** (sentinelle `app_state`) : les 7 employées (phone `''`,
+    numéros à saisir) + « Planning actuel » publié + 35 shifts, au prochain boot.
+  - Pièges notés : suppression d'une employée = cascade sur tous les scénarios ;
+    risque collision `findStaffByName` si un futur coach Wix est homonyme d'une
+    employée sans numéro. Fichiers : `domain/staffPlanningRules.ts` (pur, testé) +
+    `staffPlanningRepo.ts`, `admin/staffPage.ts` + routes, `recordStaffPlanningLog`.
+    Tests purs (parse/fmt, matrice pause, totaux feuille, validation grille,
+    message) + intégration (seed idempotent, grille save/rejet, 1-seul-publié,
+    duplicate/delete/print, envois).
+
 ## 5. Chronologie condensée
 
 - **17/07 — « Nouveau client par défaut » : la question du compte ne vient plus

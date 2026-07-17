@@ -594,4 +594,77 @@ create table if not exists cafe_menu_items (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- ═══ Planning hebdo du personnel (accueil / bar / entretien) ═══
+-- Un scénario = une ligne staff_schedules ; UN SEUL est 'published' à la fois
+-- (invariant appliqué côté app par un UPDATE CASE unique — pas d'index unique
+-- partiel : sa vérification par ligne peut échouer transitoirement pendant
+-- l'UPDATE multi-lignes de publication).
+-- weekday : 0=lundi … 6=dimanche (≠ notification_rules.days_of_week où
+-- 0=dimanche) — la grille commence lundi comme la feuille du gérant.
+-- Un seul créneau CONTINU par personne et par jour ; pas de ligne = repos.
+-- Pause déjeuner 13h30–14h30 non payée : déduite au calcul (seulement si le
+-- créneau dépasse 14h30), pas stockée.
+create table if not exists staff_schedules (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  status text not null default 'draft',   -- draft | published
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists staff_shifts (
+  id uuid primary key default gen_random_uuid(),
+  schedule_id uuid not null references staff_schedules(id) on delete cascade,
+  staff_id uuid not null references staff_contacts(id) on delete cascade,
+  weekday smallint not null check (weekday between 0 and 6),
+  start_min smallint not null check (start_min >= 0),
+  end_min smallint not null check (end_min <= 1440),
+  check (start_min < end_min),
+  unique (schedule_id, staff_id, weekday)
+);
+create index if not exists idx_staff_shifts_schedule on staff_shifts (schedule_id);
+
+-- Seed one-shot du planning actuel (feuille Word de Babakar, 07/2026). Sentinelle
+-- app_state : ne tourne qu'UNE fois, ne ressuscite jamais des données supprimées.
+-- phone='' volontaire (numéros à saisir dans /admin/notifications#contacts ;
+-- l'envoi garde le garde-fou « numéro manquant »). migrate() = une seule query
+-- multi-statements ⇒ transaction implicite : les inserts se voient entre eux.
+insert into staff_contacts (name, phone, role)
+select v.name, '', v.role
+from (values
+  ('Meryl','accueil'),('Linsey','accueil'),('Syndel','accueil'),
+  ('Ama','bar'),('Jacqueline','bar'),
+  ('Fatou','entretien'),('Arame','entretien')
+) as v(name, role)
+where not exists (select 1 from app_state where key = 'staff_planning_seed_done')
+  and not exists (select 1 from staff_contacts c where lower(c.name) = lower(v.name));
+
+insert into staff_schedules (name, status, created_by)
+select 'Planning actuel', 'published', 'seed'
+where not exists (select 1 from app_state where key = 'staff_planning_seed_done')
+  and not exists (select 1 from staff_schedules);
+
+-- weekday 0=Lun 1=Mar 2=Mer 3=Jeu 5=Sam ; Ven(4) & Dim(6) = repos (aucune ligne).
+-- Minutes : 8h00=480 9h15=555 10h00=600 10h30=630 11h30=690 13h35=815 17h05=1025 18h00=1080 19h35=1175.
+insert into staff_shifts (schedule_id, staff_id, weekday, start_min, end_min)
+select s.id, c.id, v.weekday, v.start_min, v.end_min
+from staff_schedules s
+cross join (values
+  ('Meryl',0,555,1175),('Meryl',1,555,1175),('Meryl',2,690,1175),('Meryl',3,555,1175),('Meryl',5,555,815),
+  ('Linsey',0,555,1175),('Linsey',1,555,1175),('Linsey',2,690,1175),('Linsey',3,555,1175),('Linsey',5,555,815),
+  ('Syndel',0,555,1175),('Syndel',1,555,1175),('Syndel',2,690,1175),('Syndel',3,555,1175),('Syndel',5,555,815),
+  ('Ama',0,555,1080),('Ama',1,555,1080),('Ama',2,690,1080),('Ama',3,555,1080),('Ama',5,555,815),
+  ('Jacqueline',0,600,1175),('Jacqueline',1,600,1175),('Jacqueline',2,690,1175),('Jacqueline',3,600,1175),('Jacqueline',5,555,815),
+  ('Fatou',0,480,1025),('Fatou',1,480,1025),('Fatou',2,630,1025),('Fatou',3,480,1025),('Fatou',5,480,815),
+  ('Arame',0,600,1175),('Arame',1,600,1175),('Arame',2,630,1175),('Arame',3,600,1175),('Arame',5,480,815)
+) as v(name, weekday, start_min, end_min)
+join staff_contacts c on lower(c.name) = lower(v.name)
+where s.name = 'Planning actuel' and s.created_by = 'seed'
+  and not exists (select 1 from app_state where key = 'staff_planning_seed_done')
+  and not exists (select 1 from staff_shifts sh where sh.schedule_id = s.id);
+
+insert into app_state (key, value) values ('staff_planning_seed_done', '1')
+on conflict (key) do nothing;
 `;

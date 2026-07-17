@@ -92,6 +92,9 @@ import { ago, badge, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
 import { layout } from "./layout.js";
 import { loadNavBadges } from "./navBadges.js";
 import { renderInbox } from "./inboxPage.js";
+import * as staffPlan from "../domain/staffPlanningRepo.js";
+import { buildEmployeeScheduleMessage, validateGridPayload } from "../domain/staffPlanningRules.js";
+import { renderStaffPlanning, renderStaffPrint, staffBanner } from "./staffPage.js";
 
 export { escapeHtml } from "./helpers.js";
 
@@ -1525,6 +1528,138 @@ ${photoSection}
         }
 
         return reply.redirect("/admin/profile?done=1", 303);
+      });
+
+      // ---------- Planning du personnel (grille interactive + envoi WhatsApp) ----------
+      async function staffPlanningView(scheduleId: string | undefined, banner: string, showNew: boolean, reply: any) {
+        const schedules = await staffPlan.listSchedules();
+        const current =
+          (scheduleId ? await staffPlan.getSchedule(scheduleId) : null) ??
+          schedules.find((s) => s.status === "published") ??
+          schedules[0] ??
+          null;
+        const [shifts, staff] = await Promise.all([
+          current ? staffPlan.getShifts(current.id) : Promise.resolve([]),
+          staffPlan.listPlanningStaff(),
+        ]);
+        const body = renderStaffPlanning(
+          Object.assign({ schedules, current, shifts, staff, banner }, { showNewForm: showNew }),
+        );
+        reply.type("text/html").send(await layout("Équipe", "/admin/staff", body));
+      }
+
+      admin.get("/staff", async (req, reply) => {
+        const q = req.query as any;
+        return staffPlanningView(q?.s, staffBanner(q?.done, q?.err), q?.new === "1", reply);
+      });
+
+      admin.post("/staff", async (req, reply) => {
+        const name = String((req.body as any)?.name ?? "").trim();
+        if (!name) return reply.redirect("/admin/staff?err=nom obligatoire", 303);
+        const s = await staffPlan.createSchedule(name, req.adminUser ?? null);
+        return reply.redirect(`/admin/staff?s=${s.id}&done=created`, 303);
+      });
+
+      admin.post("/staff/duplicate", async (req, reply) => {
+        const b = req.body as any;
+        const name = String(b?.name ?? "").trim() || "Copie";
+        const dup = await staffPlan.duplicateSchedule(String(b?.source_id ?? ""), name, req.adminUser ?? null);
+        if (!dup) return reply.redirect("/admin/staff?err=planning introuvable", 303);
+        return reply.redirect(`/admin/staff?s=${dup.id}&done=duplicated`, 303);
+      });
+
+      admin.post("/staff/:id/rename", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const name = String((req.body as any)?.name ?? "").trim();
+        if (name) await staffPlan.renameSchedule(id, name);
+        return reply.redirect(`/admin/staff?s=${id}&done=renamed`, 303);
+      });
+
+      admin.post("/staff/:id/publish", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const ok = await staffPlan.publishSchedule(id);
+        req.log.info({ schedule: id, by: req.adminUser }, "Staff schedule published");
+        return reply.redirect(ok ? `/admin/staff?s=${id}&done=published` : "/admin/staff?err=planning introuvable", 303);
+      });
+
+      admin.post("/staff/:id/delete", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const ok = await staffPlan.deleteSchedule(id);
+        return reply.redirect(ok ? "/admin/staff?done=deleted" : "/admin/staff?err=seul un brouillon peut être supprimé", 303);
+      });
+
+      admin.post("/staff/:id/grid", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const schedule = await staffPlan.getSchedule(id);
+        if (!schedule) return reply.redirect("/admin/staff?err=planning introuvable", 303);
+        const staff = await staffPlan.listPlanningStaff();
+        const known = new Set(staff.map((s) => s.id));
+        const parsed = validateGridPayload(String((req.body as any)?.grid ?? ""), known);
+        if ("error" in parsed) return reply.redirect(`/admin/staff?s=${id}&err=${encodeURIComponent(parsed.error)}`, 303);
+        await staffPlan.replaceShifts(id, parsed.shifts);
+        req.log.info({ schedule: id, shifts: parsed.shifts.length, by: req.adminUser }, "Staff grid saved");
+        return reply.redirect(`/admin/staff?s=${id}&done=saved`, 303);
+      });
+
+      admin.get("/staff/:id/print", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const schedule = await staffPlan.getSchedule(id);
+        if (!schedule) return reply.code(404).type("text/plain").send("Planning introuvable");
+        const [shifts, staff] = await Promise.all([staffPlan.getShifts(id), staffPlan.listPlanningStaff()]);
+        reply.type("text/html").send(renderStaffPrint(schedule, shifts, staff));
+      });
+
+      // Send one employee her own schedule on WhatsApp (staff = out of the 24h
+      // window → template-first, like every other staff ping).
+      async function sendStaffPlanning(
+        schedule: staffPlan.StaffSchedule,
+        staffMember: staffPlan.PlanningStaff,
+        allShifts: staffPlan.StaffShift[],
+        log: any,
+      ): Promise<"sent" | "no_phone" | "no_shift" | "failed"> {
+        if (!staffMember.phone) return "no_phone";
+        const mine = allShifts.filter((s) => s.staff_id === staffMember.id);
+        if (mine.length === 0) return "no_shift";
+        const { subject, body } = buildEmployeeScheduleMessage(schedule.name, staffMember.name, mine);
+        try {
+          const path = await sendWhatsAppNotification(staffMember.phone, subject, body, { preferTemplate: true });
+          await nrepo.recordStaffPlanningLog(staffMember.phone, `[planning ${schedule.name}] ${staffMember.name}`, path, null);
+          return "sent";
+        } catch (e) {
+          await nrepo.recordStaffPlanningLog(staffMember.phone, `[planning ${schedule.name}] ${staffMember.name}`, "failed", String(e).slice(0, 300));
+          log.error({ err: e, staff: staffMember.id }, "Staff planning send failed");
+          return "failed";
+        }
+      }
+
+      admin.post("/staff/:id/send/:staffId", async (req, reply) => {
+        const { id, staffId } = req.params as { id: string; staffId: string };
+        const schedule = await staffPlan.getSchedule(id);
+        if (!schedule) return reply.redirect("/admin/staff?err=planning introuvable", 303);
+        const [shifts, staff] = await Promise.all([staffPlan.getShifts(id), staffPlan.listPlanningStaff()]);
+        const member = staff.find((s) => s.id === staffId);
+        if (!member) return reply.redirect(`/admin/staff?s=${id}&err=employée introuvable`, 303);
+        const r = await sendStaffPlanning(schedule, member, shifts, req.log);
+        if (r === "no_phone") return reply.redirect(`/admin/staff?s=${id}&err=no-phone`, 303);
+        if (r === "no_shift") return reply.redirect(`/admin/staff?s=${id}&err=${encodeURIComponent(member.name + " n'a aucun horaire")}`, 303);
+        if (r === "failed") return reply.redirect(`/admin/staff?s=${id}&err=${encodeURIComponent("échec de l'envoi WhatsApp")}`, 303);
+        return reply.redirect(`/admin/staff?s=${id}&done=${encodeURIComponent("sent:" + member.name)}`, 303);
+      });
+
+      admin.post("/staff/:id/send-all", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const schedule = await staffPlan.getSchedule(id);
+        if (!schedule) return reply.redirect("/admin/staff?err=planning introuvable", 303);
+        const [shifts, staff] = await Promise.all([staffPlan.getShifts(id), staffPlan.listPlanningStaff()]);
+        let sent = 0, noPhone = 0, noShift = 0;
+        for (const member of staff) {
+          const r = await sendStaffPlanning(schedule, member, shifts, req.log);
+          if (r === "sent") sent++;
+          else if (r === "no_phone") noPhone++;
+          else if (r === "no_shift") noShift++;
+        }
+        req.log.info({ schedule: id, sent, noPhone, noShift, by: req.adminUser }, "Staff planning sent to all");
+        return reply.redirect(`/admin/staff?s=${id}&done=sent-all:${sent}:${noPhone}:${noShift}`, 303);
       });
 
       // ---------- Notifications automatiques (rappels staff, journal) ----------

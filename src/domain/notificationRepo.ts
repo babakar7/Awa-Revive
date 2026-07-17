@@ -363,6 +363,24 @@ export async function recordGiftCardLog(
   }
 }
 
+/** Staff-planning send log (source='staff_planning', no wamid). Never throws. */
+export async function recordStaffPlanningLog(
+  recipientPhone: string,
+  body: string,
+  status: LogStatus,
+  error: string | null,
+): Promise<void> {
+  try {
+    await pool.query(
+      `insert into notification_log (source, recipient_phone, body, status, error)
+       values ('staff_planning', $1, $2, $3, $4)`,
+      [recipientPhone, body, status, error],
+    );
+  } catch {
+    /* logging must never break a planning send */
+  }
+}
+
 /** Test-send log entry (source='test', dedup key test:<uuid> — never blocks a real claim). */
 export async function recordTestLog(
   recipientPhone: string,

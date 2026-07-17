@@ -42,6 +42,7 @@ const NAV: NavSection[] = [
     title: "Studio",
     links: [
       { href: "/admin/bookings", label: "Réservations" },
+      { href: "/admin/staff", label: "Équipe 🗓" },
       { href: "/admin/devis", label: "Devis 📄" },
     ],
   },
