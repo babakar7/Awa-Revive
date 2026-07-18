@@ -156,6 +156,8 @@ async function maybeNotifyConversationStart(
   profileName?: string,
 ): Promise<void> {
   if (config.NEW_CHAT_NOTIFY_PHONE === "") return;
+  // Studio team/test numbers testing Awa are not leads — don't ping the owner.
+  if (client.is_test) return;
   try {
     const last = await repo.lastConversationActivityAt(client.id);
     if (!isConversationStart(last, Date.now(), config.NEW_CHAT_NOTIFY_GAP_HOURS)) return;

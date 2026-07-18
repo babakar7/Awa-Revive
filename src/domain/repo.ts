@@ -12,6 +12,8 @@ export interface Client {
   claimed_email: string | null;
   /** Last capability menu (vague opener) delivered — once-per-conversation window. */
   capability_menu_at: Date | null;
+  /** Studio team/test number — badged in admin, no new-conversation ping. */
+  is_test: boolean;
 }
 
 export interface PendingBooking {
@@ -51,10 +53,18 @@ export async function upsertClient(waPhone: string): Promise<Client> {
   const res = await pool.query(
     `insert into clients (wa_phone) values ($1)
      on conflict (wa_phone) do update set updated_at = now()
-     returning id, wa_phone, name, language, email_prompted_at, claimed_email, capability_menu_at`,
+     returning id, wa_phone, name, language, email_prompted_at, claimed_email, capability_menu_at, is_test`,
     [waPhone],
   );
   return res.rows[0];
+}
+
+/** Mark or unmark a client as a studio team/test number (admin toggle). */
+export async function setClientTest(clientId: string, isTest: boolean): Promise<void> {
+  await pool.query(
+    `update clients set is_test = $2, updated_at = now() where id = $1`,
+    [clientId, isTest],
+  );
 }
 
 /**
@@ -101,7 +111,7 @@ export async function findClientByPhone(candidates: string[]): Promise<Client | 
   const digits = [...new Set(candidates.map((c) => c.replace(/\D/g, "")).filter(Boolean))];
   if (digits.length === 0) return null;
   const res = await pool.query(
-    `select id, wa_phone, name, language, email_prompted_at, claimed_email, capability_menu_at
+    `select id, wa_phone, name, language, email_prompted_at, claimed_email, capability_menu_at, is_test
        from clients where regexp_replace(wa_phone, '\\D', '', 'g') = any($1) limit 1`,
     [digits],
   );

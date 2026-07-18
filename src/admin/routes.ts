@@ -277,7 +277,7 @@ export function registerAdmin(app: FastifyInstance): void {
         const rows = clients
           .map(
             (c) => `<tr>
-<td><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b><div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
+<td><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b>${c.is_test ? ` <span class="badge badge--gray">🧪 Équipe</span>` : ""}<div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
 <td>${escapeHtml((c.last_message ?? "").slice(0, 90))}${(c.last_message ?? "").length > 90 ? "…" : ""}<div class="muted">${ago(c.last_message_at)} · ${c.message_count} messages</div></td>
 <td class="hide-sm">${escapeHtml(c.language ?? "—")}</td>
 </tr>`,
@@ -306,15 +306,28 @@ export function registerAdmin(app: FastifyInstance): void {
             return `<div class="turnrow"><div class="bubble ${side}">${escapeHtml(t.content)}</div><span class="muted" style="${t.role === "user" ? "" : "text-align:right"}">${fmtDate(t.created_at)}</span></div>`;
           })
           .join("");
+        const isTest = client.is_test === true;
+        const testToggle = `<form class="inline" method="post" action="/admin/conversations/${client.id}/toggle-test" style="float:right">
+<input type="hidden" name="value" value="${isTest ? "0" : "1"}">
+<button class="act act--sm">${isTest ? "Retirer le tag Équipe" : "🧪 Marquer comme Équipe/test"}</button></form>`;
         const body = `
 <div class="card">
-<b>${escapeHtml(client.name ?? "(sans nom)")}</b> · +${escapeHtml(client.wa_phone)}
+${testToggle}
+<b>${escapeHtml(client.name ?? "(sans nom)")}</b> · +${escapeHtml(client.wa_phone)}${isTest ? ` <span class="badge badge--gray">🧪 Équipe</span>` : ""}
 <div class="muted">Langue : ${escapeHtml(client.language ?? "—")} · Email déclaré : ${escapeHtml(client.claimed_email ?? "—")} · Client depuis : ${fmtDate(client.created_at)}</div>
 </div>
 ${thread || `<p class="muted">Aucun message.</p>`}`;
         reply
           .type("text/html")
           .send(await layout(client.name ?? client.wa_phone, "/admin/conversations", body));
+      });
+
+      admin.post("/conversations/:clientId/toggle-test", async (req, reply) => {
+        const { clientId } = req.params as { clientId: string };
+        const isTest = String((req.body as any)?.value ?? "") === "1";
+        await repo.setClientTest(clientId, isTest);
+        req.log.info({ clientId, isTest, by: req.adminUser }, "Client test flag toggled");
+        reply.redirect(`/admin/conversations/${clientId}`, 303);
       });
 
       // ---------- Réservations & abonnements ----------

@@ -81,6 +81,13 @@ alter table clients
 alter table clients
   add column if not exists capability_menu_at timestamptz;
 
+-- Team/test numbers: someone from the studio testing Awa, not a real lead.
+-- Flagged clients are badged in the admin, excluded from campaign audiences,
+-- and never trigger the new-conversation ping to the owner. Toggled from the
+-- conversation page (source of truth); the initial team list is seeded once.
+alter table clients
+  add column if not exists is_test boolean not null default false;
+
 create index if not exists idx_pending_bookings_client_status
   on pending_bookings (client_id, status);
 create index if not exists idx_pending_bookings_status_expiry

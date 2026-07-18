@@ -15,6 +15,7 @@ export interface AdminClientRow {
   last_message_at: Date | null;
   last_message: string | null;
   message_count: number;
+  is_test: boolean;
 }
 
 export async function listClients(search?: string): Promise<AdminClientRow[]> {
@@ -25,7 +26,7 @@ export async function listClients(search?: string): Promise<AdminClientRow[]> {
     where = `where c.name ilike $1 or c.wa_phone like $1`;
   }
   const res = await pool.query(
-    `select c.id, c.wa_phone, c.name, c.language, c.claimed_email,
+    `select c.id, c.wa_phone, c.name, c.language, c.claimed_email, c.is_test,
             m.created_at as last_message_at, m.content as last_message,
             (select count(*) from conversations cc
               where cc.client_id = c.id and cc.role in ('user','assistant'))::int as message_count
