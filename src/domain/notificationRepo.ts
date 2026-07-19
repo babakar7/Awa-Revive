@@ -204,7 +204,7 @@ export async function claimOrReclaim(
   const ins = await pool.query(
     `insert into notification_log (rule_id, source, dedup_key, event_start, event_end, status)
      values ($1, 'rule', $2, $3, $4, 'claimed')
-     on conflict (dedup_key) do nothing`,
+     on conflict (dedup_key) where dedup_key is not null do nothing`,
     [ruleId, dedupKey, eventStart, eventEnd],
   );
   if ((ins.rowCount ?? 0) > 0) return true;
