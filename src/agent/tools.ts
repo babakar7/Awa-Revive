@@ -9,7 +9,10 @@ import {
   type ScheduleEntry,
 } from "../lib/scheduleImage.js";
 import { classTip } from "../lib/classTips.js";
-import { renderReceiptImage, formatXof } from "../lib/receiptImage.js";
+import { formatXof } from "../lib/receiptImage.js";
+import { renderInvoiceImage } from "../lib/invoiceImage.js";
+import * as invoices from "../domain/invoiceRepo.js";
+import { recordInvoiceLog } from "../domain/notificationRepo.js";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import { receptionWhatsAppLink, clientOutreachLink } from "../lib/receptionContact.js";
 import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
@@ -545,21 +548,34 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
-    name: "send_receipt",
+    name: "send_invoice",
     description:
-      "Send the client a studio-branded payment receipt IMAGE for a recent Wave payment (class, " +
-      "abonnement, or bar). Call this when they ask for a reçu / receipt / justificatif de paiement. " +
-      "Amounts come from the server only. If they ask for a formal company invoice (facture " +
-      "officielle / entreprise / SIRET), use handoff_to_human instead — this tool is not a legal invoice. " +
+      "Send the client a REAL numbered facture (invoice IMAGE, same register and numbering as the " +
+      "reception's factures) for one of their recent payments (class, abonnement, or bar). Call this " +
+      "when they ask for a facture / reçu / justificatif / receipt / proof of payment. Amounts always " +
+      "come from the server. Asking again for the same payment resends the SAME facture number. " +
       "Optional receipt_id to pick among several recent payments; omit to auto-send the single latest " +
-      "or return a list of choices when there are several.",
+      "or get a list of choices. Optional company to put a company name on the facture (facture " +
+      "entreprise) — ask the client for the exact name first if they want one.",
     input_schema: {
       type: "object",
       properties: {
         receipt_id: {
           type: "string",
           description:
-            "Id of a candidate from a previous send_receipt result (booking/plan/cafe id). Omit on first call.",
+            "Id of a candidate from a previous send_invoice result (booking/plan/cafe id). Omit on first call.",
+        },
+        company: {
+          type: "string",
+          description:
+            "Company / organisation name to print under the client's name (facture entreprise). " +
+            "Only when the client asked for it, spelled exactly as they gave it.",
+        },
+        client_name: {
+          type: "string",
+          description:
+            "Client's full name for the facture — only needed when the tool returned " +
+            "missing_client_name and you asked the client; it is saved to their profile.",
         },
       },
       additionalProperties: false,
@@ -571,8 +587,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Escalate the conversation to the human reception team. Triggers: the client wants to call or speak to " +
       "a person (e.g. \"je peux vous appeler ?\"), complaints, refunds beyond what cancel_booking handles, " +
       "cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
-      "medical questions, formal company invoices (facture officielle / entreprise — simple reçus use " +
-      "send_receipt), anything off-script. Records the handoff, notifies reception with a one-tap link to " +
+      "medical questions, factures needing special legal mentions or covering payments send_invoice " +
+      "doesn't list, anything off-script. Records the handoff, notifies reception with a one-tap link to " +
       "message the client, and the client is simply told reception will reach out to them — they send nothing.",
     input_schema: {
       type: "object",
@@ -2259,16 +2275,16 @@ export async function executeTool(
       });
     }
 
-    case "send_receipt": {
+    case "send_invoice": {
       const candidates = await repo.recentReceiptCandidates(client.id);
       if (candidates.length === 0) {
         return JSON.stringify({
           sent: false,
           error: "no_recent_payments",
           message:
-            "No recent Wave payments found for this client (class, plan, or bar in the last 90 days). " +
-            "Tell them politely you don't have a payment to print a receipt for; if they need a formal " +
-            "invoice from the studio, use handoff_to_human. Do NOT invent amounts.",
+            "No recent payments found for this client (class, plan, or bar in the last 90 days), so " +
+            "there is nothing to invoice. Tell them politely; for a facture on an older or special " +
+            "payment, use handoff_to_human. Do NOT invent amounts.",
         });
       }
       const wantedId = input.receipt_id ? String(input.receipt_id).trim() : "";
@@ -2301,11 +2317,27 @@ export async function executeTool(
             paid_at: c.paidAt.toISOString(),
           })),
           message:
-            "Several recent payments — ask the client which one (or present_options) then call send_receipt " +
+            "Several recent payments — ask the client which one (or present_options) then call send_invoice " +
             "again with that receipt_id. Do NOT invent amounts; use the list above.",
         });
       }
       chosen = chosen ?? candidates[0];
+      // A facture carries the client's identity — never emit one for an
+      // anonymous row. The model asks for the name and passes it back here.
+      const givenName = input.client_name ? String(input.client_name).trim().slice(0, 80) : "";
+      if (!client.name && givenName) {
+        await repo.updateClientName(client.id, givenName);
+        client = { ...client, name: givenName };
+      }
+      if (!client.name) {
+        return JSON.stringify({
+          sent: false,
+          error: "missing_client_name",
+          message:
+            "This client has no name on file and a facture needs one. Ask for their full name, " +
+            "then call send_invoice again passing it as client_name.",
+        });
+      }
       let detailLine = chosen.detail;
       if (chosen.kind === "booking" && chosen.detail) {
         const d = new Date(chosen.detail);
@@ -2320,44 +2352,76 @@ export async function executeTool(
           });
         }
       }
+      const company = input.company ? String(input.company).trim().slice(0, 120) : null;
       try {
-        const png = renderReceiptImage({
-          title: "Reçu de paiement",
-          clientName: client.name,
-          itemLabel: chosen.label,
-          detailLine,
-          amountXof: chosen.amountXof,
-          paymentRef: chosen.paymentRef,
-          paidVia: chosen.paidVia,
-          paidAt: chosen.paidAt,
+        // One facture per payment: re-asking resends the same number. A new
+        // company name on the facture is the one case that mints a new one.
+        let invoice = await invoices.findInvoiceBySource(chosen.kind, chosen.id);
+        if (invoice && company && (invoice.client_ref ?? "") !== company) invoice = null;
+        if (!invoice) {
+          invoice = await invoices.createInvoice({
+            client_name: client.name,
+            client_phone: client.wa_phone,
+            client_ref: company,
+            lines: [
+              {
+                label: detailLine ? `${chosen.label} — ${detailLine}` : chosen.label,
+                qty: 1,
+                unit_xof: chosen.amountXof,
+                total_xof: chosen.amountXof,
+              },
+            ],
+            total_xof: chosen.amountXof,
+            note: null,
+            source_kind: chosen.kind,
+            source_id: chosen.id,
+            payment_method: chosen.paidVia,
+            payment_ref: chosen.paymentRef,
+            paid_at: chosen.paidAt,
+            created_by: "awa",
+          });
+        }
+        const png = renderInvoiceImage({
+          number: invoice.number,
+          clientName: invoice.client_name,
+          clientRef: invoice.client_ref,
+          lines: invoices.invoiceLines(invoice),
+          totalXof: invoice.total_xof,
+          note: invoice.note,
+          paidVia: invoice.payment_method,
+          paymentRef: invoice.payment_ref,
+          paidAt: invoice.paid_at,
+          createdAt: invoice.created_at,
         });
-        await sendImage(
-          client.wa_phone,
-          png,
-          `Reçu — ${chosen.label} · ${formatXof(chosen.amountXof)}`,
-        );
+        const caption = `Facture ${invoice.number} — Revive · ${formatXof(invoice.total_xof)}`;
+        const wamid = await sendImage(client.wa_phone, png, caption);
+        await invoices.markInvoiceSent(invoice.id, "sent");
+        await recordInvoiceLog(client.wa_phone, `[facture ${invoice.number}] ${caption}`, "sent", null, wamid ?? null);
         await repo.addTurn(
           client.id,
           "assistant",
-          `[image envoyée : reçu ${chosen.kind} ${chosen.id} — ${chosen.label} ${formatXof(chosen.amountXof)}]`,
+          `[image envoyée : facture ${invoice.number} — ${chosen.label} ${formatXof(chosen.amountXof)}]`,
         );
         return JSON.stringify({
           sent: true,
+          invoice_number: invoice.number,
           receipt_id: chosen.id,
           kind: chosen.kind,
           label: chosen.label,
           amount_xof: chosen.amountXof,
           note:
-            "Receipt image already delivered. Confirm briefly in the client's language that this is their " +
-            "payment proof (not a formal company invoice). If they need a facture officielle, handoff_to_human.",
+            "Facture image already delivered (visible in /admin/factures). Confirm briefly in the " +
+            "client's language, naming the facture number. If they need extra legal mentions the " +
+            "facture doesn't carry, use handoff_to_human.",
         });
       } catch (err) {
-        console.error("send_receipt failed:", err);
+        console.error("send_invoice failed:", err);
         return JSON.stringify({
           sent: false,
-          error: "receipt_send_failed",
+          error: "invoice_send_failed",
           message:
-            "Could not render or send the receipt image. Apologize briefly and offer handoff_to_human for a formal receipt.",
+            "Could not create or send the facture. Apologize briefly and call handoff_to_human so " +
+            "reception prepares it.",
         });
       }
     }

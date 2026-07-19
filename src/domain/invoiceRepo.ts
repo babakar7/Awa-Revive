@@ -118,6 +118,24 @@ export async function findInvoice(id: string): Promise<Invoice | null> {
   return (res.rows[0] as Invoice) ?? null;
 }
 
+/**
+ * The invoice already emitted for a given paid item, if any — one facture per
+ * payment: re-asking resends the SAME number instead of minting a new one
+ * (immutability + no duplicate numbers for the same transaction).
+ */
+export async function findInvoiceBySource(
+  sourceKind: string,
+  sourceId: string,
+): Promise<Invoice | null> {
+  if (!UUID_RE.test(String(sourceId))) return null;
+  const res = await pool.query(
+    `select * from invoices where source_kind = $1 and source_id = $2
+      order by created_at desc limit 1`,
+    [sourceKind, sourceId],
+  );
+  return (res.rows[0] as Invoice) ?? null;
+}
+
 export async function listInvoices(limit = 100): Promise<Invoice[]> {
   const res = await pool.query(`select * from invoices order by created_at desc limit $1`, [limit]);
   return res.rows as Invoice[];

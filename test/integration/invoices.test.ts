@@ -151,3 +151,31 @@ describe("invoice WhatsApp send", () => {
     expect(mock.calls.filter((c) => c.url.includes("graph.facebook.com")).length).toBe(0);
   });
 });
+
+describe("one facture per payment (send_invoice dedup)", () => {
+  it("findInvoiceBySource returns the emitted invoice, none for another source", async () => {
+    const { createInvoice: create, findInvoiceBySource } = await import(
+      "../../src/domain/invoiceRepo.js"
+    );
+    const sourceId = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+    const made = await create({
+      client_name: "Nasita Fofana",
+      client_phone: "221781428610",
+      client_ref: null,
+      lines: [{ label: "Rééducation Fonctionnelle", qty: 1, unit_xof: 225000, total_xof: 225000 }],
+      total_xof: 225000,
+      note: null,
+      source_kind: "booking",
+      source_id: sourceId,
+      payment_method: "wave",
+      payment_ref: "S-123",
+      paid_at: new Date(),
+      created_by: "awa",
+    });
+    const found = await findInvoiceBySource("booking", sourceId);
+    expect(found?.id).toBe(made.id);
+    expect(found?.number).toBe(made.number);
+    expect(await findInvoiceBySource("plan", sourceId)).toBeNull();
+    expect(await findInvoiceBySource("booking", "not-a-uuid")).toBeNull();
+  });
+});
