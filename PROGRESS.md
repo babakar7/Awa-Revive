@@ -1,10 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **15 juillet 2026** — **admin IA redesign** (inbox
-> « À faire », sidebar groupée, recherche client globale, badges), cf. §4.34.
-> Avant : notifications staff §4.32, livraisons bar, handoffs `wa.me`, lot
-> exactitude & fermeture.
+> Dernière mise à jour : **19 juillet 2026** — journal notif : ping « nouvelle
+> conversation » source=`new_chat` (plus `reception`). Avant : admin IA
+> redesign §4.34, notifications staff §4.32, livraisons bar, handoffs `wa.me`.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
@@ -1607,6 +1606,15 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   (`clientOutreachLink`, `receptionContact.ts`). ~12 consignes du prompt
   alignées. INCHANGÉS volontairement (lien immédiat conservé) : annulation résa
   studio (remboursement), échec post-paiement, fallback technique.
+- **19/07 — Journal notif : source `new_chat` (plus `reception`) pour le ping
+  owner.** Le ping « Nouvelle conversation » part bien uniquement vers
+  `NEW_CHAT_NOTIFY_PHONE` (Babakar), mais était journalisé via
+  `recordReceptionLog` → colonne Source = `reception` alors que la réception
+  n'était pas contactée. Correctif : `recordNewChatLog` (`source='new_chat'`) +
+  libellés FR dans `/admin/notifications` (réception / nouvelle conv / …).
+  Anciennes lignes historiques restent `reception` en DB ; seuls les nouveaux
+  pings sont corrects. Livraison inchangée.
+
 - **18/07 — Numéros équipe/test + campagne `new_slots` (`9b7c911`).**
   (a) `clients.is_test` : badge « 🧪 Équipe » + bascule sur la fiche
   conversation, plus de ping « nouvelle conversation » au gérant pour l'équipe,
@@ -1892,9 +1900,10 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   template réception `WA_RECEPTION_TEMPLATE` si fenêtre 24h fermée (Meta 131047,
   facturé). **Piège** : sans ce template posé sur Railway, le ping n'arrive que
   si le numéro notifié a écrit à Awa dans les 24h. Fire-and-forget (ne bloque
-  jamais la réponse). 5 tests `conversationStart`. Fichiers :
-  [notify.ts](src/lib/notify.ts), [index.ts](src/agent/index.ts), config,
-  repo, `.env.example`.
+  jamais la réponse). 5 tests `conversationStart`. Journal : `source='new_chat'`
+  (corrigé 19/07 — avant réutilisait `recordReceptionLog` → faux label
+  « reception »). Fichiers : [notify.ts](src/lib/notify.ts),
+  [index.ts](src/agent/index.ts), config, repo, `.env.example`.
 - **13/07 — Tests d'intégration Orange Money / Max It (`7fb8487`).** Nouveau
   fichier [orange-money-webhook.test.ts](test/integration/orange-money-webhook.test.ts)
   (15 cas) sur le même harnais Postgres jetable + fetch mock que Wave. Valide

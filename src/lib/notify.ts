@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import { sendTemplate, sendText } from "./whatsapp.js";
-import { recordReceptionLog } from "../domain/notificationRepo.js";
+import { recordNewChatLog, recordReceptionLog } from "../domain/notificationRepo.js";
 import { STAFF_FOOTER } from "../domain/notificationRules.js";
 
 /**
@@ -193,16 +193,17 @@ export function notifyNewConversation(args: {
   // The notify number (Babakar) almost never messages Awa → its 24h window is
   // ~always closed, and free-text out-of-window can be accepted (200) then
   // dropped asynchronously — a silent miss. Template-first, like the other staff
-  // pings (test button, rule reminders). Journaled so it's visible in the log.
+  // pings (test button, rule reminders). Journaled as source='new_chat' (owner
+  // only — not reception) so the admin log doesn't mislabel it.
   const logBody = `${subject}\n${body}`;
   sendWhatsAppNotification(config.NEW_CHAT_NOTIFY_PHONE, subject, body, { preferTemplate: true })
     .then((path) => {
       console.log(`[notify] New-conversation ping (${path}) for +${cleanPhone}`);
-      void recordReceptionLog(config.NEW_CHAT_NOTIFY_PHONE, logBody, path, null);
+      void recordNewChatLog(config.NEW_CHAT_NOTIFY_PHONE, logBody, path, null);
     })
     .catch((err) => {
       console.error(`[notify] Failed to send new-conversation ping for +${cleanPhone}:`, err);
-      void recordReceptionLog(config.NEW_CHAT_NOTIFY_PHONE, logBody, "failed", String(err).slice(0, 300));
+      void recordNewChatLog(config.NEW_CHAT_NOTIFY_PHONE, logBody, "failed", String(err).slice(0, 300));
     });
 }
 

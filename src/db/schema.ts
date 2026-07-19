@@ -430,9 +430,11 @@ alter table notification_rules
 alter table notification_rules
   add column if not exists exclude_pattern text;
 
--- Journal de tout envoi (règle, réception, test). dedup_key = clé de claim
--- (unique partiel) : une occurrence n'est jamais envoyée deux fois, même après
--- redémarrage ou sweeps concurrents. status :
+-- Journal de tout envoi. source ∈ rule | reception | new_chat | delivery |
+-- invoice | gift_card | staff_planning | test. new_chat = ping owner
+-- (NEW_CHAT_NOTIFY_PHONE) uniquement — ne pas confondre avec reception.
+-- dedup_key = clé de claim (unique partiel) : une occurrence n'est jamais
+-- envoyée deux fois, même après redémarrage ou sweeps concurrents. status :
 --   claimed → réservé, envoi pas encore confirmé (reclaimable après 2 min si
 --             coincé : un envoi perdu pour « mettre les vélos à l'eau » est pire
 --             qu'un doublon, contrairement aux relances marketing) ;

@@ -278,6 +278,8 @@ export async function recentRuleEventEnds(ruleId: string): Promise<number[]> {
 /**
  * Reception/café notification log entry (source='reception', no dedup key).
  * Best-effort: never throws to the fire-and-forget caller.
+ * Only for messages that actually go to RECEPTION_PHONE (handoffs, refunds,
+ * café orders, crashes) — NOT owner pings (use recordNewChatLog).
  */
 export async function recordReceptionLog(
   recipientPhone: string,
@@ -289,6 +291,28 @@ export async function recordReceptionLog(
     await pool.query(
       `insert into notification_log (source, recipient_phone, body, status, error)
        values ('reception', $1, $2, $3, $4)`,
+      [recipientPhone, body, status, error],
+    );
+  } catch {
+    /* logging must never break a notification */
+  }
+}
+
+/**
+ * Owner "new conversation started" ping (source='new_chat', no dedup key).
+ * Goes to NEW_CHAT_NOTIFY_PHONE only — must not be labeled reception in the
+ * admin journal. Same best-effort contract as recordReceptionLog.
+ */
+export async function recordNewChatLog(
+  recipientPhone: string,
+  body: string,
+  status: LogStatus,
+  error: string | null,
+): Promise<void> {
+  try {
+    await pool.query(
+      `insert into notification_log (source, recipient_phone, body, status, error)
+       values ('new_chat', $1, $2, $3, $4)`,
       [recipientPhone, body, status, error],
     );
   } catch {

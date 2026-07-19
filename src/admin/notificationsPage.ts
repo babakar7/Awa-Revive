@@ -52,9 +52,26 @@ const LOG_COLORS: Record<string, string> = {
   suppressed: "#6e7781",
 };
 
+/** Human labels for notification_log.source — raw key stays the title attribute. */
+const SOURCE_LABELS: Record<string, string> = {
+  reception: "réception",
+  new_chat: "nouvelle conv",
+  delivery: "livraison",
+  invoice: "facture",
+  gift_card: "carte cadeau",
+  staff_planning: "planning staff",
+  test: "test",
+  rule: "règle",
+};
+
 function statusBadge(status: string): string {
   const color = LOG_COLORS[status] ?? "#6e7781";
   return `<span class="badge" style="background:${color}">${esc(status)}</span>`;
+}
+
+function sourceLabel(source: string): string {
+  const label = SOURCE_LABELS[source] ?? source;
+  return `<span title="${esc(source)}">${esc(label)}</span>`;
 }
 
 /** Sample values so the owner sees how a rule reads before it fires. */
@@ -238,7 +255,7 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
     .map(
       (l) => `<tr>
 <td>${fmtDate(l.created_at)}</td>
-<td>${esc(l.source)}</td>
+<td>${sourceLabel(l.source)}</td>
 <td>${statusBadge(l.status)}</td>
 <td>+${esc((l.recipient_phone ?? "").replace(/^\+/, "")) || "—"}</td>
 <td>${esc((l.body ?? "").slice(0, 80))}${l.error ? `<div class="muted">⚠️ ${esc(l.error.slice(0, 80))}</div>` : ""}</td>
