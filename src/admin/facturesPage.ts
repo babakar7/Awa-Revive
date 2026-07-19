@@ -18,7 +18,7 @@ function esc(s: unknown): string {
 }
 
 function fcfa(n: number): string {
-  return `${Number(n).toLocaleString("fr-FR").replace(/ /g, " ")} F`;
+  return `${Number(n).toLocaleString("fr-FR").replace(/ /g, " ")} FCFA`;
 }
 
 function fmtDay(d: Date | string | null): string {
@@ -241,52 +241,61 @@ export function renderFacturePrint(inv: Invoice): string {
       (l) => `<tr><td>${esc(l.label)}</td><td class="num">${l.qty}</td><td class="num">${fcfa(l.unit_xof)}</td><td class="num"><b>${fcfa(l.total_xof)}</b></td></tr>`,
     )
     .join("");
+  const paid = inv.paid_at ? inv.total_xof : 0;
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
-<title>Facture ${esc(inv.number)} — Revive Ventures</title>
+<title>Facture ${esc(inv.number)} — Revive</title>
 <style>
   *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#211921;background:#fff;margin:0;padding:2rem}
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1f2126;background:#fff;margin:0;padding:2rem}
   .paper{max-width:720px;margin:0 auto}
-  .band{background:#7c547d;color:#fbf6f0;display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:.5rem;padding:1.2rem 1.6rem;border-radius:6px}
-  .band .who b{font-size:1.3rem;letter-spacing:.03em}
-  .band .who div,.band .doc div{font-size:.8rem;opacity:.9;margin-top:.15rem}
-  .band .doc{text-align:right}
-  .band .doc b{font-size:1.1rem;letter-spacing:.06em}
-  .blk{background:#f3e6ee;border-radius:10px;padding:.8rem 1.1rem;max-width:340px;margin:1.5rem 0}
-  .blk .lab{font-size:.68rem;font-weight:700;letter-spacing:.07em;color:#7c547d}
-  .blk .nom{font-weight:700;margin-top:.2rem}
-  .blk .ref{font-size:.85rem;color:#6c5a6d}
-  table{width:100%;border-collapse:collapse;font-size:.92rem}
-  thead th{background:#7c547d;color:#fbf6f0;text-align:left;font-size:.72rem;letter-spacing:.05em;padding:.5rem .7rem}
+  .head{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem}
+  .logo{font-size:2rem;font-weight:800;letter-spacing:-.02em}
+  .doc{text-align:right}
+  .doc b{font-size:1.05rem}
+  .doc div{font-size:.82rem;color:#6b7075;margin-top:.2rem}
+  .seller{margin-top:1.4rem;font-size:.85rem;color:#6b7075;line-height:1.45}
+  .seller b{color:#1f2126}
+  hr{border:none;border-top:1px solid #e3e5e8;margin:1.2rem 0}
+  .parties{display:flex;gap:2rem;flex-wrap:wrap;font-size:.85rem;line-height:1.45}
+  .parties .lab{color:#6b7075}
+  .parties .nom{font-weight:700}
+  .parties .muted{color:#6b7075}
+  table{width:100%;border-collapse:collapse;font-size:.92rem;margin-top:1.6rem}
+  thead th{background:#cfdcf3;color:#1f2126;text-align:left;font-size:.8rem;padding:.55rem .7rem}
   thead th.num,td.num{text-align:right}
-  td{padding:.6rem .7rem;border-bottom:1px solid #e8d9d2;font-variant-numeric:tabular-nums}
-  .total{margin:1.3rem 0 0 auto;max-width:340px;background:#3d2b3e;color:#fbf6f0;border-radius:12px;display:flex;justify-content:space-between;align-items:center;padding:.85rem 1.3rem}
-  .total span{font-size:.72rem;font-weight:700;letter-spacing:.07em}
-  .total b{font-size:1.25rem}
-  .paid,.note{color:#6c5a6d;font-size:.88rem;margin-top:1rem}
-  .foot{border-top:1px solid #e8d9d2;margin-top:2rem;padding-top:.9rem;text-align:center;color:#a98baa;font-size:.8rem}
+  td{padding:.65rem .7rem;font-variant-numeric:tabular-nums}
+  tbody{border-bottom:2px solid #1f2126}
+  .totals{margin:1.2rem 0 0 auto;max-width:340px;font-size:.9rem}
+  .totals .row{display:flex;justify-content:space-between;padding:.22rem 0}
+  .totals .strong{font-weight:700;font-size:1rem;border-top:1px solid #e3e5e8;margin-top:.3rem;padding-top:.5rem}
+  .paid,.note{color:#6b7075;font-size:.85rem;margin-top:1.1rem}
   .no-print{margin:0 auto 1.2rem;max-width:720px}
-  .no-print button{background:#7c547d;color:#fff;border:none;border-radius:8px;padding:.55rem 1.1rem;font-size:.95rem;cursor:pointer}
+  .no-print button{background:#1f2126;color:#fff;border:none;border-radius:8px;padding:.55rem 1.1rem;font-size:.95rem;cursor:pointer}
   @media print{ .no-print{display:none} body{padding:0} }
 </style></head><body>
 <div class="no-print"><button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button></div>
 <div class="paper">
-  <div class="band">
-    <div class="who"><b>REVIVE VENTURES</b><div>Centre de bien-être — Almadies, Dakar</div><div>revive.sn</div></div>
-    <div class="doc"><b>FACTURE</b><div>N° ${esc(inv.number)}</div><div>${fmtLongDay(inv.created_at)}</div></div>
+  <div class="head">
+    <div class="logo">revive</div>
+    <div class="doc"><b>Facture n° ${esc(inv.number)}</b><div>Date d'émission : ${fmtLongDay(inv.created_at)}</div></div>
   </div>
-  <div class="blk">
-    <div class="lab">FACTURÉ À</div>
-    <div class="nom">${esc(inv.client_name)}</div>
-    ${inv.client_ref ? `<div class="ref">${esc(inv.client_ref)}</div>` : ""}
-    ${inv.client_phone ? `<div class="ref">+${esc(inv.client_phone)}</div>` : ""}
+  <div class="seller"><b>Revive</b><br>Dakar, Dakar<br>Sénégal<br>support@revive.sn<br>Téléphone : 78 464 43 29</div>
+  <hr>
+  <div class="parties">
+    <div><div class="lab">Facturer à :</div><div class="nom">${esc(inv.client_name)}</div>${inv.client_ref ? `<div class="muted">${esc(inv.client_ref)}</div>` : ""}<div class="muted">Sénégal</div></div>
+    ${inv.client_phone ? `<div><div class="lab">Infos client supplémentaires :</div><div class="muted">Téléphone : +${esc(inv.client_phone)}</div></div>` : ""}
   </div>
-  <table><thead><tr><th>DÉSIGNATION</th><th class="num">QTÉ</th><th class="num">PU</th><th class="num">TOTAL</th></tr></thead><tbody>${rows}</tbody></table>
-  <div class="total"><span>TOTAL À RÉGLER</span><b>${fcfa(inv.total_xof)}</b></div>
+  <table><thead><tr><th>Article ou service</th><th class="num">Quantité</th><th class="num">Prix</th><th class="num">Total</th></tr></thead><tbody>${rows}</tbody></table>
+  <div class="totals">
+    <div class="row"><span>Sous-total</span><span>${fcfa(inv.total_xof)}</span></div>
+    <div class="row"><span>Taxes</span><span>${fcfa(0)}</span></div>
+    <div class="row strong"><span>Total de la facture</span><span>${fcfa(inv.total_xof)}</span></div>
+    <div class="row"><span>Montant payé</span><span>${fcfa(paid)}</span></div>
+    <div class="row strong"><span>Reste à payer</span><span>${fcfa(inv.total_xof - paid)}</span></div>
+  </div>
   ${inv.paid_at ? `<div class="paid">✓ Payée via ${esc(inv.payment_method ?? "—")}${inv.payment_ref ? ` — réf. ${esc(inv.payment_ref)}` : ""} · le ${fmtLongDay(inv.paid_at)}</div>` : ""}
   ${inv.note ? `<div class="note">${esc(inv.note)}</div>` : ""}
-  <div class="foot">Revive Ventures · Centre de bien-être · Almadies, Dakar · revive.sn — Merci de votre confiance</div>
 </div>
 </body></html>`;
 }

@@ -49,6 +49,7 @@ import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import {
   composeBusinessDescription,
   getBusinessProfile,
+  sendDocument,
   sendImage,
   sendText,
   updateBusinessProfile,
@@ -56,7 +57,7 @@ import {
 } from "../lib/whatsapp.js";
 import * as invoices from "../domain/invoiceRepo.js";
 import { normalizeSourceKind, parseInvoiceLineFields } from "../domain/invoiceRules.js";
-import { renderInvoiceImage } from "../lib/invoiceImage.js";
+import { renderInvoicePdf } from "../lib/invoicePdf.js";
 import { formatXof } from "../lib/receiptImage.js";
 import {
   facturesBanner,
@@ -617,10 +618,11 @@ ${
         if (!inv) return reply.redirect("/admin/factures?err=facture introuvable", 303);
         if (!inv.client_phone)
           return reply.redirect(`/admin/factures/${id}?err=${encodeURIComponent("pas de numéro — envoi impossible")}`, 303);
-        const png = renderInvoiceImage({
+        const pdf = await renderInvoicePdf({
           number: inv.number,
           clientName: inv.client_name,
           clientRef: inv.client_ref,
+          clientPhone: inv.client_phone,
           lines: invoices.invoiceLines(inv),
           totalXof: inv.total_xof,
           note: inv.note,
@@ -632,7 +634,7 @@ ${
         const caption = `Facture ${inv.number} — Revive · ${formatXof(inv.total_xof)}`;
         const logBody = `[facture ${inv.number}] ${caption}`;
         try {
-          const wamid = await sendImage(inv.client_phone, png, caption);
+          const wamid = await sendDocument(inv.client_phone, pdf, `Facture-${inv.number}.pdf`, caption);
           await invoices.markInvoiceSent(id, "sent");
           await nrepo.recordInvoiceLog(inv.client_phone, logBody, "sent", null, wamid ?? null);
           req.log.info({ invoice: id, by: req.adminUser }, "Invoice sent on WhatsApp");

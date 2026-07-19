@@ -1579,6 +1579,21 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
 
 ## 5. Chronologie condensée
 
+- **19/07 — Factures : Awa émet de vraies factures, et tout part en PDF
+  (`764fbb1` + ce commit).** (a) `send_receipt` → **`send_invoice`** : demande
+  client reçu/justificatif/facture = facture RÉELLE du registre
+  `/admin/factures` (numérotation FAC-YYYY-NNNN partagée avec la réception).
+  Une facture par paiement (`findInvoiceBySource` — redemander renvoie le MÊME
+  numéro) ; `company` pour facture entreprise (nouveau numéro si la société
+  change) ; `missing_client_name` → le modèle demande le nom (`client_name`,
+  sauvegardé). Handoff facture réservé aux mentions légales spéciales /
+  paiements hors liste (>90 j, comptoir). (b) Sur demande gérant, layout calqué
+  sur les factures Wix (page blanche, bande tableau bleue, Sous-total / Taxes /
+  Total / Montant payé / Reste à payer) et **envoi en PDF joint**
+  (`invoicePdf.ts` pdfkit + `sendDocument` type document, nom de fichier
+  `Facture-FAC-….pdf`) — pour Awa ET le bouton Envoyer de `/admin/factures`.
+  La page print HTML suit le même layout. `invoiceImage.ts` (PNG) n'est plus
+  branché sur les factures.
 - **19/07 — Interrupteur global alertes staff (`c316966`).** Bouton ⏸️/▶️ en
   tête de `/admin/notifications` : pause TOUTES les règles d'un clic (flag
   `staff_alerts_paused` en `app_state`, gate en tête de sweep — rien n'est

@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import { notifyReception, sendVerificationCodeEmail } from "../lib/notify.js";
-import { sendInteractive, sendImage } from "../lib/whatsapp.js";
+import { sendInteractive, sendImage, sendDocument } from "../lib/whatsapp.js";
 import {
   buildWeeklyGrid,
   renderScheduleImage,
@@ -10,7 +10,7 @@ import {
 } from "../lib/scheduleImage.js";
 import { classTip } from "../lib/classTips.js";
 import { formatXof } from "../lib/receiptImage.js";
-import { renderInvoiceImage } from "../lib/invoiceImage.js";
+import { renderInvoicePdf } from "../lib/invoicePdf.js";
 import * as invoices from "../domain/invoiceRepo.js";
 import { recordInvoiceLog } from "../domain/notificationRepo.js";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
@@ -2381,10 +2381,11 @@ export async function executeTool(
             created_by: "awa",
           });
         }
-        const png = renderInvoiceImage({
+        const pdf = await renderInvoicePdf({
           number: invoice.number,
           clientName: invoice.client_name,
           clientRef: invoice.client_ref,
+          clientPhone: invoice.client_phone,
           lines: invoices.invoiceLines(invoice),
           totalXof: invoice.total_xof,
           note: invoice.note,
@@ -2394,13 +2395,13 @@ export async function executeTool(
           createdAt: invoice.created_at,
         });
         const caption = `Facture ${invoice.number} — Revive · ${formatXof(invoice.total_xof)}`;
-        const wamid = await sendImage(client.wa_phone, png, caption);
+        const wamid = await sendDocument(client.wa_phone, pdf, `Facture-${invoice.number}.pdf`, caption);
         await invoices.markInvoiceSent(invoice.id, "sent");
         await recordInvoiceLog(client.wa_phone, `[facture ${invoice.number}] ${caption}`, "sent", null, wamid ?? null);
         await repo.addTurn(
           client.id,
           "assistant",
-          `[image envoyée : facture ${invoice.number} — ${chosen.label} ${formatXof(chosen.amountXof)}]`,
+          `[document envoyé : facture ${invoice.number} (PDF) — ${chosen.label} ${formatXof(chosen.amountXof)}]`,
         );
         return JSON.stringify({
           sent: true,

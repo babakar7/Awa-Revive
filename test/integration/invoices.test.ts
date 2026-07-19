@@ -101,8 +101,9 @@ describe("invoice pages", () => {
     const id = loc.split("/")[3].split("?")[0];
     const print = await app.inject({ method: "GET", url: `/admin/factures/${id}/print`, headers: { authorization: AUTH } });
     expect(print.statusCode).toBe(200);
-    expect(print.body).toContain("REVIVE VENTURES");
-    expect(print.body).toContain("FACTURÉ À");
+    expect(print.body).toContain(`Facture n° FAC-${YEAR}-0001`);
+    expect(print.body).toContain("Facturer à :");
+    expect(print.body).toContain("Reste à payer");
 
     const list = await app.inject({ method: "GET", url: "/admin/factures", headers: { authorization: AUTH } });
     expect(list.body).toContain(`FAC-${YEAR}-0001`);
@@ -117,7 +118,7 @@ describe("invoice pages", () => {
 });
 
 describe("invoice WhatsApp send", () => {
-  it("uploads the image then sends it, and records sent_at + a log", async () => {
+  it("uploads the PDF then sends it as a document, and records sent_at + a log", async () => {
     const loc = await createInvoice();
     const id = loc.split("/")[3].split("?")[0];
     mock.reset();
@@ -128,8 +129,9 @@ describe("invoice WhatsApp send", () => {
 
     const media = mock.calls.filter((c) => c.url.includes("graph.facebook.com") && c.url.endsWith("/media"));
     expect(media.length).toBe(1);
-    const image = mock.calls.filter((c) => c.body?.type === "image" && c.body?.to === "221771234567");
-    expect(image.length).toBe(1);
+    const docs = mock.calls.filter((c) => c.body?.type === "document" && c.body?.to === "221771234567");
+    expect(docs.length).toBe(1);
+    expect(docs[0].body?.document?.filename).toMatch(/^Facture-FAC-\d{4}-\d{4}\.pdf$/);
 
     const inv = (await pool.query(`select sent_status, sent_at from invoices where id=$1`, [id])).rows[0];
     expect(inv.sent_status).toBe("sent");

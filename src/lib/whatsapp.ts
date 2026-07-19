@@ -158,6 +158,44 @@ export async function sendImage(to: string, png: Buffer, caption?: string): Prom
   });
 }
 
+/**
+ * Send a PDF as a WhatsApp DOCUMENT: upload to Meta's media endpoint, then send
+ * by media id with a filename (what the client sees). Same contract as
+ * sendImage — throws on failure, returns the wamid.
+ */
+export async function sendDocument(
+  to: string,
+  pdf: Buffer,
+  filename: string,
+  caption?: string,
+): Promise<string | null> {
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("file", new Blob([new Uint8Array(pdf)], { type: "application/pdf" }), filename);
+  const res = await fetch(`${GRAPH_BASE}/${config.WA_PHONE_NUMBER_ID}/media`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.WA_ACCESS_TOKEN}` },
+    body: form,
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`WhatsApp media upload failed (${res.status}): ${await res.text()}`);
+  }
+  const mediaId = ((await res.json()) as { id?: string })?.id;
+  if (!mediaId) throw new Error("WhatsApp media upload returned no id");
+  return postMessage({
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "document",
+    document: {
+      id: mediaId,
+      filename,
+      ...(caption ? { caption: caption.slice(0, 1024) } : {}),
+    },
+  });
+}
+
 // ---------- WhatsApp Business profile (about/address/description/photo) ----------
 
 export interface BusinessProfile {
