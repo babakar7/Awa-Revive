@@ -1580,6 +1580,13 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
 
 ## 5. Chronologie condensée
 
+- **19/07 — Interrupteur global alertes staff (`c316966`).** Bouton ⏸️/▶️ en
+  tête de `/admin/notifications` : pause TOUTES les règles d'un clic (flag
+  `staff_alerts_paused` en `app_state`, gate en tête de sweep — rien n'est
+  claimé pendant la pause). Demande gérant après le fix ci-dessous : ne pas
+  déclencher les premières alertes sans prévenir le staff. **État laissé :
+  pause ACTIVE, les 2 règles enabled** — pour démarrer les envois, un seul
+  clic sur « ▶️ Activer les alertes ».
 - **19/07 — Fix CRITIQUE rappels staff : aucune alerte n'était jamais partie
   (`d30fcc0`).** Les 2 règles de `/admin/notifications` (« Aquabikes à l'eau »
   30 min avant au gardien +224 [numéro guinéen VOULU], « Effectif coach » 3h
