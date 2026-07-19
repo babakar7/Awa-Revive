@@ -1580,6 +1580,40 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
 
 ## 5. Chronologie condensée
 
+- **19/07 — Fix CRITIQUE rappels staff : aucune alerte n'était jamais partie
+  (`d30fcc0`).** Les 2 règles de `/admin/notifications` (« Aquabikes à l'eau »
+  30 min avant au gardien +224 [numéro guinéen VOULU], « Effectif coach » 3h
+  avant hors Reformer) échouaient à CHAQUE sweep depuis le 14/07 : l'index
+  unique sur `notification_log.dedup_key` est PARTIEL (`where dedup_key is not
+  null`) et le `ON CONFLICT (dedup_key)` du claim ne répétait pas le prédicat →
+  Postgres 42P10 avant tout envoi, erreur avalée par le try/catch de la boucle,
+  journal admin VIDE (piège : l'échec était invisible partout sauf `railway
+  logs`). Fix une ligne (`notificationRepo.ts:claimOrReclaim`) + test
+  d'intégration de régression (`notificationClaim.test.ts`). Vérifié aussi :
+  Wix a les téléphones de tous les coachs sauf **Lamine** (Fusion) — à créer
+  dans Wix sinon ses alertes feront `failed` (visible au journal désormais).
+- **19/07 — Handoff inversé : la réception écrit AU client (`ffad537`).**
+  Feedback gérant (cas hernie discale) : le client ne doit plus rien envoyer.
+  `handoff_to_human` ne retourne plus de lien wa.me au client — Awa le rassure
+  (« la réception va te recontacter ici ») et la notif réception contient un
+  lien 1-clic vers le client avec message prérempli à la voix de la réception
+  (`clientOutreachLink`, `receptionContact.ts`). ~12 consignes du prompt
+  alignées. INCHANGÉS volontairement (lien immédiat conservé) : annulation résa
+  studio (remboursement), échec post-paiement, fallback technique.
+- **18/07 — Numéros équipe/test + campagne `new_slots` (`9b7c911`).**
+  (a) `clients.is_test` : badge « 🧪 Équipe » + bascule sur la fiche
+  conversation, plus de ping « nouvelle conversation » au gérant pour l'équipe,
+  à EXCLURE de toute audience de campagne. 5 seedés : Baba, Meryl, Réception,
+  Linsey, Syndel. (b) Template Meta **`new_slots`** (Marketing, langue `en`,
+  corps FR, 2 variables : cours + créneaux) créé et approuvé — réutilisable
+  pour annoncer de nouveaux créneaux. Envoyé à 6 clientes à la demande
+  Foundation non servie (nouveaux créneaux Ven 16h15/17h15/18h15, coachs
+  Leslie/Yass/Leslie) ; chaque envoi journalisé comme tour assistant pour le
+  contexte d'Awa. Piège découvert : `WA_WABA_ID` en env Railway pointe un WABA
+  de TEST (templates sample uniquement) — le vrai est « Revive »
+  `1738439110507790` (via business 778192040138434) ; l'envoi n'en dépend pas
+  (phone_number_id suffit).
+
 - **17/07 — « Nouveau client par défaut » : la question du compte ne vient plus
   au premier contact.** Sur un simple « Salut », Awa répondait puis le serveur
   poussait aussitôt l'invitation compte/email (« Au fait 😊… je t'en crée un »)
