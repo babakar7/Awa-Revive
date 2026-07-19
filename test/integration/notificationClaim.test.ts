@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { pool, migrate } from "../../src/db/index.js";
-import { claimOrReclaim, finishLog } from "../../src/domain/notificationRepo.js";
+import {
+  areStaffAlertsPaused,
+  claimOrReclaim,
+  finishLog,
+  setStaffAlertsPaused,
+} from "../../src/domain/notificationRepo.js";
 import { truncateAll } from "./helpers.js";
 
 /**
@@ -54,6 +59,15 @@ describe("claimOrReclaim (notification dedup)", () => {
       `update notification_log set created_at = now() - interval '3 minutes' where dedup_key='k3'`,
     );
     expect(await claimOrReclaim("k3", RULE_ID, SLOT)).toBe(true);
+  });
+
+  it("global pause flag: defaults to active, flips both ways, survives re-reads", async () => {
+    await pool.query(`delete from app_state where key = 'staff_alerts_paused'`);
+    expect(await areStaffAlertsPaused()).toBe(false); // absent = alerts active
+    await setStaffAlertsPaused(true);
+    expect(await areStaffAlertsPaused()).toBe(true);
+    await setStaffAlertsPaused(false);
+    expect(await areStaffAlertsPaused()).toBe(false);
   });
 
   it("finishLog finalizes the claimed row", async () => {

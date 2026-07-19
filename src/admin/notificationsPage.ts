@@ -196,6 +196,7 @@ export interface NotificationsPageData {
   editRule: NotificationRuleRow | null;
   banner: string;
   testPhone: string;
+  alertsPaused: boolean;
 }
 
 export function renderNotificationsPage(d: NotificationsPageData): string {
@@ -253,8 +254,21 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
     ? ""
     : `<div class="card warn">⚠️ Aucun template WhatsApp configuré (<code>WA_RECEPTION_TEMPLATE</code>). Les envois au staff hors fenêtre 24h échoueront (erreur 131047) — visibles dans le journal ci-dessous. À activer une fois le template Meta approuvé.</div>`;
 
+  const masterSwitch = d.alertsPaused
+    ? `<div class="card warn"><form class="inline" method="post" action="/admin/notifications/pause" style="float:right">
+<input type="hidden" name="value" value="0">
+<button class="act act--ok">▶️ Activer les alertes</button></form>
+<b>⏸️ Alertes staff EN PAUSE</b>
+<div class="muted">Aucun rappel (gardien, coachs, horaires fixes) n'est envoyé, quel que soit l'état des règles ci-dessous. Les occurrences pendant la pause sont ignorées, pas mises en attente.</div></div>`
+    : `<div class="card success"><form class="inline" method="post" action="/admin/notifications/pause" style="float:right" onsubmit="return confirm('Mettre TOUTES les alertes staff en pause ?')">
+<input type="hidden" name="value" value="1">
+<button class="act act--sm act--ghost">⏸️ Tout mettre en pause</button></form>
+<span class="ok">✓ Alertes staff actives</span>
+<div class="muted">Les règles activées ci-dessous envoient leurs rappels normalement.</div></div>`;
+
   return `
 ${d.banner}
+${masterSwitch}
 ${templateNote}
 <nav class="jump-nav" aria-label="Sections notifications">
   <a href="#regles">Règles</a>

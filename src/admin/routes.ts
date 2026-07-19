@@ -1686,6 +1686,8 @@ ${photoSection}
         "contact-added": "Contact ajouté.",
         "contact-deleted": "Contact supprimé.",
         "contact-muted": "Contact muté / réactivé.",
+        alerts_paused: "Toutes les alertes staff sont EN PAUSE.",
+        alerts_resumed: "Alertes staff réactivées.",
       };
 
       function banner(done?: string, err?: string): string {
@@ -1756,11 +1758,12 @@ ${photoSection}
         const editId = (req.query as any)?.edit as string | undefined;
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
-        const [rules, contacts, log, lastByRule] = await Promise.all([
+        const [rules, contacts, log, lastByRule, alertsPaused] = await Promise.all([
           q.listNotificationRules(),
           q.listStaffContacts(),
           q.listNotificationLog(100),
           q.lastLogPerRule(),
+          nrepo.areStaffAlertsPaused(),
         ]);
         const editRule = editId ? (rules.find((r) => r.id === editId) ?? null) : null;
         const body = renderNotificationsPage({
@@ -1772,8 +1775,19 @@ ${photoSection}
           editRule,
           banner: banner(done, err),
           testPhone: config.NOTIF_TEST_PHONE,
+          alertsPaused,
         });
         reply.type("text/html").send(await layout("Notifications", "/admin/notifications", body));
+      });
+
+      admin.post("/notifications/pause", async (req, reply) => {
+        const paused = String((req.body as any)?.value ?? "") === "1";
+        await nrepo.setStaffAlertsPaused(paused);
+        req.log.info({ paused, by: req.adminUser }, "Staff alerts master switch toggled");
+        return reply.redirect(
+          `/admin/notifications?done=${paused ? "alerts_paused" : "alerts_resumed"}`,
+          303,
+        );
       });
 
       admin.post("/notifications/rules", async (req, reply) => {

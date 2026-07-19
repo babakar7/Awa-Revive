@@ -11,6 +11,26 @@ import { normalizeName, type NotificationRule, type SlotWithName } from "./notif
 
 export type LogStatus = "claimed" | "sent" | "sent_template" | "failed" | "suppressed";
 
+// ---------- global kill switch (admin button) ----------
+
+const ALERTS_PAUSED_KEY = "staff_alerts_paused";
+
+/** Global pause for ALL staff-alert rules (app_state, survives restarts). */
+export async function areStaffAlertsPaused(): Promise<boolean> {
+  const res = await pool.query(`select value from app_state where key = $1`, [
+    ALERTS_PAUSED_KEY,
+  ]);
+  return res.rows[0]?.value === "1";
+}
+
+export async function setStaffAlertsPaused(paused: boolean): Promise<void> {
+  await pool.query(
+    `insert into app_state (key, value) values ($1, $2)
+     on conflict (key) do update set value = excluded.value, updated_at = now()`,
+    [ALERTS_PAUSED_KEY, paused ? "1" : "0"],
+  );
+}
+
 export interface StaffContact {
   id: string;
   name: string;

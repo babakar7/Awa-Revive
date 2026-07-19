@@ -269,6 +269,9 @@ async function runFixedRule(rule: NotificationRule, now: Date, log: SweepLog): P
 // ---------- entry point (called from the 60s loop) ----------
 
 export async function sweepStaffNotifications(log: SweepLog): Promise<number> {
+  // Global kill switch (admin button) — trumps every rule, nothing is claimed
+  // or logged while paused (the occurrences are simply skipped, not queued).
+  if (await nrepo.areStaffAlertsPaused()) return 0;
   const rules = await nrepo.listEnabledRules();
   if (rules.length === 0) return 0;
 
