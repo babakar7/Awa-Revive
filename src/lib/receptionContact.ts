@@ -62,6 +62,27 @@ export function receptionWhatsAppLink(
   return { url: whatsappClickToChatUrl(phone, message), message };
 }
 
+/**
+ * Reception-voice greeting to send TO the client, so reception can reach out in
+ * one tap after a handoff (the client no longer sends anything). Kept generic
+ * and editable: the detailed reason lives in the reception notification body,
+ * not echoed here (the reason is phrased in the client's first person).
+ */
+export function clientOutreachMessage(clientName: unknown): string {
+  const name = cleanInlineText(clientName, MAX_CLIENT_NAME_LENGTH);
+  const hello = name ? `Bonjour ${name} 🙏🏾` : "Bonjour 🙏🏾";
+  return `${hello} C'est la réception de Revive. Awa m'a transmis votre demande, je reviens vers vous.`;
+}
+
+/** wa.me link reception taps to write to the client (prefilled greeting). */
+export function clientOutreachLink(
+  clientPhone: string,
+  clientName: unknown,
+): { url: string; message: string } {
+  const message = clientOutreachMessage(clientName);
+  return { url: whatsappClickToChatUrl(clientPhone, message), message };
+}
+
 /** Client-facing instruction; the final tap on Send is mandatory in WhatsApp. */
 export function receptionLinkInstruction(lang: string, url: string): string {
   switch (lang) {

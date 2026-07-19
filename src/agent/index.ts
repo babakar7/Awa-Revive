@@ -427,8 +427,8 @@ export async function handleInboundText(args: {
           result = JSON.stringify({
             error: "tool_failed",
             message:
-              "The service is temporarily unavailable. Apologize and call handoff_to_human so the client " +
-              "receives the prefilled reception link.",
+              "The service is temporarily unavailable. Apologize and call handoff_to_human and reception " +
+              "will reach out to the client.",
           });
           console.error(`Tool ${block.name} failed:`, err);
         }

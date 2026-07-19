@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  clientOutreachLink,
+  clientOutreachMessage,
   receptionHandoffMessage,
   receptionLinkInstruction,
   receptionWhatsAppLink,
@@ -71,6 +73,22 @@ describe("WhatsApp reception contact", () => {
     expect(url).toBeTruthy();
     expect(new URL(url!).searchParams.get("text")).toContain("je suis Fatou");
     expect(message).toContain("appuie sur Envoyer");
+  });
+
+  it("builds a reception-voice outreach link to write TO the client (handoff)", () => {
+    const { url, message } = clientOutreachLink("+221 77 330 33 79", "  Awa\nNdiaye ");
+    // Reception's voice, greeting the client by name — no echo of the reason.
+    expect(message).toBe(
+      "Bonjour Awa Ndiaye 🙏🏾 C'est la réception de Revive. Awa m'a transmis votre demande, je reviens vers vous.",
+    );
+    expect(new URL(url).origin + new URL(url).pathname).toBe("https://wa.me/221773303379");
+    expect(new URL(url).searchParams.get("text")).toBe(message);
+  });
+
+  it("falls back to a plain greeting when the client has no name", () => {
+    expect(clientOutreachMessage(null)).toBe(
+      "Bonjour 🙏🏾 C'est la réception de Revive. Awa m'a transmis votre demande, je reviens vers vous.",
+    );
   });
 
   it("adds the contact link only when a paid plan needs manual activation", () => {
