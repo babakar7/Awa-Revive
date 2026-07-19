@@ -161,27 +161,12 @@ function drawBody(doc: PDFKit.PDFDocument, data: InvoicePdfData): void {
   doc.moveTo(left, y).lineTo(right, y).lineWidth(1.2).strokeColor(C.darkRule).stroke();
   y += 20;
 
-  // ---- Totals block (right) ----
-  const paid = data.paidAt ? data.totalXof : 0;
-  const rows: [string, string, boolean][] = [
-    ["Sous-total", fmtFcfa(data.totalXof), false],
-    ["Taxes", fmtFcfa(0), false],
-    ["Total de la facture", fmtFcfa(data.totalXof), true],
-    ["Montant payé", fmtFcfa(paid), false],
-    ["Reste à payer", fmtFcfa(data.totalXof - paid), true],
-  ];
+  // ---- Total (right) ----
   const labelX = left + CONTENT_W * 0.45;
-  for (const [label, value, bold] of rows) {
-    if (label === "Total de la facture") {
-      doc.moveTo(labelX, y - 4).lineTo(right, y - 4).lineWidth(0.75).strokeColor(C.rule).stroke();
-      y += 4;
-    }
-    doc.font(bold ? BOLD : BODY).fontSize(bold ? 11 : 9.5).fillColor(C.text);
-    doc.text(label, labelX, y);
-    doc.text(value, labelX, y, { width: right - labelX, align: "right" });
-    y += bold ? 20 : 17;
-  }
-  y += 10;
+  doc.font(BOLD).fontSize(12).fillColor(C.text);
+  doc.text("Total de la facture", labelX, y);
+  doc.text(fmtFcfa(data.totalXof), labelX, y, { width: right - labelX, align: "right" });
+  y += 32;
 
   // ---- Payment reference / note ----
   if (data.paidAt) {

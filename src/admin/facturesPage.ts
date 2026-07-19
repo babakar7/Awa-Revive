@@ -241,7 +241,6 @@ export function renderFacturePrint(inv: Invoice): string {
       (l) => `<tr><td>${esc(l.label)}</td><td class="num">${l.qty}</td><td class="num">${fcfa(l.unit_xof)}</td><td class="num"><b>${fcfa(l.total_xof)}</b></td></tr>`,
     )
     .join("");
-  const paid = inv.paid_at ? inv.total_xof : 0;
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>Facture ${esc(inv.number)} — Revive</title>
@@ -288,11 +287,7 @@ export function renderFacturePrint(inv: Invoice): string {
   </div>
   <table><thead><tr><th>Article ou service</th><th class="num">Quantité</th><th class="num">Prix</th><th class="num">Total</th></tr></thead><tbody>${rows}</tbody></table>
   <div class="totals">
-    <div class="row"><span>Sous-total</span><span>${fcfa(inv.total_xof)}</span></div>
-    <div class="row"><span>Taxes</span><span>${fcfa(0)}</span></div>
     <div class="row strong"><span>Total de la facture</span><span>${fcfa(inv.total_xof)}</span></div>
-    <div class="row"><span>Montant payé</span><span>${fcfa(paid)}</span></div>
-    <div class="row strong"><span>Reste à payer</span><span>${fcfa(inv.total_xof - paid)}</span></div>
   </div>
   ${inv.paid_at ? `<div class="paid">✓ Payée via ${esc(inv.payment_method ?? "—")}${inv.payment_ref ? ` — réf. ${esc(inv.payment_ref)}` : ""} · le ${fmtLongDay(inv.paid_at)}</div>` : ""}
   ${inv.note ? `<div class="note">${esc(inv.note)}</div>` : ""}

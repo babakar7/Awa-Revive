@@ -103,7 +103,8 @@ describe("invoice pages", () => {
     expect(print.statusCode).toBe(200);
     expect(print.body).toContain(`Facture n° FAC-${YEAR}-0001`);
     expect(print.body).toContain("Facturer à :");
-    expect(print.body).toContain("Reste à payer");
+    expect(print.body).toContain("Total de la facture");
+    expect(print.body).not.toContain("Reste à payer");
 
     const list = await app.inject({ method: "GET", url: "/admin/factures", headers: { authorization: AUTH } });
     expect(list.body).toContain(`FAC-${YEAR}-0001`);
