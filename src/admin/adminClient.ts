@@ -62,6 +62,11 @@ export const ADMIN_CLIENT_JS = `
       activity.querySelectorAll('[data-stat-caption]').forEach(function(caption){
         caption.textContent=periodLabels[period]||'';
       });
+      activity.querySelectorAll('[data-stat-link]').forEach(function(link){
+        var base=link.getAttribute('data-href-base')||'';
+        var value=period==='today'?'today':period==='month'?'30':'7';
+        link.setAttribute('href',base+'?period='+value);
+      });
       if(copy)copy.textContent=periodCopies[period]||'';
     }
     buttons.forEach(function(button){

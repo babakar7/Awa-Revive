@@ -8,6 +8,8 @@
   },
   "scripts": {
     "dev": "DEV_AUTO_PORT=1 tsx watch src/index.ts",
+    "dev:prod-db": "tsx scripts/dev-prod-db.ts",
+    "dev:prod-db:check": "tsx scripts/dev-prod-db.ts --check",
     "build": "tsc",
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",

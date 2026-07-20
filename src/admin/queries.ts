@@ -16,6 +16,8 @@ export interface AdminClientRow {
   last_message: string | null;
   message_count: number;
   is_test: boolean;
+  human_takeover_until: Date | null;
+  human_takeover_by: string | null;
 }
 
 export async function listClients(search?: string): Promise<AdminClientRow[]> {
@@ -27,6 +29,7 @@ export async function listClients(search?: string): Promise<AdminClientRow[]> {
   }
   const res = await pool.query(
     `select c.id, c.wa_phone, c.name, c.language, c.claimed_email, c.is_test,
+            c.human_takeover_until, c.human_takeover_by,
             m.created_at as last_message_at, m.content as last_message,
             (select count(*) from conversations cc
               where cc.client_id = c.id and cc.role in ('user','assistant'))::int as message_count
@@ -44,10 +47,73 @@ export async function listClients(search?: string): Promise<AdminClientRow[]> {
   return res.rows;
 }
 
+export interface PageResult<T> {
+  rows: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+  pages: number;
+}
+
+export async function listClientsPage(args: {
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  periodDays?: number | null;
+}): Promise<PageResult<AdminClientRow>> {
+  const page = Math.max(1, Math.trunc(args.page ?? 1));
+  const pageSize = Math.min(100, Math.max(10, Math.trunc(args.pageSize ?? 30)));
+  const params: unknown[] = [];
+  const where: string[] = [];
+  if (args.search?.trim()) {
+    params.push(`%${args.search.trim()}%`);
+    where.push(`(c.name ilike $${params.length} or c.wa_phone like $${params.length})`);
+  }
+  if (args.periodDays) {
+    params.push(args.periodDays);
+    where.push(`m.created_at > now() - make_interval(days => $${params.length}::int)`);
+  }
+  const clause = where.length ? `where ${where.join(" and ")}` : "";
+  params.push(pageSize, (page - 1) * pageSize);
+  const result = await pool.query(
+    `with latest as (
+       select c.id, c.wa_phone, c.name, c.language, c.claimed_email, c.is_test,
+              c.human_takeover_until, c.human_takeover_by,
+              m.created_at as last_message_at, m.content as last_message,
+              (select count(*) from conversations cc
+                where cc.client_id = c.id and cc.role in ('user','assistant'))::int as message_count
+         from clients c
+         left join lateral (
+           select content, created_at from conversations
+            where client_id = c.id and role in ('user','assistant')
+            order by created_at desc limit 1
+         ) m on true
+         ${clause}
+     )
+     select *, count(*) over()::int as total_count
+       from latest order by last_message_at desc nulls last
+      limit $${params.length - 1} offset $${params.length}`,
+    params,
+  );
+  const total = result.rows[0]?.total_count ?? 0;
+  return {
+    rows: result.rows.map(({ total_count: _total, ...row }) => row as AdminClientRow),
+    page,
+    pageSize,
+    total,
+    pages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
 export interface AdminTurn {
   role: string;
   content: string;
   created_at: Date;
+  source?: "awa" | "admin";
+  sent_by?: string | null;
+  delivery_status?: "pending" | "sent" | "failed";
+  error?: string | null;
+  outbound_id?: string | null;
 }
 
 export async function getClient(clientId: string): Promise<any | null> {
@@ -57,23 +123,146 @@ export async function getClient(clientId: string): Promise<any | null> {
 
 export async function getThread(clientId: string, limit = 200): Promise<AdminTurn[]> {
   const res = await pool.query(
-    `select role, content, created_at
-       from (select role, content, created_at from conversations
-              where client_id = $1
-              order by created_at desc limit $2) t
+    `select role, content, created_at, source, sent_by, delivery_status, error, outbound_id
+       from (select * from (
+               select role, content, created_at, 'awa'::text as source,
+                      null::text as sent_by, 'sent'::text as delivery_status,
+                      null::text as error, null::uuid as outbound_id
+                 from conversations where client_id = $1
+               union all
+               select 'assistant'::text as role, body as content, created_at,
+                      'admin'::text as source, sent_by, status as delivery_status, error, id as outbound_id
+                 from admin_outbound_messages where client_id = $1
+             ) history order by created_at desc limit $2) t
       order by created_at asc`,
     [clientId, limit],
   );
   return res.rows;
 }
 
-export async function listBookings(status?: string, limit = 100): Promise<any[]> {
+export interface ClientWorkspace {
+  bookings: any[];
+  plans: any[];
+  cafeOrders: any[];
+  deliveries: any[];
+  handoffs: any[];
+  reviews: any[];
+  invoices: any[];
+  quotes: any[];
+  giftCards: any[];
+}
+
+export async function getClientWorkspace(clientId: string, phone: string): Promise<ClientWorkspace> {
+  const digits = phone.replace(/\D/g, "");
+  const matchPhone = `regexp_replace(coalesce(client_phone,''), '\\D', '', 'g') = $1`;
+  const [bookings, plans, cafeOrders, deliveries, handoffs, reviewRows, invoices, quotes, giftCards] =
+    await Promise.all([
+      pool.query(`select * from pending_bookings where client_id=$1 order by created_at desc limit 20`, [clientId]),
+      pool.query(`select * from pending_plan_orders where client_id=$1 order by created_at desc limit 20`, [clientId]),
+      pool.query(`select * from pending_cafe_orders where client_id=$1 order by created_at desc limit 20`, [clientId]),
+      pool.query(`select * from delivery_orders where regexp_replace(client_phone, '\\D', '', 'g')=$1 order by created_at desc limit 20`, [digits]),
+      pool.query(`select * from handoffs where client_id=$1 order by created_at desc limit 20`, [clientId]),
+      pool.query(`select * from conversation_reviews where client_id=$1 order by created_at desc limit 20`, [clientId]),
+      pool.query(`select * from invoices where ${matchPhone} order by created_at desc limit 20`, [digits]),
+      pool.query(`select * from quotes where ${matchPhone} order by created_at desc limit 20`, [digits]),
+      pool.query(`select * from gift_cards where regexp_replace(coalesce(send_phone,''), '\\D', '', 'g')=$1 order by created_at desc limit 20`, [digits]),
+    ]);
+  return {
+    bookings: bookings.rows,
+    plans: plans.rows,
+    cafeOrders: cafeOrders.rows,
+    deliveries: deliveries.rows,
+    handoffs: handoffs.rows,
+    reviews: reviewRows.rows,
+    invoices: invoices.rows,
+    quotes: quotes.rows,
+    giftCards: giftCards.rows,
+  };
+}
+
+export type FollowUpSource = "handoff" | "review";
+export interface AdminQueueItem {
+  id: string;
+  source: FollowUpSource;
+  client_id: string;
+  client_name: string | null;
+  wa_phone: string;
+  title: string;
+  detail: string | null;
+  suggested_action: string | null;
+  priority: "high" | "normal";
+  status: "OPEN" | "DONE";
+  resolution_outcome: string | null;
+  resolution_note: string | null;
+  done_by: string | null;
+  done_at: Date | null;
+  created_at: Date;
+}
+
+export async function listFollowUpQueue(args: {
+  source?: FollowUpSource | "all";
+  status?: "OPEN" | "DONE";
+  periodDays?: number | null;
+  page?: number;
+  pageSize?: number;
+}): Promise<PageResult<AdminQueueItem>> {
+  const page = Math.max(1, Math.trunc(args.page ?? 1));
+  const pageSize = Math.min(100, Math.max(10, Math.trunc(args.pageSize ?? 30)));
+  const source = args.source ?? "all";
+  const status = args.status ?? "OPEN";
+  const days = args.periodDays ?? null;
+  const result = await pool.query(
+    `with queue as (
+       select h.id, 'handoff'::text as source, h.client_id, c.name as client_name,
+              c.wa_phone, coalesce(h.reason,'Intervention humaine') as title,
+              h.transcript_excerpt as detail, null::text as suggested_action,
+              'normal'::text as priority, h.status, h.resolution_outcome,
+              h.resolution_note, h.done_by, h.done_at, h.created_at
+         from handoffs h join clients c on c.id=h.client_id
+       union all
+       select r.id, 'review'::text as source, r.client_id, c.name as client_name,
+              c.wa_phone, coalesce(r.summary,'Conversation à reprendre') as title,
+              r.need_category as detail, r.suggested_action,
+              case when r.severity='severe' then 'high' else 'normal' end as priority,
+              r.status, r.resolution_outcome, r.resolution_note,
+              r.done_by, r.done_at, r.created_at
+         from conversation_reviews r join clients c on c.id=r.client_id
+     )
+     select *, count(*) over()::int as total_count from queue
+      where status=$1
+        and ($2='all' or source=$2)
+        and ($3::int is null or created_at > now() - make_interval(days => $3::int))
+      order by (priority='high') desc, created_at asc
+      limit $4 offset $5`,
+    [status, source, days, pageSize, (page - 1) * pageSize],
+  );
+  const total = result.rows[0]?.total_count ?? 0;
+  return {
+    rows: result.rows.map(({ total_count: _total, ...row }) => row as AdminQueueItem),
+    page,
+    pageSize,
+    total,
+    pages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
+export async function listBookings(
+  status?: string,
+  limit = 100,
+  period?: "today" | "7" | "30" | null,
+): Promise<any[]> {
   const params: unknown[] = [limit];
-  let where = "";
+  const conditions: string[] = [];
   if (status) {
     params.push(status);
-    where = "where b.status = $2";
+    conditions.push(`b.status = $${params.length}`);
   }
+  if (period === "today") conditions.push("b.updated_at >= current_date");
+  else if (period === "7" || period === "30") {
+    params.push(Number(period));
+    conditions.push(`b.updated_at > now() - make_interval(days => $${params.length}::int)`);
+  }
+  const where = conditions.length ? `where ${conditions.join(" and ")}` : "";
   const res = await pool.query(
     `select b.*, c.name as client_name, c.wa_phone
        from pending_bookings b join clients c on c.id = b.client_id
@@ -107,13 +296,23 @@ export async function listCafeOrders(): Promise<{ today: any[]; upcoming: any[] 
   return { today: today.rows, upcoming: upcoming.rows };
 }
 
-export async function listPlanOrders(status?: string, limit = 50): Promise<any[]> {
+export async function listPlanOrders(
+  status?: string,
+  limit = 50,
+  period?: "today" | "7" | "30" | null,
+): Promise<any[]> {
   const params: unknown[] = [limit];
-  let where = "";
+  const conditions: string[] = [];
   if (status) {
     params.push(status);
-    where = "where p.status = $2";
+    conditions.push(`p.status = $${params.length}`);
   }
+  if (period === "today") conditions.push("p.updated_at >= current_date");
+  else if (period === "7" || period === "30") {
+    params.push(Number(period));
+    conditions.push(`p.updated_at > now() - make_interval(days => $${params.length}::int)`);
+  }
+  const where = conditions.length ? `where ${conditions.join(" and ")}` : "";
   const res = await pool.query(
     `select p.*, c.name as client_name, c.wa_phone
        from pending_plan_orders p join clients c on c.id = p.client_id
@@ -232,6 +431,70 @@ export async function stats(): Promise<AdminStats> {
     revenue30d: r.revenue_30d,
     refundsPending: r.refunds_pending,
     handoffsOpen: r.handoffs_open,
+  };
+}
+
+export interface AdminReport {
+  periodDays: 1 | 7 | 30;
+  messages: number;
+  previousMessages: number;
+  activeClients: number;
+  previousActiveClients: number;
+  bookings: number;
+  previousBookings: number;
+  bookingRevenue: number;
+  planRevenue: number;
+  cafeRevenue: number;
+  previousRevenue: number;
+  openFollowUps: number;
+  oldestFollowUpAt: Date | null;
+  servedRate: number | null;
+}
+
+export async function adminReport(periodDays: 1 | 7 | 30): Promise<AdminReport> {
+  const result = await pool.query(
+    `with bounds as (
+       select case when $1::int=1 then current_date::timestamptz else now() - make_interval(days=>$1::int) end as current_start,
+              case when $1::int=1 then (current_date - 1)::timestamptz else now() - make_interval(days=>$1::int * 2) end as previous_start
+     ), review_counts as (
+       select count(*) filter (where outcome in ('resolved','handed_off'))::int as served,
+              count(*) filter (where outcome <> 'dropoff')::int as considered
+         from conversation_reviews, bounds where created_at >= current_start
+     )
+     select
+       (select count(*) from conversations,bounds where role='user' and created_at>=current_start)::int as messages,
+       (select count(*) from conversations,bounds where role='user' and created_at>=previous_start and created_at<current_start)::int as previous_messages,
+       (select count(distinct client_id) from conversations,bounds where role='user' and created_at>=current_start)::int as active_clients,
+       (select count(distinct client_id) from conversations,bounds where role='user' and created_at>=previous_start and created_at<current_start)::int as previous_active_clients,
+       (select count(*) from pending_bookings,bounds where status='BOOKED' and updated_at>=current_start)::int as bookings,
+       (select count(*) from pending_bookings,bounds where status='BOOKED' and updated_at>=previous_start and updated_at<current_start)::int as previous_bookings,
+       coalesce((select sum(amount_xof) from pending_bookings,bounds where status='BOOKED' and payment_method<>'membership' and updated_at>=current_start),0)::int as booking_revenue,
+       coalesce((select sum(amount_xof) from pending_plan_orders,bounds where status in ('PAID','ACTIVATED') and updated_at>=current_start),0)::int as plan_revenue,
+       coalesce((select sum(amount_xof) from pending_cafe_orders,bounds where status='PAID' and updated_at>=current_start),0)::int as cafe_revenue,
+       (coalesce((select sum(amount_xof) from pending_bookings,bounds where status='BOOKED' and payment_method<>'membership' and updated_at>=previous_start and updated_at<current_start),0)
+        + coalesce((select sum(amount_xof) from pending_plan_orders,bounds where status in ('PAID','ACTIVATED') and updated_at>=previous_start and updated_at<current_start),0)
+        + coalesce((select sum(amount_xof) from pending_cafe_orders,bounds where status='PAID' and updated_at>=previous_start and updated_at<current_start),0))::int as previous_revenue,
+       ((select count(*) from handoffs where status='OPEN') + (select count(*) from conversation_reviews where status='OPEN'))::int as open_follow_ups,
+       least((select min(created_at) from handoffs where status='OPEN'), (select min(created_at) from conversation_reviews where status='OPEN')) as oldest_follow_up_at,
+       (select case when considered=0 then null else round(served*100.0/considered)::int end from review_counts) as served_rate`,
+    [periodDays],
+  );
+  const row = result.rows[0];
+  return {
+    periodDays,
+    messages: row.messages,
+    previousMessages: row.previous_messages,
+    activeClients: row.active_clients,
+    previousActiveClients: row.previous_active_clients,
+    bookings: row.bookings,
+    previousBookings: row.previous_bookings,
+    bookingRevenue: row.booking_revenue,
+    planRevenue: row.plan_revenue,
+    cafeRevenue: row.cafe_revenue,
+    previousRevenue: row.previous_revenue,
+    openFollowUps: row.open_follow_ups,
+    oldestFollowUpAt: row.oldest_follow_up_at,
+    servedRate: row.served_rate,
   };
 }
 

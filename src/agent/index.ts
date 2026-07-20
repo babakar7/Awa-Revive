@@ -14,6 +14,7 @@ import {
   receptionWhatsAppLink,
 } from "../lib/receptionContact.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
+import { isHumanTakeoverActive } from "../domain/adminOperations.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -172,6 +173,14 @@ async function maybeNotifyConversationStart(
   }
 }
 
+function notifyHumanTakeoverInbound(client: repo.Client, preview: string): void {
+  notifyReception(
+    "Nouveau message pendant un relais humain",
+    `${client.name ?? "Client"} (+${client.wa_phone.replace(/^\+/, "")}) a répondu : « ${preview.replace(/\s+/g, " ").trim().slice(0, 180)} »\n` +
+      `Ouvrir : ${config.BASE_URL.replace(/\/+$/, "")}/admin/conversations/${client.id}`,
+  );
+}
+
 /**
  * The client just received the technical fallback: the agent loop crashed or produced
  * nothing. Record it in the handoffs register and tell reception (fire and
@@ -246,9 +255,6 @@ export async function handleInboundText(args: {
   waMessageId: string;
   profileName?: string;
 }): Promise<void> {
-  // Blue ticks + "typing…" bubble while the agent thinks (best-effort, non-blocking).
-  void sendTypingIndicator(args.waMessageId);
-
   const client = await repo.upsertClient(args.waPhone);
 
   // Conversation-start ping (before the incoming turn is persisted, so the gap
@@ -259,6 +265,17 @@ export async function handleInboundText(args: {
   if (lang) await repo.updateClientLanguage(client.id, lang);
 
   await repo.addTurn(client.id, "user", args.text, args.waMessageId);
+
+  // Human takeover is a hard gate: keep the incoming turn, alert reception,
+  // and never enter the model/tool loop. The timestamp expires automatically
+  // after 12h, so normal handling resumes without a background sweep.
+  if (isHumanTakeoverActive(client)) {
+    notifyHumanTakeoverInbound(client, args.text);
+    return;
+  }
+
+  // Blue ticks + "typing…" bubble while the agent thinks (best-effort, non-blocking).
+  void sendTypingIndicator(args.waMessageId);
 
   // Lazy TTL sweep so the "active link" context below is accurate.
   await Promise.all([
@@ -510,10 +527,14 @@ export async function handleInboundText(args: {
 
 /** Image received but the description failed — ask kindly for text. */
 export async function handleFailedImage(waPhone: string, waMessageId: string): Promise<void> {
-  void sendTypingIndicator(waMessageId);
   const client = await repo.upsertClient(waPhone);
   await maybeNotifyConversationStart(client, "[image]");
   await repo.addTurn(client.id, "user", "[image reçue — lecture échouée]", waMessageId);
+  if (isHumanTakeoverActive(client)) {
+    notifyHumanTakeoverInbound(client, "[image reçue]");
+    return;
+  }
+  void sendTypingIndicator(waMessageId);
   const reply =
     "Désolée, je n'ai pas réussi à lire ton image 🙏🏾 Tu peux m'écrire ce qu'elle montre ?\n" +
     "(Sorry, I couldn't read your image — could you tell me what it shows?)";
@@ -523,10 +544,14 @@ export async function handleFailedImage(waPhone: string, waMessageId: string): P
 
 /** Polite reply for stickers / documents / other unreadable media (SPEC §8). */
 export async function handleUnsupportedMedia(waPhone: string, waMessageId: string): Promise<void> {
-  void sendTypingIndicator(waMessageId);
   const client = await repo.upsertClient(waPhone);
   await maybeNotifyConversationStart(client, "[message non lisible]");
   await repo.addTurn(client.id, "user", "[non-text message]", waMessageId);
+  if (isHumanTakeoverActive(client)) {
+    notifyHumanTakeoverInbound(client, "[message non lisible]");
+    return;
+  }
+  void sendTypingIndicator(waMessageId);
   const reply =
     "Je ne peux pas lire ce type de message 🙏🏾 Écris-moi (ou envoie une note vocale) ce que tu veux réserver !\n" +
     "(I can't read this kind of message — please type or voice-note your request.)";
@@ -536,10 +561,14 @@ export async function handleUnsupportedMedia(waPhone: string, waMessageId: strin
 
 /** Voice note received but transcription failed — ask kindly for text. */
 export async function handleFailedVoiceNote(waPhone: string, waMessageId: string): Promise<void> {
-  void sendTypingIndicator(waMessageId);
   const client = await repo.upsertClient(waPhone);
   await maybeNotifyConversationStart(client, "[note vocale]");
   await repo.addTurn(client.id, "user", "[note vocale — transcription échouée]", waMessageId);
+  if (isHumanTakeoverActive(client)) {
+    notifyHumanTakeoverInbound(client, "[note vocale]");
+    return;
+  }
+  void sendTypingIndicator(waMessageId);
   const reply =
     "Désolée, je n'ai pas réussi à écouter ta note vocale 🙏🏾 Tu peux me l'écrire ?\n" +
     "(Sorry, I couldn't process your voice note — could you type it instead?)";

@@ -98,6 +98,14 @@ alter table clients
 alter table clients
   add column if not exists is_test boolean not null default false;
 
+-- Explicit human takeover for the admin conversation workspace. Awa is
+-- paused only while human_takeover_until is in the future; the timestamp is
+-- the automatic 12h safety release, so a forgotten takeover cannot strand a
+-- client indefinitely. Manual resume clears all three fields.
+alter table clients add column if not exists human_takeover_until timestamptz;
+alter table clients add column if not exists human_takeover_by text;
+alter table clients add column if not exists human_takeover_at timestamptz;
+
 create index if not exists idx_pending_bookings_client_status
   on pending_bookings (client_id, status);
 create index if not exists idx_pending_bookings_status_expiry
@@ -121,6 +129,25 @@ create table if not exists conversations (
 create index if not exists idx_conversations_client_created
   on conversations (client_id, created_at);
 
+-- Human replies are kept separately from Awa's turns so pending/failed sends
+-- never pollute the model history. request_key makes form retries idempotent;
+-- successful rows are merged into both the admin timeline and Awa replay.
+create table if not exists admin_outbound_messages (
+  id uuid primary key default gen_random_uuid(),
+  request_key uuid unique not null,
+  client_id uuid not null references clients(id),
+  body text not null check (length(trim(body)) between 1 and 1500),
+  sent_by text not null,
+  status text not null default 'pending'
+    check (status in ('pending','sent','failed')),
+  wa_message_id text,
+  error text,
+  created_at timestamptz not null default now(),
+  sent_at timestamptz
+);
+create index if not exists idx_admin_outbound_client_created
+  on admin_outbound_messages (client_id, created_at);
+
 create table if not exists handoffs (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references clients(id),
@@ -138,6 +165,8 @@ alter table handoffs
   add column if not exists done_by text;
 alter table handoffs
   add column if not exists done_at timestamptz;
+alter table handoffs add column if not exists resolution_outcome text;
+alter table handoffs add column if not exists resolution_note text;
 
 -- Backfill one-shot (borne FIXE = idempotent) : l'historique d'avant la
 -- feature est considéré traité — seuls les handoffs neufs vivent le cycle.
@@ -356,6 +385,8 @@ create index if not exists idx_conversation_reviews_status
   on conversation_reviews (status, outcome, created_at);
 create unique index if not exists idx_conversation_reviews_point
   on conversation_reviews (client_id, last_message_at);
+alter table conversation_reviews add column if not exists resolution_outcome text;
+alter table conversation_reviews add column if not exists resolution_note text;
 
 -- Petit registre clé/valeur applicatif (ex : date du dernier digest quotidien
 -- envoyé — la garde vit en DB pour survivre aux restarts/redéploiements).
@@ -364,6 +395,22 @@ create table if not exists app_state (
   value text not null,
   updated_at timestamptz not null default now()
 );
+
+-- Durable audit trail for consequential admin actions. Details contain only
+-- operational metadata (never passwords/tokens); target links let the owner
+-- jump back to the affected record.
+create table if not exists admin_audit_log (
+  id bigserial primary key,
+  admin_user text not null,
+  admin_role text not null,
+  action text not null,
+  target_type text,
+  target_id text,
+  detail_json jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_admin_audit_created
+  on admin_audit_log (created_at desc);
 
 -- Rappel de renouvellement envoyé (J-3 avant la fin d'un abonnement, via
 -- template Meta approuvé). Clé = l'ordre Wix : un rappel par période de plan.

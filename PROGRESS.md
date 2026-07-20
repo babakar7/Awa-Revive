@@ -2178,6 +2178,18 @@ clôture réellement un remboursement, rappels de séance (templates Meta),
 stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
 élargi, vente d'abonnements, report, transcription : déjà en prod ou Phase 1+.)
 
+### 6.5 Admin — espace client et relais humain (20/07/2026)
+
+- [x] File partagée **Suivi clients** : handoffs + conversations à reprendre,
+  filtres/pagination, résultat de clôture obligatoire et note facultative.
+- [x] URL conversation conservée mais enrichie en espace client : fil WhatsApp,
+  suivis ouverts, réservations, abonnements, bar/livraisons et documents liés.
+- [x] Relais humain sûr : pause Awa explicite, reprise manuelle ou automatique
+  après 12 h, fenêtre WhatsApp 24 h, envoi idempotent et échecs visibles.
+- [x] Rapport 1/7/30 jours, drill-down des stats et journal propriétaire des
+  mutations. Le compositeur reste protégé par
+  `ADMIN_HUMAN_REPLY_ENABLED=false` jusqu'à la recette Meta en production.
+
 ### 6.6 Réservations Awa — nom CRM + commande Wix (20/07/2026)
 
 - [x] Le nom canonique de la fiche contact Wix est maintenant prioritaire lors

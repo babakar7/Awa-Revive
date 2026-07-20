@@ -3,6 +3,7 @@ import type { AdminStats } from "./queries.js";
 import type { NavBadges } from "./navBadges.js";
 import { ago, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
 import { uiIcon } from "./layout.js";
+import { resolutionForm } from "./followUpPage.js";
 
 export interface InboxData {
   refunds: any[];
@@ -24,6 +25,7 @@ function activityStat(
   label: string,
   icon: ReturnType<typeof uiIcon>,
   values: { today: number; week: number; month: number },
+  hrefBase: string,
   format: (value: number) => string = String,
 ): string {
   const today = format(values.today);
@@ -33,6 +35,7 @@ function activityStat(
   <div class="activity-stat-label"><span class="activity-stat-icon">${icon}</span><span>${escapeHtml(label)}</span></div>
   <b data-stat-value data-today="${escapeHtml(today)}" data-week="${escapeHtml(week)}" data-month="${escapeHtml(month)}" aria-live="polite">${escapeHtml(week)}</b>
   <span data-stat-caption>7 derniers jours</span>
+  <a class="stat-drilldown" data-stat-link data-href-base="${escapeHtml(hrefBase)}" href="${escapeHtml(hrefBase)}?period=7">Voir le détail</a>
 </article>`;
 }
 
@@ -75,7 +78,7 @@ export function renderInbox(d: InboxData): string {
     <p>${escapeHtml(h.reason ?? "Demande transmise à l’équipe")}</p>
     <div class="task-meta"><span class="muted">${ago(h.created_at)} · +${escapeHtml(h.wa_phone)}</span><a href="/admin/conversations/${h.client_id}">Ouvrir la conversation</a></div>
   </div>
-  <div class="task-action"><form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act act--ok act--sm">Marquer traité</button></form></div>
+  <div class="task-action">${resolutionForm({ id: h.id, source: "handoff" }, "/admin")}</div>
 </article>`,
     )
     .join("");
@@ -89,7 +92,7 @@ export function renderInbox(d: InboxData): string {
     <p>${escapeHtml((r.summary ?? "Conversation restée sans issue").slice(0, 150))}</p>
     <div class="task-meta">${r.severity === "severe" ? '<span class="badge badge--red">Priorité haute</span>' : '<span class="badge badge--amber">À reprendre</span>'}<span class="muted">${ago(r.created_at)}</span>${r.suggested_action ? `<span class="muted">Prochaine étape : ${escapeHtml(r.suggested_action)}</span>` : ""}</div>
   </div>
-  <div class="task-action"><a class="act act--ghost act--sm" href="/admin/conversations/${r.client_id}">Voir le fil</a><a class="act act--sm" href="/admin/reviews">Traiter</a></div>
+  <div class="task-action"><a class="act act--ghost act--sm" href="/admin/conversations/${r.client_id}">Voir le fil</a>${resolutionForm({ id: r.id, source: "review" }, "/admin")}</div>
 </article>`)
     .join("");
 
@@ -110,21 +113,22 @@ export function renderInbox(d: InboxData): string {
       today: s.msgToday,
       week: s.msg7d,
       month: s.msg30d,
-    }),
+    }, "/admin/conversations"),
     activityStat("Clients actifs", uiIcon("team"), {
       today: s.activeClientsToday,
       week: s.activeClients7d,
       month: s.activeClients30d,
-    }),
+    }, "/admin/conversations"),
     activityStat("Réservations", uiIcon("booking"), {
       today: s.bookingsToday,
       week: s.bookings7d,
       month: s.bookings30d,
-    }),
+    }, "/admin/bookings"),
     activityStat(
       "Encaissé",
       uiIcon("wallet"),
       { today: s.revenueToday, week: s.revenue7d, month: s.revenue30d },
+      "/admin/rapport",
       fmtFcfa,
     ),
   ].join("");

@@ -12,6 +12,7 @@ export interface NavBadges {
   plans: number;
   handoffs: number;
   reviews: number;
+  followUps: number;
   crmLinks: number;
   livraisons: number;
   /** Sum used on « À faire ». */
@@ -23,6 +24,7 @@ const empty: NavBadges = {
   plans: 0,
   handoffs: 0,
   reviews: 0,
+  followUps: 0,
   crmLinks: 0,
   livraisons: 0,
   total: 0,
@@ -82,6 +84,7 @@ export async function loadNavBadges(): Promise<NavBadges> {
     plans: money.plans,
     handoffs,
     reviews: reviewN,
+    followUps: handoffs + reviewN,
     crmLinks,
     livraisons,
     total: 0,

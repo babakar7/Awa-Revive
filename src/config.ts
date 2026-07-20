@@ -128,6 +128,13 @@ export const config = {
   // A message counts as a NEW conversation when the client had no activity in
   // the last N hours (so a back-and-forth within one session pings only once).
   NEW_CHAT_NOTIFY_GAP_HOURS: parseInt(optional("NEW_CHAT_NOTIFY_GAP_HOURS", "6"), 10),
+  // Guarded admin-to-client messaging. Keep false until takeover behavior has
+  // been verified in production with the Meta number.
+  ADMIN_HUMAN_REPLY_ENABLED: optional("ADMIN_HUMAN_REPLY_ENABLED", "false") === "true",
+  // Optional fixed client-facing template for follow-up outside WhatsApp's
+  // 24h free-text window. It must have no body variables.
+  WA_ADMIN_FOLLOWUP_TEMPLATE: optional("WA_ADMIN_FOLLOWUP_TEMPLATE", ""),
+  WA_ADMIN_FOLLOWUP_TEMPLATE_LANG: optional("WA_ADMIN_FOLLOWUP_TEMPLATE_LANG", "fr"),
   // Where the "Envoyer un test" button on /admin/notifications sends its preview
   // message. Defaults to Babakar's number so tests never surprise the guardian
   // or a coach. Empty = the test button is disabled.

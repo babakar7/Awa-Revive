@@ -14,6 +14,10 @@ export interface Client {
   capability_menu_at: Date | null;
   /** Studio team/test number — badged in admin, no new-conversation ping. */
   is_test: boolean;
+  /** Awa stays paused while this timestamp is in the future. */
+  human_takeover_until: Date | null;
+  human_takeover_by: string | null;
+  human_takeover_at: Date | null;
 }
 
 export interface PendingBooking {
@@ -57,7 +61,9 @@ export async function upsertClient(waPhone: string): Promise<Client> {
   const res = await pool.query(
     `insert into clients (wa_phone) values ($1)
      on conflict (wa_phone) do update set updated_at = now()
-     returning id, wa_phone, name, language, email_prompted_at, claimed_email, capability_menu_at, is_test`,
+     returning id, wa_phone, name, language, email_prompted_at, claimed_email,
+               capability_menu_at, is_test, human_takeover_until,
+               human_takeover_by, human_takeover_at`,
     [waPhone],
   );
   return res.rows[0];
@@ -115,7 +121,9 @@ export async function findClientByPhone(candidates: string[]): Promise<Client | 
   const digits = [...new Set(candidates.map((c) => c.replace(/\D/g, "")).filter(Boolean))];
   if (digits.length === 0) return null;
   const res = await pool.query(
-    `select id, wa_phone, name, language, email_prompted_at, claimed_email, capability_menu_at, is_test
+    `select id, wa_phone, name, language, email_prompted_at, claimed_email,
+            capability_menu_at, is_test, human_takeover_until,
+            human_takeover_by, human_takeover_at
        from clients where regexp_replace(wa_phone, '\\D', '', 'g') = any($1) limit 1`,
     [digits],
   );
@@ -175,11 +183,15 @@ export async function addTurn(
 export async function lastTurns(clientId: string, n = 20): Promise<Turn[]> {
   const res = await pool.query(
     `select role, content, created_at
-       from (select role, content, created_at
-               from conversations
-              where client_id = $1 and role in ('user', 'assistant')
-              order by created_at desc
-              limit $2) t
+       from (select role, content, created_at from (
+               select role, content, created_at
+                 from conversations
+                where client_id = $1 and role in ('user', 'assistant')
+               union all
+               select 'assistant' as role, body as content, coalesce(sent_at, created_at) as created_at
+                 from admin_outbound_messages
+                where client_id = $1 and status = 'sent'
+             ) history order by created_at desc limit $2) t
       order by created_at asc`,
     [clientId, n],
   );
@@ -203,11 +215,15 @@ export async function recentTranscriptExcerpt(clientId: string, n = 6): Promise<
 export async function lastTurnsForReplay(clientId: string, n = 30): Promise<Turn[]> {
   const res = await pool.query(
     `select role, content, created_at
-       from (select role, content, created_at
-               from conversations
-              where client_id = $1 and role in ('user', 'assistant', 'tool')
-              order by created_at desc
-              limit $2) t
+       from (select role, content, created_at from (
+               select role, content, created_at
+                 from conversations
+                where client_id = $1 and role in ('user', 'assistant', 'tool')
+               union all
+               select 'assistant' as role, body as content, coalesce(sent_at, created_at) as created_at
+                 from admin_outbound_messages
+                where client_id = $1 and status = 'sent'
+             ) history order by created_at desc limit $2) t
       order by created_at asc`,
     [clientId, n],
   );

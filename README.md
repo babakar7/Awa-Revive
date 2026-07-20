@@ -32,6 +32,20 @@ npm run migrate           # creates tables (idempotent; also runs at boot)
 npm run dev               # hot reload; tries the next port when PORT is occupied
 ```
 
+Pour ouvrir l’admin local avec les données réelles de production :
+
+```bash
+npm run dev:prod-db:check  # vérifie la connexion Railway sans modifier les données
+npm run dev:prod-db        # hot reload + base de production
+```
+
+Cette commande récupère uniquement `DATABASE_PUBLIC_URL` depuis le service
+Postgres Railway. Elle conserve les autres variables du `.env` local et ne
+lance aucun worker périodique (expiration, réconciliation ou notification),
+afin de ne pas doubler les tâches du serveur de production. Les formulaires et
+boutons de l’admin restent toutefois réels : toute action effectuée en local
+modifie la base de production.
+
 ### Environment variables
 
 | Variable | What / where to get it |
@@ -138,12 +152,17 @@ dashboard, including coach payments, without a second password. The legacy
 `OWNER_PAYMENTS_PASSWORD` remains a temporary password fallback during migration.
 The responsive Revive design system
 uses a task-oriented sidebar, global client search (`Ctrl/Cmd+K`), an off-canvas
-mobile menu, accessible focus states and confirmation dialogs. `/admin` is the
-operational queue: pending refunds, paid plans awaiting Wix activation, open
-handoffs/reviews, CRM links and delivery alerts appear before the day/7-day
-activity metrics. The full admin also covers conversations, bookings, staff
+mobile menu, accessible focus states and confirmation dialogs. `/admin` opens
+with day/7-day/30-day studio activity and the operational queue. **Clients →
+Suivi clients** combines handoffs and conversations to resume, requires a
+closure outcome, and keeps a durable history. Every conversation URL is now a
+client workspace joining messages, reservations, plans, orders, documents and
+open follow-ups. Optional guarded human replies use an explicit 12-hour takeover
+(`ADMIN_HUMAN_REPLY_ENABLED=true` after Meta verification), which hard-pauses Awa
+for that client and stores idempotent delivery results. The full admin also covers bookings, staff
 planning, coach payments, documents, gifts, bar deliveries/menu, notifications
-and WhatsApp profile settings. Team accounts cannot access coach-payment pages,
+and WhatsApp profile settings; `/admin/rapport` adds period comparisons and the
+owner-only action journal is at `/admin/journal`. Team accounts cannot access coach-payment pages,
 PDFs or mutations; this is enforced server-side. Financial buttons only RECORD manual actions —
 no money ever moves from the dashboard; refunds are done by a human in the Wave
 portal (`npm run refund:done` remains as CLI fallback).

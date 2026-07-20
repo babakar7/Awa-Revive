@@ -9,6 +9,7 @@ const badges: NavBadges = {
   plans: 2,
   handoffs: 3,
   reviews: 4,
+  followUps: 7,
   crmLinks: 5,
   livraisons: 6,
   total: 21,
@@ -135,7 +136,7 @@ describe("admin operational homepage", () => {
         refundsPending: 0,
         handoffsOpen: 0,
       },
-      badges: { ...badges, refunds: 0, plans: 0, handoffs: 0, reviews: 0, crmLinks: 0, livraisons: 0, total: 0 },
+      badges: { ...badges, refunds: 0, plans: 0, handoffs: 0, reviews: 0, followUps: 0, crmLinks: 0, livraisons: 0, total: 0 },
       adminUser: "reception",
     });
 

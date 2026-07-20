@@ -51,6 +51,7 @@ import {
   sendDocument,
   sendImage,
   sendText,
+  sendTemplate,
   updateBusinessProfile,
   uploadProfilePictureHandle,
 } from "../lib/whatsapp.js";
@@ -103,6 +104,10 @@ import { buildEmployeeScheduleMessage, validateGridPayload } from "../domain/sta
 import { renderStaffPlanning, renderStaffPrint, staffBanner } from "./staffPage.js";
 import { registerCoachPaymentRoutes } from "./coachPaymentsRoutes.js";
 import { ADMIN_AUTH_CSS } from "./adminStyles.js";
+import { renderFollowUpPage } from "./followUpPage.js";
+import { renderClientWorkspace } from "./clientWorkspacePage.js";
+import * as adminOps from "../domain/adminOperations.js";
+import { renderAdminReport, renderAuditPage } from "./reportPage.js";
 
 export { escapeHtml } from "./helpers.js";
 
@@ -173,6 +178,25 @@ export function registerAdmin(app: FastifyInstance): void {
   app.register(
     async (admin) => {
       admin.addHook("onRequest", adminAuthHook);
+
+      // Generic durable trace for all successful admin mutations. Specific
+      // operations also write richer events; this catch-all covers legacy
+      // forms without risking passwords (login/logout are explicitly skipped).
+      admin.addHook("onResponse", async (req, reply) => {
+        if (req.method !== "POST" || !req.adminUser || reply.statusCode >= 400) return;
+        if (/\/(?:login|logout)(?:\?|$)/.test(req.url)) return;
+        try {
+          await adminOps.recordAdminAudit(
+            { username: req.adminUser, role: req.adminRole ?? "team" },
+            "admin.mutation",
+            "route",
+            req.routeOptions.url,
+            { statusCode: reply.statusCode },
+          );
+        } catch (error) {
+          req.log.warn({ err: error }, "Admin audit write failed");
+        }
+      });
 
       // ---------- Login (public — hook skips /login) ----------
       admin.get("/login", async (req, reply) => {
@@ -251,7 +275,7 @@ export function registerAdmin(app: FastifyInstance): void {
           }
           if (o.status === "READY" && o.client_notify_status === "failed") clientFailed++;
         }
-        const body = renderInbox({
+        const inbox = renderInbox({
           refunds: actions.refunds,
           planActivations: actions.planActivations,
           openHandoffs,
@@ -267,17 +291,80 @@ export function registerAdmin(app: FastifyInstance): void {
           badges,
           adminUser: req.adminUser ?? "?",
         });
+        const query = req.query as Record<string, string | undefined>;
+        const banner = query.done
+          ? `<div class="card success"><b>✓ Action enregistrée</b></div>`
+          : query.err
+            ? `<div class="card warn"><b>${escapeHtml(query.err)}</b></div>`
+            : "";
+        const body = banner + inbox;
         reply.type("text/html").send(await layout("À faire", "/admin", body, { badges }));
+      });
+
+      admin.get("/rapport", async (req, reply) => {
+        const raw = (req.query as Record<string, string | undefined>).period;
+        const period = raw === "today" ? 1 : raw === "30" ? 30 : 7;
+        const report = await q.adminReport(period);
+        reply.type("text/html").send(await layout("Rapport", "/admin/rapport", renderAdminReport(report, req.adminRole === "owner"), { subtitle: `${period} jours`, contentWidth: "wide" }));
+      });
+
+      admin.get("/journal", async (req, reply) => {
+        if (req.adminRole !== "owner") {
+          return reply.code(403).type("text/plain").send("Accès propriétaire requis.");
+        }
+        const rows = await adminOps.listAdminAudit(150);
+        reply.type("text/html").send(await layout("Journal des actions", "/admin/rapport", renderAuditPage(rows), { subtitle: "Propriétaire", contentWidth: "wide", breadcrumbs: [{ href: "/admin/rapport", label: "Rapport" }, { label: "Journal" }] }));
+      });
+
+      // ---------- Suivi clients (file partagée) ----------
+      admin.get("/suivi", async (req, reply) => {
+        const query = req.query as Record<string, string | undefined>;
+        const source = query.source === "handoff" || query.source === "review" ? query.source : "all";
+        const status = query.status === "DONE" ? "DONE" : "OPEN";
+        const period = query.period === "7" || query.period === "30" ? query.period : "all";
+        const page = Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1);
+        const result = await q.listFollowUpQueue({
+          source,
+          status,
+          periodDays: period === "all" ? null : Number(period),
+          page,
+        });
+        const banner = query.done
+          ? `<div class="card success"><b>✓ Suivi clôturé</b><p class="muted">Le résultat est enregistré dans l’historique.</p></div>`
+          : query.err
+            ? `<div class="card warn"><b>Action non enregistrée</b><p class="muted">${escapeHtml(query.err)}</p></div>`
+            : "";
+        const body = renderFollowUpPage({ result, source, status, period, banner });
+        reply.type("text/html").send(await layout("Suivi clients", "/admin/suivi", body, { badges: await loadNavBadges(), subtitle: `${result.total} élément(s)`, contentWidth: "wide" }));
+      });
+
+      admin.post("/suivi/:source/:id/resolve", async (req, reply) => {
+        const { source, id } = req.params as { source: string; id: string };
+        const body = req.body as Record<string, unknown>;
+        const outcome = adminOps.parseResolutionOutcome(body.outcome);
+        const next = safeNextPath(String(body.next ?? "/admin/suivi"));
+        if (!outcome || (source !== "handoff" && source !== "review")) {
+          return reply.redirect(`${next}${next.includes("?") ? "&" : "?"}err=${encodeURIComponent("Choisissez un résultat valide")}`, 303);
+        }
+        const identity = { username: req.adminUser ?? "?", role: req.adminRole ?? "team" };
+        const note = adminOps.cleanResolutionNote(body.note);
+        const updated = source === "handoff"
+          ? await adminOps.resolveHandoff(id, identity, outcome, note)
+          : await adminOps.resolveReview(id, identity, outcome, note);
+        return reply.redirect(`${next}${next.includes("?") ? "&" : "?"}${updated ? "done=resolved" : `err=${encodeURIComponent("Ce suivi était déjà clôturé")}`}`, 303);
       });
 
       // ---------- Conversations ----------
       admin.get("/conversations", async (req, reply) => {
-        const search = (req.query as any)?.q as string | undefined;
-        const clients = await q.listClients(search);
-        const rows = clients
+        const query = req.query as Record<string, string | undefined>;
+        const search = query.q;
+        const period = query.period === "7" || query.period === "30" ? query.period : "all";
+        const page = Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1);
+        const result = await q.listClientsPage({ search, page, periodDays: period === "all" ? null : Number(period) });
+        const rows = result.rows
           .map(
             (c) => `<tr>
-<td data-label="Client"><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b>${c.is_test ? ` <span class="badge badge--gray">Équipe</span>` : ""}<div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
+<td data-label="Client"><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b>${c.is_test ? ` <span class="badge badge--gray">Équipe</span>` : ""}${c.human_takeover_until && new Date(c.human_takeover_until).getTime() > Date.now() ? ` <span class="badge badge--amber">Relais humain</span>` : ""}<div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
 <td data-label="Dernier message">${escapeHtml((c.last_message ?? "").slice(0, 110))}${(c.last_message ?? "").length > 110 ? "…" : ""}<div class="muted">${ago(c.last_message_at)} · ${c.message_count} messages</div></td>
 <td data-label="Langue" class="hide-sm"><span class="badge badge--gray">${escapeHtml(c.language ?? "—")}</span></td>
 <td data-label=""><a class="act act--ghost act--sm" href="/admin/conversations/${c.id}">Ouvrir</a></td>
@@ -285,9 +372,10 @@ export function registerAdmin(app: FastifyInstance): void {
           )
           .join("");
         const body = `
-<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Clients</span><h2>Conversations</h2><p>${search ? `${clients.length} résultat(s) pour « ${escapeHtml(search)} »` : "Les 100 conversations les plus récentes, classées par dernière activité."}</p></div></header>
-<form method="get" action="/admin/conversations" class="card row"><label style="flex:1">Rechercher par nom ou numéro<input type="search" name="q" placeholder="Ex. Marie ou 77 123…" value="${escapeHtml(search ?? "")}"></label><button class="act" type="submit">Rechercher</button>${search ? `<a class="act act--ghost" href="/admin/conversations">Effacer</a>` : ""}</form>
-<div class="card">${rows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Client</th><th>Dernier message</th><th class="hide-sm">Langue</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty"><span class="empty-icon" aria-hidden="true">⌕</span><b>Aucun client trouvé</b><p>Essayez un autre nom ou seulement quelques chiffres du numéro.</p></div>`}</div>`;
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Clients</span><h2>Conversations</h2><p>${result.total} client(s)${search ? ` pour « ${escapeHtml(search)} »` : " classés par dernière activité"}.</p></div></header>
+<form method="get" action="/admin/conversations" class="card conversation-filters"><label>Rechercher par nom ou numéro<input type="search" name="q" placeholder="Ex. Marie ou 77 123…" value="${escapeHtml(search ?? "")}"></label><label>Période<select name="period"><option value="all"${period === "all" ? " selected" : ""}>Toutes</option><option value="7"${period === "7" ? " selected" : ""}>7 jours</option><option value="30"${period === "30" ? " selected" : ""}>30 jours</option></select></label><button class="act" type="submit">Appliquer</button>${search || period !== "all" ? `<a class="act act--ghost" href="/admin/conversations">Effacer</a>` : ""}</form>
+<div class="card">${rows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Client</th><th>Dernier message</th><th class="hide-sm">Langue</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty"><span class="empty-icon" aria-hidden="true">⌕</span><b>Aucun client trouvé</b><p>Essayez un autre nom ou seulement quelques chiffres du numéro.</p></div>`}</div>
+${result.pages > 1 ? `<nav class="pagination" aria-label="Pagination"><span>${result.page > 1 ? `<a class="act act--ghost act--sm" href="/admin/conversations?${new URLSearchParams({ ...(search ? { q: search } : {}), ...(period !== "all" ? { period } : {}), page: String(result.page - 1) }).toString()}">Précédent</a>` : ""}</span><span>Page <b>${result.page}</b> sur ${result.pages}</span><span>${result.page < result.pages ? `<a class="act act--ghost act--sm" href="/admin/conversations?${new URLSearchParams({ ...(search ? { q: search } : {}), ...(period !== "all" ? { period } : {}), page: String(result.page + 1) }).toString()}">Suivant</a>` : ""}</span></nav>` : ""}`;
         reply.type("text/html").send(await layout("Conversations", "/admin/conversations", body, { subtitle: "Historique client", contentWidth: "wide" }));
       });
 
@@ -298,36 +386,70 @@ export function registerAdmin(app: FastifyInstance): void {
           reply.code(404).type("text/plain").send("Client introuvable");
           return;
         }
-        const turns = await q.getThread(clientId);
-        const thread = turns
-          .map((t) => {
-            if (t.role === "tool") {
-              return `<details class="tool"><summary>Détail technique · ${escapeHtml(t.content.slice(0, 72))}…</summary><pre>${escapeHtml(t.content)}</pre></details>`;
-            }
-            const side = t.role === "user" ? "user" : "assistant";
-            return `<div class="turnrow ${side}"><div class="bubble ${side}">${escapeHtml(t.content)}</div><span class="muted">${fmtDate(t.created_at)}</span></div>`;
-          })
-          .join("");
-        const isTest = client.is_test === true;
-        const testToggle = `<form class="inline" method="post" action="/admin/conversations/${client.id}/toggle-test">
-<input type="hidden" name="value" value="${isTest ? "0" : "1"}">
-<button class="act act--ghost act--sm">${isTest ? "Retirer le tag Équipe" : "Marquer comme Équipe/test"}</button></form>`;
-        const body = `
-<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Conversation client</span><h2>${escapeHtml(client.name ?? "(sans nom)")}</h2><p>Historique des échanges WhatsApp avec Awa.</p></div><div class="page-header-actions"><a class="act act--ghost" href="/admin/conversations">Retour à la liste</a></div></header>
-<div class="conversation-shell">
-<aside class="card client-summary">
-  <div class="row between"><b>${escapeHtml(client.name ?? "(sans nom)")}</b>${isTest ? `<span class="badge badge--gray">Équipe</span>` : ""}</div>
-  <dl class="client-facts"><div><dt>WhatsApp</dt><dd><a href="tel:+${escapeHtml(client.wa_phone)}">+${escapeHtml(client.wa_phone)}</a></dd></div><div><dt>Langue</dt><dd>${escapeHtml(client.language ?? "—")}</dd></div><div><dt>Email déclaré</dt><dd>${escapeHtml(client.claimed_email ?? "—")}</dd></div><div><dt>Client depuis</dt><dd>${fmtDate(client.created_at)}</dd></div></dl>
-  ${testToggle}
-</aside>
-<section class="card thread" aria-label="Messages">
-${thread || `<div class="empty"><b>Aucun message</b><p>Cette conversation ne contient pas encore de tour enregistré.</p></div>`}
-</section>
-</div>
-`;
+        const [turns, workspace, lastClientMessage] = await Promise.all([
+          q.getThread(clientId),
+          q.getClientWorkspace(clientId, client.wa_phone),
+          adminOps.lastClientMessageAt(clientId),
+        ]);
+        const query = req.query as Record<string, string | undefined>;
+        const banner = query.done ? `<div class="card success"><b>✓ Action enregistrée</b></div>` : query.err ? `<div class="card warn"><b>${escapeHtml(query.err)}</b></div>` : "";
+        const body = renderClientWorkspace({ client, turns, workspace, lastClientMessage, whatsappWindowOpen: adminOps.isWithinWhatsAppWindow(lastClientMessage), banner });
         reply
           .type("text/html")
           .send(await layout(client.name ?? client.wa_phone, "/admin/conversations", body, { subtitle: "Conversation", contentWidth: "wide", breadcrumbs: [{ href: "/admin/conversations", label: "Conversations" }, { label: client.name ?? client.wa_phone }] }));
+      });
+
+      admin.post("/conversations/:clientId/takeover", async (req, reply) => {
+        const { clientId } = req.params as { clientId: string };
+        const identity = { username: req.adminUser ?? "?", role: req.adminRole ?? "team" };
+        const updated = await adminOps.startHumanTakeover(clientId, identity, 12);
+        return reply.redirect(`/admin/conversations/${clientId}?${updated ? "done=takeover" : `err=${encodeURIComponent("Client introuvable")}`}`, 303);
+      });
+
+      admin.post("/conversations/:clientId/resume", async (req, reply) => {
+        const { clientId } = req.params as { clientId: string };
+        const identity = { username: req.adminUser ?? "?", role: req.adminRole ?? "team" };
+        const updated = await adminOps.resumeAwa(clientId, identity);
+        return reply.redirect(`/admin/conversations/${clientId}?${updated ? "done=resumed" : `err=${encodeURIComponent("Client introuvable")}`}`, 303);
+      });
+
+      admin.post("/conversations/:clientId/reply", async (req, reply) => {
+        const { clientId } = req.params as { clientId: string };
+        const body = req.body as Record<string, unknown>;
+        const back = (kind: "done" | "err", message: string) =>
+          reply.redirect(`/admin/conversations/${clientId}?${kind}=${encodeURIComponent(message)}`, 303);
+        if (!config.ADMIN_HUMAN_REPLY_ENABLED) return back("err", "Réponse admin désactivée");
+        const client = await q.getClient(clientId);
+        if (!client) return back("err", "Client introuvable");
+        if (!adminOps.isHumanTakeoverActive(client)) return back("err", "Prenez d’abord le relais sur cette conversation");
+        const requestKey = String(body.request_key ?? "");
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestKey)) {
+          return back("err", "Requête d’envoi invalide — rechargez la page");
+        }
+        const mode = body.mode === "template" ? "template" : "text";
+        const lastClientMessage = await adminOps.lastClientMessageAt(clientId);
+        const windowOpen = adminOps.isWithinWhatsAppWindow(lastClientMessage);
+        if (mode === "text" && !windowOpen) return back("err", "Fenêtre WhatsApp fermée — texte libre interdit");
+        if (mode === "template" && !config.WA_ADMIN_FOLLOWUP_TEMPLATE) return back("err", "Modèle de relance non configuré");
+        const message = mode === "template"
+          ? `Relance Revive (${config.WA_ADMIN_FOLLOWUP_TEMPLATE})`
+          : String(body.body ?? "").trim().slice(0, 1500);
+        if (!message) return back("err", "Écrivez un message");
+        const outbound = await adminOps.claimAdminOutbound({ requestKey, clientId, body: message, sentBy: req.adminUser ?? "?" });
+        if (!outbound) return back("done", "already-sent");
+        const identity = { username: req.adminUser ?? "?", role: req.adminRole ?? "team" };
+        try {
+          const wamid = mode === "template"
+            ? await sendTemplate(client.wa_phone, config.WA_ADMIN_FOLLOWUP_TEMPLATE, config.WA_ADMIN_FOLLOWUP_TEMPLATE_LANG, [])
+            : await sendText(client.wa_phone, message);
+          await adminOps.markAdminOutboundSent(outbound.id, wamid);
+          await adminOps.recordAdminAudit(identity, "conversation.message_sent", "client", clientId, { mode, outboundId: outbound.id });
+          return back("done", "sent");
+        } catch (error) {
+          await adminOps.markAdminOutboundFailed(outbound.id, error);
+          await adminOps.recordAdminAudit(identity, "conversation.message_failed", "client", clientId, { mode, outboundId: outbound.id, error: String(error).slice(0, 200) });
+          return back("err", "Échec de l’envoi WhatsApp — le message reste visible dans le fil");
+        }
       });
 
       admin.post("/conversations/:clientId/toggle-test", async (req, reply) => {
@@ -340,10 +462,12 @@ ${thread || `<div class="empty"><b>Aucun message</b><p>Cette conversation ne con
 
       // ---------- Réservations & abonnements ----------
       admin.get("/bookings", async (req, reply) => {
-        const status = ((req.query as any)?.status as string | undefined)?.toUpperCase();
+        const query = req.query as Record<string, string | undefined>;
+        const status = query.status?.toUpperCase();
+        const period = query.period === "today" || query.period === "7" || query.period === "30" ? query.period : null;
         const [bookings, planOrders] = await Promise.all([
-          q.listBookings(status),
-          q.listPlanOrders(status),
+          q.listBookings(status, 100, period),
+          q.listPlanOrders(status, 100, period),
         ]);
         const bookingRows = bookings
           .map((b) => {
@@ -375,11 +499,12 @@ ${thread || `<div class="empty"><b>Aucun message</b><p>Cette conversation ne con
         const filters = ["", "BOOKED", "AWAITING_PAYMENT", "REFUND_NEEDED", "REFUNDED", "CANCELLED", "EXPIRED"]
           .map(
             (st) =>
-              `<a href="/admin/bookings${st ? `?status=${st}` : ""}" class="${(status ?? "") === st ? "active" : ""}"${(status ?? "") === st ? ' aria-current="page"' : ""}>${statusLabels[st]}</a>`,
+              `<a href="/admin/bookings?${new URLSearchParams({ ...(st ? { status: st } : {}), ...(period ? { period } : {}) }).toString()}" class="${(status ?? "") === st ? "active" : ""}"${(status ?? "") === st ? ' aria-current="page"' : ""}>${statusLabels[st]}</a>`,
           )
           .join("");
         const body = `
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio</span><h2>Réservations et abonnements</h2><p>Suivez les ventes, paiements et statuts traités par Awa.</p></div></header>
+<nav class="filters" aria-label="Filtrer par période"><a href="/admin/bookings${status ? `?status=${status}` : ""}" class="${!period ? "active" : ""}">Toutes dates</a>${(["today", "7", "30"] as const).map((value) => `<a href="/admin/bookings?${new URLSearchParams({ ...(status ? { status } : {}), period: value }).toString()}" class="${period === value ? "active" : ""}">${value === "today" ? "Aujourd’hui" : `${value} jours`}</a>`).join("")}</nav>
 <nav class="filters" aria-label="Filtrer par statut">${filters}</nav>
 <div class="section-header"><h2>Réservations</h2><span class="badge badge--gray">${bookings.length}</span></div>
 <div class="card">${bookingRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créée</th><th>Client</th><th>Cours</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${bookingRows}</tbody></table></div>` : `<div class="empty"><b>Aucune réservation</b><p>Aucune réservation ne correspond à ce filtre.</p></div>`}</div>
@@ -932,7 +1057,7 @@ ${
 <td data-label="Motif">${escapeHtml(h.reason ?? "")}</td>
 <td data-label="Statut">${
               h.status === "OPEN"
-                ? `<form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act act--ok act--sm">Marquer traité</button></form>`
+                ? `<a class="act act--ok act--sm" href="/admin/suivi?source=handoff">Traiter dans le suivi</a>`
                 : `<span class="badge badge--green">Traité · ${escapeHtml(h.done_by ?? "")}</span>`
             }</td>
 </tr>`,
@@ -944,12 +1069,10 @@ ${
       });
 
       admin.post("/handoffs/:id/done", async (req, reply) => {
-        const { id } = req.params as { id: string };
-        const updated = await q.markHandoffDone(id, req.adminUser ?? "?");
-        if (updated) {
-          req.log.info({ handoffId: id, by: req.adminUser }, "Handoff marked done");
-        }
-        reply.redirect("/admin/handoffs", 303);
+        reply.redirect(
+          `/admin/suivi?source=handoff&err=${encodeURIComponent("Choisissez un résultat avant de clôturer ce suivi")}`,
+          303,
+        );
       });
 
       // ---------- À reprendre (boucle de résultat, §4.31) ----------
@@ -982,7 +1105,7 @@ ${
 <div class="task-copy"><div class="cluster">${r.severity === "severe" ? `<span class="badge badge--red">Priorité haute</span>` : ""}${outcomeBadge(r.outcome)}<span class="badge badge--gray">${escapeHtml(r.need_category)}</span></div>
 <b><a href="/admin/conversations/${r.client_id}">${escapeHtml(r.client_name ?? "?")}</a></b><p>${escapeHtml(r.summary ?? "")}</p>
 <div class="task-meta"><span class="muted">+${escapeHtml(r.wa_phone)} · ${ago(r.created_at)}</span>${r.suggested_action ? `<span class="muted">Prochaine étape : ${escapeHtml(r.suggested_action)}</span>` : ""}</div></div>
-<div class="task-action"><form class="inline" method="post" action="/admin/reviews/${r.id}/done"><button class="act act--ok act--sm">Marquer traité</button></form><form class="inline" method="post" action="/admin/reviews/${r.id}/ignore"><button class="act act--sm act--ghost">Ignorer</button></form></div>
+<div class="task-action"><a class="act act--ok act--sm" href="/admin/suivi?source=review">Traiter dans le suivi</a></div>
 </article>`,
           )
           .join("");
@@ -1028,16 +1151,14 @@ ${recentRows ? `<div class="table-wrap"><table class="responsive-table"><thead><
         reply.type("text/html").send(await layout("À reprendre", "/admin/reviews", body, { subtitle: `${open.length} conversation(s)`, contentWidth: "wide" }));
       });
 
-      const closeReviewRoute = (ignored: boolean) => async (req: any, reply: any) => {
-        const { id } = req.params as { id: string };
-        const updated = await reviews.closeReview(id, req.adminUser ?? "?", ignored);
-        if (updated) {
-          req.log.info({ reviewId: id, by: req.adminUser, ignored }, "Review closed");
-        }
-        reply.redirect("/admin/reviews", 303);
+      const closeReviewRoute = () => async (_req: any, reply: any) => {
+        reply.redirect(
+          `/admin/suivi?source=review&err=${encodeURIComponent("Choisissez un résultat avant de clôturer ce suivi")}`,
+          303,
+        );
       };
-      admin.post("/reviews/:id/done", closeReviewRoute(false));
-      admin.post("/reviews/:id/ignore", closeReviewRoute(true));
+      admin.post("/reviews/:id/done", closeReviewRoute());
+      admin.post("/reviews/:id/ignore", closeReviewRoute());
 
       // ---------- Hygiène CRM (fiches sans téléphone, doublons à fusionner) ----------
       admin.get("/crm", async (req, reply) => {

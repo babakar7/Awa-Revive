@@ -55,14 +55,16 @@ type NavSection = {
 const NAV: NavSection[] = [
   {
     title: "Aperçu",
-    links: [{ href: "/admin", label: "À faire", icon: "home", badgeKey: "total" }],
+    links: [
+      { href: "/admin", label: "À faire", icon: "home", badgeKey: "total" },
+      { href: "/admin/rapport", label: "Rapport", icon: "wallet" },
+    ],
   },
   {
     title: "Clients",
     links: [
       { href: "/admin/conversations", label: "Conversations", icon: "chat" },
-      { href: "/admin/handoffs", label: "Handoffs", icon: "handoff", badgeKey: "handoffs" },
-      { href: "/admin/reviews", label: "À reprendre", icon: "review", badgeKey: "reviews" },
+      { href: "/admin/suivi", label: "Suivi clients", icon: "handoff", badgeKey: "followUps" },
       { href: "/admin/crm", label: "CRM", icon: "crm", badgeKey: "crmLinks" },
     ],
   },
