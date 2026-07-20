@@ -26,6 +26,16 @@ describe("classTip — keyword matching", () => {
     }
   });
 
+  it("Bébé Nageur → swim diaper tip (not just the generic swimsuit one)", () => {
+    for (const lang of ["fr", "en", "wo"] as const) {
+      expect(classTip("Bébé Nageur", lang)).toMatch(/couche|diaper/i);
+    }
+    // Adult aquatic classes keep the plain swimsuit tip.
+    expect(classTip("Aquabike", "fr")).not.toMatch(/couche/i);
+    // A dry-land baby class would get no pool advice.
+    expect(classTip("Éveil Bébé", "fr")).toBeNull();
+  });
+
   it("Cardio Boxe → trainers + water", () => {
     expect(classTip("Cardio Boxe", "fr")).toMatch(/baskets|eau/i);
     expect(classTip("Boxe", "en")).toMatch(/trainers|water/i);

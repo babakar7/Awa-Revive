@@ -10,7 +10,7 @@
 
 export type TipLang = "fr" | "en" | "wo";
 
-const TIPS: Record<"reformer" | "studio" | "aqua" | "boxe", Record<TipLang, string>> = {
+const TIPS: Record<"reformer" | "studio" | "aqua" | "babyswim" | "boxe", Record<TipLang, string>> = {
   reformer: {
     fr: "💡 Tenue de sport confortable + chaussettes antidérapantes obligatoires pour le Reformer (en vente au studio).",
     en: "💡 Comfortable sports clothes + non-slip socks are required for Reformer (available at the studio).",
@@ -25,6 +25,11 @@ const TIPS: Record<"reformer" | "studio" | "aqua" | "boxe", Record<TipLang, stri
     fr: "💡 Pense à ton maillot de bain ou lycra.",
     en: "💡 Bring a swimsuit or lycra.",
     wo: "💡 Indil sa maillot de bain walla lycra.",
+  },
+  babyswim: {
+    fr: "💡 Couche de piscine jetable obligatoire pour bébé (en vente au studio) + maillot de bain pour le parent qui accompagne.",
+    en: "💡 A disposable swim diaper is required for baby (sold at the studio) + swimsuit for the accompanying parent.",
+    wo: "💡 Couche de piscine jetable dafa war ci bébé bi (jëndees na ko ci studio bi) + maillot ngir waajur bi.",
   },
   boxe: {
     fr: "💡 Tenue de sport, baskets propres et une bouteille d'eau.",
@@ -49,6 +54,14 @@ export function classTip(serviceName: string, lang?: string | null): string | nu
     .replace(/[\u0300-\u036f]/g, "");
   const l = normalizeLang(lang);
 
+  // Baby swim before generic aqua: "Bébé Nageur" needs the diaper tip, not
+  // just the swimsuit one (a parent asked about diapers minutes after the
+  // generic confirmation — real gap, 20/07). Requires an aquatic hint so a
+  // future dry-land baby class doesn't get pool advice.
+  const baby = s.includes("bebe") || s.includes("baby");
+  if (baby && (s.includes("aqua") || s.includes("nag") || s.includes("swim") || s.includes("piscine"))) {
+    return TIPS.babyswim[l];
+  }
   // Aqua first so e.g. a future "Aqua Pilates" still gets swimsuit tip.
   if (
     s.includes("aqua") ||

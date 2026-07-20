@@ -250,9 +250,19 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         service_id: { type: "string", description: "Class id from list_classes" },
-        event_id: { type: "string", description: "event_id (or choice_id) of the chosen slot from check_availability" },
+        event_id: {
+          type: "string",
+          description:
+            "The chosen slot's choice_id from check_availability (PREFERRED — short and copy-safe). The long " +
+            "event_id is also accepted but must be reproduced EXACTLY in full: any truncation fails as unknown_slot.",
+        },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
-        client_name: { type: "string", description: "Client's first name for the booking" },
+        client_name: {
+          type: "string",
+          description:
+            "Client's first name for the booking — the real name they gave. If you don't know it yet, ASK " +
+            "before creating the link; never pass an initial, a guess or a placeholder.",
+        },
         payment_method: {
           type: "string",
           enum: ["wave", "orange_money", "maxit"],
@@ -363,7 +373,12 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         service_id: { type: "string", description: "Class id from list_classes" },
-        event_id: { type: "string", description: "event_id (or choice_id) of the chosen slot from check_availability" },
+        event_id: {
+          type: "string",
+          description:
+            "The chosen slot's choice_id from check_availability (PREFERRED — short and copy-safe). The long " +
+            "event_id is also accepted but must be reproduced EXACTLY in full: any truncation fails as unknown_slot.",
+        },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
         client_name: { type: "string", description: "Client's first name" },
         participants: {

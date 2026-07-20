@@ -113,6 +113,23 @@ export async function markCapabilityMenuShown(clientId: string): Promise<void> {
 }
 
 /**
+ * Atomically claim the right to show the post-booking bar menu offer.
+ * Returns false when it was already shown within the last 24h — a client
+ * paying several sessions in a row gets the offer once, not after every
+ * payment. Claimed BEFORE sending: a lost offer is a minor miss, a repeated
+ * one reads as spam.
+ */
+export async function claimCafeOffer(clientId: string): Promise<boolean> {
+  const res = await pool.query(
+    `update clients set cafe_offer_at = now(), updated_at = now()
+      where id = $1 and (cafe_offer_at is null or cafe_offer_at < now() - interval '24 hours')
+      returning id`,
+    [clientId],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
  * Find a local client whose WhatsApp number matches any of the given phone
  * spellings (a Wix contact's phones come in e164/raw forms). wa_phone is
  * stored as bare digits (WhatsApp wa_id), so we compare on digits only.

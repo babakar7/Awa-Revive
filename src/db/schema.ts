@@ -91,6 +91,13 @@ alter table clients
 alter table clients
   add column if not exists capability_menu_at timestamptz;
 
+-- Last time the post-booking bar menu offer was delivered. Caps the offer at
+-- once per ~24h: a client paying several sessions back-to-back must not get
+-- the same "incontournables" list after every single confirmation (observed
+-- 20/07: 3 identical lists in 12 minutes). NULL = never shown (offer allowed).
+alter table clients
+  add column if not exists cafe_offer_at timestamptz;
+
 -- Team/test numbers: someone from the studio testing Awa, not a real lead.
 -- Flagged clients are badged in the admin, excluded from campaign audiences,
 -- and never trigger the new-conversation ping to the owner. Toggled from the

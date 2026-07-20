@@ -556,8 +556,8 @@ export async function handleUnsupportedMedia(waPhone: string, waMessageId: strin
   }
   void sendTypingIndicator(waMessageId);
   const reply =
-    "Je ne peux pas lire ce type de message 🙏🏾 Écris-moi (ou envoie une note vocale) ce que tu veux réserver !\n" +
-    "(I can't read this kind of message — please type or voice-note your request.)";
+    "Je ne peux pas lire ce type de message 🙏🏾 Écris-moi (ou envoie une note vocale) et je continue à t'aider !\n" +
+    "(I can't read this kind of message — please type or voice-note it and we'll continue.)";
   await sendText(waPhone, reply);
   await repo.addTurn(client.id, "assistant", reply);
 }

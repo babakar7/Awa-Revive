@@ -145,7 +145,8 @@ export const config = {
   STORY_PHONE: optional("STORY_PHONE", optional("NOTIF_TEST_PHONE", "+221774982711")),
   STORY_HOUR: parseInt(optional("STORY_HOUR", "18"), 10),
   PAYMENT_LINK_TTL_MINUTES: parseInt(optional("PAYMENT_LINK_TTL_MINUTES", "20"), 10),
-  STUDIO_ADDRESS: optional("STUDIO_ADDRESS", "Revive Pilates, Almadies, Dakar"),
+  // Brand rule: the studio is "Revive" — never "Revive Pilates" in client copy.
+  STUDIO_ADDRESS: optional("STUDIO_ADDRESS", "Revive, Almadies, Dakar"),
   PORT: parseInt(optional("PORT", "3000"), 10),
   TIMEZONE: "Africa/Dakar",
 };

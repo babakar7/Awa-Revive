@@ -22,6 +22,9 @@ export async function sendCafeMenuOffer(args: {
   try {
     const options = cafeFavouriteOptions();
     if (options.length === 0) return; // menu unavailable — show nothing
+    // Once per ~24h per client: someone booking several sessions back-to-back
+    // must not get the identical list after every payment confirmation.
+    if (!(await repo.claimCafeOffer(args.clientId))) return;
     const { body, button } = cafeMenuOfferCopy(args.lang);
     const kind = await sendInteractive(args.waPhone, body, button, options);
     // Log what the client saw so the rebuilt history stays coherent (same
