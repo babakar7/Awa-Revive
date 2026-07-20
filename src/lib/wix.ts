@@ -17,6 +17,17 @@ const WIX_API = "https://www.wixapis.com";
 // hung connection would otherwise stall that client's whole queue.
 const HTTP_TIMEOUT_MS = 15_000;
 
+// The eCommerce endpoints are throttled more aggressively than the Bookings
+// APIs. A booking-order sync performs several dependent Wix calls; spacing
+// them prevents Create Order / Add Payments from becoming the third request in
+// the same short rate-limit window. Tests use mocked HTTP and skip the wait.
+const WIX_ECOM_PACE_MS = process.env.NODE_ENV === "test" ? 0 : 1_250;
+
+async function paceWixEcomCall(): Promise<void> {
+  if (WIX_ECOM_PACE_MS === 0) return;
+  await new Promise<void>((resolve) => setTimeout(resolve, WIX_ECOM_PACE_MS));
+}
+
 function headers(): Record<string, string> {
   return {
     Authorization: config.WIX_API_KEY,
@@ -1361,6 +1372,7 @@ export async function createBooking(args: {
 }
 
 export async function findOrderIdByExternalId(externalOrderId: string): Promise<string | null> {
+  await paceWixEcomCall();
   const data = await wixPost("/ecom/v1/orders/search", {
     search: {
       filter: { "channelInfo.externalOrderId": externalOrderId },
@@ -1381,6 +1393,7 @@ export async function createBookingOrder(args: {
   name: string;
   contactId?: string | null;
 }): Promise<string> {
+  await paceWixEcomCall();
   const amount = String(Math.max(0, Math.round(args.amountXof)));
   const contactName = splitContactName(args.name);
   const data = await wixPost("/ecom/v1/orders", {
@@ -1434,6 +1447,7 @@ export async function hasApprovedOrderPayment(
   orderId: string,
   amountXof: number,
 ): Promise<boolean> {
+  await paceWixEcomCall();
   const data = await wixGet(`/ecom/v1/payments/orders/${encodeURIComponent(orderId)}`);
   const target = Math.max(0, Math.round(amountXof));
   const payments: any[] = data?.orderTransactions?.payments ?? [];
@@ -1450,6 +1464,7 @@ export async function addApprovedOrderPayment(args: {
   amountXof: number;
   paymentMethod: string;
 }): Promise<void> {
+  await paceWixEcomCall();
   const data = await wixPost(
     `/ecom/v1/payments/orders/${encodeURIComponent(args.orderId)}/add-payment`,
     {
