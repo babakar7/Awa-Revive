@@ -1,57 +1,61 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { config } from "../src/config.js";
-import {
-  OWNER_PAYMENTS_TTL_MS,
-  mintOwnerPaymentsToken,
-  ownerPaymentsCookieHeader,
-  recordOwnerAttempt,
-  resetOwnerAttemptLimiter,
-  ownerAttemptAllowed,
-  verifyOwnerPaymentsPassword,
-  verifyOwnerPaymentsToken,
-} from "../src/admin/coachPaymentsAuth.js";
-import type { FastifyRequest } from "fastify";
+import { describe, expect, it, vi } from "vitest";
+import type { FastifyReply, FastifyRequest } from "fastify";
+import { ownerPaymentsAuthHook } from "../src/admin/coachPaymentsAuth.js";
 
-describe("owner payment lock", () => {
-  beforeEach(() => {
-    config.OWNER_PAYMENTS_PASSWORD = "owner-secret";
-    resetOwnerAttemptLimiter();
+function replyDouble() {
+  const reply = {
+    header: vi.fn(),
+    code: vi.fn(),
+    type: vi.fn(),
+    send: vi.fn(),
+  };
+  reply.header.mockReturnValue(reply);
+  reply.code.mockReturnValue(reply);
+  reply.type.mockReturnValue(reply);
+  reply.send.mockReturnValue(reply);
+  return reply as unknown as FastifyReply & {
+    code: ReturnType<typeof vi.fn>;
+    send: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe("coach payment role guard", () => {
+  it("lets an owner session through without a second password", async () => {
+    const req = {
+      method: "GET",
+      headers: { accept: "text/html" },
+      adminUser: "direction",
+      adminRole: "owner",
+    } as FastifyRequest;
+    const reply = replyDouble();
+
+    await ownerPaymentsAuthHook(req, reply);
+
+    expect(reply.code).not.toHaveBeenCalled();
+    expect(reply.send).not.toHaveBeenCalled();
   });
 
-  it("compares the dedicated password and has no usable empty fallback", () => {
-    expect(verifyOwnerPaymentsPassword("owner-secret")).toBe(true);
-    expect(verifyOwnerPaymentsPassword("wrong")).toBe(false);
-    config.OWNER_PAYMENTS_PASSWORD = "";
-    expect(verifyOwnerPaymentsPassword("")).toBe(false);
-  });
+  it("blocks a team session from financial pages and mutations", async () => {
+    const htmlReq = {
+      method: "GET",
+      headers: { accept: "text/html" },
+      adminUser: "reception",
+      adminRole: "team",
+    } as FastifyRequest;
+    const htmlReply = replyDouble();
+    await ownerPaymentsAuthHook(htmlReq, htmlReply);
+    expect(htmlReply.code).toHaveBeenCalledWith(403);
+    expect(htmlReply.send).toHaveBeenCalledWith(expect.stringContaining("Changer de compte"));
 
-  it("signs a user-bound token that expires after 8 hours", () => {
-    const now = Date.UTC(2026, 6, 20, 12);
-    const token = mintOwnerPaymentsToken("babakar", now);
-    expect(verifyOwnerPaymentsToken(token, "babakar", now + OWNER_PAYMENTS_TTL_MS - 1)).toBe(true);
-    expect(verifyOwnerPaymentsToken(token, "reception", now)).toBe(false);
-    expect(verifyOwnerPaymentsToken(`${token}x`, "babakar", now)).toBe(false);
-    expect(verifyOwnerPaymentsToken(token, "babakar", now + OWNER_PAYMENTS_TTL_MS)).toBe(false);
-    expect(verifyOwnerPaymentsToken(token, "babakar", now + OWNER_PAYMENTS_TTL_MS + 1)).toBe(false);
-  });
-
-  it("emits a restricted secure cookie", () => {
-    const cookie = ownerPaymentsCookieHeader("token");
-    expect(cookie).toContain("Path=/admin/paiements-coachs");
-    expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("Secure");
-    expect(cookie).toContain("SameSite=Lax");
-    expect(cookie).toContain("Max-Age=28800");
-  });
-
-  it("limits invalid attempts per admin and IP", () => {
-    const req = { adminUser: "babakar", ip: "127.0.0.1" } as FastifyRequest;
-    for (let i = 0; i < 5; i++) {
-      expect(ownerAttemptAllowed(req)).toBe(true);
-      recordOwnerAttempt(req, false);
-    }
-    expect(ownerAttemptAllowed(req)).toBe(false);
-    recordOwnerAttempt(req, true);
-    expect(ownerAttemptAllowed(req)).toBe(true);
+    const postReq = {
+      method: "POST",
+      headers: {},
+      adminUser: "reception",
+      adminRole: "team",
+    } as FastifyRequest;
+    const postReply = replyDouble();
+    await ownerPaymentsAuthHook(postReq, postReply);
+    expect(postReply.code).toHaveBeenCalledWith(403);
+    expect(postReply.send).toHaveBeenCalledWith("Accès propriétaire requis.");
   });
 });

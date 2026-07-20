@@ -597,12 +597,16 @@ create table if not exists cafe_menu_items (
   price_xof integer not null check (price_xof > 0),
   category text not null,
   description text,
+  recipe_ingredients text,                  -- interne équipe, jamais envoyé à Awa / clients
+  recipe_steps text,                        -- préparation interne, texte libre
   favourite boolean not null default false,  -- « incontournables » (liste WhatsApp post-résa, cap 10)
   enabled boolean not null default true,     -- false = retiré du menu (restaurable)
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table cafe_menu_items add column if not exists recipe_ingredients text;
+alter table cafe_menu_items add column if not exists recipe_steps text;
 
 -- ═══ Planning hebdo du personnel (accueil / bar / entretien) ═══
 -- Un scénario = une ligne staff_schedules ; UN SEUL est 'published' à la fois

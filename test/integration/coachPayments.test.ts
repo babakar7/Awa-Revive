@@ -4,7 +4,6 @@ import { buildServer } from "../../src/server.js";
 import { migrate, pool } from "../../src/db/index.js";
 import { makeFetchMock, truncateAll, type FetchMock } from "./helpers.js";
 
-const AUTH = `Basic ${Buffer.from("revive:revive@5000").toString("base64")}`;
 const FORM = "application/x-www-form-urlencoded";
 const BASE = "/admin/paiements-coachs";
 
@@ -31,25 +30,31 @@ beforeEach(async () => {
   mock.reset();
 });
 
-async function unlock(): Promise<string> {
+async function login(username: string, password: string): Promise<string> {
   const response = await app.inject({
     method: "POST",
-    url: `${BASE}/unlock`,
-    headers: { authorization: AUTH, "content-type": FORM },
-    payload: new URLSearchParams({ password: "test-owner-password", next: BASE }).toString(),
+    url: "/admin/login",
+    headers: { "content-type": FORM },
+    payload: new URLSearchParams({
+      username,
+      password,
+      next: BASE,
+    }).toString(),
   });
   expect(response.statusCode).toBe(303);
   const setCookie = String(response.headers["set-cookie"]);
-  expect(setCookie).toContain("Path=/admin/paiements-coachs");
-  expect(setCookie).toContain("Secure");
+  expect(setCookie).toContain("Path=/admin");
   return setCookie.split(";")[0];
 }
+
+const loginAsOwner = () => login("owner", "test-owner-password");
+const loginAsTeam = () => login("revive", "revive@5000");
 
 function post(url: string, fields: Record<string, string>, cookie: string) {
   return app.inject({
     method: "POST",
     url,
-    headers: { authorization: AUTH, cookie, "content-type": FORM },
+    headers: { cookie, "content-type": FORM },
     payload: new URLSearchParams(fields).toString(),
   });
 }
@@ -89,29 +94,27 @@ async function createJuneDraft(cookie: string, profileId: string): Promise<strin
 }
 
 describe("owner payment authorization", () => {
-  it("hides every financial route until the second password and clears it immediately", async () => {
-    const page = await app.inject({ method: "GET", url: BASE, headers: { authorization: AUTH, accept: "text/html" } });
-    expect(page.statusCode).toBe(302);
-    expect(page.headers.location).toContain("/unlock");
+  it("blocks the team account while one owner login grants direct access", async () => {
+    const teamCookie = await loginAsTeam();
+    const page = await app.inject({ method: "GET", url: BASE, headers: { cookie: teamCookie, accept: "text/html" } });
+    expect(page.statusCode).toBe(403);
+    expect(page.body).toContain("Accès propriétaire requis");
+    expect(page.body).toContain("Changer de compte");
 
-    const directPost = await app.inject({ method: "POST", url: `${BASE}/etats`, headers: { authorization: AUTH } });
+    const directPost = await app.inject({ method: "POST", url: `${BASE}/etats`, headers: { cookie: teamCookie } });
     expect(directPost.statusCode).toBe(403);
 
-    const cookie = await unlock();
-    const open = await app.inject({ method: "GET", url: BASE, headers: { authorization: AUTH, cookie } });
+    const cookie = await loginAsOwner();
+    const open = await app.inject({ method: "GET", url: BASE, headers: { cookie } });
     expect(open.statusCode).toBe(200);
     expect(open.body).toContain("Yass");
     expect(open.body).toContain("Leslie");
-
-    const locked = await post(`${BASE}/lock`, {}, cookie);
-    expect(locked.statusCode).toBe(303);
-    expect(String(locked.headers["set-cookie"])).toContain("Max-Age=0");
   });
 });
 
 describe("monthly statement lifecycle", () => {
   it("snapshots Wix, edits, validates, emails a PDF, marks paid and creates a correction", async () => {
-    const cookie = await unlock();
+    const cookie = await loginAsOwner();
     const profileId = await configureYass();
     mock.wix.calendarEvents = [
       calendarEvent("event-a", "2026-06-03T10:00:00"),
@@ -158,7 +161,7 @@ describe("monthly statement lifecycle", () => {
     const immutableAttempt = await post(`${BASE}/etats/${id}/cours/${wixCourse.id}/toggle`, {}, cookie);
     expect(immutableAttempt.headers.location).toContain("err=");
 
-    const pdfBefore = await app.inject({ method: "GET", url: `${BASE}/etats/${id}/pdf`, headers: { authorization: AUTH, cookie } });
+    const pdfBefore = await app.inject({ method: "GET", url: `${BASE}/etats/${id}/pdf`, headers: { cookie } });
     expect(pdfBefore.statusCode).toBe(200);
     expect(pdfBefore.rawPayload.subarray(0, 5).toString("latin1")).toBe("%PDF-");
 
@@ -172,7 +175,7 @@ describe("monthly statement lifecycle", () => {
 
     const paid = await post(`${BASE}/etats/${id}/payer`, { paid_on: "2026-07-05" }, cookie);
     expect(paid.headers.location).toContain("done=paid");
-    const pdfAfter = await app.inject({ method: "GET", url: `${BASE}/etats/${id}/pdf`, headers: { authorization: AUTH, cookie } });
+    const pdfAfter = await app.inject({ method: "GET", url: `${BASE}/etats/${id}/pdf`, headers: { cookie } });
     expect(pdfAfter.rawPayload.equals(pdfBefore.rawPayload)).toBe(true);
 
     const correction = await post(`${BASE}/etats/${id}/correction`, {}, cookie);
@@ -192,7 +195,7 @@ describe("monthly statement lifecycle", () => {
   });
 
   it("blocks validation on an open month and after a Wix outage", async () => {
-    const cookie = await unlock();
+    const cookie = await loginAsOwner();
     const profileId = await configureYass();
     mock.wix.calendarEvents = [calendarEvent("july", "2026-07-05T10:00:00")];
     const julyCreate = await post(`${BASE}/etats`, { profile_id: profileId, month: "2026-07" }, cookie);

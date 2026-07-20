@@ -218,6 +218,24 @@ form.inline{display:inline}
 .checklist-progress{display:flex;align-items:center;justify-content:space-between;gap:1rem}
 .checklist-progress>div{display:flex;flex-direction:column;gap:.12rem}
 
+/* menu catalogue and internal recipes */
+.menu-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+.menu-filters{display:grid;grid-template-columns:minmax(220px,1.5fr) repeat(3,minmax(130px,.75fr)) auto;align-items:end;gap:.75rem}
+.menu-filter-actions{min-height:42px;display:flex;align-items:center;gap:.7rem;white-space:nowrap}
+.menu-editor{display:grid;gap:.9rem}
+.menu-editor>.card{margin-bottom:0}
+.menu-editor-heading{margin:0 0 1rem}
+.menu-editor-heading p{margin:.25rem 0 0}
+.menu-form-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(150px,.5fr);gap:1rem}
+.menu-form-grid .menu-description{grid-column:1/-1}
+.menu-form-grid .menu-favourite{grid-column:1/-1;display:flex;align-items:center;gap:.5rem;padding:.7rem .75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--cream-25)}
+.menu-form-grid .menu-favourite input{flex:0 0 auto;margin:0}
+.recipe-editor{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.recipe-editor .menu-editor-heading{grid-column:1/-1}
+.recipe-editor textarea{min-height:250px;line-height:1.6}
+.menu-danger-zone{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-top:1rem}
+.menu-danger-zone p{margin:.15rem 0 0}
+
 /* chat */
 .conversation-shell{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:1rem;align-items:start}
 .client-summary{position:sticky;top:calc(var(--topbar-h) + 1rem)}
@@ -287,6 +305,8 @@ details>summary{cursor:pointer}
   main,main.content-standard,main.content-wide,main.content-full{max-width:none;padding:1.15rem .9rem 3.5rem}
   .conversation-shell{grid-template-columns:1fr}
   .client-summary{position:static}
+  .menu-filters{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .menu-search,.menu-filter-actions{grid-column:1/-1}
 }
 @media(max-width:640px){
   .topbar-title{display:none}
@@ -316,6 +336,9 @@ details>summary{cursor:pointer}
   .actionbar{bottom:.45rem;margin-inline:-.2rem;padding:.65rem}
   .statement-summary,.checklist-progress{align-items:flex-start;flex-direction:column}
   .statement-summary>div:last-child,.finance-total{align-items:flex-start;text-align:left}
+  .menu-stats,.menu-filters,.menu-form-grid,.recipe-editor{grid-template-columns:1fr}
+  .menu-search,.menu-filter-actions,.menu-form-grid .menu-description,.menu-form-grid .menu-favourite,.recipe-editor .menu-editor-heading{grid-column:1}
+  .menu-danger-zone{align-items:stretch;flex-direction:column}
 }
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
@@ -323,7 +346,7 @@ details>summary{cursor:pointer}
 }
 `;
 
-/** Standalone login/unlock screens share the same premium first impression. */
+/** Standalone login/access-control screens share the same premium first impression. */
 export const ADMIN_AUTH_CSS = `
 :root{color-scheme:light;--brand:#7c547d;--brand-strong:#684469;--brand-accent:#a98baa;--ink:#211a22;--muted:#665c68;--border:#ded3ca;--cream:#f5efe9;--surface:#fbf7f2;--surface-raised:#fefbf7;--plum-soft:#f8f4f8;--danger:#b63843;--danger-bg:#fff0f1}
 *{box-sizing:border-box}

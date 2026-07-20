@@ -8,7 +8,9 @@ import {
   safeNextPath,
   parseCookies,
   SESSION_TTL_MS,
+  verifyAdminCredentials,
 } from "../src/admin/auth.js";
+import { config } from "../src/config.js";
 import { escapeHtml } from "../src/admin/routes.js";
 
 // Session HMAC needs config.DATABASE_URL — tests load dotenv or empty; pin env.
@@ -115,7 +117,7 @@ describe("admin session cookie", () => {
 
   it("mints a token that verifies for the same user", () => {
     const token = mintSessionToken("babakar");
-    expect(verifySessionToken(token, users)).toBe("babakar");
+    expect(verifySessionToken(token, users)).toEqual({ username: "babakar", role: "team" });
   });
 
   it("rejects tampered tokens and unknown users", () => {
@@ -144,5 +146,50 @@ describe("admin session cookie", () => {
       awa_admin_session: "tok+",
       b: "c",
     });
+  });
+});
+
+describe("admin roles", () => {
+  it("authenticates the owner separately from restricted team accounts", () => {
+    const previous = {
+      users: config.ADMIN_USERS,
+      ownerUser: config.OWNER_ADMIN_USER,
+      ownerPassword: config.OWNER_ADMIN_PASSWORD,
+    };
+    config.ADMIN_USERS = "reception:team-secret";
+    config.OWNER_ADMIN_USER = "direction";
+    config.OWNER_ADMIN_PASSWORD = "owner-secret";
+    try {
+      expect(verifyAdminCredentials("reception", "team-secret")).toEqual({
+        username: "reception",
+        role: "team",
+      });
+      expect(verifyAdminCredentials("direction", "owner-secret")).toEqual({
+        username: "direction",
+        role: "owner",
+      });
+      expect(verifyAdminCredentials("reception", "owner-secret")).toBeNull();
+    } finally {
+      config.ADMIN_USERS = previous.users;
+      config.OWNER_ADMIN_USER = previous.ownerUser;
+      config.OWNER_ADMIN_PASSWORD = previous.ownerPassword;
+    }
+  });
+
+  it("keeps the owner role in the signed session", () => {
+    const previousUser = config.OWNER_ADMIN_USER;
+    const previousPassword = config.OWNER_ADMIN_PASSWORD;
+    config.OWNER_ADMIN_USER = "direction";
+    config.OWNER_ADMIN_PASSWORD = "owner-secret";
+    try {
+      const token = mintSessionToken({ username: "direction", role: "owner" });
+      expect(verifySessionToken(token, new Map())).toEqual({
+        username: "direction",
+        role: "owner",
+      });
+    } finally {
+      config.OWNER_ADMIN_USER = previousUser;
+      config.OWNER_ADMIN_PASSWORD = previousPassword;
+    }
   });
 });

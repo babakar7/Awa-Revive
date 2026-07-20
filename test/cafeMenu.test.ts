@@ -15,7 +15,7 @@ import {
   setCafeMenu,
   slugifyMenuId,
 } from "../src/lib/cafeMenu.js";
-import { parseMenuItemForm } from "../src/domain/cafeMenuRepo.js";
+import { isRecipeComplete, parseMenuItemForm } from "../src/domain/cafeMenuRepo.js";
 import { systemPrompt } from "../src/agent/systemPrompt.js";
 
 /** The real menu file, parsed as the DB seed would — items are the source. */
@@ -256,10 +256,24 @@ describe("systemPrompt() — memoized on the menu version (prompt cache)", () =>
 });
 
 describe("parseMenuItemForm", () => {
-  const base = { name: "Jus Vert", price_xof: "2500", category: "JUS", description: "pomme, épinard" };
+  const base = {
+    name: "Jus Vert",
+    price_xof: "2500",
+    category: "JUS",
+    description: "pomme, épinard",
+    recipe_ingredients: "  100 g pomme\n50 g épinard  ",
+    recipe_steps: "  1. Mixer\n2. Servir  ",
+  };
   it("accepts a valid item and reads the favourite checkbox", () => {
     const r = parseMenuItemForm({ ...base, favourite: "on" });
-    expect(r).toMatchObject({ name: "Jus Vert", price_xof: 2500, category: "JUS", favourite: true });
+    expect(r).toMatchObject({
+      name: "Jus Vert",
+      price_xof: 2500,
+      category: "JUS",
+      favourite: true,
+      recipe_ingredients: "100 g pomme\n50 g épinard",
+      recipe_steps: "1. Mixer\n2. Servir",
+    });
   });
   it("requires name, category and a valid integer price", () => {
     expect("error" in parseMenuItemForm({ ...base, name: "" })).toBe(true);
@@ -267,8 +281,44 @@ describe("parseMenuItemForm", () => {
     expect("error" in parseMenuItemForm({ ...base, price_xof: "0" })).toBe(true);
     expect("error" in parseMenuItemForm({ ...base, price_xof: "abc" })).toBe(true);
   });
-  it("defaults favourite to false and empty description to null", () => {
-    const r = parseMenuItemForm({ ...base, description: "" });
-    expect(r).toMatchObject({ favourite: false, description: null });
+  it("defaults optional public and recipe fields to null", () => {
+    const r = parseMenuItemForm({ ...base, description: "", recipe_ingredients: "", recipe_steps: "" });
+    expect(r).toMatchObject({
+      favourite: false,
+      description: null,
+      recipe_ingredients: null,
+      recipe_steps: null,
+    });
+  });
+  it("rejects an oversized recipe field", () => {
+    expect(parseMenuItemForm({ ...base, recipe_ingredients: "x".repeat(5_001) })).toEqual({
+      error: "ingrédients trop longs (max 5000 caractères).",
+    });
+    expect(parseMenuItemForm({ ...base, recipe_steps: "x".repeat(5_001) })).toEqual({
+      error: "préparation trop longue (max 5000 caractères).",
+    });
+  });
+});
+
+describe("internal recipes", () => {
+  it("is complete only when ingredients and steps are both present", () => {
+    expect(isRecipeComplete({ recipe_ingredients: "Mangue", recipe_steps: "Mixer" })).toBe(true);
+    expect(isRecipeComplete({ recipe_ingredients: "Mangue", recipe_steps: null })).toBe(false);
+    expect(isRecipeComplete({ recipe_ingredients: " ", recipe_steps: "Mixer" })).toBe(false);
+  });
+
+  it("never reaches the Awa snapshot or prompt even if attached to input rows", () => {
+    const rows = rowsFromMenu() as Array<CafeMenuRow & {
+      recipe_ingredients?: string;
+      recipe_steps?: string;
+    }>;
+    rows[0].recipe_ingredients = "SECRET CUISINE";
+    rows[0].recipe_steps = "ÉTAPE INTERNE";
+    setCafeMenu(rows);
+    expect(getCafeMenu().promptText).not.toContain("SECRET CUISINE");
+    expect(getCafeMenu().promptText).not.toContain("ÉTAPE INTERNE");
+    expect(getCafeMenu().items.get(rows[0].id)).not.toHaveProperty("recipe_ingredients");
+    expect(getCafeMenu().items.get(rows[0].id)).not.toHaveProperty("recipe_steps");
+    setCafeMenu(rowsFromMenu());
   });
 });

@@ -19,6 +19,7 @@ import { startOmTokenKeepAlive } from "./lib/orangeMoney.js";
 import { initCafeMenu } from "./domain/cafeMenuRepo.js";
 import { notifyReception } from "./lib/notify.js";
 import { drainQueues } from "./lib/serialize.js";
+import { listenOnAvailablePort } from "./lib/listen.js";
 import { buildServer } from "./server.js";
 
 async function main() {
@@ -142,8 +143,15 @@ async function main() {
   }, 5 * 60 * 1000);
   cancellationSweeper.unref();
 
-  await app.listen({ port: config.PORT, host: "0.0.0.0" });
-  app.log.info(`Revive booking agent listening on :${config.PORT}`);
+  const activePort = await listenOnAvailablePort(config.PORT, {
+    // Set by `npm run dev` only. `npm start` remains strict in production.
+    autoFallback: process.env.DEV_AUTO_PORT === "1",
+    listen: (port) => app.listen({ port, host: "0.0.0.0" }),
+    onPortBusy: (port, nextPort) => {
+      app.log.warn({ port, nextPort }, `Port ${port} occupé, essai sur ${nextPort}…`);
+    },
+  });
+  app.log.info(`Revive booking agent listening on http://localhost:${activePort}`);
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, "Shutting down");

@@ -5,7 +5,6 @@ import type {
 } from "../domain/coachPaymentRepo.js";
 import { monthBounds, monthIsClosed, storedMonthKey, tariffFromJson, tariffFromProfile, tariffLabel } from "../domain/coachPaymentRules.js";
 import type { WixStaffResource } from "../lib/wix.js";
-import { ADMIN_AUTH_CSS } from "./adminStyles.js";
 
 const BASE = "/admin/paiements-coachs";
 
@@ -53,7 +52,6 @@ function statusBadge(status: string): string {
 
 export function coachPaymentBanner(done?: string, error?: string): string {
   const messages: Record<string, string> = {
-    unlocked: "Section déverrouillée pour 8 heures.",
     profile: "Réglages enregistrés.",
     created: "Brouillon créé avec son instantané Wix.",
     synced: "Instantané Wix actualisé.",
@@ -70,25 +68,6 @@ export function coachPaymentBanner(done?: string, error?: string): string {
   if (error) return `<div class="card warn">⚠️ ${esc(error)}</div>`;
   if (done && messages[done]) return `<div class="card success"><span class="ok">✓ ${esc(messages[done])}</span></div>`;
   return "";
-}
-
-export function renderOwnerUnlockPage(args: {
-  error?: string;
-  next: string;
-  configured: boolean;
-}): string {
-  const error = args.error ? `<div class="err">⚠️ ${esc(args.error)}</div>` : "";
-  const form = args.configured
-    ? `<form method="post" action="${BASE}/unlock">
-        <input type="hidden" name="next" value="${esc(args.next)}">
-        <label for="owner_password">Mot de passe propriétaire</label>
-        <input id="owner_password" name="password" type="password" autocomplete="current-password" required autofocus>
-        <button type="submit">Déverrouiller</button>
-      </form>`
-    : `<div class="err">OWNER_PAYMENTS_PASSWORD n'est pas configuré. La section reste fermée.</div>`;
-  return `<!doctype html><html lang="fr"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
-<title>Déverrouillage — Paiements coachs</title><style>${ADMIN_AUTH_CSS}</style></head><body><main class="auth-card"><div class="auth-brand"><span class="auth-mark" aria-hidden="true">r</span><span><b>revive</b><small>Espace propriétaire</small></span></div><h1>Paiements coachs</h1><p>Ces données financières sont réservées au propriétaire. Le déverrouillage expire automatiquement après 8 heures.</p>${error}${form}<p class="muted"><a href="/admin">Retour à l’administration</a></p></main></body></html>`;
 }
 
 export function renderCoachPaymentsDashboard(args: {
@@ -110,7 +89,7 @@ export function renderCoachPaymentsDashboard(args: {
       return `<article class="card finance-card"><div class="row between"><div><span class="eyebrow">Coach</span><h2>${esc(profile.display_name)}</h2><div class="muted">${esc(tariffLabel(tariffFromProfile(profile)))}</div><div class="muted">${resource} · ${esc(profile.email ?? "e-mail non renseigné")}</div></div><div class="finance-total">${statement ? `${statusBadge(statement.status)}<b>${xof(statement.total_xof)}</b><span>${statement.course_count} cours · v${statement.version}</span>` : `<span class="muted">Aucun état pour ce mois</span>`}</div></div><div class="card-actions">${action}</div></article>`;
     })
     .join("");
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio</span><h2>Paiements coachs</h2><p>Préparez, contrôlez et validez les états mensuels à partir des séances Wix.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}/reglages">Réglages coachs</a><form class="inline" method="post" action="${BASE}/lock"><button class="act act--danger" type="submit">Verrouiller</button></form></div></header>${args.banner}<div class="card filter-bar"><form method="get" action="${BASE}" class="row"><label>Mois<input type="month" name="month" value="${esc(args.month)}" required></label><button class="act act--ghost" type="submit">Afficher le mois</button></form></div><div class="section-header"><h2>${esc(monthLabel(args.month))}</h2><span class="badge badge--gray">${args.profiles.length} coach(s)</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach active</b><p>Ajoutez ou réactivez une fiche depuis les réglages.</p></div>`}`;
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio · Propriétaire</span><h2>Paiements coachs</h2><p>Préparez, contrôlez et validez les états mensuels à partir des séances Wix.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}/reglages">Réglages coachs</a></div></header>${args.banner}<div class="card filter-bar"><form method="get" action="${BASE}" class="row"><label>Mois<input type="month" name="month" value="${esc(args.month)}" required></label><button class="act act--ghost" type="submit">Afficher le mois</button></form></div><div class="section-header"><h2>${esc(monthLabel(args.month))}</h2><span class="badge badge--gray">${args.profiles.length} coach(s)</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach active</b><p>Ajoutez ou réactivez une fiche depuis les réglages.</p></div>`}`;
 }
 
 export function renderCoachPaymentSettings(args: {
@@ -135,7 +114,7 @@ export function renderCoachPaymentSettings(args: {
     </form>`;
   }).join("");
   const script = `<script>document.querySelectorAll('select[data-email-target]').forEach(function(s){s.addEventListener('change',function(){var o=s.options[s.selectedIndex];var text=o?o.textContent:'';var m=text.match(/—\s+([^\s]+@[^\s]+)$/);var input=document.getElementById(s.dataset.emailTarget);if(m&&input&&!input.value)input.value=m[1];});});</script>`;
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Paiements coachs</span><h2>Réglages des coachs</h2><p>Associez chaque coach à Wix et définissez ses conditions pour les prochains brouillons.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}">États mensuels</a><form class="inline" method="post" action="${BASE}/lock"><button class="act act--danger" type="submit">Verrouiller</button></form></div></header>${args.banner}${args.wixError ? `<div class="card warn">Ressources Wix indisponibles : ${esc(args.wixError)}</div>` : ""}<p class="subhead">Les états déjà créés conservent les conditions figées lors de leur création.</p>${cards || `<div class="card empty"><b>Aucune fiche coach</b><p>Créez une fiche en base pour commencer.</p></div>`}${script}`;
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Paiements coachs · Propriétaire</span><h2>Réglages des coachs</h2><p>Associez chaque coach à Wix et définissez ses conditions pour les prochains brouillons.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}">États mensuels</a></div></header>${args.banner}${args.wixError ? `<div class="card warn">Ressources Wix indisponibles : ${esc(args.wixError)}</div>` : ""}<p class="subhead">Les états déjà créés conservent les conditions figées lors de leur création.</p>${cards || `<div class="card empty"><b>Aucune fiche coach</b><p>Créez une fiche en base pour commencer.</p></div>`}${script}`;
 }
 
 function tariffFields(detail: StatementDetail): string {
@@ -186,7 +165,7 @@ export function renderCoachPaymentStatement(args: {
   const versionsHtml = versions.map((v) => `<li><a href="${BASE}/etats/${esc(v.id)}">Version ${v.version}</a> — ${statusBadge(v.status)}${v.is_current ? " · active" : ""} · ${xof(v.total_xof)}</li>`).join("");
   const sendsHtml = sends.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Destinataire</th><th>Résultat</th><th>Erreur</th></tr></thead><tbody>${sends.map((s) => `<tr><td>${date(s.attempted_at)}</td><td>${esc(s.recipient_email)}</td><td>${s.status === "success" ? `<span class="ok">Succès</span>` : `<span class="danger-text">Erreur</span>`}</td><td class="muted">${esc(s.error ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>Aucun envoi</b><p>Les tentatives apparaîtront ici avec leur résultat.</p></div>`;
 
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">État mensuel · version ${statement.version}</span><h2>${esc(statement.coach_name_snapshot)} — ${esc(monthLabel(month))}</h2><p>${esc(tariffLabel(tariffFromJson(statement.tariff_json)))}</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}?month=${esc(month)}">États du mois</a><a class="act act--ghost" href="${BASE}/etats/${esc(statement.id)}/pdf" target="_blank">PDF ${draft ? "brouillon" : "validé"}</a>${correction}<form class="inline" method="post" action="${BASE}/lock"><button class="act act--danger" type="submit">Verrouiller</button></form></div></header>${args.banner}
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">État mensuel · version ${statement.version} · Propriétaire</span><h2>${esc(statement.coach_name_snapshot)} — ${esc(monthLabel(month))}</h2><p>${esc(tariffLabel(tariffFromJson(statement.tariff_json)))}</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}?month=${esc(month)}">États du mois</a><a class="act act--ghost" href="${BASE}/etats/${esc(statement.id)}/pdf" target="_blank">PDF ${draft ? "brouillon" : "validé"}</a>${correction}</div></header>${args.banner}
   <div class="card statement-summary"><div><span class="muted">Montant de l’état</span><b>${xof(statement.total_xof)}</b></div><div>${statusBadge(statement.status)}<p class="${syncOk ? "muted" : "danger-text"}">${esc(syncLabel)}</p></div></div>
   ${draftTools}
   <div class="card"><h2>Séances (${statement.course_count} comptées)</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${courseRows || `<tr><td colspan="4"><div class="empty"><b>Aucune séance</b><p>Synchronisez Wix ou ajoutez une séance manuelle.</p></div></td></tr>`}</tbody></table></div></div>

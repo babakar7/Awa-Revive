@@ -29,7 +29,7 @@ Requirements: **Node 20+**, **Postgres** (any managed instance).
 npm install
 cp .env.example .env      # then fill it in (see below)
 npm run migrate           # creates tables (idempotent; also runs at boot)
-npm run dev               # start with hot reload
+npm run dev               # hot reload; tries the next port when PORT is occupied
 ```
 
 ### Environment variables
@@ -114,7 +114,7 @@ PAID ──slot gone or Wix error──────────────► R
 
 Awa can bundle a bar order (smoothies, matcha, food) into a class booking: one Wave link covers class + bar, the client confirmation lists the items, and reception is notified (email + WhatsApp) to prepare the order — by default ready after the class.
 
-- **Menu source of truth: the `cafe_menu_items` table**, edited in the admin (**Bar → Menu bar**, `/admin/menu`) — add / edit / remove items with no redeploy. On the FIRST boot (empty table) it is seeded from [cafe-menu.md](cafe-menu.md); after that the file is ignored. Ids are auto-generated (UPPER_SNAKE slug of the name) and never reused — "removing" an item archives it (`enabled=false`). Prices are always resolved server-side from the table (the model only passes ids — same anti-injection stance as slots). The live menu is an in-memory snapshot refreshed on every admin edit, so Awa's prompt and the delivery form update instantly; the `<cafe_menu>` prompt block is rebuilt only on a menu edit, keeping the Anthropic prompt-cache prefix stable otherwise.
+- **Menu source of truth: the `cafe_menu_items` table**, edited in the admin (**Bar → Menu bar**, `/admin/menu`) — searchable catalogue, dedicated item forms, recipe completion filters, and add/edit/remove with no redeploy. Each item can carry an internal recipe split into ingredients/quantities and preparation steps; both fields are optional and **never enter Awa's prompt or any client-facing output**. On the FIRST boot (empty table) the public catalogue fields are seeded from [cafe-menu.md](cafe-menu.md); after that the file is ignored. Ids are auto-generated (UPPER_SNAKE slug of the name) and never reused — "removing" an item archives it (`enabled=false`) together with its recipe. Prices are always resolved server-side from the table (the model only passes ids — same anti-injection stance as slots). The live menu is an in-memory snapshot refreshed on every commercial edit, so Awa's prompt and the delivery form update instantly; the `<cafe_menu>` prompt block is rebuilt only on a menu edit, keeping the Anthropic prompt-cache prefix stable otherwise.
 - v1 limitations: no bundling with membership bookings (no payment link) and no bar-only orders — both are counter-only, Awa says so.
 
 ## Operations
@@ -130,16 +130,21 @@ npm run build && npm start   # production
 ### Admin dashboard (`/admin`)
 
 Server-rendered, zero-runtime-dependency dashboard (`src/admin/`) protected by
-HTTP Basic Auth. Set `ADMIN_USERS="babakar:pass1,reception:pass2"` (one account
-per human — action logs record who clicked); unset → built-in fallback login
-`revive` / `revive@5000` (never open, never 503). The responsive Revive design system
+a signed 30-day login session (HTTP Basic remains available for scripts). Set
+`ADMIN_USERS="reception:pass1,equipe:pass2"` for restricted team accounts; unset
+→ built-in fallback `revive` / `revive@5000`. Configure the separate owner account
+with `OWNER_ADMIN_USER` and `OWNER_ADMIN_PASSWORD`: one owner login grants the whole
+dashboard, including coach payments, without a second password. The legacy
+`OWNER_PAYMENTS_PASSWORD` remains a temporary password fallback during migration.
+The responsive Revive design system
 uses a task-oriented sidebar, global client search (`Ctrl/Cmd+K`), an off-canvas
 mobile menu, accessible focus states and confirmation dialogs. `/admin` is the
 operational queue: pending refunds, paid plans awaiting Wix activation, open
 handoffs/reviews, CRM links and delivery alerts appear before the day/7-day
 activity metrics. The full admin also covers conversations, bookings, staff
 planning, coach payments, documents, gifts, bar deliveries/menu, notifications
-and WhatsApp profile settings. Financial buttons only RECORD manual actions —
+and WhatsApp profile settings. Team accounts cannot access coach-payment pages,
+PDFs or mutations; this is enforced server-side. Financial buttons only RECORD manual actions —
 no money ever moves from the dashboard; refunds are done by a human in the Wave
 portal (`npm run refund:done` remains as CLI fallback).
 

@@ -7,6 +7,10 @@
   (ajouter / modifier / retirer un article, sans redéploiement). Éditer ce
   fichier après le premier boot n'a AUCUN effet.
 
+  Les recettes internes (ingrédients + étapes) ne sont pas seedées ici : elles
+  se complètent uniquement dans la fiche article de /admin/menu et ne sont
+  jamais transmises à Awa ni aux clients.
+
   Les prix facturés dans les liens Wave viennent toujours du serveur (table),
   jamais de l'IA.
 

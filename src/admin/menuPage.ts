@@ -1,15 +1,9 @@
-import type { MenuItemView } from "../domain/cafeMenuRepo.js";
+import { isRecipeComplete, type MenuItemView } from "../domain/cafeMenuRepo.js";
 
-/**
- * Body HTML for /admin/menu — server-rendered, self-contained escaping so it
- * doesn't import from routes.ts (which imports this). routes.ts wraps it in
- * layout() and owns the POST handlers (create / update / toggle), each of which
- * calls refreshCafeMenu() so Awa's prompt + the delivery form pick up the edit
- * with no redeploy. Editing a row is inline via ?edit=<id>.
- */
+/** Server-rendered menu catalogue and internal recipe editor. */
 
-function esc(s: unknown): string {
-  return String(s ?? "")
+function esc(value: unknown): string {
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -17,9 +11,13 @@ function esc(s: unknown): string {
     .replaceAll("'", "&#39;");
 }
 
+function query(value: unknown): string {
+  return encodeURIComponent(String(value ?? ""));
+}
+
 const BANNERS: Record<string, string> = {
   created: "Article ajouté au menu.",
-  updated: "Article mis à jour.",
+  updated: "Article et recette mis à jour.",
   retired: "Article retiré du menu.",
   restored: "Article remis au menu.",
 };
@@ -27,92 +25,149 @@ const BANNERS: Record<string, string> = {
 export function menuBanner(done?: string, err?: string): string {
   if (done && BANNERS[done])
     return `<div class="card success"><span class="ok">✓ ${esc(BANNERS[done])}</span></div>`;
-  if (err) return `<div class="card warn">⚠️ ${esc(err)}</div>`;
+  if (err) return `<div class="card warn">${esc(err)}</div>`;
   return "";
 }
 
-/** Ordered unique categories (for the datalist + group order). */
-function categoriesInOrder(items: MenuItemView[]): string[] {
+export type MenuFilters = {
+  q?: string;
+  status?: "active" | "retired" | "all";
+  recipe?: "all" | "complete" | "missing";
+  category?: string;
+};
+
+function normalized(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLocaleLowerCase("fr-FR");
+}
+
+export function filterMenuItems(items: MenuItemView[], filters: MenuFilters): MenuItemView[] {
+  const q = normalized(filters.q?.trim() ?? "");
+  const status = filters.status ?? "active";
+  const recipe = filters.recipe ?? "all";
+  const category = filters.category?.trim() ?? "";
+  return items.filter((item) => {
+    if (status === "active" && !item.enabled) return false;
+    if (status === "retired" && item.enabled) return false;
+    if (recipe === "complete" && !isRecipeComplete(item)) return false;
+    if (recipe === "missing" && isRecipeComplete(item)) return false;
+    if (category && item.category !== category) return false;
+    if (q && !normalized(`${item.name} ${item.category} ${item.id}`).includes(q)) return false;
+    return true;
+  });
+}
+
+/** Ordered unique categories used by the catalogue and editor datalist. */
+export function menuCategories(items: MenuItemView[]): string[] {
   const seen: string[] = [];
-  for (const it of items) if (!seen.includes(it.category)) seen.push(it.category);
+  for (const item of items) if (!seen.includes(item.category)) seen.push(item.category);
   return seen;
 }
 
-function fieldsRow(prefix: string, it: MenuItemView | null, cats: string[]): string {
-  const nameV = it ? esc(it.name) : "";
-  const priceV = it ? String(it.price_xof) : "";
-  const catV = it ? esc(it.category) : "";
-  const descV = it ? esc(it.description) : "";
-  const fav = it?.favourite ? " checked" : "";
-  return `<input name="name" required maxlength="80" value="${nameV}" placeholder="Nom" aria-label="Nom de l’article" style="flex:2;min-width:9rem">
-<input name="price_xof" required type="number" min="1" value="${priceV}" placeholder="Prix" aria-label="Prix en francs CFA" style="width:7rem">
-<input name="category" required maxlength="40" list="${prefix}-cats" value="${catV}" placeholder="Catégorie" aria-label="Catégorie" style="flex:1;min-width:8rem">
-<input name="description" maxlength="200" value="${descV}" placeholder="Description (optionnel)" aria-label="Description" style="flex:3;min-width:10rem">
-<label class="cluster nowrap"><input type="checkbox" name="favourite"${fav}> Incontournable</label>
-<datalist id="${prefix}-cats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>`;
+function selected(value: string | undefined, expected: string): string {
+  return (value ?? "") === expected ? " selected" : "";
 }
 
-function editRow(it: MenuItemView, cats: string[]): string {
-  return `<tr><td colspan="5" data-label="">
-<form method="post" action="/admin/menu/items/${esc(it.id)}/update" class="row">
-  ${fieldsRow("edit", it, cats)}
-  <button class="act act--sm" type="submit">Enregistrer</button>
-  <a href="/admin/menu">Annuler</a>
-  <span class="muted">id ${esc(it.id)}</span>
-</form></td></tr>`;
+function recipeBadge(item: MenuItemView): string {
+  return isRecipeComplete(item)
+    ? `<span class="badge badge--green">Recette complète</span>`
+    : `<span class="badge badge--amber">Recette à compléter</span>`;
 }
 
-function viewRow(it: MenuItemView): string {
+function price(value: number): string {
+  return `${Math.round(value).toLocaleString("fr-FR").replace(/ /g, " ")} F`;
+}
+
+function itemRow(item: MenuItemView): string {
   return `<tr>
-<td data-label="Article"><b>${esc(it.name)}</b>${it.favourite ? ` <span class="badge badge--violet">Incontournable</span>` : ""}</td>
-<td data-label="Prix" class="nowrap"><b>${esc(it.price_xof)} F</b></td>
-<td data-label="Description" class="hide-sm">${esc(it.description) || "—"}</td>
-<td data-label="ID" class="hide-sm"><span class="muted">${esc(it.id)}</span></td>
-<td data-label="Actions" class="nowrap">
-  <a class="act act--sm act--ghost" href="/admin/menu?edit=${esc(it.id)}">Modifier</a>
-  <form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" class="inline" data-confirm="Retirer « ${esc(it.name)} » du menu ? L’article pourra être restauré plus tard.">
-    <button class="act act--sm act--ghost" type="submit">Retirer</button>
-  </form>
-</td></tr>`;
+<td data-label="Article"><a href="/admin/menu/items/${query(item.id)}"><b>${esc(item.name)}</b></a>${item.favourite ? ` <span class="badge badge--violet">Incontournable</span>` : ""}<div class="muted">${esc(item.id)}</div></td>
+<td data-label="Prix" class="nowrap"><b>${esc(price(item.price_xof))}</b></td>
+<td data-label="Recette">${recipeBadge(item)}</td>
+<td data-label="Statut">${item.enabled ? `<span class="badge badge--green">Actif</span>` : `<span class="badge badge--gray">Retiré</span>`}</td>
+<td data-label="Actions" class="nowrap"><a class="act act--sm act--ghost" href="/admin/menu/items/${query(item.id)}">Ouvrir la fiche</a></td>
+</tr>`;
 }
 
-export function renderMenuPage(opts: { items: MenuItemView[]; editId?: string; banner: string }): string {
-  const { items, editId, banner } = opts;
-  const cats = categoriesInOrder(items.filter((i) => i.enabled));
-  const enabled = items.filter((i) => i.enabled);
-  const retired = items.filter((i) => !i.enabled);
+export function renderMenuPage(opts: {
+  items: MenuItemView[];
+  filters: MenuFilters;
+  banner: string;
+}): string {
+  const { items, filters, banner } = opts;
+  const categories = menuCategories(items);
+  const visible = filterMenuItems(items, filters);
+  const active = items.filter((item) => item.enabled);
+  const missing = active.filter((item) => !isRecipeComplete(item));
+  const complete = active.length - missing.length;
 
-  const groups = cats
-    .map((cat) => {
-      const rows = enabled
-        .filter((i) => i.category === cat)
-        .map((it) => (it.id === editId ? editRow(it, cats) : viewRow(it)))
-        .join("");
-      return `<div class="section-header"><h3>${esc(cat)}</h3><span class="badge badge--gray">${enabled.filter((i) => i.category === cat).length}</span></div>
-<div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Article</th><th>Prix</th><th class="hide-sm">Description</th><th class="hide-sm">ID</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  const groups = menuCategories(visible)
+    .map((category) => {
+      const categoryItems = visible.filter((item) => item.category === category);
+      return `<div class="section-header"><h2>${esc(category)}</h2><span class="badge badge--gray">${categoryItems.length}</span></div>
+<div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Article</th><th>Prix</th><th>Recette</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${categoryItems.map(itemRow).join("")}</tbody></table></div></div>`;
     })
     .join("");
 
-  const retiredBlock = retired.length
-    ? `<details style="margin-top:1rem"><summary style="cursor:pointer;font-weight:600">Articles retirés (${retired.length})</summary>
-<div class="card"><table><tbody>${retired
-        .map(
-          (it) => `<tr><td><b>${esc(it.name)}</b> <span class="muted">— ${esc(it.price_xof)} F · ${esc(it.category)}</span></td>
-<td style="white-space:nowrap"><form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" style="display:inline"><button class="act act--ok act--sm" type="submit">Remettre au menu</button></form></td></tr>`,
-        )
-        .join("")}</tbody></table></div></details>`
-    : "";
+  return `${banner}
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Menu et recettes</h2><p>Gérez les articles vendus par Awa et les fiches de préparation réservées à l’équipe.</p></div><div class="page-header-actions"><a class="act" href="/admin/menu/new">Ajouter un article</a></div></header>
+<div class="stat-grid menu-stats">
+  <div class="stat"><span>Articles actifs</span><b>${active.length}</b><span>visibles par Awa</span></div>
+  <div class="stat"><span>Recettes complètes</span><b>${complete}</b><span>ingrédients et étapes</span></div>
+  <div class="stat"><span>À compléter</span><b>${missing.length}</b><span>sans impact sur la vente</span></div>
+</div>
+<form class="card menu-filters" method="get" action="/admin/menu">
+  <label class="menu-search">Rechercher<input type="search" name="q" value="${esc(filters.q)}" placeholder="Nom, catégorie ou ID…"></label>
+  <label>Statut<select name="status"><option value="active"${selected(filters.status ?? "active", "active")}>Actifs</option><option value="retired"${selected(filters.status, "retired")}>Retirés</option><option value="all"${selected(filters.status, "all")}>Tous</option></select></label>
+  <label>Recette<select name="recipe"><option value="all"${selected(filters.recipe ?? "all", "all")}>Toutes</option><option value="missing"${selected(filters.recipe, "missing")}>À compléter</option><option value="complete"${selected(filters.recipe, "complete")}>Complètes</option></select></label>
+  <label>Catégorie<select name="category"><option value="">Toutes</option>${categories.map((category) => `<option value="${esc(category)}"${selected(filters.category, category)}>${esc(category)}</option>`).join("")}</select></label>
+  <div class="menu-filter-actions"><button class="act act--ghost" type="submit">Filtrer</button><a href="/admin/menu">Réinitialiser</a></div>
+</form>
+<div class="section-header"><div><span class="eyebrow">Catalogue</span><h2>${visible.length} article(s)</h2></div></div>
+${groups || `<div class="card"><div class="empty"><b>Aucun article trouvé</b><p>Modifiez les filtres ou ajoutez un nouvel article.</p></div></div>`}`;
+}
+
+function recipeState(item: MenuItemView | null): string {
+  if (!item) return `<span class="badge badge--gray">Nouvelle fiche</span>`;
+  return recipeBadge(item);
+}
+
+export function renderMenuItemForm(opts: {
+  item: MenuItemView | null;
+  categories: string[];
+  banner: string;
+}): string {
+  const { item, categories, banner } = opts;
+  const creating = item === null;
+  const action = creating ? "/admin/menu/items" : `/admin/menu/items/${query(item.id)}/update`;
+  const name = esc(item?.name);
+  const category = esc(item?.category);
+  const description = esc(item?.description);
+  const ingredients = esc(item?.recipe_ingredients);
+  const steps = esc(item?.recipe_steps);
+  const favourite = item?.favourite ? " checked" : "";
 
   return `${banner}
-<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Menu</h2><p>Les modifications sont immédiatement visibles par Awa et dans le formulaire de livraison. Retirer un article l’archive sans supprimer son historique.</p></div><div class="page-header-actions"><span class="badge badge--green">${enabled.length} actif(s)</span></div></header>
-${groups || `<div class="card"><div class="empty"><b>Menu vide</b><p>Ajoutez le premier article ci-dessous.</p></div></div>`}
-${retiredBlock}
-<div class="section-header"><div><span class="eyebrow">Catalogue</span><h3>Ajouter un article</h3></div></div>
-<div class="card">
-  <form method="post" action="/admin/menu/items" class="row">
-    ${fieldsRow("add", null, cats)}
-    <button class="act" type="submit">Ajouter</button>
-  </form>
-  <p class="muted">Un incontournable peut être proposé sur WhatsApp après une réservation, avec un maximum de dix. L’ID technique est généré automatiquement.</p>
-</div>`;
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Menu du bar</span><h2>${creating ? "Nouvel article" : esc(item.name)}</h2><p>${creating ? "Créez l’article vendu et sa fiche de préparation interne." : "Mettez à jour les informations commerciales et la recette utilisée par l’équipe."}</p></div><div class="page-header-actions">${recipeState(item)}${item ? (item.enabled ? `<span class="badge badge--green">Actif</span>` : `<span class="badge badge--gray">Retiré</span>`) : ""}</div></header>
+<form method="post" action="${action}" class="menu-editor">
+  <section class="card form-card">
+    <div class="section-header menu-editor-heading"><div><span class="eyebrow">Catalogue</span><h2>Informations de vente</h2></div></div>
+    <div class="menu-form-grid">
+      <label class="menu-name">Nom de l’article<input name="name" required maxlength="80" value="${name}" placeholder="Ex. Smoothie Jant Bi"></label>
+      <label>Prix en FCFA<input name="price_xof" required type="number" min="1" max="1000000" step="1" value="${item ? esc(item.price_xof) : ""}" placeholder="3000"></label>
+      <label>Catégorie<input name="category" required maxlength="40" list="menu-categories" value="${category}" placeholder="Ex. Smoothies"></label>
+      <datalist id="menu-categories">${categories.map((value) => `<option value="${esc(value)}">`).join("")}</datalist>
+      <label class="menu-description">Description commerciale<span class="field-help">Courte présentation visible par Awa et les clients.</span><textarea name="description" rows="3" maxlength="200" placeholder="Goût, ingrédients principaux ou bénéfice client…">${description}</textarea></label>
+      <label class="menu-favourite"><input type="checkbox" name="favourite"${favourite}> Incontournable proposé sur WhatsApp</label>
+    </div>
+  </section>
+  <section class="card form-card recipe-editor">
+    <div class="section-header menu-editor-heading"><div><span class="eyebrow">Interne équipe</span><h2>Fiche recette</h2><p class="muted">Ces informations ne sont jamais envoyées à Awa ni aux clients.</p></div></div>
+    <label>Ingrédients et quantités<span class="field-help">Indiquez les quantités pour une portion vendue, ou précisez le rendement si la préparation se fait en lot.</span><textarea name="recipe_ingredients" rows="10" maxlength="5000" placeholder="Pour 1 portion :&#10;• 150 g de mangue&#10;• 100 ml de lait de coco">${ingredients}</textarea></label>
+    <label>Étapes de préparation<span class="field-help">Écrivez les étapes dans l’ordre, avec les temps ou points de contrôle utiles.</span><textarea name="recipe_steps" rows="10" maxlength="5000" placeholder="1. Ajouter les ingrédients dans le blender.&#10;2. Mixer 45 secondes.&#10;3. Servir immédiatement.">${steps}</textarea></label>
+  </section>
+  <div class="actionbar"><button class="act" type="submit">${creating ? "Créer l’article" : "Enregistrer les modifications"}</button><a class="act act--ghost" href="/admin/menu">Retour au menu</a></div>
+</form>
+${item ? `<div class="card menu-danger-zone"><div><b>${item.enabled ? "Retirer cet article" : "Remettre cet article au menu"}</b><p class="muted">La recette et l’historique sont conservés.</p></div><form class="inline" method="post" action="/admin/menu/items/${query(item.id)}/toggle"${item.enabled ? ` data-confirm="Retirer « ${esc(item.name)} » du menu ? L’article pourra être restauré plus tard."` : ""}><button class="act ${item.enabled ? "act--danger" : "act--ok"}" type="submit">${item.enabled ? "Retirer du menu" : "Remettre au menu"}</button></form></div>` : ""}`;
 }

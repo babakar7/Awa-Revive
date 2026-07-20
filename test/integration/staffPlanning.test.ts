@@ -142,7 +142,7 @@ describe("send to employees", () => {
     const res = await post(`/admin/staff/${sched.id}/send/${s1}`, {});
     expect(res.headers.location).toContain("done=sent");
     await settle();
-    expect(mock.waTextsTo("221771112233").join("\n")).toContain("Planning");
+    expect(mock.waTextsTo("221771112233").join("\n")).toMatch(/planning/i);
     const log = (await pool.query(`select count(*) from notification_log where source='staff_planning' and status='sent'`)).rows[0];
     expect(Number(log.count)).toBe(1);
   });

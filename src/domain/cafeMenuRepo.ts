@@ -23,6 +23,8 @@ export interface MenuItemView {
   price_xof: number;
   category: string;
   description: string | null;
+  recipe_ingredients: string | null;
+  recipe_steps: string | null;
   favourite: boolean;
   enabled: boolean;
   sort_order: number;
@@ -44,7 +46,8 @@ function rowToSnapshot(r: MenuItemView): CafeMenuRow {
 
 export async function listMenuItems(): Promise<MenuItemView[]> {
   const res = await pool.query(
-    `select id, name, price_xof, category, description, favourite, enabled, sort_order, updated_at
+    `select id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
+            favourite, enabled, sort_order, updated_at
        from cafe_menu_items order by sort_order, name`,
   );
   return res.rows as MenuItemView[];
@@ -52,7 +55,8 @@ export async function listMenuItems(): Promise<MenuItemView[]> {
 
 export async function getMenuItem(id: string): Promise<MenuItemView | null> {
   const res = await pool.query(
-    `select id, name, price_xof, category, description, favourite, enabled, sort_order, updated_at
+    `select id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
+            favourite, enabled, sort_order, updated_at
        from cafe_menu_items where id = $1`,
     [id],
   );
@@ -64,12 +68,19 @@ export interface MenuItemInput {
   price_xof: number;
   category: string;
   description: string | null;
+  recipe_ingredients: string | null;
+  recipe_steps: string | null;
   favourite: boolean;
 }
 
 const MAX_NAME = 80;
 const MAX_CATEGORY = 40;
 const MAX_DESC = 200;
+const MAX_RECIPE_FIELD = 5_000;
+
+export function isRecipeComplete(item: Pick<MenuItemView, "recipe_ingredients" | "recipe_steps">): boolean {
+  return Boolean(item.recipe_ingredients?.trim() && item.recipe_steps?.trim());
+}
 
 /** Pure: validate/normalize the admin form. */
 export function parseMenuItemForm(body: Record<string, string>): MenuItemInput | { error: string } {
@@ -89,11 +100,21 @@ export function parseMenuItemForm(body: Record<string, string>): MenuItemInput |
   const desc = String(body.description ?? "").trim();
   if (desc.length > MAX_DESC) return { error: `description trop longue (max ${MAX_DESC}).` };
 
+  const recipeIngredients = String(body.recipe_ingredients ?? "").trim();
+  if (recipeIngredients.length > MAX_RECIPE_FIELD)
+    return { error: `ingrédients trop longs (max ${MAX_RECIPE_FIELD} caractères).` };
+
+  const recipeSteps = String(body.recipe_steps ?? "").trim();
+  if (recipeSteps.length > MAX_RECIPE_FIELD)
+    return { error: `préparation trop longue (max ${MAX_RECIPE_FIELD} caractères).` };
+
   return {
     name,
     price_xof,
     category,
     description: desc || null,
+    recipe_ingredients: recipeIngredients || null,
+    recipe_steps: recipeSteps || null,
     favourite: body.favourite === "on" || body.favourite === "true" || body.favourite === "1",
   };
 }
@@ -108,9 +129,20 @@ export async function createMenuItem(input: MenuItemInput): Promise<{ id: string
   const ord = await pool.query(`select coalesce(max(sort_order), 0) + 10 as n from cafe_menu_items`);
   const sortOrder = Number(ord.rows[0]?.n ?? 10);
   await pool.query(
-    `insert into cafe_menu_items (id, name, price_xof, category, description, favourite, sort_order)
-     values ($1,$2,$3,$4,$5,$6,$7)`,
-    [id, input.name, input.price_xof, input.category, input.description, input.favourite, sortOrder],
+    `insert into cafe_menu_items
+       (id, name, price_xof, category, description, recipe_ingredients, recipe_steps, favourite, sort_order)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [
+      id,
+      input.name,
+      input.price_xof,
+      input.category,
+      input.description,
+      input.recipe_ingredients,
+      input.recipe_steps,
+      input.favourite,
+      sortOrder,
+    ],
   );
   return { id };
 }
@@ -118,9 +150,19 @@ export async function createMenuItem(input: MenuItemInput): Promise<{ id: string
 export async function updateMenuItem(id: string, input: MenuItemInput): Promise<boolean> {
   const res = await pool.query(
     `update cafe_menu_items set
-       name = $2, price_xof = $3, category = $4, description = $5, favourite = $6, updated_at = now()
+       name = $2, price_xof = $3, category = $4, description = $5,
+       recipe_ingredients = $6, recipe_steps = $7, favourite = $8, updated_at = now()
      where id = $1`,
-    [id, input.name, input.price_xof, input.category, input.description, input.favourite],
+    [
+      id,
+      input.name,
+      input.price_xof,
+      input.category,
+      input.description,
+      input.recipe_ingredients,
+      input.recipe_steps,
+      input.favourite,
+    ],
   );
   return (res.rowCount ?? 0) > 0;
 }

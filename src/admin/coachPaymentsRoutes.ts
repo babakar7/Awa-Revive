@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import { config } from "../config.js";
 import * as payments from "../domain/coachPaymentRepo.js";
 import {
   calendarLocalBounds,
@@ -16,23 +15,12 @@ import {
 import { coachPaymentPdfFilename, renderCoachPaymentPdf } from "../lib/coachPaymentPdf.js";
 import { emailNotificationsEnabled, sendEmail } from "../lib/notify.js";
 import { listServices, listStaffResources, queryCalendarEventsV3 } from "../lib/wix.js";
-import {
-  clearOwnerPaymentsCookieHeader,
-  mintOwnerPaymentsToken,
-  ownerAttemptAllowed,
-  ownerPaymentsAuthHook,
-  ownerPaymentsConfigured,
-  ownerPaymentsCookieHeader,
-  recordOwnerAttempt,
-  safeOwnerNext,
-  verifyOwnerPaymentsPassword,
-} from "./coachPaymentsAuth.js";
+import { ownerPaymentsAuthHook } from "./coachPaymentsAuth.js";
 import {
   coachPaymentBanner,
   renderCoachPaymentSettings,
   renderCoachPaymentsDashboard,
   renderCoachPaymentStatement,
-  renderOwnerUnlockPage,
 } from "./coachPaymentsPage.js";
 import { layout } from "./layout.js";
 
@@ -109,61 +97,6 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
   admin.register(
     async (section) => {
       section.addHook("onRequest", ownerPaymentsAuthHook);
-
-      section.get("/unlock", async (req, reply) => {
-        const query = req.query as { next?: string; err?: string };
-        const next = safeOwnerNext(query.next);
-        reply.type("text/html").send(
-          renderOwnerUnlockPage({
-            next,
-            error: query.err,
-            configured: ownerPaymentsConfigured(),
-          }),
-        );
-      });
-
-      section.post("/unlock", async (req, reply) => {
-        const body = (req.body ?? {}) as Record<string, string>;
-        const next = safeOwnerNext(body.next);
-        if (!ownerPaymentsConfigured()) {
-          return reply
-            .code(503)
-            .type("text/html")
-            .send(renderOwnerUnlockPage({ next, configured: false }));
-        }
-        if (!ownerAttemptAllowed(req)) {
-          return reply
-            .code(429)
-            .type("text/html")
-            .send(renderOwnerUnlockPage({
-              next,
-              configured: true,
-              error: "Trop de tentatives. Réessaie dans 15 minutes.",
-            }));
-        }
-        const ok = verifyOwnerPaymentsPassword(String(body.password ?? ""));
-        recordOwnerAttempt(req, ok);
-        if (!ok) {
-          return reply
-            .code(401)
-            .type("text/html")
-            .send(renderOwnerUnlockPage({
-              next,
-              configured: true,
-              error: "Mot de passe incorrect.",
-            }));
-        }
-        const token = mintOwnerPaymentsToken(req.adminUser ?? "?");
-        return reply
-          .header("Set-Cookie", ownerPaymentsCookieHeader(token))
-          .redirect(`${next}${next.includes("?") ? "&" : "?"}done=unlocked`, 303);
-      });
-
-      section.post("/lock", async (_req, reply) =>
-        reply
-          .header("Set-Cookie", clearOwnerPaymentsCookieHeader())
-          .redirect(`${BASE}/unlock`, 303),
-      );
 
       section.get("/", async (req, reply) => {
         const query = req.query as { month?: string; done?: string; err?: string };

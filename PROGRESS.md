@@ -1616,6 +1616,35 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     shell et les états urgent/vide de l’accueil. Vérification de livraison :
     `npm run build`, suite `npm test`, `git diff --check`.
 
+- **4.42 — Fiches recettes internes du menu bar (20/07).** `/admin/menu` devient
+  un catalogue recherchable avec filtres statut/catégorie/recette et compteurs de
+  complétude. L’ajout et l’édition quittent le tableau compact pour des fiches
+  dédiées (`/admin/menu/new`, `/admin/menu/items/:id`) contenant nom, prix,
+  catégorie, description commerciale, incontournable, ingrédients/quantités et
+  étapes de préparation. L’ancien `?edit=ID` redirige vers la fiche.
+  - Deux colonnes nullables et idempotentes (`recipe_ingredients`, `recipe_steps`),
+    5 000 caractères chacune. Recette facultative : badge « complète » seulement
+    si les deux champs sont présents ; un manque ne bloque jamais la vente.
+  - **Séparation stricte** : les recettes vivent dans `MenuItemView`/DB mais sont
+    volontairement omises de `CafeMenuRow`, `CafeMenuItem`, `rowToSnapshot`, du
+    prompt d’Awa, des listes WhatsApp et des formulaires client/livraison.
+  - Retirer/restaurer conserve la recette. L’ancien seed `cafe-menu.md` ne remplit
+    que les champs commerciaux ; les recettes se complètent progressivement dans
+    l’admin. Couverture pure (validation, filtres, rendu/échappement, non-fuite)
+  et intégration CRUD/routes/migration.
+
+- **4.43 — Authentification admin par rôles, sans double mot de passe (20/07).**
+  `/admin/login` accepte désormais deux catégories de comptes dans une seule
+  session signée de 30 jours : `ADMIN_USERS` pour l’équipe restreinte, et
+  `OWNER_ADMIN_USER` + `OWNER_ADMIN_PASSWORD` pour le propriétaire avec accès
+  total. Le rôle est signé dans le cookie et vérifié côté serveur à chaque
+  requête. Toutes les pages, mutations et PDF de `/admin/paiements-coachs`
+  exigent le rôle propriétaire ; un compte équipe reçoit un refus 403 avec une
+  action claire « Changer de compte ». Suppression du cookie financier 8 h,
+  de l’écran `/unlock` et des boutons « Verrouiller » : une seule connexion
+  propriétaire suffit. `OWNER_PAYMENTS_PASSWORD` reste provisoirement accepté
+  comme fallback de migration pour ne pas casser l’accès au déploiement.
+
 ## 5. Chronologie condensée
 
 - **19/07 — Factures : Awa émet de vraies factures, et tout part en PDF

@@ -8,12 +8,17 @@ import { config } from "../config.js";
  * accepted for scripts/curl but we no longer challenge browsers with
  * WWW-Authenticate (that dialog is what felt like "every time").
  *
- * Accounts from ADMIN_USERS ("user1:pass1,user2:pass2"). Unset → revive/revive@5000.
+ * Team accounts come from ADMIN_USERS (unset → revive/revive@5000). A separate
+ * OWNER_ADMIN_USER / OWNER_ADMIN_PASSWORD account receives the owner role and
+ * therefore has access to every section in one login.
  */
 
 export const SESSION_COOKIE = "awa_admin_session";
 /** 30 days — visit often without re-login. */
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export type AdminRole = "team" | "owner";
+export type AdminIdentity = { username: string; role: AdminRole };
 
 /** Parse "u1:p1,u2:p2" into a map. Malformed entries are dropped. */
 export function parseAdminUsers(raw: string): Map<string, string> {
@@ -45,6 +50,12 @@ export function adminUsers(): Map<string, string> {
  */
 export const FALLBACK_USERS = new Map([["revive", "revive@5000"]]);
 
+export function ownerAdminAccount(): { username: string; password: string } | null {
+  const username = config.OWNER_ADMIN_USER.trim();
+  const password = config.OWNER_ADMIN_PASSWORD;
+  return username && password ? { username, password } : null;
+}
+
 /**
  * Check username/password against the account map.
  * Always runs a comparison so unknown-vs-wrong timing matches.
@@ -59,14 +70,20 @@ export function verifyCredentials(
   return ok && expected !== undefined ? username : null;
 }
 
-/**
- * Check an Authorization header against the account map.
- * Returns the authenticated username, or null.
- */
-export function verifyBasicAuth(
-  authorizationHeader: string | undefined,
-  users: Map<string, string>,
-): string | null {
+/** Authenticate either a restricted team account or the separate owner. */
+export function verifyAdminCredentials(username: string, password: string): AdminIdentity | null {
+  const owner = ownerAdminAccount();
+  const ownerNameMatches = safeEqual(username, owner?.username ?? `\0${username}\0`);
+  const ownerPasswordMatches = safeEqual(password, owner?.password ?? `\0${password}\0`);
+  const teamUser = verifyCredentials(username, password, adminUsers());
+
+  if (owner && ownerNameMatches && ownerPasswordMatches) {
+    return { username: owner.username, role: "owner" };
+  }
+  return teamUser ? { username: teamUser, role: "team" } : null;
+}
+
+function decodeBasicAuth(authorizationHeader: string | undefined): [string, string] | null {
   if (!authorizationHeader?.startsWith("Basic ")) return null;
   let decoded: string;
   try {
@@ -76,14 +93,34 @@ export function verifyBasicAuth(
   }
   const sep = decoded.indexOf(":");
   if (sep < 0) return null;
-  return verifyCredentials(decoded.slice(0, sep), decoded.slice(sep + 1), users);
+  return [decoded.slice(0, sep), decoded.slice(sep + 1)];
+}
+
+/**
+ * Check an Authorization header against the account map.
+ * Returns the authenticated username, or null.
+ */
+export function verifyBasicAuth(
+  authorizationHeader: string | undefined,
+  users: Map<string, string>,
+): string | null {
+  const credentials = decodeBasicAuth(authorizationHeader);
+  return credentials ? verifyCredentials(credentials[0], credentials[1], users) : null;
+}
+
+export function verifyAdminBasicAuth(
+  authorizationHeader: string | undefined,
+): AdminIdentity | null {
+  const credentials = decodeBasicAuth(authorizationHeader);
+  return credentials ? verifyAdminCredentials(credentials[0], credentials[1]) : null;
 }
 
 /** Stable HMAC key so sessions survive process restarts without a new env var. */
 export function sessionSecret(): string {
   // Derived from existing env so no extra Railway var is required. Changing
   // configured OR fallback credentials invalidates all sessions (acceptable).
-  const authMaterial = config.ADMIN_USERS || [...FALLBACK_USERS.entries()].map(([user, pass]) => `${user}:${pass}`).join(",");
+  const teamMaterial = config.ADMIN_USERS || [...FALLBACK_USERS.entries()].map(([user, pass]) => `${user}:${pass}`).join(",");
+  const authMaterial = `${teamMaterial}|owner:${config.OWNER_ADMIN_USER}:${config.OWNER_ADMIN_PASSWORD}`;
   return crypto
     .createHash("sha256")
     .update(`awa-admin-v1|${authMaterial}|${config.DATABASE_URL}`)
@@ -95,12 +132,19 @@ function hmac(payload: string): string {
 }
 
 /**
- * Token: base64url(username).expMs.sig  (username may contain dots after encoding)
+ * Token: role.base64url(username).expMs.sig
  */
-export function mintSessionToken(username: string, nowMs = Date.now()): string {
+export function mintSessionToken(
+  identityOrUsername: AdminIdentity | string,
+  nowMs = Date.now(),
+): string {
+  const identity: AdminIdentity =
+    typeof identityOrUsername === "string"
+      ? { username: identityOrUsername, role: "team" }
+      : identityOrUsername;
   const exp = nowMs + SESSION_TTL_MS;
-  const userB64 = Buffer.from(username, "utf8").toString("base64url");
-  const payload = `${userB64}.${exp}`;
+  const userB64 = Buffer.from(identity.username, "utf8").toString("base64url");
+  const payload = `${identity.role}.${userB64}.${exp}`;
   return `${payload}.${hmac(payload)}`;
 }
 
@@ -108,17 +152,18 @@ export function verifySessionToken(
   token: string | undefined,
   users: Map<string, string>,
   nowMs = Date.now(),
-): string | null {
+): AdminIdentity | null {
   if (!token) return null;
   const lastDot = token.lastIndexOf(".");
   if (lastDot <= 0) return null;
   const payload = token.slice(0, lastDot);
   const sig = token.slice(lastDot + 1);
   if (!sig || !safeEqual(sig, hmac(payload))) return null;
-  const sep = payload.indexOf(".");
-  if (sep <= 0) return null;
-  const userB64 = payload.slice(0, sep);
-  const exp = Number(payload.slice(sep + 1));
+  const parts = payload.split(".");
+  if (parts.length !== 3) return null;
+  const [role, userB64, rawExpiry] = parts;
+  if (role !== "team" && role !== "owner") return null;
+  const exp = Number(rawExpiry);
   if (!Number.isFinite(exp) || exp < nowMs) return null;
   let username: string;
   try {
@@ -126,9 +171,11 @@ export function verifySessionToken(
   } catch {
     return null;
   }
-  // Account removed → session invalid.
-  if (!users.has(username)) return null;
-  return username;
+  // Account removed or role configuration changed → session invalid.
+  if (role === "team" && !users.has(username)) return null;
+  const owner = ownerAdminAccount();
+  if (role === "owner" && owner?.username !== username) return null;
+  return { username, role };
 }
 
 export function parseCookies(header: string | undefined): Record<string, string> {
@@ -174,6 +221,7 @@ export function clearSessionCookieHeader(): string {
 declare module "fastify" {
   interface FastifyRequest {
     adminUser?: string;
+    adminRole?: AdminRole;
   }
 }
 
@@ -209,11 +257,12 @@ export async function adminAuthHook(req: FastifyRequest, reply: FastifyReply): P
   const users = adminUsers();
   const cookies = parseCookies(req.headers.cookie);
   const fromCookie = verifySessionToken(cookies[SESSION_COOKIE], users);
-  const fromBasic = verifyBasicAuth(req.headers.authorization, users);
-  const user = fromCookie ?? fromBasic;
+  const fromBasic = verifyAdminBasicAuth(req.headers.authorization);
+  const identity = fromCookie ?? fromBasic;
 
-  if (user) {
-    req.adminUser = user;
+  if (identity) {
+    req.adminUser = identity.username;
+    req.adminRole = identity.role;
     return;
   }
 

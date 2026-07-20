@@ -6,12 +6,11 @@ import * as repo from "../domain/repo.js";
 import { extrasFromJson, getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
 import {
   adminAuthHook,
-  adminUsers,
   clearSessionCookieHeader,
   mintSessionToken,
   safeNextPath,
   sessionCookieHeader,
-  verifyCredentials,
+  verifyAdminCredentials,
 } from "./auth.js";
 import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
@@ -71,7 +70,13 @@ import { parseQuoteForm } from "../domain/quoteRules.js";
 import { renderQuotePdf } from "../lib/quotePdf.js";
 import { devisBanner, renderQuoteForm, renderQuotesList } from "./devisPage.js";
 import * as menu from "../domain/cafeMenuRepo.js";
-import { menuBanner, renderMenuPage } from "./menuPage.js";
+import {
+  menuBanner,
+  menuCategories,
+  renderMenuItemForm,
+  renderMenuPage,
+  type MenuFilters,
+} from "./menuPage.js";
 import * as giftCards from "../domain/giftCardRepo.js";
 import { parseGiftCardForm } from "../domain/giftCardRules.js";
 import { renderGiftCardImage } from "../lib/giftCardImage.js";
@@ -149,7 +154,7 @@ function renderLoginPage(opts: { error?: string; next?: string }): string {
 <main class="auth-card">
   <div class="auth-brand"><span class="auth-mark" aria-hidden="true">r</span><span><b>revive</b><small>Awa admin</small></span></div>
   <h1>Bienvenue</h1>
-  <p>Connectez-vous à l’espace opérationnel de la réception. La session reste active pendant 30 jours.</p>
+  <p>Utilisez votre compte équipe ou propriétaire. La session reste active pendant 30 jours.</p>
   ${err}
   <form method="post" action="/admin/login">
     <input type="hidden" name="next" value="${escLogin(next)}">
@@ -159,7 +164,7 @@ function renderLoginPage(opts: { error?: string; next?: string }): string {
     <input id="pass" name="password" type="password" autocomplete="current-password" required>
     <button type="submit">Se connecter</button>
   </form>
-  <p class="muted">Accès réservé à l’équipe Revive.</p>
+  <p class="muted">Le compte propriétaire donne accès à tout. Les comptes équipe restent limités aux opérations autorisées.</p>
 </main>
 </body></html>`;
 }
@@ -183,8 +188,8 @@ export function registerAdmin(app: FastifyInstance): void {
         const username = String(body.username ?? "").trim();
         const password = String(body.password ?? "");
         const next = safeNextPath(body.next);
-        const user = verifyCredentials(username, password, adminUsers());
-        if (!user) {
+        const identity = verifyAdminCredentials(username, password);
+        if (!identity) {
           reply
             .code(401)
             .type("text/html")
@@ -192,7 +197,7 @@ export function registerAdmin(app: FastifyInstance): void {
             .send(renderLoginPage({ error: "Identifiant ou mot de passe incorrect.", next }));
           return;
         }
-        const token = mintSessionToken(user);
+        const token = mintSessionToken(identity);
         reply
           .header("Set-Cookie", sessionCookieHeader(token))
           .redirect(next, 303);
@@ -204,8 +209,8 @@ export function registerAdmin(app: FastifyInstance): void {
           .redirect("/admin/login", 303);
       });
 
-      // Owner-only financial section. Its child plugin adds a second signed
-      // cookie guard to every page, action and PDF.
+      // Owner-only financial section. The main login session already carries
+      // the role, so there is no second password or section-specific cookie.
       registerCoachPaymentRoutes(admin);
 
       // ---------- À tester (checklist de recette) ----------
@@ -738,34 +743,85 @@ ${
 
       // ---------- Menu bar (éditable — DB source de vérité) ----------
       admin.get("/menu", async (req, reply) => {
-        const editId = (req.query as any)?.edit as string | undefined;
-        const done = (req.query as any)?.done as string | undefined;
-        const err = (req.query as any)?.err as string | undefined;
+        const queryIn = (req.query ?? {}) as Record<string, string>;
+        const editId = String(queryIn.edit ?? "").trim();
+        if (editId) {
+          const suffix = queryIn.err ? `?err=${encodeURIComponent(String(queryIn.err))}` : "";
+          return reply.redirect(`/admin/menu/items/${encodeURIComponent(editId)}${suffix}`, 303);
+        }
+        const statusRaw = String(queryIn.status ?? "active");
+        const recipeRaw = String(queryIn.recipe ?? "all");
+        const filters: MenuFilters = {
+          q: String(queryIn.q ?? "").slice(0, 100),
+          status: (["active", "retired", "all"] as const).includes(statusRaw as any)
+            ? (statusRaw as MenuFilters["status"])
+            : "active",
+          recipe: (["all", "complete", "missing"] as const).includes(recipeRaw as any)
+            ? (recipeRaw as MenuFilters["recipe"])
+            : "all",
+          category: String(queryIn.category ?? "").slice(0, 40),
+        };
         const items = await menu.listMenuItems();
-        const body = renderMenuPage({ items, editId, banner: menuBanner(done, err) });
-        reply.type("text/html").send(await layout("Menu bar", "/admin/menu", body, { subtitle: "Catalogue visible par Awa", contentWidth: "wide" }));
+        const body = renderMenuPage({
+          items,
+          filters,
+          banner: menuBanner(queryIn.done, queryIn.err),
+        });
+        reply.type("text/html").send(await layout("Menu bar", "/admin/menu", body, { subtitle: "Catalogue et recettes internes", contentWidth: "wide" }));
+      });
+
+      admin.get("/menu/new", async (req, reply) => {
+        const queryIn = (req.query ?? {}) as Record<string, string>;
+        const items = await menu.listMenuItems();
+        const body = renderMenuItemForm({
+          item: null,
+          categories: menuCategories(items),
+          banner: menuBanner(undefined, queryIn.err),
+        });
+        reply.type("text/html").send(await layout("Nouvel article", "/admin/menu", body, {
+          subtitle: "Catalogue du bar",
+          contentWidth: "standard",
+          breadcrumbs: [{ href: "/admin/menu", label: "Menu" }, { label: "Nouvel article" }],
+        }));
+      });
+
+      admin.get("/menu/items/:id", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const queryIn = (req.query ?? {}) as Record<string, string>;
+        const [item, items] = await Promise.all([menu.getMenuItem(id), menu.listMenuItems()]);
+        if (!item) return reply.redirect("/admin/menu?err=article introuvable", 303);
+        const body = renderMenuItemForm({
+          item,
+          categories: menuCategories(items),
+          banner: menuBanner(queryIn.done, queryIn.err),
+        });
+        reply.type("text/html").send(await layout(item.name, "/admin/menu", body, {
+          subtitle: "Fiche article et recette interne",
+          contentWidth: "standard",
+          breadcrumbs: [{ href: "/admin/menu", label: "Menu" }, { label: item.name }],
+        }));
       });
 
       admin.post("/menu/items", async (req, reply) => {
         const parsed = menu.parseMenuItemForm((req.body ?? {}) as Record<string, string>);
         if ("error" in parsed)
-          return reply.redirect(`/admin/menu?err=${encodeURIComponent(parsed.error)}`, 303);
+          return reply.redirect(`/admin/menu/new?err=${encodeURIComponent(parsed.error)}`, 303);
         const { id } = await menu.createMenuItem(parsed);
         await menu.refreshCafeMenu();
         req.log.info({ by: req.adminUser, id }, "Menu item created");
-        return reply.redirect("/admin/menu?done=created", 303);
+        return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?done=created`, 303);
       });
 
       admin.post("/menu/items/:id/update", async (req, reply) => {
         const { id } = req.params as { id: string };
         const parsed = menu.parseMenuItemForm((req.body ?? {}) as Record<string, string>);
         if ("error" in parsed)
-          return reply.redirect(`/admin/menu?edit=${encodeURIComponent(id)}&err=${encodeURIComponent(parsed.error)}`, 303);
+          return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?err=${encodeURIComponent(parsed.error)}`, 303);
         const ok = await menu.updateMenuItem(id, parsed);
         if (!ok) return reply.redirect("/admin/menu?err=article introuvable", 303);
         await menu.refreshCafeMenu();
         req.log.info({ by: req.adminUser, id }, "Menu item updated");
-        return reply.redirect("/admin/menu?done=updated", 303);
+        return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?done=updated`, 303);
       });
 
       admin.post("/menu/items/:id/toggle", async (req, reply) => {
@@ -775,7 +831,7 @@ ${
         await menu.setMenuItemEnabled(id, !item.enabled);
         await menu.refreshCafeMenu();
         req.log.info({ by: req.adminUser, id, enabled: !item.enabled }, "Menu item toggled");
-        return reply.redirect(`/admin/menu?done=${item.enabled ? "retired" : "restored"}`, 303);
+        return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?done=${item.enabled ? "retired" : "restored"}`, 303);
       });
 
       // ---------- Cartes cadeaux (visuel PNG + envoi WhatsApp) ----------
