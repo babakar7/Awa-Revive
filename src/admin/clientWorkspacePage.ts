@@ -9,6 +9,19 @@ function empty(text: string): string {
   return `<div class="empty compact-empty"><b>Rien à afficher</b><p>${esc(text)}</p></div>`;
 }
 
+export function renderThread(turns: AdminTurn[], clientId: string, canRetry: boolean): string {
+  return timeline(turns, clientId, canRetry) || empty("Cette conversation ne contient encore aucun message.");
+}
+
+/** Change signature of a thread: new turn or delivery-status flip ⇒ new value. */
+export function threadSignature(turns: AdminTurn[]): string {
+  const h = crypto.createHash("sha1");
+  for (const turn of turns) {
+    h.update(`${new Date(turn.created_at).getTime()}|${turn.delivery_status ?? ""}|${turn.error ?? ""};`);
+  }
+  return h.digest("hex").slice(0, 16);
+}
+
 function timeline(turns: AdminTurn[], clientId: string, canRetry: boolean): string {
   return turns.map((turn) => {
     if (turn.role === "tool") {
@@ -89,8 +102,41 @@ ${takeover ? `<div class="card warn takeover-banner"><b>Relais humain actif</b><
 ${followUps(args.workspace, client.id)}
 <div class="conversation-shell client-workspace-shell">
   <aside class="card client-summary"><div class="row between"><b>${esc(client.name ?? "(sans nom)")}</b>${client.is_test ? `<span class="badge badge--gray">Équipe</span>` : ""}</div><dl class="client-facts"><div><dt>WhatsApp</dt><dd><a href="tel:+${esc(client.wa_phone)}">+${esc(client.wa_phone)}</a></dd></div><div><dt>Langue</dt><dd>${esc(client.language ?? "—")}</dd></div><div><dt>Email déclaré</dt><dd>${esc(client.claimed_email ?? "—")}</dd></div><div><dt>Dernier message</dt><dd>${fmtDate(args.lastClientMessage)}</dd></div><div><dt>Client depuis</dt><dd>${fmtDate(client.created_at)}</dd></div></dl><form method="post" action="${returnPath}/toggle-test"><input type="hidden" name="value" value="${client.is_test ? "0" : "1"}"><button class="act act--ghost act--sm" type="submit">${client.is_test ? "Retirer le tag Équipe" : "Marquer Équipe/test"}</button></form></aside>
-  <div><section class="card thread" aria-label="Messages">${timeline(args.turns, client.id, takeover && config.ADMIN_HUMAN_REPLY_ENABLED && args.whatsappWindowOpen) || empty("Cette conversation ne contient encore aucun message.")}</section>${composer}</div>
+  <div><section class="card thread" id="thread" aria-label="Messages">${renderThread(args.turns, client.id, takeover && config.ADMIN_HUMAN_REPLY_ENABLED && args.whatsappWindowOpen)}</section>${composer}</div>
 </div>
 <div class="section-header"><div><span class="eyebrow">Historique</span><h2>Activité liée au client</h2></div></div>
-${operationalHistory(args.workspace)}`;
+${operationalHistory(args.workspace)}
+${threadPollScript(returnPath, threadSignature(args.turns))}`;
+}
+
+/** Rafraîchit le fil de messages sans recharger la page (le composer et le scroll restent intacts). */
+function threadPollScript(returnPath: string, sig: string): string {
+  return `<script>
+(function(){
+  var sig=${JSON.stringify(sig)};
+  var url=${JSON.stringify(`${returnPath}/thread`)};
+  var base=3500,delay=base,timer=null;
+  function nearBottom(){return window.innerHeight+window.scrollY>=document.body.scrollHeight-160;}
+  function schedule(ms){clearTimeout(timer);timer=setTimeout(poll,ms);}
+  function poll(){
+    if(document.visibilityState!=="visible"){schedule(base);return;}
+    fetch(url+"?sig="+encodeURIComponent(sig),{headers:{accept:"application/json"}})
+      .then(function(res){if(!res.ok)throw new Error(String(res.status));return res.json();})
+      .then(function(data){
+        delay=base;
+        var el=document.getElementById("thread");
+        if(el&&data&&data.sig&&data.sig!==sig&&typeof data.html==="string"){
+          var stick=nearBottom();
+          el.innerHTML=data.html;
+          sig=data.sig;
+          if(stick)window.scrollTo(0,document.body.scrollHeight);
+        }
+        schedule(delay);
+      })
+      .catch(function(){delay=Math.min(delay*2,30000);schedule(delay);});
+  }
+  document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"){delay=base;schedule(250);}});
+  schedule(base);
+})();
+</script>`;
 }

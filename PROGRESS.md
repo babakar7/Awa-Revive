@@ -2277,6 +2277,30 @@ stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
   paiement confirmé→panne Wix doit être joué seulement sur l'environnement de
   recette avec un petit montant.
 
+### 6.8 Admin — fil de conversation en direct, sans recharger (20/07/2026)
+
+- [x] La page `/admin/conversations/:clientId` rafraîchit désormais le fil de
+  messages toute seule : un script embarqué interroge toutes les ~3,5 s le
+  nouvel endpoint `GET /admin/conversations/:clientId/thread` (JSON
+  `{ sig, html }`, protégé par le même hook d'auth admin). Le serveur rend le
+  fragment HTML avec le `timeline()` existant — aucune duplication du markup
+  côté client.
+- [x] Signature de changement (`threadSignature`, `clientWorkspacePage.ts`) :
+  hash des `created_at` + `delivery_status` + `error` de chaque tour. Elle
+  capte les nouveaux messages ET le passage « Envoi… » → envoyé/échec des
+  réponses humaines. Sig identique → `html: null` (réponse quasi gratuite).
+- [x] Choix délibérés : polling léger plutôt que SSE/WebSocket (aucun bus
+  d'événements dans l'app, inserts SQL directs) ; seul le `<section id="thread">`
+  est remplacé → le texte du composer et la position de scroll survivent ;
+  pause quand l'onglet est masqué ; backoff ×2 jusqu'à 30 s sur erreur ;
+  auto-scroll bas uniquement si l'utilisateur y était déjà.
+- [x] Piège vérifié en intégration : la signature se calcule sur les DONNÉES,
+  pas sur le HTML rendu — les formulaires « Réessayer » embarquent un
+  `request_key` UUID aléatoire qui changerait le HTML à chaque rendu.
+- [x] Tests : `test/clientWorkspaceThread.test.ts` (signature pure + rendu) et
+  `test/integration/adminThreadPoll.test.ts` (401 poller JSON, 404, no-op sur
+  sig inchangée, nouveau message, flip pending→sent, script présent sur la page).
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

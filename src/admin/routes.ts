@@ -106,7 +106,7 @@ import { registerCoachPaymentRoutes } from "./coachPaymentsRoutes.js";
 import { registerStoryRoutes } from "./storyPage.js";
 import { ADMIN_AUTH_CSS } from "./adminStyles.js";
 import { renderFollowUpPage } from "./followUpPage.js";
-import { renderClientWorkspace } from "./clientWorkspacePage.js";
+import { renderClientWorkspace, renderThread, threadSignature } from "./clientWorkspacePage.js";
 import * as adminOps from "../domain/adminOperations.js";
 import { renderAdminReport, renderAuditPage } from "./reportPage.js";
 import { bookingConversionDashboard } from "../domain/bookingFunnel.js";
@@ -413,6 +413,28 @@ ${result.pages > 1 ? `<nav class="pagination" aria-label="Pagination"><span>${re
         reply
           .type("text/html")
           .send(await layout(client.name ?? client.wa_phone, "/admin/conversations", body, { subtitle: "Conversation", contentWidth: "wide", breadcrumbs: [{ href: "/admin/conversations", label: "Conversations" }, { label: client.name ?? client.wa_phone }] }));
+      });
+
+      // Fragment JSON interrogé par la page conversation pour rafraîchir le fil sans recharger.
+      admin.get("/conversations/:clientId/thread", async (req, reply) => {
+        const { clientId } = req.params as { clientId: string };
+        const client = await q.getClient(clientId);
+        if (!client) {
+          reply.code(404).send({ error: "Client introuvable" });
+          return;
+        }
+        const [turns, lastClientMessage] = await Promise.all([
+          q.getThread(clientId),
+          adminOps.lastClientMessageAt(clientId),
+        ]);
+        const sig = threadSignature(turns);
+        const { sig: knownSig } = req.query as { sig?: string };
+        if (knownSig === sig) {
+          reply.send({ sig, html: null });
+          return;
+        }
+        const canRetry = adminOps.isHumanTakeoverActive(client) && config.ADMIN_HUMAN_REPLY_ENABLED && adminOps.isWithinWhatsAppWindow(lastClientMessage);
+        reply.send({ sig, html: renderThread(turns, clientId, canRetry) });
       });
 
       admin.post("/conversations/:clientId/takeover", async (req, reply) => {
