@@ -32,6 +32,7 @@ import type { LinkRequest } from "../domain/linkRequests.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
 import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
+import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -2527,6 +2528,11 @@ export async function executeTool(
       }
       await links.markVerified(request.id, provenId);
       invalidateMembershipCache(client.id);
+
+      // Les réservations payées AVANT la création de la fiche (nom de profil
+      // WhatsApp « A », cas Amy Ndiaye 20/07) restent orphelines dans Wix —
+      // maintenant que la fiche est prouvée, on les rattache. Non bloquant.
+      void backfillBookingContacts({ clientId: client.id, phone: wa, contactId: provenId });
 
       // Post-verification duplicate handling. The number is JUST on the proven
       // fiche (attached or freshly created), so we list ALL fiches carrying it

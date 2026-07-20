@@ -2255,11 +2255,19 @@ stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
   les 3 réservations d'Amy sont désormais « Amy Ndiaye » avec `contactId`.
   La `revision` se lit via `POST /_api/bookings-reader/v2/extended-bookings/query`
   (le GET `/bookings/v2/bookings/{id}` n'existe pas → 404).
-- **Reste à faire (backfill auto)** : quand un compte est lié/créé
-  (`submit_verification_code` → fiche contact), rechercher les bookings
-  récents du même téléphone créés sans `contactId` et les rattacher via ce
-  PATCH. Idem pour réparer le « L » historique de Habott Lina. Étant
-  non documenté, prévoir un fallback silencieux si Wix retire l'endpoint.
+- **Habott Lina réparée aussi** (21/07) : ses 2 bookings « L » (Reformer
+  Sculpt 20/07) avaient déjà un `contactId` mais le libellé tronqué — même
+  PATCH, désormais « Habott Lina » dans Wix.
+- **Backfill auto livré** (21/07) : `src/domain/bookingContactBackfill.ts` —
+  décision pure `planBookingContactRepairs` (testée) + orchestrateur
+  `backfillBookingContacts` qui ne lève JAMAIS (PATCH non documenté = échec
+  non fatal, juste loggé). Périmètre : bookings BOOKED des 60 derniers jours
+  avec `wix_booking_id`, max 25, rattachés dès que la fiche diverge (contactId
+  manquant OU libellé ≠ nom canonique de la fiche). Deux déclencheurs,
+  fire-and-forget : `submit_verification_code` (fiche prouvée/créée — cas Amy)
+  et post-BOOKED dans `fulfillment.ts` quand un contact est résolu (hors du
+  try/catch refund, une panne de backfill ne peut pas rembourser). Helpers
+  Wix : `getBookingContactSnapshots` + `updateBookingContactDetails`.
 
 ### 6.7 Sprint conversion réservations — instrumentation et quick wins (20/07/2026)
 

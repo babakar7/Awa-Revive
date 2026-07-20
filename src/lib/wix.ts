@@ -394,6 +394,71 @@ export async function getBookingStatuses(bookingIds: string[]): Promise<Record<s
   return out;
 }
 
+// ---------- Booking contact repair (cas « A »/Amy Ndiaye, PROGRESS §6.6bis) ----------
+
+export interface BookingContactSnapshot {
+  bookingId: string;
+  revision: string;
+  contactId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+}
+
+/**
+ * Read revision + contactDetails for a set of bookings via the reader query —
+ * there is no GET /bookings/v2/bookings/{id} (404, verified live 21/07).
+ */
+export async function getBookingContactSnapshots(
+  bookingIds: string[],
+): Promise<BookingContactSnapshot[]> {
+  if (bookingIds.length === 0) return [];
+  const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+    query: { filter: { id: { $in: bookingIds } } },
+  });
+  const out: BookingContactSnapshot[] = [];
+  for (const eb of data?.extendedBookings ?? []) {
+    const b = eb?.booking;
+    if (!b?.id || !b?.revision) continue;
+    out.push({
+      bookingId: String(b.id),
+      revision: String(b.revision),
+      contactId: b?.contactDetails?.contactId ? String(b.contactDetails.contactId) : null,
+      firstName: b?.contactDetails?.firstName ? String(b.contactDetails.firstName) : null,
+      lastName: b?.contactDetails?.lastName ? String(b.contactDetails.lastName) : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * UNDOCUMENTED endpoint: PATCH /bookings/v2/bookings/{id} with the current
+ * revision re-attaches a booking to a contact and fixes its display name,
+ * leaving status/payment/participants intact (verified live 21/07 on the Amy
+ * Ndiaye and Habott Lina bookings). It is absent from the public Writer V2
+ * API, so Wix could remove it — callers MUST treat a failure as non-fatal
+ * (the booking stays valid, only its label is off).
+ */
+export async function updateBookingContactDetails(args: {
+  bookingId: string;
+  revision: string;
+  contactId: string;
+  firstName: string;
+  lastName?: string;
+  phone: string;
+}): Promise<void> {
+  await wixPatch(`/bookings/v2/bookings/${args.bookingId}`, {
+    booking: {
+      revision: args.revision,
+      contactDetails: {
+        contactId: args.contactId,
+        firstName: args.firstName,
+        ...(args.lastName ? { lastName: args.lastName } : {}),
+        phone: args.phone,
+      },
+    },
+  });
+}
+
 /**
  * All of a contact's upcoming CONFIRMED bookings straight from Wix — so
  * get_my_bookings can also show classes booked at the counter or on the

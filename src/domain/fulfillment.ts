@@ -16,6 +16,7 @@ import {
   receptionWhatsAppLink,
 } from "../lib/receptionContact.js";
 import { recordBookingFunnelEvent } from "./bookingFunnel.js";
+import { backfillBookingContacts } from "./bookingContactBackfill.js";
 
 /**
  * Payment fulfillment — shared by Wave and Orange Money / Max It webhooks.
@@ -106,6 +107,7 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
   let participants: number;
   let serviceLabel: string;
   let extras: ExtraLine[];
+  let resolvedContact: wix.WixContactMatch | null = null;
   try {
     participants = Math.max(1, booking.participants ?? 1);
     const slotStartIso = new Date(booking.slot_start).toISOString();
@@ -129,6 +131,7 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
 
     const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
     const contact = await wix.findContactByPhone(phone, client?.name ?? undefined);
+    resolvedContact = contact;
     const bookingName = contact?.fullName || client?.name || "Client Revive";
     if (contact?.fullName && contact.fullName !== client?.name) {
       await repo.updateClientName(booking.client_id, contact.fullName);
@@ -166,6 +169,20 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
     idempotencyKey: `booking:${booking.id}:booked`,
     metadata: { participants },
   }).catch((err) => log.error({ err, bookingId: booking.id }, "BOOKED funnel event failed"));
+
+  // Auto-réparation : si une résa antérieure du client est partie sans fiche
+  // contact (payée avant toute vérification, cas « A »), on la rattache
+  // maintenant qu'un contact est résolu. Fire-and-forget, jamais de refund.
+  if (resolvedContact?.id) {
+    void backfillBookingContacts(
+      {
+        clientId: booking.client_id,
+        phone: `+${client.wa_phone.replace(/^\+/, "")}`,
+        contactId: resolvedContact.id,
+      },
+      log,
+    );
+  }
 
   // --- Post-BOOKED: never refund from here ---
   try {
