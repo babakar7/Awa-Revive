@@ -111,6 +111,50 @@ create index if not exists idx_pending_bookings_client_status
 create index if not exists idx_pending_bookings_status_expiry
   on pending_bookings (status, link_expires_at);
 
+-- Class-booking conversion stream. Journeys group a client's consecutive
+-- booking intent until a terminal outcome or 24 h of inactivity. Events are
+-- deliberately operational only: no transcript text and no payment URL.
+create table if not exists booking_funnel_journeys (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  status text not null default 'open'
+    check (status in ('open','booked','handed_off','failed','inactive')),
+  payment_method text,
+  is_excluded boolean not null default false,
+  backfill_key text unique,
+  started_at timestamptz not null default now(),
+  last_event_at timestamptz not null default now(),
+  closed_at timestamptz,
+  terminal_stage text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_booking_funnel_journeys_client_open
+  on booking_funnel_journeys (client_id, last_event_at desc)
+  where status = 'open';
+create index if not exists idx_booking_funnel_journeys_started
+  on booking_funnel_journeys (started_at desc) where not is_excluded;
+
+create table if not exists booking_funnel_events (
+  id bigserial primary key,
+  journey_id uuid not null references booking_funnel_journeys(id) on delete cascade,
+  client_id uuid not null references clients(id),
+  booking_id uuid references pending_bookings(id),
+  stage text not null,
+  payment_method text,
+  failure_code text,
+  metadata_json jsonb not null default '{}'::jsonb,
+  idempotency_key text unique,
+  is_excluded boolean not null default false,
+  occurred_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_booking_funnel_events_journey
+  on booking_funnel_events (journey_id, occurred_at);
+create index if not exists idx_booking_funnel_events_stage_time
+  on booking_funnel_events (stage, occurred_at desc) where not is_excluded;
+create index if not exists idx_booking_funnel_events_booking
+  on booking_funnel_events (booking_id) where booking_id is not null;
+
 create table if not exists processed_webhooks (
   id text primary key,
   source text not null,
@@ -845,4 +889,84 @@ where s.name = 'Planning actuel' and s.created_by = 'seed'
 
 insert into app_state (key, value) values ('staff_planning_seed_done', '1')
 on conflict (key) do nothing;
+
+-- Historical class-funnel backfill. One journey per old pending booking is
+-- intentional: pre-link intent was not observable before this stream existed.
+insert into booking_funnel_journeys
+  (client_id, status, payment_method, is_excluded, backfill_key,
+   started_at, last_event_at, closed_at, terminal_stage)
+select b.client_id,
+       case
+         when b.status in ('BOOKED','CANCELLED') and b.wix_booking_id is not null then 'booked'
+         when b.status in ('REFUND_NEEDED','REFUNDED') then 'failed'
+         when greatest(b.created_at, b.updated_at) < now() - interval '24 hours' then 'inactive'
+         else 'open'
+       end,
+       b.payment_method,
+       c.is_test,
+       'booking:' || b.id::text,
+       b.created_at,
+       greatest(b.created_at, b.updated_at),
+       case
+         when b.status in ('BOOKED','CANCELLED','REFUND_NEEDED','REFUNDED')
+           or greatest(b.created_at, b.updated_at) < now() - interval '24 hours'
+         then greatest(b.created_at, b.updated_at)
+       end,
+       case
+         when b.status in ('BOOKED','CANCELLED') and b.wix_booking_id is not null then 'booked'
+         when b.status in ('REFUND_NEEDED','REFUNDED') then 'technical_failure'
+       end
+  from pending_bookings b join clients c on c.id = b.client_id
+ where (b.payment_link is not null or b.wix_booking_id is not null)
+   and not exists (select 1 from booking_funnel_events e where e.booking_id=b.id)
+on conflict (backfill_key) do nothing;
+
+insert into booking_funnel_events
+  (journey_id, client_id, booking_id, stage, payment_method, metadata_json,
+   idempotency_key, is_excluded, occurred_at)
+select j.id, b.client_id, b.id, 'payment_link_created', b.payment_method,
+       jsonb_build_object('source','backfill','amount_xof',b.amount_xof,'participants',b.participants),
+       'backfill:' || b.id::text || ':payment_link_created', c.is_test, b.created_at
+  from pending_bookings b
+  join clients c on c.id = b.client_id
+  join booking_funnel_journeys j on j.backfill_key = 'booking:' || b.id::text
+ where b.payment_link is not null
+on conflict (idempotency_key) do nothing;
+
+insert into booking_funnel_events
+  (journey_id, client_id, booking_id, stage, payment_method, metadata_json,
+   idempotency_key, is_excluded, occurred_at)
+select j.id, b.client_id, b.id, 'expired', b.payment_method,
+       jsonb_build_object('source','backfill'),
+       'backfill:' || b.id::text || ':expired', c.is_test,
+       least(coalesce(b.link_expires_at,b.updated_at), b.updated_at)
+  from pending_bookings b
+  join clients c on c.id = b.client_id
+  join booking_funnel_journeys j on j.backfill_key = 'booking:' || b.id::text
+ where b.status = 'EXPIRED'
+on conflict (idempotency_key) do nothing;
+
+insert into booking_funnel_events
+  (journey_id, client_id, booking_id, stage, payment_method, metadata_json,
+   idempotency_key, is_excluded, occurred_at)
+select j.id, b.client_id, b.id, 'booked', b.payment_method,
+       jsonb_build_object('source','backfill','participants',b.participants),
+       'backfill:' || b.id::text || ':booked', c.is_test, b.updated_at
+  from pending_bookings b
+  join clients c on c.id = b.client_id
+  join booking_funnel_journeys j on j.backfill_key = 'booking:' || b.id::text
+ where b.status in ('BOOKED','CANCELLED') and b.wix_booking_id is not null
+on conflict (idempotency_key) do nothing;
+
+insert into booking_funnel_events
+  (journey_id, client_id, booking_id, stage, payment_method, failure_code,
+   metadata_json, idempotency_key, is_excluded, occurred_at)
+select j.id, b.client_id, b.id, 'technical_failure', b.payment_method,
+       'wix_booking_failed', jsonb_build_object('source','backfill','refund_required',true),
+       'backfill:' || b.id::text || ':technical_failure', c.is_test, b.updated_at
+  from pending_bookings b
+  join clients c on c.id = b.client_id
+  join booking_funnel_journeys j on j.backfill_key = 'booking:' || b.id::text
+ where b.status in ('REFUND_NEEDED','REFUNDED')
+on conflict (idempotency_key) do nothing;
 `;

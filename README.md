@@ -161,7 +161,9 @@ open follow-ups. Optional guarded human replies use an explicit 12-hour takeover
 (`ADMIN_HUMAN_REPLY_ENABLED=true` after Meta verification), which hard-pauses Awa
 for that client and stores idempotent delivery results. The full admin also covers bookings, staff
 planning, coach payments, documents, gifts, bar deliveries/menu, notifications
-and WhatsApp profile settings; `/admin/rapport` adds period comparisons and the
+and WhatsApp profile settings; `/admin/rapport` adds period comparisons,
+`/admin/conversion` shows the class-booking funnel (7/30 days, payment rails,
+expiration recovery, normalized failure causes and paid incidents), and the
 owner-only action journal is at `/admin/journal`. Team accounts cannot access coach-payment pages,
 PDFs or mutations; this is enforced server-side. Financial buttons only RECORD manual actions —
 no money ever moves from the dashboard; refunds are done by a human in the Wave

@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import { sendText } from "../lib/whatsapp.js";
 import * as repo from "./repo.js";
+import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 
 /**
  * One-shot follow-up when a payment link expires unused: the client showed
@@ -64,6 +65,14 @@ export async function nudgeExpiredLinks(log: {
       const msg = expiryNudgeMessage(b.language, b.service_name, new Date(b.slot_start));
       await sendText(b.wa_phone, msg);
       await repo.addTurn(b.client_id, "assistant", msg);
+      await recordBookingFunnelEvent({
+        clientId: b.client_id,
+        bookingId: b.id,
+        stage: "recovery_sent",
+        paymentMethod: b.payment_method,
+        idempotencyKey: `booking:${b.id}:recovery-sent`,
+        metadata: { recovery: "expired_link_one_shot" },
+      });
       sent++;
       log.info({ bookingId: b.id }, "Expired-link nudge sent");
     } catch (err) {

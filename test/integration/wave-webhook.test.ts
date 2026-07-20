@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { pool, migrate } from "../../src/db/index.js";
@@ -49,6 +49,12 @@ afterAll(async () => {
 beforeEach(async () => {
   await truncateAll();
   mock.reset();
+});
+
+// The Wave route acknowledges before its setImmediate fulfillment finishes.
+// Let that background task release all DB locks before the next test truncates.
+afterEach(async () => {
+  await settle(500);
 });
 
 describe("signature & routing", () => {
@@ -170,6 +176,15 @@ describe("happy path", () => {
       `wave:${eventId}`,
     ]);
     expect(processed.rowCount).toBe(1);
+    const funnel = await pool.query(
+      `select stage, count(*)::int as n from booking_funnel_events
+        where booking_id=$1 group by stage order by stage`,
+      [booking.id],
+    );
+    expect(funnel.rows).toEqual([
+      { stage: "booked", n: 1 },
+      { stage: "payment_confirmed", n: 1 },
+    ]);
   });
 
   it("uses the full Wix contact name instead of a one-letter model name", async () => {
@@ -275,6 +290,15 @@ describe("refund paths", () => {
     );
     expect(mock.emailCalls()[0].body.subject).toContain("REMBOURSEMENT");
     expect(receptionTexts[0]).toContain("REMBOURSEMENT");
+    const funnel = await pool.query(
+      `select stage, failure_code from booking_funnel_events
+        where booking_id=$1 order by occurred_at`,
+      [booking.id],
+    );
+    expect(funnel.rows).toEqual([
+      { stage: "payment_confirmed", failure_code: null },
+      { stage: "technical_failure", failure_code: "slot_unavailable" },
+    ]);
   });
 
   it("payment landing after class start → REFUND_NEEDED with the honest message", async () => {

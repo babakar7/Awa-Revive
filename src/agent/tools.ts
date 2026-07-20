@@ -13,7 +13,7 @@ import { formatXof } from "../lib/receiptImage.js";
 import { renderInvoicePdf } from "../lib/invoicePdf.js";
 import * as invoices from "../domain/invoiceRepo.js";
 import { recordInvoiceLog } from "../domain/notificationRepo.js";
-import { paymentMethodLabel } from "../lib/paymentMethod.js";
+import { orderedPaymentMethodOptions, paymentMethodLabel } from "../lib/paymentMethod.js";
 import { receptionWhatsAppLink, clientOutreachLink } from "../lib/receptionContact.js";
 import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
 import {
@@ -31,6 +31,7 @@ import * as links from "../domain/linkRequests.js";
 import type { LinkRequest } from "../domain/linkRequests.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
+import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -731,6 +732,74 @@ function fmtDakar(iso: string): string {
   });
 }
 
+export function nextSevenDayWindow(dateTo: string): { dateFrom: string; dateTo: string } {
+  const end = new Date(dateTo);
+  if (Number.isNaN(end.getTime())) throw new Error("invalid date_to");
+  const from = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate() + 1));
+  const to = new Date(from.getTime() + 6 * 86_400_000);
+  return {
+    dateFrom: `${from.toISOString().slice(0, 10)}T00:00:00Z`,
+    dateTo: `${to.toISOString().slice(0, 10)}T23:59:59Z`,
+  };
+}
+
+async function trackFunnel(
+  args: Parameters<typeof recordBookingFunnelEvent>[0],
+): Promise<void> {
+  await recordBookingFunnelEvent(args).catch((error) =>
+    console.error(`Failed to record booking funnel stage ${args.stage}:`, error),
+  );
+}
+
+function slotResult(slot: wix.WixSlot, alternative = false): Record<string, unknown> {
+  return {
+    event_id: slot.eventId,
+    choice_id: slot.openSpots > 0 ? repo.slotChoiceKey(slot.eventId) : undefined,
+    start: slot.startDate,
+    start_dakar: fmtDakar(slot.startDate),
+    duration_minutes: slot.endDate
+      ? Math.round((Date.parse(slot.endDate) - Date.parse(slot.startDate)) / 60000)
+      : undefined,
+    open_spots: slot.openSpots,
+    full: slot.openSpots <= 0 || undefined,
+    coach: slot.coach ?? undefined,
+    alternative: alternative || undefined,
+  };
+}
+
+async function freshSlotAlternatives(
+  clientId: string,
+  serviceId: string,
+  excludedEventId: string,
+): Promise<wix.WixSlot[]> {
+  const from = new Date();
+  const to = new Date(from.getTime() + 7 * 86_400_000);
+  const slots = (await wix.queryAvailability(serviceId, from.toISOString(), to.toISOString()))
+    .filter((slot) => slot.openSpots > 0 && slot.eventId !== excludedEventId && Date.parse(slot.startDate) > Date.now())
+    .slice(0, 10);
+  await repo.cacheSlots(
+    clientId,
+    serviceId,
+    slots.map((slot) => ({ eventId: slot.eventId, slot: slot.raw })),
+  );
+  if (slots.length > 0) {
+    await trackFunnel({
+      clientId,
+      stage: "slots_shown",
+      metadata: { service_id: serviceId, open_slots: slots.length, stale_selection_recovery: true },
+    });
+  }
+  return slots;
+}
+
+function paymentChoicePayload(preferred: string | null): Record<string, unknown> {
+  return {
+    preferred_payment_method: preferred,
+    payment_options: orderedPaymentMethodOptions(preferred, om.isOmEnabled()),
+    payment_choice_required: om.isOmEnabled(),
+  };
+}
+
 /** Hours from now until a timestamp (fractional; negative if past). */
 function hoursUntil(ts: Date | string): number {
   return (new Date(ts).getTime() - Date.now()) / 3_600_000;
@@ -789,18 +858,70 @@ export async function executeTool(
       const serviceId = String(input.service_id ?? "");
       const dateFrom = String(input.date_from ?? "");
       const dateTo = String(input.date_to ?? "");
-      if (!serviceId || Number.isNaN(Date.parse(dateFrom)) || Number.isNaN(Date.parse(dateTo))) {
+      if (
+        !serviceId ||
+        Number.isNaN(Date.parse(dateFrom)) ||
+        Number.isNaN(Date.parse(dateTo)) ||
+        Date.parse(dateFrom) > Date.parse(dateTo)
+      ) {
         return JSON.stringify({ error: "invalid_arguments" });
       }
       const service = await wix.getService(serviceId);
       if (!service) return JSON.stringify({ error: "unknown_service_id" });
 
+      await trackFunnel({
+        clientId: client.id,
+        stage: "availability_requested",
+        metadata: { service_id: serviceId, date_from: dateFrom, date_to: dateTo },
+      });
+
       // Slots whose class already started must never be offered nor cached —
       // a link sold for a started class can only end in a refund.
       const now = Date.now();
-      const slots = (await wix.queryAvailability(serviceId, dateFrom, dateTo))
-        .filter((s) => Date.parse(s.startDate) > now)
-        .slice(0, 30);
+      let requestedSlots: wix.WixSlot[];
+      try {
+        requestedSlots = (await wix.queryAvailability(serviceId, dateFrom, dateTo))
+          .filter((s) => Date.parse(s.startDate) > now)
+          .slice(0, 30);
+      } catch (error) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "technical_failure",
+          failureCode: "wix_booking_failed",
+          metadata: { operation: "availability", service_id: serviceId },
+        });
+        throw error;
+      }
+      const requestedOpenSlots = requestedSlots.filter((s) => s.openSpots > 0);
+      let alternativeSlots: wix.WixSlot[] = [];
+      let alternativeWindow: { dateFrom: string; dateTo: string } | null = null;
+      if (requestedOpenSlots.length === 0) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "no_availability",
+          failureCode: "no_availability",
+          metadata: { service_id: serviceId, date_from: dateFrom, date_to: dateTo },
+        });
+        alternativeWindow = nextSevenDayWindow(dateTo);
+        try {
+          alternativeSlots = (await wix.queryAvailability(
+            serviceId,
+            alternativeWindow.dateFrom,
+            alternativeWindow.dateTo,
+          ))
+            .filter((s) => Date.parse(s.startDate) > now)
+            .slice(0, 30);
+        } catch (error) {
+          await trackFunnel({
+            clientId: client.id,
+            stage: "technical_failure",
+            failureCode: "wix_booking_failed",
+            metadata: { operation: "availability_alternative", service_id: serviceId },
+          });
+          throw error;
+        }
+      }
+      const slots = [...requestedSlots, ...alternativeSlots];
       const openSlots = slots.filter((s) => s.openSpots > 0);
 
       // Server-side slot cache: only event_ids recorded here are accepted by
@@ -812,29 +933,37 @@ export async function executeTool(
         openSlots.map((s) => ({ eventId: s.eventId, slot: s.raw })),
       );
 
+      if (openSlots.length > 0) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slots_shown",
+          metadata: {
+            service_id: serviceId,
+            open_slots: openSlots.length,
+            used_next_window: alternativeSlots.length > 0,
+          },
+        });
+      }
+
+      const preferredPaymentMethod = await repo.lastSuccessfulBookingPaymentMethod(client.id);
+
       return JSON.stringify({
         service: service.name,
+        requested_period: { date_from: dateFrom, date_to: dateTo },
+        alternative_period: alternativeWindow
+          ? { date_from: alternativeWindow.dateFrom, date_to: alternativeWindow.dateTo }
+          : undefined,
         timezone_note:
           "start_dakar is the class time in Dakar local time — relay it verbatim. NEVER convert timezones or mention GMT/UTC.",
-        slots: slots.map((s) => ({
-          // Full slots expose their event_id too — join_waitlist needs it. They
-          // stay unbookable: only OPEN slots go in slot_cache, and the payment
-          // tools re-verify open spots live anyway.
-          event_id: s.eventId,
-          // Short alias usable as a clickable row id in present_options
-          // (event_ids can exceed WhatsApp's 200-char row id limit).
-          choice_id: s.openSpots > 0 ? repo.slotChoiceKey(s.eventId) : undefined,
-          start: s.startDate,
-          start_dakar: fmtDakar(s.startDate),
-          duration_minutes: s.endDate
-            ? Math.round((Date.parse(s.endDate) - Date.parse(s.startDate)) / 60000)
-            : undefined,
-          open_spots: s.openSpots,
-          full: s.openSpots <= 0 || undefined,
-          coach: s.coach ?? undefined,
-        })),
+        slots: slots.map((s) => slotResult(s, alternativeSlots.includes(s))),
+        ...paymentChoicePayload(preferredPaymentMethod),
         note:
-          slots.some((s) => s.openSpots <= 0)
+          requestedOpenSlots.length === 0 && alternativeSlots.some((s) => s.openSpots > 0)
+            ? "No open slot existed in the requested period, so the server searched the next seven-day window once. " +
+              "Present the open alternative slots NOW in the same response and clearly label alternative_period; do not ask whether to search farther first."
+            : requestedOpenSlots.length === 0
+              ? "No open slot exists in the requested period or the next seven-day window. Say which two periods were checked; do not claim the class is unavailable forever."
+            : slots.some((s) => s.openSpots <= 0)
             ? "Slots marked full:true exist but cannot be booked — if the client asked for one of them, say it's " +
               "full and suggest open alternatives; if they still want THAT slot, offer the waitlist (join_waitlist " +
               "with its event_id)."
@@ -868,6 +997,11 @@ export async function executeTool(
         });
       }
       const resolvedEventId = cached.event_id;
+      await trackFunnel({
+        clientId: client.id,
+        stage: "slot_selected",
+        metadata: { service_id: serviceId, participants },
+      });
 
       // 2. Price comes from the catalog, never from the model.
       const service = await wix.getService(serviceId);
@@ -885,6 +1019,16 @@ export async function executeTool(
       //     — enforce BEFORE taking money (a 5-spot payment once ended in a
       //     refund because the cap was 3).
       if (participants > service.maxParticipantsPerBooking) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: "group_capacity",
+          metadata: {
+            service_id: serviceId,
+            participants,
+            max_participants: service.maxParticipantsPerBooking,
+          },
+        });
         return JSON.stringify({
           error: "group_too_large",
           max_participants_per_booking: service.maxParticipantsPerBooking,
@@ -905,32 +1049,59 @@ export async function executeTool(
       //     slot whose class already started: Wix can no longer book it and
       //     the payment would end in a manual refund.
       if (!slotStart || Date.parse(slotStart) <= Date.now()) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: "slot_already_started",
+          metadata: { service_id: serviceId, selection_result: "started" },
+        });
+        const alternatives = await freshSlotAlternatives(client.id, serviceId, resolvedEventId);
         return JSON.stringify({
           error: "slot_already_started",
+          alternatives: alternatives.map((s) => slotResult(s, true)),
           message:
             "This class has already started — it can no longer be booked. " +
-            "Apologize and offer upcoming slots via check_availability.",
+            "Apologize and present the fresh alternatives returned here immediately in the same response.",
         });
       }
 
       const fresh = await wix.isSlotStillOpen(serviceId, resolvedEventId, slotStart, participants);
       if (!fresh) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: participants > 1 ? "group_capacity" : "slot_unavailable",
+          metadata: { service_id: serviceId, participants, selection_result: "unavailable" },
+        });
+        const alternatives = await freshSlotAlternatives(client.id, serviceId, resolvedEventId);
         return JSON.stringify({
           error: "not_enough_spots",
+          alternatives: alternatives.map((s) => slotResult(s, true)),
           message:
             participants > 1
-              ? `Fewer than ${participants} open spots remain on this slot. Offer a smaller group size or another slot via check_availability.`
-              : "This slot just filled up. Apologize and offer alternatives via check_availability.",
+              ? `Fewer than ${participants} open spots remain. Present the fresh alternatives returned here immediately, or offer a smaller group.`
+              : "This slot just filled up. Apologize and present the fresh alternatives returned here immediately in the same response.",
+        });
+      }
+
+      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
+      if (!pay.ok) {
+        const preferred = await repo.lastSuccessfulBookingPaymentMethod(client.id);
+        return JSON.stringify({
+          error: pay.error,
+          message: pay.message,
+          ...paymentChoicePayload(preferred),
+          note: "An explicit choice is still required. Present payment_options in exactly the returned order.",
         });
       }
 
       // 4. One active link per client: expire any previous DRAFT/AWAITING_PAYMENT.
+      // Do this only AFTER an explicit payment choice, so asking the question
+      // cannot invalidate a still-usable link.
       await repo.expireActiveBookings(client.id);
       await repo.updateClientName(client.id, clientName);
 
       // 5. DRAFT booking → payment session → AWAITING_PAYMENT. Class only.
-      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
-      if (!pay.ok) return JSON.stringify({ error: pay.error, message: pay.message });
 
       const totalXof = service.priceXof * participants;
       const draft = await repo.createDraftBooking({
@@ -958,6 +1129,15 @@ export async function executeTool(
         });
       } catch (err) {
         await repo.expireActiveBookings(client.id); // clean up the DRAFT
+        await trackFunnel({
+          clientId: client.id,
+          bookingId: draft.id,
+          stage: "technical_failure",
+          paymentMethod: pay.method,
+          failureCode: "payment_provider_error",
+          idempotencyKey: `booking:${draft.id}:payment-provider-error`,
+          metadata: { operation: "create_payment_link", service_id: serviceId },
+        });
         throw err;
       }
 
@@ -968,6 +1148,19 @@ export async function executeTool(
         session.expiresAt,
         session.method,
       );
+      await trackFunnel({
+        clientId: client.id,
+        bookingId: draft.id,
+        stage: "payment_link_created",
+        paymentMethod: session.method,
+        idempotencyKey: `booking:${draft.id}:payment-link-created`,
+        metadata: {
+          service_id: serviceId,
+          amount_xof: totalXof,
+          participants,
+          expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
+        },
+      });
 
       const appLabel = paymentMethodLabel(session.method);
       return JSON.stringify({
@@ -983,9 +1176,9 @@ export async function executeTool(
         slot_start: fresh.startDate,
         slot_start_dakar: fmtDakar(fresh.startDate),
         note:
-          `Relay the link to the client (class only) — tell them to open it in ${appLabel}. ` +
-          "Spot(s) confirmed only once paid; confirmation arrives automatically on WhatsApp, and the bar " +
-          "menu is offered right after that — do NOT bring up the menu now.",
+          `Your reply must contain ONLY the class, amount, expiry, and payment link. ` +
+          `Do not add the bar, another class, an upsell, or any unrelated suggestion while payment is unresolved. ` +
+          `The client chose ${appLabel}; confirmation arrives automatically after verified payment.`,
       });
     }
 
@@ -1021,6 +1214,11 @@ export async function executeTool(
       if (!check.ok) return JSON.stringify({ error: check.error, message: check.message });
       const source = booking!;
       const extra = check.extra;
+      await trackFunnel({
+        clientId: client.id,
+        stage: "slot_selected",
+        metadata: { service_id: source.service_id, participants: extra, booking_extension: true },
+      });
 
       // 2. Price from the catalog (never the model) + per-booking cap (the NEW
       //    booking must satisfy the cap on its own).
@@ -1034,6 +1232,17 @@ export async function executeTool(
         });
       }
       if (extra > service.maxParticipantsPerBooking) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: "group_capacity",
+          metadata: {
+            service_id: source.service_id,
+            participants: extra,
+            max_participants: service.maxParticipantsPerBooking,
+            booking_extension: true,
+          },
+        });
         return JSON.stringify({
           error: "group_too_large",
           max_participants_per_booking: service.maxParticipantsPerBooking,
@@ -1048,17 +1257,37 @@ export async function executeTool(
       const slotStart = new Date(source.slot_start).toISOString();
       const fresh = await wix.isSlotStillOpen(source.service_id, source.event_id, slotStart, extra);
       if (!fresh) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: extra > 1 ? "group_capacity" : "slot_unavailable",
+          metadata: { service_id: source.service_id, participants: extra, booking_extension: true },
+        });
+        const alternatives = await freshSlotAlternatives(
+          client.id,
+          source.service_id,
+          source.event_id,
+        );
         return JSON.stringify({
           error: "not_enough_spots",
+          alternatives: alternatives.map((s) => slotResult(s, true)),
           message:
-            `Fewer than ${extra} open spot(s) remain on that slot now. Tell the client, and offer a smaller number ` +
-            `or another slot via check_availability.`,
+            `Fewer than ${extra} open spot(s) remain. Present the fresh alternatives returned here immediately, ` +
+            `or offer a smaller number.`,
         });
       }
 
       // 4. One active link per client: expire any DRAFT/AWAITING (never the source BOOKED row).
       const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
-      if (!pay.ok) return JSON.stringify({ error: pay.error, message: pay.message });
+      if (!pay.ok) {
+        const preferred = await repo.lastSuccessfulBookingPaymentMethod(client.id);
+        return JSON.stringify({
+          error: pay.error,
+          message: pay.message,
+          ...paymentChoicePayload(preferred),
+          note: "An explicit choice is still required. Present payment_options in exactly the returned order.",
+        });
+      }
       await repo.expireActiveBookings(client.id);
 
       // 5. NEW booking on the same event for ONLY the extra spots. The paid row
@@ -1090,9 +1319,32 @@ export async function executeTool(
         });
       } catch (err) {
         await repo.expireActiveBookings(client.id); // clean up the DRAFT
+        await trackFunnel({
+          clientId: client.id,
+          bookingId: draft.id,
+          stage: "technical_failure",
+          paymentMethod: pay.method,
+          failureCode: "payment_provider_error",
+          idempotencyKey: `booking:${draft.id}:payment-provider-error`,
+          metadata: { operation: "add_spots_payment", service_id: source.service_id },
+        });
         throw err;
       }
       await repo.setAwaitingPayment(draft.id, session.sessionId, session.paymentLink, session.expiresAt, session.method);
+      await trackFunnel({
+        clientId: client.id,
+        bookingId: draft.id,
+        stage: "payment_link_created",
+        paymentMethod: session.method,
+        idempotencyKey: `booking:${draft.id}:payment-link-created`,
+        metadata: {
+          service_id: source.service_id,
+          amount_xof: totalXof,
+          participants: extra,
+          booking_extension: true,
+          expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
+        },
+      });
 
       const appLabel = paymentMethodLabel(session.method);
       return JSON.stringify({
@@ -1109,11 +1361,9 @@ export async function executeTool(
         slot_start: fresh.startDate,
         slot_start_dakar: fmtDakar(fresh.startDate),
         note:
-          `Relay the link — tell them to open it in ${appLabel}. This adds ${extra} spot(s) to their existing ` +
-          `booking (${source.participants} → ${source.participants + extra} in total) — you MAY state the total ` +
-          `("ça te fera ${source.participants + extra} places en tout"). The original booking is untouched; the two ` +
-          `appear separately in get_my_bookings. The automatic confirmation after payment covers ONLY the ${extra} ` +
-          `added spot(s). Do NOT bring up the bar menu now.`,
+          `Your reply must contain ONLY the class, amount, expiry, and payment link. ` +
+          `Do not add the bar or any unrelated suggestion while payment is unresolved. The link covers ${extra} ` +
+          `additional spot(s), and the automatic confirmation arrives after verified payment.`,
       });
     }
 
@@ -1447,12 +1697,27 @@ export async function executeTool(
         });
       }
       const resolvedEventId = cached.event_id;
+      await trackFunnel({
+        clientId: client.id,
+        stage: "slot_selected",
+        metadata: { service_id: serviceId, participants },
+      });
       const service = await wix.getService(serviceId);
       if (!service) return JSON.stringify({ error: "unknown_service_id" });
 
       // Wix rejects a single booking above the service's per-booking cap — same
       // guard as the Wave group flow, enforced BEFORE deducting any session.
       if (participants > service.maxParticipantsPerBooking) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: "group_capacity",
+          metadata: {
+            service_id: serviceId,
+            participants,
+            max_participants: service.maxParticipantsPerBooking,
+          },
+        });
         return JSON.stringify({
           error: "group_too_large",
           max_participants_per_booking: service.maxParticipantsPerBooking,
@@ -1467,12 +1732,20 @@ export async function executeTool(
       const slotStart: string = slot.startDate ?? String(input.slot_start ?? "");
       const fresh = await wix.isSlotStillOpen(serviceId, resolvedEventId, slotStart, participants);
       if (!fresh) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: participants > 1 ? "group_capacity" : "slot_unavailable",
+          metadata: { service_id: serviceId, participants, selection_result: "unavailable" },
+        });
+        const alternatives = await freshSlotAlternatives(client.id, serviceId, resolvedEventId);
         return JSON.stringify({
           error: "slot_full",
+          alternatives: alternatives.map((s) => slotResult(s, true)),
           message:
             participants > 1
-              ? `Fewer than ${participants} open spots remain on this slot. Offer a smaller group or another slot via check_availability.`
-              : "This slot just filled up. Offer alternatives via check_availability.",
+              ? `Fewer than ${participants} open spots remain. Present the fresh alternatives returned here immediately, or offer a smaller group.`
+              : "This slot just filled up. Present the fresh alternatives returned here immediately in the same response.",
         });
       }
 
@@ -1482,6 +1755,12 @@ export async function executeTool(
       //    anything in Wix — a "no" costs nothing and leaves no orphan booking.
       const contact = await wix.findContactByPhone(phone, clientName || client.name || undefined);
       if (!contact) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: "client_account_not_found",
+          metadata: { service_id: serviceId, selection_result: "account_not_found" },
+        });
         return JSON.stringify({
           error: "no_matching_contact",
           message:
@@ -1493,6 +1772,12 @@ export async function executeTool(
       await repo.updateClientName(client.id, bookingName);
       const benefit = await wix.findEligibleBenefit(serviceId, contact.id);
       if (!benefit) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: "membership_not_eligible",
+          metadata: { service_id: serviceId, selection_result: "membership_not_eligible" },
+        });
         return JSON.stringify({
           error: "not_eligible",
           message:
@@ -1505,6 +1790,12 @@ export async function executeTool(
       // EVERY spot — never book part of a group on the plan. If it can't, offer
       // Wave for the whole group instead.
       if (participants > benefit.available) {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "slot_selected",
+          failureCode: "membership_balance_insufficient",
+          metadata: { service_id: serviceId, participants, remaining_sessions: benefit.available },
+        });
         return JSON.stringify({
           error: "not_enough_sessions",
           remaining_sessions: benefit.available,
@@ -1517,14 +1808,29 @@ export async function executeTool(
       }
 
       // 2. Booking (CREATED) → 3. deduct one credit per spot → 4. confirm in calendar.
-      const wixBookingId = await wix.createBookingRaw({
-        slot: fresh.raw,
-        name: bookingName,
-        phone,
-        participants,
-        paymentOption: "MEMBERSHIP",
-        resolvedContact: contact,
-      });
+      let wixBookingId: string;
+      try {
+        wixBookingId = await wix.createBookingRaw({
+          slot: fresh.raw,
+          name: bookingName,
+          phone,
+          participants,
+          paymentOption: "MEMBERSHIP",
+          resolvedContact: contact,
+        });
+      } catch {
+        await trackFunnel({
+          clientId: client.id,
+          stage: "technical_failure",
+          paymentMethod: "membership",
+          failureCode: "membership_booking_failed",
+          metadata: { service_id: serviceId, operation: "membership_create_booking" },
+        });
+        return JSON.stringify({
+          error: "membership_booking_failed",
+          message: "Technical problem while using the abonnement. Offer the normal payment flow or reception.",
+        });
+      }
 
       try {
         const redemption = await wix.redeemMembershipForBooking({
@@ -1558,6 +1864,22 @@ export async function executeTool(
           benefitTransactionId: redemption.transactionId || null,
           participants,
         });
+        await trackFunnel({
+          clientId: client.id,
+          bookingId: membershipBooking.id,
+          stage: "payment_confirmed",
+          paymentMethod: "membership",
+          idempotencyKey: `booking:${membershipBooking.id}:payment-confirmed`,
+          metadata: { service_id: serviceId, participants },
+        });
+        await trackFunnel({
+          clientId: client.id,
+          bookingId: membershipBooking.id,
+          stage: "booked",
+          paymentMethod: "membership",
+          idempotencyKey: `booking:${membershipBooking.id}:booked`,
+          metadata: { service_id: serviceId, participants },
+        });
         // Sessions were just deducted — the cached balance is stale.
         invalidateMembershipCache(client.id);
         const tip = classTip(service.name, client.language);
@@ -1590,6 +1912,15 @@ export async function executeTool(
           await wix.declineBooking(wixBookingId);
         } catch (cleanupErr) {
           console.error(`Failed to decline orphan booking ${wixBookingId}:`, cleanupErr);
+        }
+        if (!notEligible) {
+          await trackFunnel({
+            clientId: client.id,
+            stage: "technical_failure",
+            paymentMethod: "membership",
+            failureCode: "membership_booking_failed",
+            metadata: { service_id: serviceId, operation: "membership_redemption" },
+          });
         }
         return JSON.stringify({
           error: notEligible ? "not_eligible" : "membership_booking_failed",

@@ -22,6 +22,69 @@ interface Section {
 
 const SECTIONS: Section[] = [
   {
+    heading: "Réservations — recette conversion sur appareils réels",
+    intro:
+      "Utiliser uniquement les numéros marqués Équipe/test : ils restent visibles pour le diagnostic mais sont exclus de /admin/conversion.",
+    tasks: [
+      {
+        id: "booking-payment-rails",
+        prio: "P0",
+        title: "Paiement de cours Wave, Orange Money et Max It",
+        steps: [
+          "Créer puis payer une réservation test avec chacun des trois moyens, sur les vraies applications mobiles",
+          "Pour chaque paiement, attendre la confirmation WhatsApp puis vérifier la réservation dans Wix",
+          "Ouvrir /admin/conversion et vérifier qu'aucun paiement ne reste dans « Paiements à reprendre »",
+        ],
+        expect:
+          "Chaque paiement vérifié produit exactement une réservation Wix et une confirmation. Un doublon de callback ne crée jamais une deuxième place.",
+      },
+      {
+        id: "booking-capacity-stale",
+        prio: "P0",
+        title: "Capacité groupe et créneau devenu complet",
+        steps: [
+          "Tester une réservation de groupe jusqu'à la limite Wix du cours",
+          "Afficher un créneau sur un appareil, le remplir dans Wix depuis un autre, puis tenter de créer le lien",
+        ],
+        expect:
+          "Aucun paiement n'est pris au-delà de la capacité. Le créneau périmé est refusé et Awa affiche immédiatement de nouvelles alternatives.",
+      },
+      {
+        id: "booking-expiry-recovery",
+        prio: "P0",
+        title: "Expiration et récupération one-shot",
+        steps: [
+          "Laisser expirer un lien sans payer et vérifier qu'une seule relance arrive",
+          "Répondre oui, payer le nouveau lien et attendre la confirmation Wix/WhatsApp",
+        ],
+        expect:
+          "La relance n'est envoyée qu'une fois et /admin/conversion compte la réservation dans « Réservations récupérées ».",
+      },
+      {
+        id: "booking-membership-studio",
+        prio: "P0",
+        title: "Abonnement, solde et réservation studio",
+        steps: [
+          "Réserver un cours couvert par abonnement et vérifier le solde avant/après dans Wix",
+          "Créer une réservation au comptoir/site puis demander « mes cours ? » à Awa",
+        ],
+        expect:
+          "La séance d'abonnement est déduite une seule fois et la résa est confirmée. La réservation studio apparaît sans être confondue avec un paiement Awa.",
+      },
+      {
+        id: "booking-paid-wix-failure",
+        prio: "P0",
+        title: "Paiement confirmé mais Wix indisponible",
+        steps: [
+          "Sur l'environnement de recette uniquement, provoquer une panne Wix après un petit paiement réel",
+          "Vérifier le message client, l'alerte réception et /admin/conversion",
+        ],
+        expect:
+          "La ligne passe en REFUND_NEEDED, le client reçoit l'explication sous 24 h, la réception voit la tâche et le paiement n'est jamais silencieux.",
+      },
+    ],
+  },
+  {
     heading: "🔴 Config — à faire AVANT d'ouvrir les tests",
     tasks: [
       {

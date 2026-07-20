@@ -8,6 +8,7 @@ import {
   type OmTransaction,
 } from "../lib/orangeMoney.js";
 import { notifyReception } from "../lib/notify.js";
+import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
 
 /**
  * Orange Money / Max It payment notification (X-Callback-Url on QR create).
@@ -123,6 +124,27 @@ async function findPendingAny(
   return cafe;
 }
 
+async function recordClassVerificationFailure(
+  orderId: string,
+  transactionId: string,
+  reason: string,
+  log: any,
+): Promise<void> {
+  const booking = await repo.findBookingById(orderId).catch(() => null);
+  if (!booking) return; // plan and café callbacks are outside this class funnel
+  await recordBookingFunnelEvent({
+    clientId: booking.client_id,
+    bookingId: booking.id,
+    stage: "technical_failure",
+    paymentMethod: booking.payment_method,
+    failureCode: "payment_verification_failed",
+    idempotencyKey: `booking:${booking.id}:om-verification:${transactionId}:${reason}`,
+    metadata: { operation: "payment_verification", reason },
+  }).catch((err) =>
+    log.error({ err, bookingId: booking.id }, "OM verification funnel event failed"),
+  );
+}
+
 async function handleOmPayment(args: {
   transactionId: string;
   orderId: string;
@@ -136,6 +158,12 @@ async function handleOmPayment(args: {
     tx = await lookupSuccessfulTransaction(args.transactionId);
   } catch (err) {
     args.log.error({ err, transactionId: args.transactionId }, "OM lookup failed");
+    await recordClassVerificationFailure(
+      args.orderId,
+      args.transactionId,
+      "lookup_failed",
+      args.log,
+    );
     if (shouldNotifyOmOnce(`lookup_fail:${args.orderId}`)) {
       notifyReception(
         "⚠️ Paiement OM — vérif transaction échouée",
@@ -148,6 +176,12 @@ async function handleOmPayment(args: {
   }
   if (!tx) {
     args.log.warn({ transactionId: args.transactionId }, "OM lookup: no SUCCESS transaction");
+    await recordClassVerificationFailure(
+      args.orderId,
+      args.transactionId,
+      "not_successful",
+      args.log,
+    );
     if (shouldNotifyOmOnce(`lookup_miss:${args.orderId}`)) {
       notifyReception(
         "⚠️ Paiement OM — transaction introuvable/non SUCCESS",
@@ -167,6 +201,12 @@ async function handleOmPayment(args: {
     args.log.warn(
       { reason: match.reason, transactionId: args.transactionId, orderId: args.orderId },
       "OM verify-by-lookup mismatch — not fulfilling",
+    );
+    await recordClassVerificationFailure(
+      args.orderId,
+      args.transactionId,
+      match.reason,
+      args.log,
     );
     if (shouldNotifyOmOnce(`mismatch:${args.orderId}:${match.reason}`)) {
       notifyReception(

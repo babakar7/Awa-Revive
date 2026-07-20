@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { pool, migrate } from "../../src/db/index.js";
@@ -48,6 +48,11 @@ beforeEach(async () => {
   await truncateAll();
   mock.reset();
   _resetOmTokenCacheForTests();
+});
+
+// Payment callbacks are acknowledged before their background fulfillment ends.
+afterEach(async () => {
+  await settle(500);
 });
 
 describe("routing & ack", () => {
@@ -222,6 +227,13 @@ describe("verify-by-lookup guards (anti-forgery)", () => {
     expect(mock.wixCreateBookingCalls()).toHaveLength(0);
     await waitFor(async () => (mock.emailCalls().length > 0 ? true : null), "mismatch email");
     expect(JSON.stringify(mock.emailCalls()[0].body)).toMatch(/mismatch|amount/i);
+    const failure = await pool.query(
+      `select stage, failure_code from booking_funnel_events where booking_id=$1`,
+      [booking.id],
+    );
+    expect(failure.rows).toEqual([
+      { stage: "technical_failure", failure_code: "payment_verification_failed" },
+    ]);
   });
 
   it("does not fulfill when partner (merchant) does not match", async () => {

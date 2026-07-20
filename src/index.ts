@@ -22,6 +22,7 @@ import { notifyReception } from "./lib/notify.js";
 import { drainQueues } from "./lib/serialize.js";
 import { listenOnAvailablePort } from "./lib/listen.js";
 import { buildServer } from "./server.js";
+import { closeInactiveBookingJourneys } from "./domain/bookingFunnel.js";
 
 async function main() {
   assertConfig();
@@ -66,6 +67,7 @@ async function main() {
         (await expireStalePlanOrders()) +
         (await expireStaleCafeOrders());
       if (n > 0) app.log.info({ expired: n }, "Expired stale payment links");
+      await closeInactiveBookingJourneys();
       // One-shot "want a fresh link?" follow-up for links that just expired.
       await nudgeExpiredLinks(app.log);
       // Recover paid-but-unfulfilled work (crash between PAID and Wix / notify).

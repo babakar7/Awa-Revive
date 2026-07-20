@@ -291,6 +291,7 @@ export async function handleInboundText(args: {
     recentRefunds,
     habit,
     upcomingBookingsCount,
+    preferredPaymentMethod,
   ] = await Promise.all([
     repo.activeAwaitingPayment(client.id),
     repo.activeAwaitingPlanOrder(client.id),
@@ -299,6 +300,7 @@ export async function handleInboundText(args: {
     repo.recentRefunds(client.id),
     repo.bookingHabit(client.id),
     repo.countUpcomingBooked(client.id),
+    repo.lastSuccessfulBookingPaymentMethod(client.id),
   ]);
 
   const history = await repo.lastTurnsForReplay(client.id, 30);
@@ -353,6 +355,7 @@ export async function handleInboundText(args: {
         recentRefunds,
         habit,
         upcomingBookingsCount,
+        preferredPaymentMethod,
         capabilityMenu,
         firstContact: isFirstContact,
       }),

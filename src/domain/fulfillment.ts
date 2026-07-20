@@ -15,6 +15,7 @@ import {
   receptionLinkInstruction,
   receptionWhatsAppLink,
 } from "../lib/receptionContact.js";
+import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 
 /**
  * Payment fulfillment — shared by Wave and Orange Money / Max It webhooks.
@@ -61,6 +62,20 @@ export async function processPayment(
       { bookingId: booking.id, status: booking.status },
       "Not newly payable — attempting fulfillment resume",
     );
+  }
+
+  const payable = (paid as typeof booking | null) ?? (await repo.findBookingById(booking.id));
+  if (payable && ["PAID", "BOOKED", "REFUND_NEEDED", "REFUNDED", "CANCELLED"].includes(payable.status)) {
+    // Authoritative: this runs only after a signed Wave webhook or verified OM
+    // lookup transitioned (or resumed) the local payment state.
+    await recordBookingFunnelEvent({
+      clientId: booking.client_id,
+      bookingId: booking.id,
+      stage: "payment_confirmed",
+      paymentMethod: payable.payment_method,
+      idempotencyKey: `booking:${booking.id}:payment-confirmed`,
+      metadata: { amount_xof: payable.amount_xof, participants: payable.participants },
+    });
   }
 
   await fulfillPaidBooking(booking.id, log);
@@ -140,6 +155,18 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
     return;
   }
 
+  // The local BOOKED transition is the authoritative conversion point. Keep
+  // analytics outside the refund-producing try/catch: a metrics outage must
+  // never turn an already reserved Wix seat into a refund incident.
+  await recordBookingFunnelEvent({
+    clientId: booking.client_id,
+    bookingId: booking.id,
+    stage: "booked",
+    paymentMethod: booking.payment_method,
+    idempotencyKey: `booking:${booking.id}:booked`,
+    metadata: { participants },
+  }).catch((err) => log.error({ err, bookingId: booking.id }, "BOOKED funnel event failed"));
+
   // --- Post-BOOKED: never refund from here ---
   try {
     const confirmation = confirmationMessage(
@@ -210,6 +237,16 @@ export async function reconcileStuckBookings(log: any): Promise<number> {
   const stuck = await repo.stuckPaidBookings();
   for (const b of stuck) {
     log.warn({ bookingId: b.id }, "Reconciling stuck PAID booking (paid but never booked)");
+    await recordBookingFunnelEvent({
+      clientId: b.client_id,
+      bookingId: b.id,
+      stage: "payment_confirmed",
+      paymentMethod: b.payment_method,
+      idempotencyKey: `booking:${b.id}:payment-confirmed`,
+      metadata: { amount_xof: b.amount_xof, participants: b.participants },
+    }).catch((err) =>
+      log.error({ err, bookingId: b.id }, "Payment-confirmed funnel event repair failed"),
+    );
     await fulfillPaidBooking(b.id, log).catch((err) =>
       log.error({ err, bookingId: b.id }, "Reconciliation of stuck PAID booking failed"),
     );
@@ -671,6 +708,24 @@ async function markRefund(
   await transition(pool, bookingId, "REFUND_NEEDED");
   log.warn({ bookingId, ...spots }, "REFUND_NEEDED recorded — manual processing in Wave portal");
   const bookingRow = await repo.findBookingById(bookingId);
+  await recordBookingFunnelEvent({
+    clientId: bookingRow?.client_id ?? client?.id,
+    bookingId,
+    stage: "technical_failure",
+    paymentMethod: bookingRow?.payment_method ?? null,
+    failureCode:
+      reason === "class_started"
+        ? "slot_already_started"
+        : reason === "slot_taken"
+          ? "slot_unavailable"
+          : "wix_booking_failed",
+    idempotencyKey: `booking:${bookingId}:refund-needed`,
+    metadata: {
+      refund_required: true,
+      requested_spots: spots?.requested,
+      remaining_spots: spots?.remaining,
+    },
+  }).catch((error) => log.error({ err: error, bookingId }, "Failed to record refund funnel event"));
   try {
     await notifyRefundParties(bookingRow, client, lang, log, spots, reason);
     await repo.markRefundNotified(bookingId);

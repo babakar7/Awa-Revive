@@ -108,6 +108,8 @@ import { renderFollowUpPage } from "./followUpPage.js";
 import { renderClientWorkspace } from "./clientWorkspacePage.js";
 import * as adminOps from "../domain/adminOperations.js";
 import { renderAdminReport, renderAuditPage } from "./reportPage.js";
+import { bookingConversionDashboard } from "../domain/bookingFunnel.js";
+import { renderConversionPage } from "./conversionPage.js";
 
 export { escapeHtml } from "./helpers.js";
 
@@ -306,6 +308,16 @@ export function registerAdmin(app: FastifyInstance): void {
         const period = raw === "today" ? 1 : raw === "30" ? 30 : 7;
         const report = await q.adminReport(period);
         reply.type("text/html").send(await layout("Rapport", "/admin/rapport", renderAdminReport(report, req.adminRole === "owner"), { subtitle: `${period} jours`, contentWidth: "wide" }));
+      });
+
+      admin.get("/conversion", async (_req, reply) => {
+        const dashboard = await bookingConversionDashboard();
+        reply.type("text/html").send(
+          await layout("Conversion", "/admin/conversion", renderConversionPage(dashboard), {
+            subtitle: "Parcours de réservation",
+            contentWidth: "wide",
+          }),
+        );
       });
 
       admin.get("/journal", async (req, reply) => {

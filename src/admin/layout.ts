@@ -24,6 +24,7 @@ type IconName =
   | "booking"
   | "team"
   | "wallet"
+  | "funnel"
   | "invoice"
   | "quote"
   | "gift"
@@ -58,6 +59,7 @@ const NAV: NavSection[] = [
     links: [
       { href: "/admin", label: "À faire", icon: "home", badgeKey: "total" },
       { href: "/admin/rapport", label: "Rapport", icon: "wallet" },
+      { href: "/admin/conversion", label: "Conversion", icon: "funnel" },
     ],
   },
   {
@@ -112,6 +114,7 @@ const ICON_PATHS: Record<IconName, string> = {
   booking: '<rect x="3" y="5" width="14" height="12" rx="2"/><path d="M6 3v4m8-4v4M3 9h14M7 12h2m2 0h2"/>',
   team: '<circle cx="10" cy="6.5" r="3"/><path d="M4.5 17c.7-3.5 2.5-5.2 5.5-5.2s4.8 1.7 5.5 5.2"/><path d="M15 5.2c1.6.2 2.5 1.2 2.5 2.5s-.8 2.2-2.2 2.5"/>',
   wallet: '<path d="M3 5h12.5A1.5 1.5 0 0 1 17 6.5V15H4.5A1.5 1.5 0 0 1 3 13.5z"/><path d="M3 6.5 14 3v3M13 9.5h4v3h-4a1.5 1.5 0 0 1 0-3Z"/>',
+  funnel: '<path d="M3 4h14l-5.5 6v5l-3 1.5V10z"/><path d="M6 7h8"/>',
   invoice: '<path d="M5 3h8l3 3v11H5z"/><path d="M13 3v4h3M8 10h5M8 13h5"/>',
   quote: '<path d="M5 3h8l3 3v11H5z"/><path d="M13 3v4h3M8 10h5M8 13h3"/><path d="m3 15 2-2"/>',
   gift: '<rect x="3" y="8" width="14" height="9" rx="1"/><path d="M2.5 6h15v3h-15zM10 6v11"/><path d="M10 6C8 6 6 5.3 6 4s1-2 2.2-1C9.2 3.8 10 6 10 6Zm0 0s.8-2.2 1.8-3C13 2 14 2.7 14 4s-2 2-4 2Z"/>',

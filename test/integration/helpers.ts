@@ -23,6 +23,14 @@ export interface RecordedCall {
 export interface WixState {
   /** Open spots returned by the availability query. */
   openSpots: number;
+  /** Optional one-response-per-query overrides for empty/stale-slot scenarios. */
+  availabilityQueue: Array<{
+    openSpots?: number;
+    slotStart?: string;
+    slotEnd?: string;
+    serviceId?: string;
+    eventId?: string;
+  }>;
   /** Slot template returned by availability (startDate settable per test). */
   slotStart: string;
   slotEnd: string;
@@ -34,6 +42,9 @@ export interface WixState {
   failCreateBooking: boolean;
   /** CRM contacts returned for phone lookups. */
   contacts: any[];
+  /** Benefit Programs fixture used by membership-booking tests. */
+  membershipEligible: boolean;
+  membershipAvailable: number;
   /** Ids handed out by eCommerce Create Order. */
   createdOrderIds: string[];
   ordersByExternalId: Record<string, string>;
@@ -131,6 +142,7 @@ export function makeFetchMock(): FetchMock {
 
   const wix: WixState = {
     openSpots: 5,
+    availabilityQueue: [],
     slotStart: inHours(24),
     slotEnd: inHours(25),
     serviceId: "svc_1",
@@ -138,6 +150,8 @@ export function makeFetchMock(): FetchMock {
     createdBookingIds: [],
     failCreateBooking: false,
     contacts: [],
+    membershipEligible: true,
+    membershipAvailable: 5,
     createdOrderIds: [],
     ordersByExternalId: {},
     orderPayments: {},
@@ -253,16 +267,17 @@ export function makeFetchMock(): FetchMock {
 
     // --- Wix availability ---
     if (url.includes("/availability-calendar/v1/availability/query")) {
+      const override = wix.availabilityQueue.shift() ?? {};
       return json(200, {
         availabilityEntries: [
           {
             slot: {
-              sessionId: wix.eventId,
-              serviceId: wix.serviceId,
-              startDate: wix.slotStart,
-              endDate: wix.slotEnd,
+              sessionId: override.eventId ?? wix.eventId,
+              serviceId: override.serviceId ?? wix.serviceId,
+              startDate: override.slotStart ?? wix.slotStart,
+              endDate: override.slotEnd ?? wix.slotEnd,
             },
-            openSpots: wix.openSpots,
+            openSpots: override.openSpots ?? wix.openSpots,
           },
         ],
       });
@@ -301,6 +316,29 @@ export function makeFetchMock(): FetchMock {
     // --- Wix contacts (phone → contact match; none = Wix creates its own) ---
     if (url.includes("/contacts/v4/contacts/query")) {
       return json(200, { contacts: wix.contacts });
+    }
+
+    if (url.includes("/members/v1/members/query")) {
+      return json(200, { members: [{ id: "member_1" }] });
+    }
+
+    if (url.includes("/benefit-programs/v1/pools/eligible-pools")) {
+      return json(200, {
+        eligibleBenefits: wix.membershipEligible
+          ? [{
+              poolId: "pool_1",
+              benefitKey: "benefit_1",
+              poolInfo: {
+                displayName: "Pack Reformer",
+                balance: { available: wix.membershipAvailable },
+              },
+            }]
+          : [],
+      });
+    }
+
+    if (url.includes("/benefit-programs/v1/benefits/redeem")) {
+      return json(200, { transactionId: `benefit_tx_${calls.length}` });
     }
 
     // --- Wix create booking ---
@@ -386,6 +424,7 @@ export function makeFetchMock(): FetchMock {
     reset: () => {
       calls.length = 0;
       wix.openSpots = 5;
+      wix.availabilityQueue.length = 0;
       wix.slotStart = inHours(24);
       wix.slotEnd = inHours(25);
       wix.serviceId = "svc_1";
@@ -393,6 +432,8 @@ export function makeFetchMock(): FetchMock {
       wix.createdBookingIds.length = 0;
       wix.failCreateBooking = false;
       wix.contacts = [];
+      wix.membershipEligible = true;
+      wix.membershipAvailable = 5;
       wix.createdOrderIds.length = 0;
       wix.ordersByExternalId = {};
       wix.orderPayments = {};

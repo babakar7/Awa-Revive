@@ -2228,6 +2228,55 @@ stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
   jour générale de `contactDetails`) ; les nouvelles réservations prennent le
   nom canonique de la fiche contact Wix.
 
+### 6.7 Sprint conversion réservations — instrumentation et quick wins (20/07/2026)
+
+- [x] Flux interne append-only `booking_funnel_events` + parcours corrélés
+  `booking_funnel_journeys` : disponibilité demandée, créneaux montrés / aucun
+  créneau, sélection, lien créé, paiement vérifié, réservation Wix, expiration,
+  relance, handoff et échec technique. Fermeture sur réservation/handoff/échec
+  ou après 24 h d'inactivité. Métadonnées opérationnelles uniquement : aucun
+  transcript ni lien de paiement. Les numéros `clients.is_test` sont marqués à
+  l'écriture et exclus à nouveau à la lecture des métriques.
+- [x] Événements de paiement/réservation émis par les transitions serveur après
+  webhook Wave signé ou lookup Orange Money/Max It vérifié. Un échec Wix après
+  paiement reste `REFUND_NEEDED`, notifie client + réception et apparaît dans
+  `/admin/conversion`; un `PAID` non finalisé y apparaît aussi immédiatement.
+- [x] Backfill idempotent des étapes historiques observables depuis
+  `pending_bookings` : lien créé, expiré, réservé, plus les remboursements à
+  reprendre. Les étapes pré-lien ne sont pas inventées rétroactivement.
+- [x] Quick wins : une fenêtre vide déclenche automatiquement UNE recherche sur
+  les 7 jours suivants et renvoie les alternatives dans la même réponse ; un
+  créneau rempli/périmé avant le lien renvoie des alternatives fraîches ; le
+  dernier moyen de paiement de cours réussi passe en premier sans jamais être
+  auto-sélectionné ; après création du lien, le message est limité au cours,
+  montant, expiration et lien. La relance d'expiration one-shot est maintenant
+  reliée jusqu'à la réservation récupérée.
+- [x] Dashboard `/admin/conversion` : conversion 7/30 j, tunnel par étape,
+  lien→réservation par moyen de paiement, récupération des expirations, top
+  codes d'échec, paiements à reprendre et liens directs vers les conversations.
+- [x] Validation automatisée : build TypeScript, 469 tests unitaires et 91
+  tests d'intégration réussis (Wave, Orange Money/Max It, abonnement, capacité,
+  fenêtre vide, créneau périmé, expiration, doublons et panne Wix après paiement).
+- **Baseline au déploiement** : aucune valeur pré-lien fiable avant cette
+  instrumentation. Le backfill permet seulement le taux historique
+  lien→réservation et les expirations. Ne pas publier de faux taux global ; la
+  première baseline complète sera figée après **30 parcours réels ou 30 jours**.
+- **Plus grande fuite observée** : non encore statistiquement déterminable au
+  moment de la livraison (0 parcours pré-lien instrumenté). Les incidents
+  payés mais non réservés restent P0 sans attendre le seuil ; les deux fuites
+  conversationnelles déjà connues (fenêtre vide et créneau rempli avant lien)
+  ont motivé les alternatives serveur immédiates.
+- **Décision produit résultante** : ne pas élargir les fonctionnalités avant la
+  revue du premier échantillon. Prioriser la plus forte chute mesurée dans le
+  tunnel et viser au moins **+10 % relatif** sur lien→réservation ; conserver la
+  séparation entre qualité de service (un `dropoff` volontaire n'est pas un
+  échec) et conversion commerciale (il n'est pas une vente).
+- [ ] Recette appareils réels encore à exécuter : trois rails de paiement,
+  groupe/capacité, expiration→relance→réservation, solde abonnement et réservation
+  studio. Les scénarios détaillés sont ajoutés à `/admin/tests`; le cas
+  paiement confirmé→panne Wix doit être joué seulement sur l'environnement de
+  recette avec un petit montant.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

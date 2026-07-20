@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { pool } from "../db/index.js";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
+import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { transition } from "./stateMachine.js";
 
 export interface Client {
@@ -457,7 +458,21 @@ export async function expireStaleBookings(): Promise<number> {
   const res = await pool.query(
     `update pending_bookings
         set status = 'EXPIRED', updated_at = now()
-      where status = 'AWAITING_PAYMENT' and link_expires_at < now()`,
+      where status = 'AWAITING_PAYMENT' and link_expires_at < now()
+      returning id, client_id, payment_method, link_expires_at`,
+  );
+  await Promise.all(
+    res.rows.map((b) =>
+      recordBookingFunnelEvent({
+        clientId: b.client_id,
+        bookingId: b.id,
+        stage: "expired",
+        paymentMethod: b.payment_method,
+        occurredAt: new Date(b.link_expires_at),
+        idempotencyKey: `booking:${b.id}:expired`,
+        metadata: { reason: "ttl" },
+      }).catch((error) => console.error("Failed to record booking expiry funnel event:", error)),
+    ),
   );
   const stale = res.rowCount ?? 0;
   // Orphan DRAFTs (session created then crash before setAwaitingPayment, or
@@ -563,6 +578,19 @@ export async function activeAwaitingPayment(clientId: string): Promise<PendingBo
     [clientId],
   );
   return res.rows[0] ?? null;
+}
+
+/** Most recent verified class-payment rail. Membership deductions are not a mobile-money preference. */
+export async function lastSuccessfulBookingPaymentMethod(clientId: string): Promise<string | null> {
+  const res = await pool.query(
+    `select payment_method from pending_bookings
+      where client_id=$1
+        and status in ('PAID','BOOKED','REFUND_NEEDED','REFUNDED','CANCELLED')
+        and payment_method in ('wave','orange_money','maxit')
+      order by updated_at desc limit 1`,
+    [clientId],
+  );
+  return res.rows[0]?.payment_method ?? null;
 }
 
 /**
@@ -1349,6 +1377,12 @@ export async function recordHandoff(clientId: string, reason: string): Promise<v
     `insert into handoffs (client_id, reason, transcript_excerpt) values ($1, $2, $3)`,
     [clientId, reason, excerpt],
   );
+  await recordBookingFunnelEvent({
+    clientId,
+    stage: "handoff",
+    allowCreateJourney: false,
+    metadata: { reason_category: reason.split(":", 1)[0]?.slice(0, 80) || "unspecified" },
+  }).catch((error) => console.error("Failed to record booking handoff funnel event:", error));
 }
 
 /**
