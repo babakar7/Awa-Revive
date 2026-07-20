@@ -2204,14 +2204,29 @@ stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
   recherche par `externalOrderId`, contrôle des paiements existants et reprise
   automatique des réservations des dernières 48 h. Une panne Orders ne peut
   donc ni annuler la place ni produire un double paiement au retry.
-- [x] Vérification locale : build, 458 tests unitaires et suite d'intégration
-  complète ; scénarios dédiés nom `L` → `Habott Lina`, ordre/paiement Wix et
-  panne Create Order réparée sans nouvelle réservation.
-- [ ] Après déploiement : vérifier que la clé API Wix possède `Manage Orders`,
-  puis contrôler Habott Lina dans l'admin/Wix. La réservation déjà créée avec
-  `L` peut conserver ce libellé historique (l'API Writer V2 ne propose pas de
-  mise à jour générale de `contactDetails`) ; l'ordre et le nom admin seront
-  repris automatiquement s'ils datent de moins de 48 h.
+- [x] Vérification locale du correctif initial : build, 458 tests unitaires et
+  17 tests d'intégration Wix/Wave ciblés ; scénarios dédiés nom `L` →
+  `Habott Lina`, ordre/paiement Wix et panne Create Order réparée sans nouvelle
+  réservation. Les hotfixes suivants ont aussi repassé le build, 3 tests
+  unitaires ciblés et les 17 tests d'intégration.
+- [x] Déployé sur `main` : `df3a63b` (nom + ordre/paiement), `b6f78bd`
+  (`taxDetails` à 0 requis par Create Order), `45fdff4` (une seule reprise de
+  commande par cycle) et `b3ef6a2` (appels eCommerce espacés de 1,25 s).
+  Railway `SUCCESS` sur `b3ef6a2` et `GET /healthz` → `{"ok":true}`.
+- [x] Permission Orders effectivement atteinte : les appels Search/Create
+  Order sont acceptés par l'authentification Wix (aucun `403`) ; la première
+  sonde live a renvoyé une validation `400` sur la taxe, désormais corrigée.
+- [ ] **État live restant au 20/07, 20:53 UTC :** Wix répond encore
+  `429 RATE_LIMITED` sur `POST /ecom/v1/orders`, y compris avec une seule reprise et
+  les appels espacés. Tant que Wix ne libère pas ce quota d'écriture, une résa
+  payée future peut encore afficher « Aucune commande créée ». La place reste
+  `BOOKED` et confirmée ; seule la fiche eCommerce/paiement manque et le worker
+  la réessaie automatiquement, une commande à la fois.
+- [ ] Contrôle manuel restant : vérifier Habott Lina dans l'admin et dans Wix
+  lorsque le quota Orders est libéré. Sa réservation déjà créée avec `L` peut
+  conserver ce libellé historique (l'API Writer V2 ne propose pas de mise à
+  jour générale de `contactDetails`) ; les nouvelles réservations prennent le
+  nom canonique de la fiche contact Wix.
 
 ## 7. Runbook ops
 
