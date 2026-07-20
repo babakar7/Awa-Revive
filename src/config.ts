@@ -139,6 +139,11 @@ export const config = {
   // message. Defaults to Babakar's number so tests never surprise the guardian
   // or a coach. Empty = the test button is disabled.
   NOTIF_TEST_PHONE: optional("NOTIF_TEST_PHONE", "+221774982711"),
+  // Story Instagram quotidienne : numéro WhatsApp qui reçoit l'image des cours
+  // du lendemain chaque soir (le gérant la poste ensuite). Défaut = le numéro de
+  // test (celui de Babakar). Vide = envoi désactivé. Heure d'envoi (Dakar == UTC).
+  STORY_PHONE: optional("STORY_PHONE", optional("NOTIF_TEST_PHONE", "+221774982711")),
+  STORY_HOUR: parseInt(optional("STORY_HOUR", "18"), 10),
   PAYMENT_LINK_TTL_MINUTES: parseInt(optional("PAYMENT_LINK_TTL_MINUTES", "20"), 10),
   STUDIO_ADDRESS: optional("STUDIO_ADDRESS", "Revive Pilates, Almadies, Dakar"),
   PORT: parseInt(optional("PORT", "3000"), 10),

@@ -4,6 +4,7 @@ import { expireStaleBookings, expireStalePlanOrders, expireStaleCafeOrders } fro
 import { nudgeExpiredLinks } from "./domain/expiryNudge.js";
 import { escalateStaleLinkRequests } from "./domain/linkRequests.js";
 import { runReviewSweep, maybeSendDailyDigest } from "./domain/conversationReview.js";
+import { maybeSendDailyStory } from "./domain/dailyStory.js";
 import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
@@ -146,6 +147,14 @@ async function main() {
       if (nudged > 0) app.log.info({ nudged }, "Renewal nudges sent");
     } catch (err) {
       app.log.error({ err }, "Renewal-nudge sweep failed");
+    }
+    try {
+      // Story Instagram du soir : image des cours de demain envoyée au gérant
+      // une fois par jour (garde app_state). En cas d'échec, retry au prochain
+      // passage jusqu'à 22h.
+      if (await maybeSendDailyStory(app.log)) app.log.info("Daily story sent to owner");
+    } catch (err) {
+      app.log.error({ err }, "Daily story failed (will retry within window)");
     }
   }, 5 * 60 * 1000);
   cancellationSweeper.unref();

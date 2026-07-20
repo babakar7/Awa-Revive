@@ -99,6 +99,7 @@ const NAV: NavSection[] = [
     muted: true,
     links: [
       { href: "/admin/notifications", label: "Notifications", icon: "bell" },
+      { href: "/admin/story", label: "Story Instagram", icon: "gift" },
       { href: "/admin/profile", label: "Profil WhatsApp", icon: "profile" },
       { href: "/admin/tests", label: "Tests", icon: "tests" },
     ],
