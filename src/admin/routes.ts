@@ -1682,6 +1682,47 @@ ${photoSection}
         return reply.redirect(`/admin/staff?s=${id}&done=sent-all:${sent}:${noPhone}:${noShift}`, 303);
       });
 
+      // Team management, right on the planning page (no detour to the directory).
+      const backToStaff = (reply: any, sched: string | undefined, params: string) =>
+        reply.redirect(`/admin/staff${sched ? `?s=${sched}&` : "?"}${params}`, 303);
+
+      admin.post("/staff/contact", async (req, reply) => {
+        const b = req.body as any;
+        const name = String(b?.name ?? "").trim();
+        const role = ["accueil", "bar", "entretien"].includes(String(b?.role)) ? String(b.role) : "accueil";
+        const phoneRaw = String(b?.phone ?? "").trim();
+        if (!name) return backToStaff(reply, b?.s, "err=nom obligatoire");
+        let phone = "";
+        if (phoneRaw) {
+          const n = normalizeDeliveryPhone(phoneRaw);
+          if (!n) return backToStaff(reply, b?.s, "err=numéro invalide (laisse vide si aucun)");
+          phone = n;
+        }
+        await staffPlan.addPlanningStaff(name, role, phone);
+        req.log.info({ name, role, by: req.adminUser }, "Planning staff added");
+        return backToStaff(reply, b?.s, "done=contact-added");
+      });
+
+      admin.post("/staff/contact/:staffId/phone", async (req, reply) => {
+        const { staffId } = req.params as { staffId: string };
+        const raw = String((req.body as any)?.phone ?? "").trim();
+        if (raw === "") {
+          await staffPlan.setStaffPhone(staffId, "");
+          return reply.redirect(`/admin/staff?done=phone-cleared`, 303);
+        }
+        const phone = normalizeDeliveryPhone(raw);
+        if (!phone) return reply.redirect(`/admin/staff?err=${encodeURIComponent("numéro invalide")}`, 303);
+        const ok = await staffPlan.setStaffPhone(staffId, phone);
+        return reply.redirect(`/admin/staff?${ok ? "done=phone-saved" : "err=employée introuvable"}`, 303);
+      });
+
+      admin.post("/staff/contact/:staffId/delete", async (req, reply) => {
+        const { staffId } = req.params as { staffId: string };
+        const ok = await staffPlan.removePlanningStaff(staffId);
+        req.log.info({ staff: staffId, by: req.adminUser }, "Planning staff removed");
+        return reply.redirect(`/admin/staff?${ok ? "done=contact-removed" : "err=employée introuvable"}`, 303);
+      });
+
       // ---------- Notifications automatiques (rappels staff, journal) ----------
       const NOTIF_BANNERS: Record<string, string> = {
         created: "Règle créée.",

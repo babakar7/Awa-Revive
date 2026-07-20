@@ -151,3 +151,33 @@ export async function listPlanningStaff(): Promise<PlanningStaff[]> {
   );
   return res.rows as PlanningStaff[];
 }
+
+/**
+ * Set (or clear) a planning employee's WhatsApp number, editable straight from
+ * the planning page so sending her schedule doesn't require the directory.
+ * Restricted to planning roles so it can't touch a coach's contact. Returns
+ * whether a row was updated. `phone` is already normalized (or "" to clear).
+ */
+export async function setStaffPhone(id: string, phone: string): Promise<boolean> {
+  if (!UUID_RE.test(String(id))) return false;
+  const res = await pool.query(
+    `update staff_contacts set phone=$2 where id=$1 and role = any($3)`,
+    [id, phone, PLANNING_ROLES as unknown as string[]],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** Add a planning employee (role restricted to a planning role; phone may be ""). */
+export async function addPlanningStaff(name: string, role: string, phone: string): Promise<void> {
+  await pool.query(`insert into staff_contacts (name, phone, role) values ($1, $2, $3)`, [name, phone, role]);
+}
+
+/** Remove a planning employee (cascades her shifts across all scenarios). */
+export async function removePlanningStaff(id: string): Promise<boolean> {
+  if (!UUID_RE.test(String(id))) return false;
+  const res = await pool.query(`delete from staff_contacts where id=$1 and role = any($2)`, [
+    id,
+    PLANNING_ROLES as unknown as string[],
+  ]);
+  return (res.rowCount ?? 0) > 0;
+}

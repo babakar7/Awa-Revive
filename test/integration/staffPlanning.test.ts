@@ -171,3 +171,39 @@ describe("send to employees", () => {
     await settle();
   });
 });
+
+describe("team management on the planning page", () => {
+  it("adds an employee (normalized phone), sets/clears her number, then removes her", async () => {
+    // Add — local number normalized to wa_id.
+    const add = await post("/admin/staff/contact", { name: "Nafi", role: "bar", phone: "77 555 44 33" });
+    expect(add.headers.location).toContain("done=contact-added");
+    const staff = await staffPlan.listPlanningStaff();
+    const nafi = staff.find((s) => s.name === "Nafi")!;
+    expect(nafi.role).toBe("bar");
+    expect(nafi.phone).toBe("221775554433");
+
+    // Now she can receive a schedule (has a phone).
+    const sched = await staffPlan.createSchedule("S", "test");
+    await staffPlan.replaceShifts(sched.id, [{ staff_id: nafi.id, weekday: 0, start_min: 555, end_min: 1175 }]);
+    const send = await post(`/admin/staff/${sched.id}/send/${nafi.id}`, {});
+    expect(send.headers.location).toContain("done=sent");
+
+    // Edit the number, then clear it.
+    await post(`/admin/staff/contact/${nafi.id}/phone`, { phone: "781112233" });
+    expect((await staffPlan.listPlanningStaff()).find((s) => s.id === nafi.id)!.phone).toBe("221781112233");
+    await post(`/admin/staff/contact/${nafi.id}/phone`, { phone: "" });
+    expect((await staffPlan.listPlanningStaff()).find((s) => s.id === nafi.id)!.phone).toBe("");
+
+    // Remove — cascades her shifts.
+    const del = await post(`/admin/staff/contact/${nafi.id}/delete`, {});
+    expect(del.headers.location).toContain("done=contact-removed");
+    expect((await staffPlan.listPlanningStaff()).some((s) => s.id === nafi.id)).toBe(false);
+    expect(Number((await pool.query(`select count(*) from staff_shifts where staff_id=$1`, [nafi.id])).rows[0].count)).toBe(0);
+  });
+
+  it("rejects an invalid phone on add", async () => {
+    const add = await post("/admin/staff/contact", { name: "X", role: "accueil", phone: "12" });
+    expect(add.headers.location).toContain("err=");
+    expect((await staffPlan.listPlanningStaff()).some((s) => s.name === "X")).toBe(false);
+  });
+});

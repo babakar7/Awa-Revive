@@ -33,6 +33,10 @@ const BANNERS: Record<string, string> = {
   renamed: "Planning renommé.",
   published: "Planning publié — c'est le planning de référence.",
   deleted: "Planning supprimé.",
+  "phone-saved": "Numéro enregistré.",
+  "phone-cleared": "Numéro retiré.",
+  "contact-added": "Employée ajoutée.",
+  "contact-removed": "Employée retirée de l'équipe.",
 };
 
 export function staffBanner(done?: string, err?: string): string {
@@ -126,7 +130,39 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   <tbody id="gridbody"></tbody>
   <tfoot><tr id="gridfoot" style="font-size:.78rem;color:#6e7781"></tr></tfoot></table>
 </div>
-<p class="muted">Les contacts au rôle <b>accueil</b>, <b>bar</b> ou <b>entretien</b> du <a href="/admin/notifications#contacts">répertoire</a> apparaissent ici.</p>
+<h2 style="margin:1.2rem 0 .4rem">L'équipe 👥</h2>
+<div class="card" style="overflow-x:auto">
+  <p class="muted" style="margin:.1rem 0 .7rem">Gère ici tes employées et leurs numéros WhatsApp, puis envoie à chacune SON planning (« ${esc(current.name)} »). L'ajout/retrait d'une employée s'applique à tous les scénarios.</p>
+  <table style="min-width:560px"><thead><tr><th>Employée</th><th>Numéro WhatsApp</th><th class="right">Envoi</th><th></th></tr></thead><tbody>
+  ${
+    staff.length
+      ? staff
+          .map(
+            (p) => `<tr>
+<td><b>${esc(p.name)}</b> <span class="muted">${esc(p.role)}</span></td>
+<td><form method="post" action="/admin/staff/contact/${esc(p.id)}/phone" style="display:flex;gap:.35rem;align-items:center;margin:0">
+  <input name="phone" value="${esc(p.phone)}" placeholder="77 123 45 67" style="width:11rem">
+  <button class="act act--sm act--ghost" type="submit" title="Enregistrer le numéro">💾</button>
+</form></td>
+<td class="right">${
+              p.phone
+                ? `<form method="post" action="/admin/staff/${esc(current.id)}/send/${esc(p.id)}" style="display:inline;margin:0" onsubmit="return confirm('Envoyer son planning à ${esc(p.name)} ?')"><button class="act act--sm" type="submit">📲 Envoyer</button></form>`
+                : `<span class="muted">ajoute un numéro d'abord</span>`
+            }</td>
+<td class="right"><form method="post" action="/admin/staff/contact/${esc(p.id)}/delete" style="display:inline;margin:0" onsubmit="return confirm('Retirer ${esc(p.name)} de l\\'équipe ? Ses horaires seront supprimés de TOUS les plannings.')"><button class="act act--sm act--ghost" type="submit" title="Retirer">🗑</button></form></td>
+</tr>`,
+          )
+          .join("")
+      : `<tr><td colspan="4" class="muted">Aucune employée. Ajoute-la ci-dessous.</td></tr>`
+  }
+  </tbody></table>
+  <form method="post" action="/admin/staff/contact" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;margin-top:.8rem;border-top:1px solid #eee;padding-top:.8rem">
+    <label style="flex:1;min-width:140px">Nouvelle employée<input name="name" required placeholder="Prénom" style="width:100%"></label>
+    <label>Rôle<select name="role"><option value="accueil">accueil</option><option value="bar">bar</option><option value="entretien">entretien</option></select></label>
+    <label style="min-width:150px">Numéro <span class="muted">(optionnel)</span><input name="phone" placeholder="77 123 45 67" style="width:100%"></label>
+    <button class="act" type="submit">➕ Ajouter</button>
+  </form>
+</div>
 
 <form method="post" action="/admin/staff/${esc(current.id)}/grid" id="gridform" style="display:none"><input type="hidden" name="grid" id="gridinput"></form>
 
@@ -167,10 +203,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
     ST.staff.forEach(function(p){
       var tr = document.createElement("tr");
       var tot = 0;
-      var tds = "<td><b>"+esc(p.name)+"</b> <span class='muted'>"+esc(p.role)+"</span>"+
-        (p.hasPhone
-          ? " <form method='post' action='/admin/staff/${esc(current.id)}/send/"+p.id+"' style='display:inline' onsubmit='return confirm(\\"Envoyer son planning à "+esc(p.name)+" ?\\")'><button class='act' style='padding:.15rem .45rem;font-size:.72rem'>📲</button></form>"
-          : " <span class='muted' title='numéro manquant — répertoire'>📵</span>")+"</td>";
+      var tds = "<td><b>"+esc(p.name)+"</b> <span class='muted'>"+esc(p.role)+"</span></td>";
       for(var wd=0; wd<7; wd++){
         var c = ST.cells[p.id+":"+wd];
         if(c){ tot += worked(c.s,c.e); }
