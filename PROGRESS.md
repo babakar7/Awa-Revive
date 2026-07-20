@@ -2187,10 +2187,21 @@ stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
 - [x] Relais humain sûr : pause Awa explicite, reprise manuelle ou automatique
   après 12 h, fenêtre WhatsApp 24 h, envoi idempotent et échecs visibles.
 - [x] Rapport 1/7/30 jours, drill-down des stats et journal propriétaire des
-  mutations. Le compositeur reste protégé par
-  `ADMIN_HUMAN_REPLY_ENABLED=false` jusqu'à la recette Meta en production.
+  mutations.
+- [x] Réponses humaines WhatsApp activées en production le 20/07 :
+  `ADMIN_HUMAN_REPLY_ENABLED=true` sur Railway. L'équipe doit d'abord prendre
+  le relais (Awa est alors suspendue 12 h) ; le texte libre est limité à la
+  fenêtre Meta de 24 h et les envois sont idempotents. Hors fenêtre, un template
+  approuvé reste nécessaire via `WA_ADMIN_FOLLOWUP_TEMPLATE`.
+- [x] Mode local sur données réelles ajouté : `npm run dev:prod-db:check` teste
+  la connexion et `npm run dev:prod-db` lance le hot reload avec l'URL publique
+  PostgreSQL Railway. Seule la base prod est injectée ; les workers périodiques
+  locaux sont désactivés pour éviter les doubles expirations/notifications.
+- [x] Déployé via le commit `3072ca8` ; Railway `SUCCESS`, `/healthz` et
+  `/admin/login` en HTTP 200. Validation avant push : build TypeScript, 461
+  tests unitaires et 85 tests d'intégration réussis.
 
-### 6.6 Réservations Awa — nom CRM + commande Wix (20/07/2026)
+### 6.6 Réservations Awa — nom CRM + commande Wix (20/07/2026 — déployé, suivi Wix en cours)
 
 - [x] Le nom canonique de la fiche contact Wix est maintenant prioritaire lors
   de la réservation : un nom WhatsApp/modèle réduit à `L` ne remplace plus
@@ -2223,10 +2234,32 @@ stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
   `BOOKED` et confirmée ; seule la fiche eCommerce/paiement manque et le worker
   la réessaie automatiquement, une commande à la fois.
 - [ ] Contrôle manuel restant : vérifier Habott Lina dans l'admin et dans Wix
-  lorsque le quota Orders est libéré. Sa réservation déjà créée avec `L` peut
-  conserver ce libellé historique (l'API Writer V2 ne propose pas de mise à
-  jour générale de `contactDetails`) ; les nouvelles réservations prennent le
-  nom canonique de la fiche contact Wix.
+  lorsque le quota Orders est libéré. Sa réservation déjà créée avec `L`
+  affiche encore ce libellé historique mais EST réparable (cf. 6.6bis) ; les
+  nouvelles réservations prennent le nom canonique de la fiche contact Wix.
+
+### 6.6bis Cas d'étude « A » (Amy Ndiaye) — réparation d'un booking sans fiche contact (21/07/2026)
+
+- **Le cas** : première cliente (tél. +221777406410), profil WhatsApp « A »,
+  paie sa 1ʳᵉ séance AVANT d'avoir donné son nom (20/07 22:28 UTC). Aucune
+  fiche contact Wix n'existait à ce moment → le garde-fou « nom CRM d'abord »
+  (6.6) n'avait rien à quoi se raccrocher → booking Wix créé
+  `{firstName:"A"}` sans `contactId`. Deux minutes plus tard elle donne
+  « Amy Ndiaye » + email, la fiche Wix est créée : ses réservations 2 et 3
+  sont correctes, la 1ʳᵉ restait orpheline sous « A ».
+- **Découverte API** : `PATCH https://www.wixapis.com/bookings/v2/bookings/{id}`
+  fonctionne (NON documenté — absent du Writer V2 public) avec
+  `{booking:{revision:"<rev courante>", contactDetails:{contactId, firstName,
+  lastName, phone}}}` → 200, revision incrémentée, statut/paiement/participants
+  intacts, booking rattaché à la fiche. Vérifié live le 21/07 ~23:02 UTC :
+  les 3 réservations d'Amy sont désormais « Amy Ndiaye » avec `contactId`.
+  La `revision` se lit via `POST /_api/bookings-reader/v2/extended-bookings/query`
+  (le GET `/bookings/v2/bookings/{id}` n'existe pas → 404).
+- **Reste à faire (backfill auto)** : quand un compte est lié/créé
+  (`submit_verification_code` → fiche contact), rechercher les bookings
+  récents du même téléphone créés sans `contactId` et les rattacher via ce
+  PATCH. Idem pour réparer le « L » historique de Habott Lina. Étant
+  non documenté, prévoir un fallback silencieux si Wix retire l'endpoint.
 
 ### 6.7 Sprint conversion réservations — instrumentation et quick wins (20/07/2026)
 
@@ -2300,6 +2333,46 @@ stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
 - [x] Tests : `test/clientWorkspaceThread.test.ts` (signature pure + rendu) et
   `test/integration/adminThreadPoll.test.ts` (401 poller JSON, 404, no-op sur
   sig inchangée, nouveau message, flip pending→sent, script présent sur la page).
+
+### 6.9 Revue conversation Amy Ndiaye → 8 correctifs UX (20-21/07/2026)
+
+Revue de la conversation réelle d'Amy Ndiaye (20/07 22:22-22:38 : 3 séances
+Bébé Nageur payées Wave pour sa fille de 3 ans, mais 5 demandées — plan resté
+incomplet en silence). Correctifs livrés :
+
+- **Cap 24h sur l'offre bar post-paiement** : colonne `clients.cafe_offer_at`
+  + claim atomique `repo.claimCafeOffer` dans `sendCafeMenuOffer` (les DEUX
+  flux, Wave + abonnement). Amy avait reçu 3 fois la même liste en 12 min.
+- **Prompt — requêtes multi-séances** (nouvelle section systemPrompt) :
+  « N séances » = N dates différentes à 1 participant (jamais N places/N
+  personnes) ; `list_plans` d'abord (un carnet ≈ N séances = 1 paiement) ;
+  liste de dates convenue et récapitulée, liens numérotés « séance 2/5 » ;
+  après chaque ✅ paiement, la réponse suivante enchaîne sur le lien de la
+  date suivante sans re-demander ; interdiction de promettre un envoi
+  automatique post-paiement ; jamais clore un plan incomplet en silence
+  (Awa avait promis « je cherche plus loin pour les 3 autres » puis plus rien).
+- **Prompt — registre tu/vous** : miroir du client réévalué à chaque message
+  (Amy vouvoyait, Awa tutoyait tout du long).
+- **Prompt — âge (règle 0b)** + business-info : vérifier l'âge annoncé contre
+  les tranches (Bébé Nageur 6 mois-3 ans, Natation Enfant 4+) avant de
+  proposer des créneaux ; à la borne haute, confirmer et mentionner le cours
+  suivant. Awa n'avait pas réagi à « ma fille de 3 ans ».
+- **classTips — tip Bébé Nageur dédié** (fr/en/wo) : couche de piscine
+  jetable obligatoire (en vente au studio) + maillot pour le parent — le tip
+  générique « maillot ou lycra » avait déclenché la question couches 2 min
+  après la confirmation. Match bébé+aquatique (jamais un cours bébé hors eau).
+- **Outils — descriptions durcies** : `event_id` → préférer le `choice_id`
+  court (Amy : 2 erreurs `unknown_slot` sur event_id tronqué par le modèle,
+  rattrapées mais +10 s de latence) ; `client_name` → jamais d'initiale ou
+  placeholder (un lien était parti avec « A »).
+- **Marque** : « Revive Pilates » → « Revive » dans STUDIO_ADDRESS (var
+  Railway + défaut config.ts + business-info) — chaque confirmation violait
+  la règle de marque.
+- **Divers** : repli média illisible neutre (« je continue à t'aider » au
+  lieu de « ce que tu veux réserver »).
+- La question couches (handoff 22:36) avait déjà son fix : prix 1 500 F
+  ajouté à business-info (`a34e84e`, autre agent, 22:43 le soir même).
+- Build + 491 tests unitaires + 96 intégration verts.
 
 ## 7. Runbook ops
 
