@@ -199,18 +199,33 @@ export async function sendReceptionWhatsApp(
  * Goes to NEW_CHAT_NOTIFY_PHONE (empty = feature off). Never awaited by the
  * caller and never throws — a notification hiccup must not affect the client.
  */
-export function notifyNewConversation(args: {
+export interface NewConversationNotificationArgs {
+  clientId: string;
   displayName: string;
   waPhone: string;
   preview: string;
-}): void {
-  if (config.NEW_CHAT_NOTIFY_PHONE === "") return;
+}
+
+/** Build the owner alert separately so its direct admin link stays testable. */
+export function formatNewConversationNotification(
+  args: NewConversationNotificationArgs,
+  baseUrl = config.BASE_URL,
+): { subject: string; body: string } {
   const cleanPhone = args.waPhone.replace(/^\+/, "");
   const subject = "Nouvelle conversation";
+  const conversationUrl =
+    `${baseUrl.replace(/\/+$/, "")}/admin/conversations/${encodeURIComponent(args.clientId)}`;
   const body =
     `${args.displayName} (+${cleanPhone}) vient de démarrer une conversation avec Awa.\n` +
     `Premier message : « ${args.preview} »\n` +
-    `Ouvrir : https://wa.me/${cleanPhone}`;
+    `Ouvrir la conversation : ${conversationUrl}`;
+  return { subject, body };
+}
+
+export function notifyNewConversation(args: NewConversationNotificationArgs): void {
+  if (config.NEW_CHAT_NOTIFY_PHONE === "") return;
+  const cleanPhone = args.waPhone.replace(/^\+/, "");
+  const { subject, body } = formatNewConversationNotification(args);
   // The notify number (Babakar) almost never messages Awa → its 24h window is
   // ~always closed, and free-text out-of-window can be accepted (200) then
   // dropped asynchronously — a silent miss. Template-first, like the other staff

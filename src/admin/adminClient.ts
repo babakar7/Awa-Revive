@@ -45,6 +45,30 @@ export const ADMIN_CLIENT_JS = `
   if(sidebar)sidebar.querySelectorAll('a[href]').forEach(function(a){a.addEventListener('click',function(){if(!desktop())setMobile(false);});});
   window.addEventListener('resize',syncNav);syncNav();
 
+  document.querySelectorAll('[data-studio-activity]').forEach(function(activity){
+    var periodLabels={today:'Aujourd’hui',week:'7 derniers jours',month:'30 derniers jours'};
+    var periodCopies={today:'Résultats d’aujourd’hui',week:'Résultats des 7 derniers jours',month:'Résultats des 30 derniers jours'};
+    var buttons=Array.from(activity.querySelectorAll('[data-activity-period]'));
+    var copy=activity.querySelector('[data-activity-period-copy]');
+    function selectPeriod(period){
+      buttons.forEach(function(button){
+        var selected=button.getAttribute('data-activity-period')===period;
+        button.classList.toggle('active',selected);
+        button.setAttribute('aria-pressed',selected?'true':'false');
+      });
+      activity.querySelectorAll('[data-stat-value]').forEach(function(value){
+        value.textContent=value.getAttribute('data-'+period)||'—';
+      });
+      activity.querySelectorAll('[data-stat-caption]').forEach(function(caption){
+        caption.textContent=periodLabels[period]||'';
+      });
+      if(copy)copy.textContent=periodCopies[period]||'';
+    }
+    buttons.forEach(function(button){
+      button.addEventListener('click',function(){selectPeriod(button.getAttribute('data-activity-period')||'week');});
+    });
+  });
+
   document.addEventListener('keydown',function(e){
     if(e.key==='Escape'&&body.classList.contains('mobile-nav-open')){e.preventDefault();setMobile(false);return;}
     if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'&&search){e.preventDefault();search.focus();search.select();return;}

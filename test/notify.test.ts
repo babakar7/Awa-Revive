@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { stripStaffFooter, toTemplateParam } from "../src/lib/notify.js";
+import {
+  formatNewConversationNotification,
+  stripStaffFooter,
+  toTemplateParam,
+} from "../src/lib/notify.js";
 import { STAFF_FOOTER } from "../src/domain/notificationRules.js";
 
 describe("stripStaffFooter", () => {
@@ -33,5 +37,25 @@ describe("toTemplateParam", () => {
 
   it("leaves short single-line text untouched", () => {
     expect(toTemplateParam("Remboursement à traiter")).toBe("Remboursement à traiter");
+  });
+});
+
+describe("formatNewConversationNotification", () => {
+  it("links directly to the matching admin conversation", () => {
+    const notification = formatNewConversationNotification(
+      {
+        clientId: "client/avec espace",
+        displayName: "L",
+        waPhone: "+221778754197",
+        preview: "Bonjour je veux réserver pour aujourd’hui à 18h15",
+      },
+      "https://awa.revive.sn/",
+    );
+
+    expect(notification.subject).toBe("Nouvelle conversation");
+    expect(notification.body).toContain(
+      "Ouvrir la conversation : https://awa.revive.sn/admin/conversations/client%2Favec%20espace",
+    );
+    expect(notification.body).not.toContain("https://wa.me/");
   });
 });

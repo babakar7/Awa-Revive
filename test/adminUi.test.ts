@@ -80,12 +80,16 @@ describe("admin operational homepage", () => {
       stats: {
         msgToday: 3,
         msg7d: 20,
+        msg30d: 92,
         activeClientsToday: 2,
         activeClients7d: 12,
+        activeClients30d: 44,
         bookingsToday: 4,
         bookings7d: 18,
+        bookings30d: 71,
         revenueToday: 30_000,
         revenue7d: 210_000,
+        revenue30d: 880_000,
         refundsPending: 1,
         handoffsOpen: 0,
       },
@@ -94,6 +98,12 @@ describe("admin operational homepage", () => {
     });
 
     expect(html).toContain("Priorités du jour");
+    expect(html.indexOf("Activité du studio")).toBeLessThan(html.indexOf("Paiements à finaliser"));
+    expect(html).toContain('data-activity-period="week" aria-pressed="true"');
+    expect(html).toContain('data-week="20"');
+    expect(html).toContain('data-month="92"');
+    expect(html).toContain("Résultats des 7 derniers jours");
+    expect(html.match(/activity-stat-icon/g)).toHaveLength(4);
     expect(html).toContain("Paiements à finaliser");
     expect(html).toContain("Remboursement effectué");
     expect(html).toContain('data-confirm="Confirmer que le remboursement');
@@ -112,12 +122,16 @@ describe("admin operational homepage", () => {
       stats: {
         msgToday: 0,
         msg7d: 0,
+        msg30d: 0,
         activeClientsToday: 0,
         activeClients7d: 0,
+        activeClients30d: 0,
         bookingsToday: 0,
         bookings7d: 0,
+        bookings30d: 0,
         revenueToday: 0,
         revenue7d: 0,
+        revenue30d: 0,
         refundsPending: 0,
         handoffsOpen: 0,
       },

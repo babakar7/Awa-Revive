@@ -162,6 +162,7 @@ async function maybeNotifyConversationStart(
     const last = await repo.lastConversationActivityAt(client.id);
     if (!isConversationStart(last, Date.now(), config.NEW_CHAT_NOTIFY_GAP_HOURS)) return;
     notifyNewConversation({
+      clientId: client.id,
       displayName: client.name ?? profileName ?? "Client",
       waPhone: client.wa_phone,
       preview: preview.replace(/\s+/g, " ").trim().slice(0, 160),

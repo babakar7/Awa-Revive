@@ -168,12 +168,16 @@ export async function pendingActions(): Promise<{
 export interface AdminStats {
   msgToday: number;
   msg7d: number;
+  msg30d: number;
   activeClientsToday: number;
   activeClients7d: number;
+  activeClients30d: number;
   bookingsToday: number;
   bookings7d: number;
+  bookings30d: number;
   revenueToday: number;
   revenue7d: number;
+  revenue30d: number;
   refundsPending: number;
   handoffsOpen: number;
 }
@@ -184,10 +188,13 @@ export async function stats(): Promise<AdminStats> {
     select
       (select count(*) from conversations where role = 'user' and created_at >= current_date)::int as msg_today,
       (select count(*) from conversations where role = 'user' and created_at > now() - interval '7 days')::int as msg_7d,
+      (select count(*) from conversations where role = 'user' and created_at > now() - interval '30 days')::int as msg_30d,
       (select count(distinct client_id) from conversations where role = 'user' and created_at >= current_date)::int as clients_today,
       (select count(distinct client_id) from conversations where role = 'user' and created_at > now() - interval '7 days')::int as clients_7d,
+      (select count(distinct client_id) from conversations where role = 'user' and created_at > now() - interval '30 days')::int as clients_30d,
       (select count(*) from pending_bookings where status = 'BOOKED' and updated_at >= current_date)::int as bookings_today,
       (select count(*) from pending_bookings where status = 'BOOKED' and updated_at > now() - interval '7 days')::int as bookings_7d,
+      (select count(*) from pending_bookings where status = 'BOOKED' and updated_at > now() - interval '30 days')::int as bookings_30d,
       (coalesce((select sum(amount_xof) from pending_bookings
          where status = 'BOOKED' and payment_method <> 'membership' and updated_at >= current_date), 0)
        + coalesce((select sum(amount_xof) from pending_plan_orders
@@ -200,6 +207,12 @@ export async function stats(): Promise<AdminStats> {
          where status in ('PAID','ACTIVATED') and updated_at > now() - interval '7 days'), 0)
        + coalesce((select sum(amount_xof) from pending_cafe_orders
          where status = 'PAID' and updated_at > now() - interval '7 days'), 0))::int as revenue_7d,
+      (coalesce((select sum(amount_xof) from pending_bookings
+         where status = 'BOOKED' and payment_method <> 'membership' and updated_at > now() - interval '30 days'), 0)
+       + coalesce((select sum(amount_xof) from pending_plan_orders
+         where status in ('PAID','ACTIVATED') and updated_at > now() - interval '30 days'), 0)
+       + coalesce((select sum(amount_xof) from pending_cafe_orders
+         where status = 'PAID' and updated_at > now() - interval '30 days'), 0))::int as revenue_30d,
       (select count(*) from pending_bookings where status = 'REFUND_NEEDED')::int as refunds_pending,
       (select count(*) from handoffs where status = 'OPEN')::int as handoffs_open
   `);
@@ -207,12 +220,16 @@ export async function stats(): Promise<AdminStats> {
   return {
     msgToday: r.msg_today,
     msg7d: r.msg_7d,
+    msg30d: r.msg_30d,
     activeClientsToday: r.clients_today,
     activeClients7d: r.clients_7d,
+    activeClients30d: r.clients_30d,
     bookingsToday: r.bookings_today,
     bookings7d: r.bookings_7d,
+    bookings30d: r.bookings_30d,
     revenueToday: r.revenue_today,
     revenue7d: r.revenue_7d,
+    revenue30d: r.revenue_30d,
     refundsPending: r.refunds_pending,
     handoffsOpen: r.handoffs_open,
   };

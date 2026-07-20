@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import type { AdminStats } from "./queries.js";
 import type { NavBadges } from "./navBadges.js";
 import { ago, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
+import { uiIcon } from "./layout.js";
 
 export interface InboxData {
   refunds: any[];
@@ -17,6 +18,22 @@ export interface InboxData {
 
 function clearState(title: string, detail: string): string {
   return `<div class="empty"><span class="empty-icon" aria-hidden="true">✓</span><b>${escapeHtml(title)}</b><p>${escapeHtml(detail)}</p></div>`;
+}
+
+function activityStat(
+  label: string,
+  icon: ReturnType<typeof uiIcon>,
+  values: { today: number; week: number; month: number },
+  format: (value: number) => string = String,
+): string {
+  const today = format(values.today);
+  const week = format(values.week);
+  const month = format(values.month);
+  return `<article class="stat activity-stat">
+  <div class="activity-stat-label"><span class="activity-stat-icon">${icon}</span><span>${escapeHtml(label)}</span></div>
+  <b data-stat-value data-today="${escapeHtml(today)}" data-week="${escapeHtml(week)}" data-month="${escapeHtml(month)}" aria-live="polite">${escapeHtml(week)}</b>
+  <span data-stat-caption>7 derniers jours</span>
+</article>`;
 }
 
 /** Home « À faire » — one prioritized operational queue. */
@@ -88,12 +105,47 @@ export function renderInbox(d: InboxData): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+  const activityStats = [
+    activityStat("Messages reçus", uiIcon("chat"), {
+      today: s.msgToday,
+      week: s.msg7d,
+      month: s.msg30d,
+    }),
+    activityStat("Clients actifs", uiIcon("team"), {
+      today: s.activeClientsToday,
+      week: s.activeClients7d,
+      month: s.activeClients30d,
+    }),
+    activityStat("Réservations", uiIcon("booking"), {
+      today: s.bookingsToday,
+      week: s.bookings7d,
+      month: s.bookings30d,
+    }),
+    activityStat(
+      "Encaissé",
+      uiIcon("wallet"),
+      { today: s.revenueToday, week: s.revenue7d, month: s.revenue30d },
+      fmtFcfa,
+    ),
+  ].join("");
 
   return `
 <header class="page-header">
   <div class="page-header-copy"><span class="eyebrow">Centre d’opérations</span><h2>Priorités du jour</h2><p>${total ? `<b>${total}</b> action(s) attendent l’équipe.` : "Tout est à jour."} Connecté : ${escapeHtml(d.adminUser)} · ${escapeHtml(now)}</p></div>
   <div class="page-header-actions"><a class="act act--ghost" href="/admin/conversations">Rechercher un client</a></div>
 </header>
+
+<section class="studio-activity" data-studio-activity aria-labelledby="studio-activity-title">
+  <div class="section-header activity-section-header">
+    <div><span class="eyebrow">Vue d’ensemble</span><h2 id="studio-activity-title">Activité du studio</h2><p class="activity-period-copy" data-activity-period-copy aria-live="polite">Résultats des 7 derniers jours</p></div>
+    <div class="period-toggle" role="group" aria-label="Période des statistiques">
+      <button type="button" data-activity-period="today" aria-pressed="false">Aujourd’hui</button>
+      <button type="button" class="active" data-activity-period="week" aria-pressed="true">7 jours</button>
+      <button type="button" data-activity-period="month" aria-pressed="false">30 jours</button>
+    </div>
+  </div>
+  <div class="stat-grid activity-stat-grid">${activityStats}</div>
+</section>
 
 ${
   total === 0
@@ -115,13 +167,5 @@ ${
     ${L.late + L.kitchenFailed + L.clientFailed ? `<article class="task-item"><span class="task-priority danger" aria-hidden="true"></span><div class="task-copy"><b>Livraisons à surveiller</b><p>${[L.late ? `${L.late} en retard` : "", L.kitchenFailed ? `${L.kitchenFailed} cuisine non notifiée` : "", L.clientFailed ? `${L.clientFailed} client non prévenu` : ""].filter(Boolean).join(" · ")}</p><div class="task-meta"><span class="muted">${L.open} commande(s) ouverte(s)</span></div></div><div class="task-action"><a class="act act--ghost act--sm" href="/admin/livraisons">Voir les livraisons</a></div></article>` : ""}
   </div>
   ${!followUpCount ? clearState("Clients à jour", "Aucun handoff, reprise, problème CRM ou livraison en alerte.") : ""}
-</div>
-
-<div class="section-header"><div><span class="eyebrow">Aujourd’hui</span><h2>Activité du studio</h2></div></div>
-<div class="stat-grid">
-  <div class="stat"><span>Messages reçus</span><b>${s.msgToday}</b><span>${s.msg7d} sur 7 jours</span></div>
-  <div class="stat"><span>Clients actifs</span><b>${s.activeClientsToday}</b><span>${s.activeClients7d} sur 7 jours</span></div>
-  <div class="stat"><span>Réservations</span><b>${s.bookingsToday}</b><span>${s.bookings7d} sur 7 jours</span></div>
-  <div class="stat"><span>Encaissé</span><b>${fmtFcfa(s.revenueToday)}</b><span>${fmtFcfa(s.revenue7d)} sur 7 jours</span></div>
 </div>`;
 }
