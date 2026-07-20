@@ -425,7 +425,9 @@ export async function releaseWixOrderSync(bookingId: string, error: string): Pro
 export async function bookingsMissingWixPaymentRecord(
   graceMinutes = 3,
   maxAgeHours = 48,
-  limit = 20,
+  // Wix throttles Create Order aggressively. Process one recovery per sweep so
+  // several missing orders cannot consume the same rate-limit window.
+  limit = 1,
 ): Promise<PendingBooking[]> {
   const res = await pool.query(
     `select * from pending_bookings
