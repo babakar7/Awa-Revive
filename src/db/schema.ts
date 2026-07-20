@@ -635,6 +635,114 @@ create table if not exists staff_shifts (
 );
 create index if not exists idx_staff_shifts_schedule on staff_shifts (schedule_id);
 
+-- ═══ États mensuels de paiement des coachs Reformer ═══
+-- Les profils portent le tarif courant. Chaque état en prend une copie
+-- complète : une modification ultérieure du profil ou de Wix ne change jamais
+-- un PDF validé. is_current matérialise l'unique version active du couple
+-- coach/mois ; les versions précédentes restent consultables.
+create table if not exists coach_payment_profiles (
+  id uuid primary key default gen_random_uuid(),
+  slug text unique not null,
+  display_name text not null,
+  wix_resource_id text,
+  email text,
+  formula_type text not null check (formula_type in ('monthly_ratio','per_session')),
+  base_amount_xof integer check (base_amount_xof is null or base_amount_xof >= 0),
+  base_session_count integer check (base_session_count is null or base_session_count > 0),
+  per_session_xof integer check (per_session_xof is null or per_session_xof >= 0),
+  enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists coach_payment_statements (
+  id uuid primary key default gen_random_uuid(),
+  coach_profile_id uuid not null references coach_payment_profiles(id),
+  month date not null check (month = date_trunc('month', month)::date),
+  version integer not null check (version > 0),
+  revises_statement_id uuid references coach_payment_statements(id),
+  is_current boolean not null default true,
+  status text not null default 'draft' check (status in ('draft','validated','paid')),
+  coach_name_snapshot text not null,
+  coach_email_snapshot text,
+  wix_resource_id_snapshot text,
+  tariff_json jsonb not null,
+  sync_status text not null default 'pending' check (sync_status in ('pending','ok','failed','unlinked')),
+  sync_error text,
+  synced_at timestamptz,
+  course_count integer not null default 0 check (course_count >= 0),
+  base_total_xof integer not null default 0 check (base_total_xof >= 0),
+  adjustment_total_xof integer not null default 0,
+  total_xof integer not null default 0,
+  validated_at timestamptz,
+  validated_by text,
+  paid_at timestamptz,
+  paid_by text,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (coach_profile_id, month, version)
+);
+create unique index if not exists idx_coach_payment_one_current
+  on coach_payment_statements (coach_profile_id, month) where is_current;
+create index if not exists idx_coach_payment_statements_month
+  on coach_payment_statements (month desc, coach_profile_id, version desc);
+
+create table if not exists coach_payment_courses (
+  id uuid primary key default gen_random_uuid(),
+  statement_id uuid not null references coach_payment_statements(id) on delete cascade,
+  source text not null check (source in ('wix','manual')),
+  wix_event_id text,
+  service_id text,
+  service_name text not null,
+  starts_at timestamptz not null,
+  ends_at timestamptz,
+  coach_resource_id text,
+  coach_name text,
+  included boolean not null default true,
+  manual_reason text,
+  raw_snapshot jsonb,
+  created_at timestamptz not null default now(),
+  check (source <> 'manual' or (manual_reason is not null and length(trim(manual_reason)) > 0))
+);
+create unique index if not exists idx_coach_payment_wix_event
+  on coach_payment_courses (statement_id, wix_event_id)
+  where source = 'wix' and wix_event_id is not null;
+create index if not exists idx_coach_payment_courses_statement
+  on coach_payment_courses (statement_id, starts_at);
+
+create table if not exists coach_payment_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  statement_id uuid not null references coach_payment_statements(id) on delete cascade,
+  kind text not null check (kind in ('bonus','deduction')),
+  amount_xof integer not null check (amount_xof > 0),
+  reason text not null check (length(trim(reason)) > 0),
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_coach_payment_adjustments_statement
+  on coach_payment_adjustments (statement_id, created_at);
+
+create table if not exists coach_payment_send_log (
+  id bigserial primary key,
+  statement_id uuid not null references coach_payment_statements(id),
+  recipient_email text not null,
+  status text not null check (status in ('success','error')),
+  error text,
+  sent_by text,
+  attempted_at timestamptz not null default now()
+);
+create index if not exists idx_coach_payment_send_log_statement
+  on coach_payment_send_log (statement_id, attempted_at desc);
+
+-- Les deux rémunérations initiales demandées. ON CONFLICT préserve toute
+-- modification faite ensuite dans l'écran Réglages.
+insert into coach_payment_profiles
+  (slug, display_name, formula_type, base_amount_xof, base_session_count, per_session_xof)
+values
+  ('yass', 'Yass', 'monthly_ratio', 800000, 84, null),
+  ('leslie', 'Leslie', 'per_session', null, null, 9000)
+on conflict (slug) do nothing;
+
 -- Seed one-shot du planning actuel (feuille Word de Babakar, 07/2026). Sentinelle
 -- app_state : ne tourne qu'UNE fois, ne ressuscite jamais des données supprimées.
 -- phone='' volontaire (numéros à saisir dans /admin/notifications#contacts ;

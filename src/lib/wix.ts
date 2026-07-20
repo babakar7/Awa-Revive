@@ -43,6 +43,81 @@ async function wixPost(path: string, body: unknown): Promise<any> {
   return res.json();
 }
 
+// ---------- Calendar Events V3 (historical coach compensation) ----------
+
+export interface WixCalendarEvent {
+  id: string;
+  serviceId: string | null;
+  serviceName: string;
+  title: string;
+  type: string;
+  status: string;
+  startDate: string;
+  endDate: string;
+  resources: Array<{ id: string; name: string; type: string | null }>;
+  raw: unknown;
+}
+
+/**
+ * Query concrete calendar occurrences over local Dakar bounds. Calendar V3 is
+ * used intentionally: the retired Availability endpoint is unsuitable for
+ * historical payroll and may omit completed/full sessions. Cursor pagination
+ * is mandatory because Wix defaults to only 50 events.
+ */
+export async function queryCalendarEventsV3(
+  fromLocalDate: string,
+  toLocalDate: string,
+): Promise<WixCalendarEvent[]> {
+  const out: WixCalendarEvent[] = [];
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+  for (;;) {
+    const data = await wixPost("/calendar/v3/events/query", {
+      fromLocalDate,
+      toLocalDate,
+      timeZone: config.TIMEZONE,
+      recurrenceType: ["NONE", "INSTANCE", "EXCEPTION"],
+      query: {
+        filter: {
+          appId: "13d21c63-b5ec-5912-8397-c3a5ddb27a97",
+          type: { $in: ["CLASS", "COURSE", "APPOINTMENT"] },
+        },
+        cursorPaging: { limit: 100, ...(cursor ? { cursor } : {}) },
+      },
+    });
+    for (const event of Array.isArray(data?.events) ? data.events : []) {
+      const startDate =
+        event?.adjustedStart?.localDate ?? event?.start?.utcDate ?? event?.start?.localDate;
+      const endDate = event?.adjustedEnd?.localDate ?? event?.end?.utcDate ?? event?.end?.localDate;
+      if (!event?.id || !startDate || !endDate) continue;
+      out.push({
+        id: String(event.id),
+        serviceId:
+          typeof event.externalScheduleId === "string" ? event.externalScheduleId : null,
+        serviceName: String(event.scheduleName ?? event.title ?? ""),
+        title: String(event.title ?? event.scheduleName ?? "Cours"),
+        type: String(event.type ?? "").toUpperCase(),
+        status: String(event.status ?? "").toUpperCase(),
+        startDate: String(startDate),
+        endDate: String(endDate),
+        resources: (Array.isArray(event.resources) ? event.resources : [])
+          .filter((r: any) => r?.id)
+          .map((r: any) => ({
+            id: String(r.id),
+            name: String(r.name ?? ""),
+            type: typeof r.type === "string" ? r.type : null,
+          })),
+        raw: event,
+      });
+    }
+    const next = data?.pagingMetadata?.cursors?.next;
+    if (typeof next !== "string" || !next || seenCursors.has(next)) break;
+    seenCursors.add(next);
+    cursor = next;
+  }
+  return out;
+}
+
 async function wixPatch(path: string, body: unknown): Promise<any> {
   const res = await fetch(`${WIX_API}${path}`, {
     method: "PATCH",

@@ -43,6 +43,7 @@ const NAV: NavSection[] = [
     links: [
       { href: "/admin/bookings", label: "Réservations" },
       { href: "/admin/staff", label: "Équipe 🗓" },
+      { href: "/admin/paiements-coachs", label: "Paiements coachs 🔒" },
       { href: "/admin/devis", label: "Devis 📄" },
     ],
   },

@@ -32,8 +32,19 @@ export function emailNotificationsEnabled(): boolean {
   return config.BREVO_API_KEY !== "";
 }
 
+export interface EmailAttachment {
+  name: string;
+  content: Buffer | string;
+}
+
 /** Send one email to any recipient via the Brevo HTTP API. Throws on failure. */
-export async function sendEmail(toEmail: string, subject: string, body: string): Promise<void> {
+export async function sendEmail(
+  toEmail: string,
+  subject: string,
+  body: string,
+  attachments: EmailAttachment[] = [],
+): Promise<void> {
+  if (!emailNotificationsEnabled()) throw new Error("BREVO_API_KEY non configurée");
   const res = await fetch(BREVO_ENDPOINT, {
     method: "POST",
     headers: {
@@ -46,6 +57,16 @@ export async function sendEmail(toEmail: string, subject: string, body: string):
       to: [{ email: toEmail }],
       subject,
       textContent: body,
+      ...(attachments.length > 0
+        ? {
+            attachment: attachments.map((a) => ({
+              name: a.name,
+              content: Buffer.isBuffer(a.content)
+                ? a.content.toString("base64")
+                : Buffer.from(a.content, "utf8").toString("base64"),
+            })),
+          }
+        : {}),
     }),
     // Never let a slow API hang a send for minutes.
     signal: AbortSignal.timeout(15_000),

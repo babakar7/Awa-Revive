@@ -89,6 +89,7 @@ export async function setup(): Promise<void> {
     // which never overrides existing vars) can't switch on the template
     // fallback and make tests environment-dependent.
     BREVO_API_KEY: "test-brevo-key",
+    OWNER_PAYMENTS_PASSWORD: "test-owner-password",
     WA_RECEPTION_TEMPLATE: "",
     RECEPTION_EMAIL: "reception@test.local",
     RECEPTION_PHONE: "+221780000000",

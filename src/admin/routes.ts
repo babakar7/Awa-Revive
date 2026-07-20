@@ -96,6 +96,7 @@ import { renderInbox } from "./inboxPage.js";
 import * as staffPlan from "../domain/staffPlanningRepo.js";
 import { buildEmployeeScheduleMessage, validateGridPayload } from "../domain/staffPlanningRules.js";
 import { renderStaffPlanning, renderStaffPrint, staffBanner } from "./staffPage.js";
+import { registerCoachPaymentRoutes } from "./coachPaymentsRoutes.js";
 
 export { escapeHtml } from "./helpers.js";
 
@@ -213,6 +214,10 @@ export function registerAdmin(app: FastifyInstance): void {
           .header("Set-Cookie", clearSessionCookieHeader())
           .redirect("/admin/login", 303);
       });
+
+      // Owner-only financial section. Its child plugin adds a second signed
+      // cookie guard to every page, action and PDF.
+      registerCoachPaymentRoutes(admin);
 
       // ---------- À tester (checklist de recette) ----------
       admin.get("/tests", async (_req, reply) => {

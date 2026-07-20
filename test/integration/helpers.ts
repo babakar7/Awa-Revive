@@ -32,6 +32,10 @@ export interface WixState {
   createdBookingIds: string[];
   /** Make create-booking answer 500 (Wix outage). */
   failCreateBooking: boolean;
+  /** Calendar Events V3 data used by coach-payment snapshots. */
+  calendarEvents: any[];
+  failCalendar: boolean;
+  staffResources: Array<{ id: string; name: string; email?: string; phone?: string; tags?: string[] }>;
 }
 
 /**
@@ -72,6 +76,7 @@ export interface FetchMock {
   wix: WixState;
   om: OmState;
   calls: RecordedCall[];
+  failEmail: boolean;
   /** Calls to the WhatsApp Cloud API, parsed. */
   waCalls: () => RecordedCall[];
   /** WhatsApp text messages sent to one number. */
@@ -121,7 +126,12 @@ export function makeFetchMock(): FetchMock {
     eventId: "ev_1",
     createdBookingIds: [],
     failCreateBooking: false,
+    calendarEvents: [],
+    failCalendar: false,
+    staffResources: [],
   };
+
+  let failEmail = false;
 
   const om: OmState = defaultOmState();
 
@@ -156,6 +166,7 @@ export function makeFetchMock(): FetchMock {
 
     // --- Brevo (reception email) ---
     if (url.includes("api.brevo.com")) {
+      if (failEmail) return json(500, { message: "brevo exploded" });
       return json(201, { messageId: `brevo-${calls.length}` });
     }
 
@@ -254,6 +265,17 @@ export function makeFetchMock(): FetchMock {
       });
     }
 
+    // --- Wix Calendar Events V3 (historical payroll snapshots) ---
+    if (url.includes("/calendar/v3/events/query")) {
+      if (wix.failCalendar) return json(503, { message: "calendar unavailable" });
+      return json(200, { events: wix.calendarEvents, pagingMetadata: {} });
+    }
+
+    // --- Wix Bookings resources (coach association + email prefill) ---
+    if (url.includes("/bookings/v1/resources/query")) {
+      return json(200, { resources: wix.staffResources });
+    }
+
     // --- Wave checkout session (create payment link) ---
     if (url.includes("api.wave.com") && url.includes("/v1/checkout/sessions") && method === "POST") {
       return json(200, { id: `cos-add-${calls.length}`, wave_launch_url: "https://pay.wave.com/c/test" });
@@ -284,6 +306,8 @@ export function makeFetchMock(): FetchMock {
     wix,
     om,
     calls,
+    get failEmail() { return failEmail; },
+    set failEmail(value: boolean) { failEmail = value; },
     waCalls: () => calls.filter((c) => c.url.includes("graph.facebook.com")),
     waTextsTo: (waId: string) =>
       calls
@@ -315,6 +339,10 @@ export function makeFetchMock(): FetchMock {
       wix.eventId = "ev_1";
       wix.createdBookingIds.length = 0;
       wix.failCreateBooking = false;
+      wix.calendarEvents = [];
+      wix.failCalendar = false;
+      wix.staffResources = [];
+      failEmail = false;
       const d = defaultOmState();
       om.failToken = d.failToken;
       om.failLookup = d.failLookup;
@@ -354,7 +382,9 @@ export async function truncateAll(): Promise<void> {
   await pool.query(
     `truncate clients, pending_bookings, pending_plan_orders, conversations,
               processed_webhooks, handoffs, slot_cache, delivery_orders,
-              staff_contacts, staff_schedules, notification_log, invoices, app_state cascade`,
+              staff_contacts, staff_schedules, notification_log, invoices,
+              coach_payment_profiles, coach_payment_statements, coach_payment_send_log,
+              app_state cascade`,
   );
 }
 

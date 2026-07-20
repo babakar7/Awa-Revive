@@ -105,6 +105,11 @@ export const config = {
   // dashboard is never served without a login.
   ADMIN_USERS: optional("ADMIN_USERS", ""),
 
+  // Second, owner-only lock around coach compensation data. Deliberately no
+  // usable default: when unset, /admin/paiements-coachs stays locked and
+  // explains which Railway variable is missing.
+  OWNER_PAYMENTS_PASSWORD: optional("OWNER_PAYMENTS_PASSWORD", ""),
+
   // App
   DATABASE_URL: required("DATABASE_URL"),
   BASE_URL: required("BASE_URL"),
