@@ -1645,6 +1645,14 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   propriétaire suffit. `OWNER_PAYMENTS_PASSWORD` reste provisoirement accepté
   comme fallback de migration pour ne pas casser l’accès au déploiement.
 
+- **4.44 — Copie d’une semaine entre employées (20/07).** Dans la grille
+  `/admin/staff`, chaque ligne propose « Copier depuis… ». La source est choisie
+  parmi les autres employées du planning ouvert ; après confirmation, les sept
+  jours de la destinataire sont remplacés exactement, repos compris. La copie
+  travaille dans l’état navigateur courant (donc inclut les modifications non
+  enregistrées), clone chaque créneau, recalcule grille/totaux/effectifs et
+  réutilise le bouton « Enregistrer » existant. Aucun nouveau endpoint ni schéma.
+
 ## 5. Chronologie condensée
 
 - **19/07 — Factures : Awa émet de vraies factures, et tout part en PDF

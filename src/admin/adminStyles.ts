@@ -265,6 +265,12 @@ details>summary{cursor:pointer}
 .savebar{display:none;position:sticky;top:calc(var(--topbar-h) + .5rem);z-index:9;align-items:center;justify-content:space-between;gap:.8rem;margin-bottom:.7rem;padding:.7rem .85rem;background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:11px;box-shadow:var(--shadow-1);font-size:.9rem;font-weight:650}
 .planning-dialog{display:none;position:fixed;inset:0;z-index:50;align-items:center;justify-content:center;padding:1rem;background:rgba(31,20,33,.48);backdrop-filter:blur(2px)}
 .planning-dialog-panel{width:min(100%,350px);padding:1.15rem;background:var(--surface-raised);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-2)}
+.planning-dialog-title{margin:.1rem 0 .35rem;font-size:1.2rem}
+.planning-dialog-actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.9rem}
+.staff-person{min-width:145px}
+.copy-week-btn{display:block;margin-top:.35rem;white-space:nowrap}
+.planning-copy-warning{display:grid;gap:.2rem;margin-top:.85rem;padding:.7rem .75rem;background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:10px;color:var(--ink-700);font-size:.84rem;line-height:1.45}
+.planning-copy-warning span{color:var(--ink-500)}
 #staffgrid td[data-k]:focus-visible{box-shadow:inset 0 0 0 3px var(--plum-400);background:var(--plum-50)}
 .nowrap{white-space:nowrap}
 .right{text-align:right}

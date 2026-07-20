@@ -70,6 +70,27 @@ const scheduleBadge = (s: StaffSchedule) =>
     ? `<span class="badge badge--green">publié</span>`
     : `<span class="badge badge--gray">brouillon</span>`;
 
+export type StaffGridCells = Record<string, { s: number; e: number }>;
+
+/** Mutates the browser grid so the target becomes an independent copy of the source week. */
+export function copyEmployeeWeek(
+  cells: StaffGridCells,
+  sourceId: string,
+  targetId: string,
+): boolean {
+  if (!sourceId || !targetId || sourceId === targetId) return false;
+  const sourceWeek = Array.from({ length: 7 }, (_, weekday) => {
+    const source = cells[`${sourceId}:${weekday}`];
+    return source ? { s: source.s, e: source.e } : null;
+  });
+  for (let weekday = 0; weekday < 7; weekday += 1) {
+    delete cells[`${targetId}:${weekday}`];
+    const source = sourceWeek[weekday];
+    if (source) cells[`${targetId}:${weekday}`] = { s: source.s, e: source.e };
+  }
+  return true;
+}
+
 export function renderStaffPlanning(data: StaffPlanningData): string {
   const { schedules, current, shifts, staff } = data;
 
@@ -120,7 +141,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
 
 <div class="section-header"><div><span class="eyebrow">Rotation hebdomadaire</span><h2>${esc(current.name)} ${scheduleBadge(current)}</h2></div></div>
 <div class="card table-wrap">
-  <p class="muted">Cliquez une case ou utilisez Entrée pour saisir l’horaire. Le glisser-déposer copie un créneau ; le clic reste l’alternative clavier. Les totaux déduisent la pause 13h30–14h30.</p>
+  <p class="muted">Cliquez une case ou utilisez Entrée pour saisir l’horaire. « Copier depuis… » remplace toute la semaine d’une employée, jours de repos compris. Le glisser-déposer copie un seul créneau. Les totaux déduisent la pause 13h30–14h30.</p>
   <table id="staffgrid" style="min-width:720px"><thead><tr><th>Employée</th>${WEEKDAYS_FR.map((d) => `<th style="text-align:center">${d.slice(0, 3)}</th>`).join("")}<th class="right">Heures</th></tr></thead>
   <tbody id="gridbody"></tbody>
   <tfoot><tr id="gridfoot" class="muted"></tr></tfoot></table>
@@ -177,12 +198,32 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   </div>
 </div>
 
+<div id="copyweek" class="planning-dialog" role="dialog" aria-modal="true" aria-labelledby="copyweektitle" aria-describedby="copyweekhelp">
+  <div class="planning-dialog-panel">
+    <span class="eyebrow">Copie hebdomadaire</span>
+    <h2 id="copyweektitle" class="planning-dialog-title">Copier une semaine</h2>
+    <p id="copyweekhelp" class="muted">Choisissez l’employée dont les horaires doivent servir de modèle.</p>
+    <label for="copyweeksource">Copier les horaires de
+      <select id="copyweeksource" onchange="copyWeekPreview()"></select>
+    </label>
+    <div class="planning-copy-warning">
+      <b id="copyweeksummary">Les 7 jours seront remplacés.</b>
+      <span>Les horaires actuels de la destinataire seront effacés, jours de repos compris.</span>
+    </div>
+    <div class="planning-dialog-actions">
+      <button type="button" onclick="copyWeekClose()" class="act act--sm act--ghost">Annuler</button>
+      <button type="button" class="act" onclick="copyWeekConfirm()">Remplacer la semaine</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   var ST = JSON.parse("${stateJson.replace(/"/g, '\\"')}");
   var BS = ${BREAK_START_MIN}, BE = ${BREAK_END_MIN};
   var DAYS = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
   var dirty = false, editKey = null, lastGridFocus = null;
+  var copyTargetId = null, lastCopyFocus = null;
 
   function pad(n){ return (n<10?"0":"")+n; }
   function fmt(x){ return Math.floor(x/60)+"h"+pad(x%60); }
@@ -190,6 +231,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   function worked(s,e){ if(e<=BE) return e-s; return (e-s) - Math.max(0, Math.min(e,BE)-Math.max(s,BS)); }
   function toMin(v){ if(!v) return null; var p=v.split(":"); return (+p[0])*60+(+p[1]); }
   function toTime(x){ return pad(Math.floor(x/60))+":"+pad(x%60); }
+  ${copyEmployeeWeek.toString()}
 
   function markDirty(){ if(!dirty){ dirty=true; document.getElementById("savebar").style.display="flex"; } }
 
@@ -198,7 +240,10 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
     ST.staff.forEach(function(p){
       var tr = document.createElement("tr");
       var tot = 0;
-      var tds = "<td><b>"+esc(p.name)+"</b> <span class='muted'>"+esc(p.role)+"</span></td>";
+      var copyDisabled = ST.staff.length < 2;
+      var tds = "<td class='staff-person'><b>"+esc(p.name)+"</b> <span class='muted'>"+esc(p.role)+"</span>"+
+        "<button type='button' class='act act--sm act--ghost copy-week-btn' data-copy-target='"+esc(p.id)+"'"+
+        (copyDisabled ? " disabled title='Ajoutez une autre employée pour copier une semaine'" : "")+">Copier depuis…</button></td>";
       for(var wd=0; wd<7; wd++){
         var c = ST.cells[p.id+":"+wd];
         if(c){ tot += worked(c.s,c.e); }
@@ -220,6 +265,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
     foot += "<td></td>";
     document.getElementById("gridfoot").innerHTML = foot;
     wireDnd();
+    wireCopyButtons();
   }
 
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
@@ -246,6 +292,69 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
       });
     });
   }
+
+  // ----- full-week copy (current client-side grid, including unsaved edits) -----
+  function wireCopyButtons(){
+    document.querySelectorAll("#gridbody .copy-week-btn:not([disabled])").forEach(function(button){
+      button.addEventListener("click", function(){ copyWeekOpen(button.getAttribute("data-copy-target")); });
+    });
+  }
+
+  function staffById(id){ return ST.staff.find(function(p){ return p.id===id; }); }
+
+  function focusCopyButton(id){
+    document.querySelectorAll("#gridbody .copy-week-btn").forEach(function(button){
+      if(button.getAttribute("data-copy-target")===id){ button.focus(); }
+    });
+  }
+
+  window.copyWeekOpen = function(targetId){
+    var target = staffById(targetId); if(!target || ST.staff.length<2) return;
+    copyTargetId = targetId;
+    lastCopyFocus = document.activeElement;
+    document.getElementById("copyweektitle").textContent = "Remplacer la semaine de " + target.name;
+    var select = document.getElementById("copyweeksource");
+    select.innerHTML = "";
+    ST.staff.forEach(function(person){
+      if(person.id===targetId) return;
+      var option = document.createElement("option");
+      option.value = person.id;
+      option.textContent = person.name + " — " + person.role;
+      select.appendChild(option);
+    });
+    copyWeekPreview();
+    document.getElementById("copyweek").style.display = "flex";
+    select.focus();
+  };
+
+  window.copyWeekPreview = function(){
+    var sourceId = document.getElementById("copyweeksource").value;
+    var source = staffById(sourceId);
+    var workedDays = 0;
+    for(var wd=0; wd<7; wd++){ if(ST.cells[sourceId+":"+wd]) workedDays++; }
+    document.getElementById("copyweeksummary").textContent = source
+      ? source.name + " : " + workedDays + " jour" + (workedDays===1 ? " travaillé" : "s travaillés") + " à copier."
+      : "Choisissez une employée source.";
+  };
+
+  window.copyWeekClose = function(restoreFocus){
+    document.getElementById("copyweek").style.display = "none";
+    copyTargetId = null;
+    if(restoreFocus!==false && lastCopyFocus && lastCopyFocus.focus) lastCopyFocus.focus();
+    lastCopyFocus = null;
+  };
+
+  window.copyWeekConfirm = function(){
+    var targetId = copyTargetId;
+    var sourceId = document.getElementById("copyweeksource").value;
+    if(!targetId || !sourceId || targetId===sourceId) return;
+
+    if(!copyEmployeeWeek(ST.cells, sourceId, targetId)) return;
+    copyWeekClose(false);
+    markDirty();
+    render();
+    focusCopyButton(targetId);
+  };
 
   // ----- cell editor -----
   window.edOpen = function(id, wd){
@@ -282,7 +391,11 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   };
 
   window.addEventListener("beforeunload", function(ev){ if(dirty){ ev.preventDefault(); ev.returnValue=""; } });
-  document.addEventListener("keydown", function(ev){ if(ev.key==="Escape"&&editKey){ ev.preventDefault();edClose(); } });
+  document.addEventListener("keydown", function(ev){
+    if(ev.key!=="Escape") return;
+    if(copyTargetId){ ev.preventDefault();copyWeekClose(); }
+    else if(editKey){ ev.preventDefault();edClose(); }
+  });
   render();
 })();
 </script>`;
