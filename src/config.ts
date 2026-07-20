@@ -101,7 +101,7 @@ export const config = {
   RECEPTION_EMAIL: optional("RECEPTION_EMAIL", "support@revive.sn"),
 
   // Admin dashboard accounts. Format: "user1:password1,user2:password2".
-  // Unset → built-in fallback login revive/revive (see admin/auth.ts) — the
+  // Unset → built-in fallback login revive/revive@5000 (see admin/auth.ts) — the
   // dashboard is never served without a login.
   ADMIN_USERS: optional("ADMIN_USERS", ""),
 

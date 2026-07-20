@@ -129,17 +129,19 @@ npm run build && npm start   # production
 
 ### Admin dashboard (`/admin`)
 
-Server-rendered, zero-dependency dashboard (`src/admin/`) protected by HTTP
-Basic Auth. Set `ADMIN_USERS="babakar:pass1,reception:pass2"` (one account per
-human — action logs record who clicked); unset → built-in fallback login
-`revive` / `revive` (never open, never 503). Pages:
-overview ("à traiter": pending refunds with a *remboursement effectué* button,
-paid plan orders awaiting manual Wix activation, recent handoffs, day/7-day
-stats), conversations (search + full thread incl. collapsed tool calls),
-bookings & plan orders (status filters), handoffs. The two buttons only
-RECORD manual actions — no money ever moves from the dashboard; refunds are
-done by a human in the Wave portal (`npm run refund:done` remains as CLI
-fallback).
+Server-rendered, zero-runtime-dependency dashboard (`src/admin/`) protected by
+HTTP Basic Auth. Set `ADMIN_USERS="babakar:pass1,reception:pass2"` (one account
+per human — action logs record who clicked); unset → built-in fallback login
+`revive` / `revive@5000` (never open, never 503). The responsive Revive design system
+uses a task-oriented sidebar, global client search (`Ctrl/Cmd+K`), an off-canvas
+mobile menu, accessible focus states and confirmation dialogs. `/admin` is the
+operational queue: pending refunds, paid plans awaiting Wix activation, open
+handoffs/reviews, CRM links and delivery alerts appear before the day/7-day
+activity metrics. The full admin also covers conversations, bookings, staff
+planning, coach payments, documents, gifts, bar deliveries/menu, notifications
+and WhatsApp profile settings. Financial buttons only RECORD manual actions —
+no money ever moves from the dashboard; refunds are done by a human in the Wave
+portal (`npm run refund:done` remains as CLI fallback).
 
 **Profile page (`/admin/profile`)**: edit the WhatsApp Business profile
 (description, address, photo) via the Cloud API's `whatsapp_business_profile`

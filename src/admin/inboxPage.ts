@@ -15,144 +15,113 @@ export interface InboxData {
   adminUser: string;
 }
 
-/**
- * Home « À faire » — single inbox for human work. Money always visible;
- * other sections only when non-empty.
- */
+function clearState(title: string, detail: string): string {
+  return `<div class="empty"><span class="empty-icon" aria-hidden="true">✓</span><b>${escapeHtml(title)}</b><p>${escapeHtml(detail)}</p></div>`;
+}
+
+/** Home « À faire » — one prioritized operational queue. */
 export function renderInbox(d: InboxData): string {
-  const refundRows = d.refunds
+  const refundTasks = d.refunds
     .map(
-      (b) => `<tr>
-<td><a href="/admin/conversations/${b.client_id}">${escapeHtml(b.client_name ?? "?")}</a><div class="muted">+${escapeHtml(b.wa_phone)}</div></td>
-<td>${escapeHtml(b.service_name)}<div class="muted">${fmtDate(b.slot_start)} · ${b.participants} place(s)</div></td>
-<td><b>${fmtFcfa(b.amount_xof)}</b><div class="muted">Wave : ${escapeHtml(b.wave_session_id ?? "?")}</div></td>
-<td><form class="inline" method="post" action="/admin/bookings/${b.id}/refund-done" onsubmit="return confirm('Confirmer : le remboursement de ${fmtFcfa(b.amount_xof)} a bien été fait dans le portail Wave ?')"><button class="act act--ok act--sm">✅ Remboursement effectué</button></form></td>
-</tr>`,
+      (b) => `<article class="task-item">
+  <span class="task-priority danger" aria-hidden="true"></span>
+  <div class="task-copy">
+    <b>Rembourser ${escapeHtml(b.client_name ?? "Client")}</b>
+    <p>${escapeHtml(b.service_name)} · ${fmtDate(b.slot_start)} · ${b.participants} place(s)</p>
+    <div class="task-meta"><a href="/admin/conversations/${b.client_id}">Voir la conversation</a><span class="badge badge--red">${fmtFcfa(b.amount_xof)}</span><span class="muted">Wave ${escapeHtml(b.wave_session_id ?? "—")}</span></div>
+  </div>
+  <div class="task-action"><form class="inline" method="post" action="/admin/bookings/${b.id}/refund-done" data-confirm="Confirmer que le remboursement de ${fmtFcfa(b.amount_xof)} a bien été effectué dans le portail Wave."><button class="act act--ok act--sm">Remboursement effectué</button></form></div>
+</article>`,
     )
     .join("");
 
-  const planRows = d.planActivations
+  const activationTasks = d.planActivations
     .map(
-      (p) => `<tr>
-<td><a href="/admin/conversations/${p.client_id}">${escapeHtml(p.client_name ?? "?")}</a><div class="muted">+${escapeHtml(p.wa_phone)}</div></td>
-<td>${escapeHtml(p.plan_name)}<div class="muted">payé ${fmtDate(p.updated_at)}</div></td>
-<td><b>${fmtFcfa(p.amount_xof)}</b></td>
-<td><form class="inline" method="post" action="/admin/plan-orders/${p.id}/activated" onsubmit="return confirm('Confirmer : l\\'abonnement a bien été attribué au client dans le dashboard Wix ?')"><button class="act act--ok act--sm">✅ Abonnement activé</button></form></td>
-</tr>`,
+      (p) => `<article class="task-item">
+  <span class="task-priority warn" aria-hidden="true"></span>
+  <div class="task-copy">
+    <b>Activer l’abonnement de ${escapeHtml(p.client_name ?? "Client")}</b>
+    <p>${escapeHtml(p.plan_name)} · payé ${fmtDate(p.updated_at)}</p>
+    <div class="task-meta"><a href="/admin/conversations/${p.client_id}">Voir la conversation</a><span class="badge badge--amber">${fmtFcfa(p.amount_xof)}</span></div>
+  </div>
+  <div class="task-action"><form class="inline" method="post" action="/admin/plan-orders/${p.id}/activated" data-confirm="Confirmer que cet abonnement a bien été attribué au client dans Wix."><button class="act act--ok act--sm">Abonnement activé</button></form></div>
+</article>`,
     )
     .join("");
 
-  const handoffRows = d.openHandoffs
+  const handoffTasks = d.openHandoffs
     .map(
-      (h) => `<tr>
-<td>${ago(h.created_at)}</td>
-<td><a href="/admin/conversations/${h.client_id}">${escapeHtml(h.client_name ?? "?")}</a><div class="muted">+${escapeHtml(h.wa_phone)}</div></td>
-<td>${escapeHtml(h.reason ?? "")}</td>
-<td><form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act act--ok act--sm">✅ Traité</button></form></td>
-</tr>`,
+      (h) => `<article class="task-item">
+  <span class="task-priority warn" aria-hidden="true"></span>
+  <div class="task-copy">
+    <b>${escapeHtml(h.client_name ?? "Client")} attend la réception</b>
+    <p>${escapeHtml(h.reason ?? "Demande transmise à l’équipe")}</p>
+    <div class="task-meta"><span class="muted">${ago(h.created_at)} · +${escapeHtml(h.wa_phone)}</span><a href="/admin/conversations/${h.client_id}">Ouvrir la conversation</a></div>
+  </div>
+  <div class="task-action"><form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act act--ok act--sm">Marquer traité</button></form></div>
+</article>`,
     )
     .join("");
 
-  const reviewRows = d.openReviews
+  const reviewTasks = d.openReviews
     .slice(0, 15)
-    .map((r) => {
-      const severe =
-        r.severity === "severe"
-          ? `<span class="badge badge--red">grave</span> `
-          : "";
-      return `<tr>
-<td>${severe}<a href="/admin/conversations/${r.client_id}"><b>${escapeHtml(r.client_name ?? "?")}</b></a>
-<div class="muted">+${escapeHtml(r.wa_phone)} · ${ago(r.created_at)}</div></td>
-<td>${escapeHtml((r.summary ?? "").slice(0, 120))}${r.suggested_action ? `<div class="muted">→ ${escapeHtml(r.suggested_action)}</div>` : ""}</td>
-<td><a href="/admin/reviews">Ouvrir</a></td>
-</tr>`;
-    })
+    .map((r) => `<article class="task-item">
+  <span class="task-priority ${r.severity === "severe" ? "danger" : "warn"}" aria-hidden="true"></span>
+  <div class="task-copy">
+    <b>Reprendre ${escapeHtml(r.client_name ?? "cette conversation")}</b>
+    <p>${escapeHtml((r.summary ?? "Conversation restée sans issue").slice(0, 150))}</p>
+    <div class="task-meta">${r.severity === "severe" ? '<span class="badge badge--red">Priorité haute</span>' : '<span class="badge badge--amber">À reprendre</span>'}<span class="muted">${ago(r.created_at)}</span>${r.suggested_action ? `<span class="muted">Prochaine étape : ${escapeHtml(r.suggested_action)}</span>` : ""}</div>
+  </div>
+  <div class="task-action"><a class="act act--ghost act--sm" href="/admin/conversations/${r.client_id}">Voir le fil</a><a class="act act--sm" href="/admin/reviews">Traiter</a></div>
+</article>`)
     .join("");
 
-  const s = d.stats;
   const L = d.livraisonAlerts;
+  const followUpCount = d.openHandoffs.length + d.openReviews.length + d.crmLinks + L.late + L.kitchenFailed + L.clientFailed;
+  const s = d.stats;
   const total = d.badges.total;
-
-  const allClear =
-    total === 0
-      ? `<div class="card success"><span class="ok">✓ Rien d'urgent — tout est à jour.</span>
-<p class="muted" style="margin:.4rem 0 0">Cherche un client en haut, ou ouvre une section à gauche.</p></div>`
-      : "";
+  const now = new Date().toLocaleString("fr-FR", {
+    timeZone: config.TIMEZONE,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
   return `
-<p class="subhead">${total ? `<b>${total}</b> action(s) en attente` : "File d'attente vide"} · connecté : ${escapeHtml(d.adminUser)} · ${new Date().toLocaleString("fr-FR", { timeZone: config.TIMEZONE })}</p>
-${allClear}
+<header class="page-header">
+  <div class="page-header-copy"><span class="eyebrow">Centre d’opérations</span><h2>Priorités du jour</h2><p>${total ? `<b>${total}</b> action(s) attendent l’équipe.` : "Tout est à jour."} Connecté : ${escapeHtml(d.adminUser)} · ${escapeHtml(now)}</p></div>
+  <div class="page-header-actions"><a class="act act--ghost" href="/admin/conversations">Rechercher un client</a></div>
+</header>
 
-<h2>💸 Remboursements ${d.refunds.length ? `(${d.refunds.length})` : ""}</h2>
-<div class="card ${d.refunds.length ? "warn" : ""}">
 ${
-  d.refunds.length
-    ? `<p class="muted">1. Rembourser dans le portail Wave Business → 2. cliquer le bouton.</p>
-       <table><tr><th>Client</th><th>Cours</th><th>Montant</th><th></th></tr>${refundRows}</table>`
-    : `<span class="ok">✓ Aucun remboursement en attente</span>`
+  total === 0
+    ? `<div class="card success">${clearState("Rien d’urgent", "La file est vide. Vous pouvez rechercher un client ou ouvrir une section dans la navigation.")}</div>`
+    : ""
 }
+
+<div class="section-header"><div><span class="eyebrow">Financier</span><h2>Paiements à finaliser</h2></div><span class="badge ${d.refunds.length + d.planActivations.length ? "badge--red" : "badge--green"}">${d.refunds.length + d.planActivations.length} en attente</span></div>
+<div class="card">
+  <div class="task-list">${refundTasks}${activationTasks}</div>
+  ${!d.refunds.length && !d.planActivations.length ? clearState("Paiements à jour", "Aucun remboursement ni abonnement à activer.") : ""}
 </div>
 
-<h2>🎫 Abonnements à activer ${d.planActivations.length ? `(${d.planActivations.length})` : ""}</h2>
-<div class="card ${d.planActivations.length ? "warn" : ""}">
-${
-  d.planActivations.length
-    ? `<p class="muted">1. Attribuer la formule au client dans Wix (Abonnements) → 2. cliquer le bouton.</p>
-       <table><tr><th>Client</th><th>Formule</th><th>Montant</th><th></th></tr>${planRows}</table>`
-    : `<span class="ok">✓ Aucun abonnement en attente d'activation</span>`
-}
+<div class="section-header"><div><span class="eyebrow">Suivi client</span><h2>Interventions humaines</h2></div><span class="badge ${followUpCount ? "badge--amber" : "badge--green"}">${followUpCount} signalement(s)</span></div>
+<div class="card">
+  <div class="task-list">
+    ${handoffTasks}${reviewTasks}
+    ${d.crmLinks ? `<article class="task-item"><span class="task-priority warn" aria-hidden="true"></span><div class="task-copy"><b>${d.crmLinks} liaison(s) CRM à vérifier</b><p>Des comptes clients attendent un rapprochement ou une décision.</p></div><div class="task-action"><a class="act act--ghost act--sm" href="/admin/crm#liaisons">Ouvrir le CRM</a></div></article>` : ""}
+    ${L.late + L.kitchenFailed + L.clientFailed ? `<article class="task-item"><span class="task-priority danger" aria-hidden="true"></span><div class="task-copy"><b>Livraisons à surveiller</b><p>${[L.late ? `${L.late} en retard` : "", L.kitchenFailed ? `${L.kitchenFailed} cuisine non notifiée` : "", L.clientFailed ? `${L.clientFailed} client non prévenu` : ""].filter(Boolean).join(" · ")}</p><div class="task-meta"><span class="muted">${L.open} commande(s) ouverte(s)</span></div></div><div class="task-action"><a class="act act--ghost act--sm" href="/admin/livraisons">Voir les livraisons</a></div></article>` : ""}
+  </div>
+  ${!followUpCount ? clearState("Clients à jour", "Aucun handoff, reprise, problème CRM ou livraison en alerte.") : ""}
 </div>
 
-${
-  d.openHandoffs.length
-    ? `<h2>🙋🏼 Handoffs ouverts (${d.openHandoffs.length})</h2>
-<div class="card warn">
-<p class="muted">Client dont le besoin attend un humain. « Traité » = recontacté ou cas réglé. <a href="/admin/handoffs">Tous les handoffs →</a></p>
-<table><tr><th>Quand</th><th>Client</th><th>Motif</th><th></th></tr>${handoffRows}</table>
-</div>`
-    : ""
-}
-
-${
-  d.openReviews.length
-    ? `<h2>🔁 À reprendre (${d.openReviews.length})</h2>
-<div class="card warn">
-<p class="muted">Conversations classées impasse / échec. <a href="/admin/reviews">File complète →</a></p>
-<table><tr><th>Client</th><th>Résumé</th><th></th></tr>${reviewRows}</table>
-</div>`
-    : ""
-}
-
-${
-  d.crmLinks > 0
-    ? `<h2>🔗 Liaisons CRM (${d.crmLinks})</h2>
-<div class="card warn">
-<p><b>${d.crmLinks}</b> demande(s) de liaison compte en attente.
-<a href="/admin/crm#liaisons">Ouvrir le CRM →</a></p>
-</div>`
-    : ""
-}
-
-${
-  L.late + L.kitchenFailed + L.clientFailed > 0
-    ? `<h2>🛵 Livraisons à surveiller</h2>
-<div class="card warn">
-<ul style="margin:.2rem 0;padding-left:1.2rem">
-${L.late ? `<li><b>${L.late}</b> en retard (SLA)</li>` : ""}
-${L.kitchenFailed ? `<li><b>${L.kitchenFailed}</b> notif cuisine en échec</li>` : ""}
-${L.clientFailed ? `<li><b>${L.clientFailed}</b> client non prévenu (appeler)</li>` : ""}
-</ul>
-<p style="margin:.4rem 0 0"><a href="/admin/livraisons">Tableau livraisons →</a>
-${L.open ? ` <span class="muted">· ${L.open} ouverte(s)</span>` : ""}</p>
-</div>`
-    : ""
-}
-
-<h2>📊 Activité</h2>
+<div class="section-header"><div><span class="eyebrow">Aujourd’hui</span><h2>Activité du studio</h2></div></div>
 <div class="stat-grid">
-<div class="stat"><span class="muted">Messages reçus aujourd'hui</span><b>${s.msgToday}</b><span class="muted">${s.msg7d} sur 7 j</span></div>
-<div class="stat"><span class="muted">Clients actifs aujourd'hui</span><b>${s.activeClientsToday}</b><span class="muted">${s.activeClients7d} sur 7 j</span></div>
-<div class="stat"><span class="muted">Résas confirmées aujourd'hui</span><b>${s.bookingsToday}</b><span class="muted">${s.bookings7d} sur 7 j</span></div>
-<div class="stat"><span class="muted">Encaissé aujourd'hui</span><b>${fmtFcfa(s.revenueToday)}</b><span class="muted">${fmtFcfa(s.revenue7d)} sur 7 j</span></div>
+  <div class="stat"><span>Messages reçus</span><b>${s.msgToday}</b><span>${s.msg7d} sur 7 jours</span></div>
+  <div class="stat"><span>Clients actifs</span><b>${s.activeClientsToday}</b><span>${s.activeClients7d} sur 7 jours</span></div>
+  <div class="stat"><span>Réservations</span><b>${s.bookingsToday}</b><span>${s.bookings7d} sur 7 jours</span></div>
+  <div class="stat"><span>Encaissé</span><b>${fmtFcfa(s.revenueToday)}</b><span>${fmtFcfa(s.revenue7d)} sur 7 jours</span></div>
 </div>`;
 }

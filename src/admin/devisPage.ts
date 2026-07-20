@@ -73,7 +73,7 @@ function validityCell(q: Quote): string {
   const overdue = exp.getTime() < Date.now() && q.status !== "ACCEPTED";
   const label = fmtDay(exp);
   return overdue
-    ? `<span style="color:#cf222e;font-weight:600">${esc(label)}</span>`
+    ? `<span class="danger-text">${esc(label)}</span>`
     : esc(label);
 }
 
@@ -83,25 +83,22 @@ export function renderQuotesList(quotes: Quote[], banner: string): string {
   const rows = quotes
     .map((q) => {
       const total = quoteTotal(quoteItems(q));
-      return `<tr class="rowlink" onclick="location='/admin/devis/${esc(q.id)}'">
-<td><b>${esc(q.number)}</b></td>
-<td>${esc(q.event_title)}</td>
-<td>${esc(q.client_name)}${q.client_company ? `<br><span class="muted">${esc(q.client_company)}</span>` : ""}</td>
-<td class="hide-sm">${esc(fmtDay(q.event_date))}</td>
-<td style="white-space:nowrap">${esc(fcfa(total))}</td>
-<td class="hide-sm">${validityCell(q)}</td>
-<td>${statusBadge(q.status)}</td>
+      return `<tr>
+<td data-label="N°"><a href="/admin/devis/${esc(q.id)}"><b>${esc(q.number)}</b></a></td>
+<td data-label="Événement"><b>${esc(q.event_title)}</b></td>
+<td data-label="Client">${esc(q.client_name)}${q.client_company ? `<br><span class="muted">${esc(q.client_company)}</span>` : ""}</td>
+<td data-label="Date" class="hide-sm">${esc(fmtDay(q.event_date))}</td>
+<td data-label="Total" class="nowrap"><b>${esc(fcfa(total))}</b></td>
+<td data-label="Expire" class="hide-sm">${validityCell(q)}</td>
+<td data-label="Statut">${statusBadge(q.status)}</td>
 </tr>`;
     })
     .join("");
   const table = quotes.length
-    ? `<table><thead><tr><th>N°</th><th>Événement</th><th>Client</th><th class="hide-sm">Date évén.</th><th>Total</th><th class="hide-sm">Expire le</th><th>Statut</th></tr></thead><tbody>${rows}</tbody></table>`
-    : `<p class="muted">Aucun devis pour l'instant.</p>`;
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>N°</th><th>Événement</th><th>Client</th><th class="hide-sm">Date évén.</th><th>Total</th><th class="hide-sm">Expire le</th><th>Statut</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : `<div class="empty"><b>Aucun devis</b><p>Créez une première proposition pour un événement ou une prestation privée.</p></div>`;
   return `${banner}
-<div class="row between">
-  <h2 style="margin:.4rem 0">Devis 📄</h2>
-  <a href="/admin/devis/new" class="act">➕ Nouveau devis</a>
-</div>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Documents</span><h2>Devis</h2><p>Préparez, validez et téléchargez les propositions commerciales Revive.</p></div><div class="page-header-actions"><a href="/admin/devis/new" class="act">Nouveau devis</a></div></header>
 <div class="card">${table}</div>`;
 }
 
@@ -142,14 +139,11 @@ export function renderQuoteForm(quote: Quote | null, banner: string): string {
     : "";
 
   const header = isEdit
-    ? `<div class="row between">
-  <h2 style="margin:.4rem 0">Devis ${esc(quote!.number)} ${statusBadge(quote!.status)}</h2>
-  <a href="/admin/devis/${esc(quote!.id)}/pdf" class="act">⬇️ Télécharger le PDF</a>
-</div>
+    ? `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Devis ${statusBadge(quote!.status)}</span><h2>${esc(quote!.number)}</h2><p>Modifiez les informations puis enregistrez avant de télécharger le PDF.</p></div><div class="page-header-actions"><a href="/admin/devis/${esc(quote!.id)}/pdf" class="act">Télécharger le PDF</a></div></header>
 <div class="card row">
   <span class="muted">Statut :</span>${QUOTE_STATUSES.map((s) => inlineStatusForm(quote!.id, s, quote!.status)).join("")}
 </div>`
-    : `<h2 style="margin:.4rem 0">➕ Nouveau devis</h2>`;
+    : `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Devis</span><h2>Nouveau devis</h2><p>Renseignez le client, l’événement et les prestations proposées.</p></div></header>`;
 
   return `${banner}
 ${header}

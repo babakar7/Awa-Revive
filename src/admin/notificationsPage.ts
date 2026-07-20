@@ -45,11 +45,11 @@ function ago(d: Date | string | null): string {
 
 const DAYS = ["dim", "lun", "mar", "mer", "jeu", "ven", "sam"];
 
-const LOG_COLORS: Record<string, string> = {
-  sent: "#1a7f37",
-  sent_template: "#0969da",
-  failed: "#cf222e",
-  suppressed: "#6e7781",
+const LOG_CLASSES: Record<string, string> = {
+  sent: "badge--green",
+  sent_template: "badge--blue",
+  failed: "badge--red",
+  suppressed: "badge--gray",
 };
 
 /** Human labels for notification_log.source — raw key stays the title attribute. */
@@ -65,8 +65,8 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 function statusBadge(status: string): string {
-  const color = LOG_COLORS[status] ?? "#6e7781";
-  return `<span class="badge" style="background:${color}">${esc(status)}</span>`;
+  const cls = LOG_CLASSES[status] ?? "badge--gray";
+  return `<span class="badge ${cls}">${esc(status)}</span>`;
 }
 
 function sourceLabel(source: string): string {
@@ -224,14 +224,14 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
       const lastLine = last
         ? `${statusBadge(last.status)} <span class="muted">${ago(last.created_at)}${last.error ? ` · ${esc(last.error.slice(0, 40))}` : ""}</span>`
         : `<span class="muted">jamais envoyée</span>`;
-      return `<tr${r.enabled ? "" : ' style="opacity:.5"'}>
-<td><b>${esc(r.label)}</b><div class="muted">${ruleSummary(r)}</div><div class="muted" style="margin-top:.2rem">📝 ${preview}</div></td>
-<td>${lastLine}</td>
-<td style="white-space:nowrap">
+      return `<tr class="${r.enabled ? "" : "is-complete"}">
+<td data-label="Règle"><b>${esc(r.label)}</b><div class="muted">${ruleSummary(r)}</div><div class="muted">Message : ${preview}</div></td>
+<td data-label="Dernier envoi">${lastLine}</td>
+<td data-label="Actions" class="nowrap">
   <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/toggle"><button class="act act--sm ${r.enabled ? "act--ghost" : "act--ok"}">${r.enabled ? "Pause" : "Activer"}</button></form>
-  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/test" style="margin-left:.3rem"><button class="act act--sm act--ghost">Test</button></form>
-  <a href="/admin/notifications?edit=${r.id}" style="margin-left:.3rem">Éditer</a>
-  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/delete" style="margin-left:.3rem" onsubmit="return confirm('Supprimer cette règle ?')"><button class="act act--sm act--danger">✕</button></form>
+  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/test"><button class="act act--sm act--ghost">Test</button></form>
+  <a class="act act--sm act--ghost" href="/admin/notifications?edit=${r.id}">Éditer</a>
+  <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/delete" data-confirm="Supprimer définitivement cette règle de notification ?"><button class="act act--sm act--danger">Supprimer</button></form>
 </td>
 </tr>`;
     })
@@ -239,13 +239,13 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
 
   const contactRows = d.contacts
     .map(
-      (c) => `<tr${c.muted ? ' style="opacity:.5"' : ""}>
-<td><b>${esc(c.name)}</b> ${c.muted ? `<span class="badge badge--gray">muet</span>` : ""}</td>
-<td>+${esc(c.phone.replace(/^\+/, ""))}</td>
-<td>${esc(c.role)}</td>
-<td style="white-space:nowrap">
+      (c) => `<tr class="${c.muted ? "is-complete" : ""}">
+<td data-label="Nom"><b>${esc(c.name)}</b> ${c.muted ? `<span class="badge badge--gray">muet</span>` : ""}</td>
+<td data-label="Numéro">+${esc(c.phone.replace(/^\+/, ""))}</td>
+<td data-label="Rôle">${esc(c.role)}</td>
+<td data-label="Actions" class="nowrap">
   <form class="inline" method="post" action="/admin/notifications/contacts/${c.id}/mute"><button class="act act--sm act--ghost">${c.muted ? "Réactiver" : "Muter"}</button></form>
-  <form class="inline" method="post" action="/admin/notifications/contacts/${c.id}/delete" style="margin-left:.3rem" onsubmit="return confirm('Supprimer ce contact ?')"><button class="act act--sm act--danger">✕</button></form>
+  <form class="inline" method="post" action="/admin/notifications/contacts/${c.id}/delete" data-confirm="Supprimer ce contact du répertoire staff ?"><button class="act act--sm act--danger">Supprimer</button></form>
 </td>
 </tr>`,
     )
@@ -254,11 +254,11 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
   const logRows = d.log
     .map(
       (l) => `<tr>
-<td>${fmtDate(l.created_at)}</td>
-<td>${sourceLabel(l.source)}</td>
-<td>${statusBadge(l.status)}</td>
-<td>+${esc((l.recipient_phone ?? "").replace(/^\+/, "")) || "—"}</td>
-<td>${esc((l.body ?? "").slice(0, 80))}${l.error ? `<div class="muted">⚠️ ${esc(l.error.slice(0, 80))}</div>` : ""}</td>
+<td data-label="Quand">${fmtDate(l.created_at)}</td>
+<td data-label="Source">${sourceLabel(l.source)}</td>
+<td data-label="Statut">${statusBadge(l.status)}</td>
+<td data-label="Destinataire">+${esc((l.recipient_phone ?? "").replace(/^\+/, "")) || "—"}</td>
+<td data-label="Message">${esc((l.body ?? "").slice(0, 80))}${l.error ? `<div class="danger-text">${esc(l.error.slice(0, 80))}</div>` : ""}</td>
 </tr>`,
     )
     .join("");
@@ -272,19 +272,16 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
     : `<div class="card warn">⚠️ Aucun template WhatsApp configuré (<code>WA_RECEPTION_TEMPLATE</code>). Les envois au staff hors fenêtre 24h échoueront (erreur 131047) — visibles dans le journal ci-dessous. À activer une fois le template Meta approuvé.</div>`;
 
   const masterSwitch = d.alertsPaused
-    ? `<div class="card warn"><form class="inline" method="post" action="/admin/notifications/pause" style="float:right">
+    ? `<div class="card warn row between"><div><b>Alertes staff en pause</b><div class="muted">Aucun rappel n’est envoyé. Les occurrences pendant la pause sont ignorées et ne sont pas mises en attente.</div></div><form class="inline" method="post" action="/admin/notifications/pause">
 <input type="hidden" name="value" value="0">
-<button class="act act--ok">▶️ Activer les alertes</button></form>
-<b>⏸️ Alertes staff EN PAUSE</b>
-<div class="muted">Aucun rappel (gardien, coachs, horaires fixes) n'est envoyé, quel que soit l'état des règles ci-dessous. Les occurrences pendant la pause sont ignorées, pas mises en attente.</div></div>`
-    : `<div class="card success"><form class="inline" method="post" action="/admin/notifications/pause" style="float:right" onsubmit="return confirm('Mettre TOUTES les alertes staff en pause ?')">
+<button class="act act--ok">Activer les alertes</button></form></div>`
+    : `<div class="card success row between"><div><span class="ok">Alertes staff actives</span><div class="muted">Les règles activées envoient leurs rappels normalement.</div></div><form class="inline" method="post" action="/admin/notifications/pause" data-confirm="Mettre toutes les alertes staff en pause ? Les occurrences pendant la pause seront ignorées.">
 <input type="hidden" name="value" value="1">
-<button class="act act--sm act--ghost">⏸️ Tout mettre en pause</button></form>
-<span class="ok">✓ Alertes staff actives</span>
-<div class="muted">Les règles activées ci-dessous envoient leurs rappels normalement.</div></div>`;
+<button class="act act--sm act--ghost">Tout mettre en pause</button></form></div>`;
 
   return `
 ${d.banner}
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Configuration</span><h2>Notifications staff</h2><p>Configurez les règles, destinataires et contrôlez chaque tentative d’envoi.</p></div><div class="page-header-actions"><span class="badge ${d.alertsPaused ? "badge--amber" : "badge--green"}">${d.alertsPaused ? "En pause" : "Actives"}</span></div></header>
 ${masterSwitch}
 ${templateNote}
 <nav class="jump-nav" aria-label="Sections notifications">
@@ -293,16 +290,16 @@ ${templateNote}
   <a href="#journal">Journal</a>
 </nav>
 
-<h2 id="regles">➕ ${d.editRule ? "Modifier la règle" : "Nouvelle règle"}</h2>
+<h2 id="regles">${d.editRule ? "Modifier la règle" : "Nouvelle règle"}</h2>
 <div class="card">${ruleForm(d.editRule)}</div>
 
-<h2>🔔 Règles (${d.rules.length})</h2>
+<h2>Règles (${d.rules.length})</h2>
 <p class="muted">« Test » envoie le message avec des valeurs d'exemple à ${d.testPhone ? `<b>+${esc(d.testPhone.replace(/^\+/, ""))}</b>` : "un numéro non configuré"} (jamais au vrai gardien / coach).</p>
 <div class="card">
-${d.rules.length ? `<table><tr><th>Règle</th><th>Dernier envoi</th><th></th></tr>${ruleRows}</table>` : `<span class="muted">Aucune règle. Créez-en une ci-dessus.</span>`}
+${d.rules.length ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Règle</th><th>Dernier envoi</th><th>Actions</th></tr></thead><tbody>${ruleRows}</tbody></table></div>` : `<div class="empty"><b>Aucune règle</b><p>Créez la première règle ci-dessus.</p></div>`}
 </div>
 
-<h2 id="contacts">👥 Répertoire staff (${d.contacts.length})</h2>
+<h2 id="contacts">Répertoire staff (${d.contacts.length})</h2>
 ${coachHint}
 <p class="muted">⚠️ Un numéro ici sera traité comme un client s'il écrit à Awa.</p>
 <div class="card">
@@ -313,11 +310,11 @@ ${coachHint}
   <label style="display:flex;align-items:center;gap:.3rem"><input type="checkbox" name="muted" value="1"> muet</label>
   <button class="act" type="submit">Ajouter</button>
 </form>
-${d.contacts.length ? `<table><tr><th>Nom</th><th>Numéro</th><th>Rôle</th><th></th></tr>${contactRows}</table>` : `<span class="muted">Aucun contact.</span>`}
+${d.contacts.length ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Nom</th><th>Numéro</th><th>Rôle</th><th>Actions</th></tr></thead><tbody>${contactRows}</tbody></table></div>` : `<div class="empty"><b>Aucun contact</b></div>`}
 </div>
 
-<h2 id="journal">📜 Journal (${d.log.length})</h2>
+<h2 id="journal">Journal (${d.log.length})</h2>
 <div class="card">
-${d.log.length ? `<table><tr><th>Quand</th><th>Source</th><th>Statut</th><th>Destinataire</th><th>Message</th></tr>${logRows}</table>` : `<span class="muted">Rien envoyé pour l'instant.</span>`}
+${d.log.length ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Quand</th><th>Source</th><th>Statut</th><th>Destinataire</th><th>Message</th></tr></thead><tbody>${logRows}</tbody></table></div>` : `<div class="empty"><b>Aucun envoi</b><p>Les prochaines tentatives apparaîtront ici.</p></div>`}
 </div>`;
 }

@@ -4,7 +4,7 @@ import { buildServer } from "../../src/server.js";
 import { migrate, pool } from "../../src/db/index.js";
 import { makeFetchMock, truncateAll, type FetchMock } from "./helpers.js";
 
-const AUTH = `Basic ${Buffer.from("revive:revive").toString("base64")}`;
+const AUTH = `Basic ${Buffer.from("revive:revive@5000").toString("base64")}`;
 const FORM = "application/x-www-form-urlencoded";
 const BASE = "/admin/paiements-coachs";
 

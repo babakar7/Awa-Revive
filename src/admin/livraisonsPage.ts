@@ -46,35 +46,35 @@ function slaBadge(o: DeliveryOrder): string {
   }
   const elapsed = minutesSince(o.created_at);
   const remaining = o.sla_minutes - elapsed;
-  let color: string;
+  let cls: string;
   let label: string;
   if (remaining <= 0) {
-    color = "#cf222e";
+    cls = "badge--red";
     label = `+${-remaining} min`;
   } else if (elapsed < 10) {
-    color = "#1a7f37";
+    cls = "badge--green";
     label = `reste ${remaining} min`;
   } else {
-    color = "#9a6700";
+    cls = "badge--amber";
     label = `reste ${remaining} min`;
   }
-  return `<span class="badge" style="background:${color}">${label}</span>`;
+  return `<span class="badge ${cls}">${label}</span>`;
 }
 
 function kitchenStatusCell(o: DeliveryOrder): string {
   const s = o.kitchen_notify_status;
   if (s === "sent" || s === "sent_template") return `<span class="ok">✓ cuisine</span>`;
-  if (s === "partial") return `<span style="color:#9a6700;font-weight:600">⚠️ partiel</span>`;
+  if (s === "partial") return `<span class="warn-text">Partiel</span>`;
   if (s === "fallback_reception")
-    return `<span style="color:#9a6700;font-weight:600">→ réception (pas de contact cuisine)</span>`;
+    return `<span class="warn-text">Réception prévenue</span>`;
   if (s === "pending" || s === "claimed") return `<span class="muted">envoi en cours…</span>`;
-  return `<span style="color:#cf222e;font-weight:600">✗ cuisine NON notifiée</span>`;
+  return `<span class="danger-text">Cuisine non notifiée</span>`;
 }
 
 function inlineForm(action: string, label: string, confirm?: string, variant = ""): string {
-  const onsubmit = confirm ? ` onsubmit="return confirm('${esc(confirm)}')"` : "";
+  const confirmation = confirm ? ` data-confirm="${esc(confirm)}"` : "";
   const cls = variant ? ` act--${variant}` : "";
-  return `<form method="post" action="${esc(action)}" class="inline"${onsubmit}><button class="act act--sm${cls}" type="submit">${esc(label)}</button></form>`;
+  return `<form method="post" action="${esc(action)}" class="inline"${confirmation}><button class="act act--sm${cls}" type="submit">${esc(label)}</button></form>`;
 }
 
 function actionsCell(o: DeliveryOrder): string {
@@ -98,22 +98,22 @@ function actionsCell(o: DeliveryOrder): string {
 function clientFlag(o: DeliveryOrder): string {
   if (o.status !== "READY") return "";
   if (o.client_notify_status === "sent" || o.client_notify_status === "sent_template")
-    return `<div class="ok" style="font-size:.8rem">✓ client prévenu</div>`;
+    return `<div class="ok">✓ client prévenu</div>`;
   if (o.client_notify_status === "pending" || o.client_notify_status === "claimed")
-    return `<div class="muted" style="font-size:.8rem">notification en cours…</div>`;
-  return `<div style="color:#cf222e;font-weight:700;font-size:.85rem">📞 Appeler le client : +${esc(o.client_phone)}</div>`;
+    return `<div class="muted">notification en cours…</div>`;
+  return `<div class="danger-text">Appeler le client : +${esc(o.client_phone)}</div>`;
 }
 
 function openRow(o: DeliveryOrder): string {
   const items = orderItems(o);
   return `<tr>
-<td>${slaBadge(o)}</td>
-<td><b>${esc(o.client_name)}</b><br><a href="tel:+${esc(o.client_phone)}" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
-<td>${esc(formatExtrasOneLine(items))}<details><summary class="muted">détail</summary><div style="white-space:pre-wrap">${esc(formatExtrasMultiline(items))}</div></details></td>
-<td class="hide-sm">${esc(o.address)}</td>
-<td style="white-space:nowrap">${esc(o.amount_xof)} F<br><span class="muted" style="font-size:.72rem">à encaisser</span></td>
-<td class="hide-sm">${kitchenStatusCell(o)}</td>
-<td>${actionsCell(o)}</td>
+<td data-label="Délai">${slaBadge(o)}</td>
+<td data-label="Client"><b>${esc(o.client_name)}</b><br><a href="tel:+${esc(o.client_phone)}" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
+<td data-label="Commande">${esc(formatExtrasOneLine(items))}<details><summary class="muted">Voir le détail</summary><div style="white-space:pre-wrap">${esc(formatExtrasMultiline(items))}</div></details></td>
+<td data-label="Adresse" class="hide-sm">${esc(o.address)}</td>
+<td data-label="Montant" class="nowrap"><b>${esc(o.amount_xof)} F</b><br><span class="muted">à encaisser</span></td>
+<td data-label="Cuisine" class="hide-sm">${kitchenStatusCell(o)}</td>
+<td data-label="Actions">${actionsCell(o)}</td>
 </tr>`;
 }
 
@@ -121,11 +121,11 @@ function closedRow(o: DeliveryOrder): string {
   const prep = o.ready_at ? `${minutesSince(o.created_at) - minutesSince(o.ready_at)} min` : "—";
   const state = o.status === "DELIVERED" ? "🛵 livrée" : "✖ annulée";
   return `<tr>
-<td>${esc(state)}</td>
-<td>${esc(o.client_name)}</td>
-<td>${esc(formatExtrasOneLine(orderItems(o)))}</td>
-<td class="hide-sm">${esc(o.amount_xof)} F</td>
-<td class="hide-sm">${o.status === "DELIVERED" ? esc(prep) : "—"}</td>
+<td data-label="État">${esc(state)}</td>
+<td data-label="Client">${esc(o.client_name)}</td>
+<td data-label="Commande">${esc(formatExtrasOneLine(orderItems(o)))}</td>
+<td data-label="Montant" class="hide-sm">${esc(o.amount_xof)} F</td>
+<td data-label="Préparation" class="hide-sm">${o.status === "DELIVERED" ? esc(prep) : "—"}</td>
 </tr>`;
 }
 
@@ -140,24 +140,21 @@ export function renderLivraisonsBoard(data: BoardData): string {
   const { open, recent, stats } = data;
   const avg = stats.avgPrepMinutes === null ? "—" : `${Math.round(stats.avgPrepMinutes)} min`;
   const openTable = open.length
-    ? `<table><thead><tr><th>Délai</th><th>Client</th><th>Commande</th><th class="hide-sm">Adresse</th><th>Montant</th><th class="hide-sm">Cuisine</th><th>Actions</th></tr></thead><tbody>${open.map(openRow).join("")}</tbody></table>`
-    : `<p class="muted">Aucune commande en cours.</p>`;
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Délai</th><th>Client</th><th>Commande</th><th class="hide-sm">Adresse</th><th>Montant</th><th class="hide-sm">Cuisine</th><th>Actions</th></tr></thead><tbody>${open.map(openRow).join("")}</tbody></table></div>`
+    : `<div class="empty"><b>Aucune commande en cours</b><p>Les nouvelles livraisons apparaîtront ici avec leur délai.</p></div>`;
   const recentTable = recent.length
-    ? `<table><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Montant</th><th class="hide-sm">Prépa</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table>`
-    : `<p class="muted">Aucune commande récente.</p>`;
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Montant</th><th class="hide-sm">Prépa</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table></div>`
+    : `<div class="empty"><b>Aucun historique récent</b></div>`;
   return `${data.banner}
-<div class="row between">
-  <h2 style="margin:.4rem 0">Livraisons 🛵</h2>
-  <a href="/admin/livraisons/new" class="act">➕ Nouvelle commande</a>
-</div>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Livraisons</h2><p>Suivez le délai cuisine, la notification client et l’encaissement à la livraison.</p></div><div class="page-header-actions"><a href="/admin/livraisons/new" class="act">Nouvelle commande</a></div></header>
 <div class="stat-grid">
   <div class="stat"><span class="muted">En cours</span><b>${stats.openCount}</b></div>
   <div class="stat"><span class="muted">Prépa moyenne (30 j)</span><b>${avg}</b></div>
   <div class="stat"><span class="muted">En retard aujourd'hui</span><b>${stats.lateToday}</b></div>
 </div>
-<h2>En cours</h2>
+<div class="section-header"><h2>En cours</h2><span class="badge ${open.length ? "badge--amber" : "badge--green"}">${open.length}</span></div>
 <div class="card">${openTable}</div>
-<h2>Historique récent</h2>
+<div class="section-header"><h2>Historique récent</h2></div>
 <div class="card">${recentTable}</div>`;
 }
 
@@ -189,8 +186,7 @@ export function renderLivraisonForm(items: Map<string, CafeMenuItem>, banner: st
     .join("");
   const menuUnavailable = items.size === 0 ? `<div class="card warn">⚠️ cafe-menu.md introuvable — aucun article disponible.</div>` : "";
   return `${banner}
-<h2 style="margin:.4rem 0">➕ Nouvelle commande livraison</h2>
-<p class="muted">Paiement à la livraison — le montant est calculé automatiquement depuis le menu.</p>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Livraisons</span><h2>Nouvelle commande</h2><p>Paiement à la livraison. Le montant est calculé automatiquement depuis le menu actif.</p></div></header>
 <form method="post" action="/admin/livraisons" class="col">
   <div class="card col">
     <label>Nom du client<input name="client_name" required></label>

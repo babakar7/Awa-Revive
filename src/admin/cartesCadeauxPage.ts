@@ -48,24 +48,21 @@ function sentCell(gc: GiftCard): string {
 
 export function renderGiftCardsList(rows: GiftCard[], banner: string): string {
   const table = rows.length
-    ? `<table><thead><tr><th class="hide-sm">Date</th><th>Offre</th><th>Pour</th><th>De</th><th class="hide-sm">Envoi</th><th>Actions</th></tr></thead><tbody>${rows
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th class="hide-sm">Date</th><th>Offre</th><th>Pour</th><th>De</th><th class="hide-sm">Envoi</th><th>Actions</th></tr></thead><tbody>${rows
         .map(
           (gc) => `<tr>
-<td class="hide-sm" style="white-space:nowrap">${fmtDay(gc.created_at)}</td>
-<td>${esc(gc.offer_line1)}${gc.offer_line2 ? `<br><span class="muted">${esc(gc.offer_line2)}</span>` : ""}</td>
-<td>${esc(gc.recipient_name)}</td>
-<td>${esc(gc.from_name)}</td>
-<td class="hide-sm">${sentCell(gc)}</td>
-<td><a class="act act--sm act--ghost" href="/admin/cartes-cadeaux/${esc(gc.id)}">Voir</a></td>
+<td data-label="Date" class="hide-sm nowrap">${fmtDay(gc.created_at)}</td>
+<td data-label="Offre"><b>${esc(gc.offer_line1)}</b>${gc.offer_line2 ? `<br><span class="muted">${esc(gc.offer_line2)}</span>` : ""}</td>
+<td data-label="Pour">${esc(gc.recipient_name)}</td>
+<td data-label="De">${esc(gc.from_name)}</td>
+<td data-label="Envoi" class="hide-sm">${sentCell(gc)}</td>
+<td data-label=""><a class="act act--sm act--ghost" href="/admin/cartes-cadeaux/${esc(gc.id)}">Consulter</a></td>
 </tr>`,
         )
-        .join("")}</tbody></table>`
-    : `<p class="muted">Aucune carte cadeau pour l'instant.</p>`;
+        .join("")}</tbody></table></div>`
+    : `<div class="empty"><b>Aucune carte cadeau</b><p>Les cartes générées et leurs états d’envoi apparaîtront ici.</p></div>`;
   return `${banner}
-<div class="row between">
-  <h2 style="margin:.4rem 0">Cartes cadeaux 🎁</h2>
-  <a href="/admin/cartes-cadeaux/new" class="act">➕ Nouvelle carte</a>
-</div>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Documents</span><h2>Cartes cadeaux</h2><p>Générez le visuel Revive puis envoyez-le au destinataire sur WhatsApp.</p></div><div class="page-header-actions"><a href="/admin/cartes-cadeaux/new" class="act">Nouvelle carte</a></div></header>
 <div class="card">${table}</div>`;
 }
 
@@ -73,8 +70,7 @@ export function renderGiftCardsList(rows: GiftCard[], banner: string): string {
 
 export function renderGiftCardForm(banner: string): string {
   return `${banner}
-<h2 style="margin:.4rem 0">➕ Nouvelle carte cadeau</h2>
-<p class="muted">Le visuel est fixe ; seules ces infos changent. L'offre est libre (ex. « PACK DECOUVERTE » / « 3 SEANCES REFORMER »).</p>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Cartes cadeaux</span><h2>Nouvelle carte</h2><p>Le visuel Revive est fixe ; seules l’offre et les informations du cadeau changent.</p></div></header>
 <form method="post" action="/admin/cartes-cadeaux" class="col">
   <div class="card col">
     <b>Offre</b>
@@ -99,18 +95,15 @@ export function renderGiftCardView(gc: GiftCard, banner: string): string {
   const base = `/admin/cartes-cadeaux/${esc(gc.id)}`;
   const sendBtn = gc.send_phone
     ? `<form method="post" action="${base}/send" style="display:inline" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Envoi…'">
-<button class="act" type="submit">📤 Envoyer sur WhatsApp (+${esc(gc.send_phone)})</button></form>`
+<button class="act" type="submit">Envoyer sur WhatsApp (+${esc(gc.send_phone)})</button></form>`
     : `<span class="muted">Aucun numéro enregistré — télécharge et envoie manuellement.</span>`;
   return `${banner}
-<div class="row between">
-  <h2 style="margin:.4rem 0">Carte cadeau — ${esc(gc.recipient_name)}</h2>
-  <a href="/admin/cartes-cadeaux">← Retour</a>
-</div>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Carte cadeau</span><h2>${esc(gc.recipient_name)}</h2><p>${esc(gc.offer_line1)}${gc.offer_line2 ? ` · ${esc(gc.offer_line2)}` : ""}</p></div><div class="page-header-actions"><a class="act act--ghost" href="/admin/cartes-cadeaux">Retour</a></div></header>
 <div class="card">
   <img src="${base}/png?inline=1" alt="Carte cadeau" style="max-width:100%;height:auto;border:1px solid #e8d9d2;border-radius:8px">
 </div>
 <div class="card row">
-  <a class="act act--ghost" href="${base}/png">⬇️ Télécharger</a>
+  <a class="act act--ghost" href="${base}/png">Télécharger</a>
   ${sendBtn}
   <span>${sentCell(gc)}</span>
 </div>`;

@@ -234,12 +234,12 @@ function prioBadge(prio: Task["prio"]): string {
 
 function taskCard(t: Task): string {
   const steps = t.steps.map((s) => `<li>${s}</li>`).join("");
-  return `<div class="card tcard" data-task="${t.id}">
+  return `<article class="card tcard" data-task="${t.id}">
 <label class="tcheck"><input type="checkbox" data-task="${t.id}"> <b>${t.title}</b></label>
-<div style="margin-top:.35rem">${prioBadge(t.prio)}</div>
+<div class="tprio">${prioBadge(t.prio)}</div>
 <ol class="tsteps">${steps}</ol>
 <div class="texpect"><b>Attendu :</b> ${t.expect}</div>
-</div>`;
+</article>`;
 }
 
 export function renderTestChecklist(pendingLinks: number): string {
@@ -256,21 +256,20 @@ ${s.tasks.map(taskCard).join("")}`,
       : `<div class="card"><span class="ok">✓ Aucune liaison en attente pour l'instant.</span></div>`;
 
   return `
-<div class="card">
-<b>Checklist de recette — liaison de compte par email (cas Rokhaya).</b>
-<div class="muted" style="margin-top:.3rem">Coche au fur et à mesure ; l'état est enregistré dans CE navigateur.
-Le numéro d'Awa (prod) : +221 78 953 66 76.</div>
-<div style="margin-top:.6rem"><b><span id="tdone">0</span> / ${total}</b> testé(s)
-<button class="act act--sm act--ghost" style="margin-left:.6rem" onclick="tReset()">Tout décocher</button></div>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Qualité</span><h2>Checklist de recette</h2><p>Validez les scénarios critiques de liaison de compte avant la mise en production.</p></div><div class="page-header-actions"><button class="act act--ghost" type="button" onclick="tReset()">Réinitialiser</button></div></header>
+<div class="card checklist-progress">
+<div><b><span id="tdone">0</span> / ${total} scénarios validés</b><span class="muted">L’état est enregistré uniquement dans ce navigateur.</span></div>
+<span class="badge badge--violet">Awa · +221 78 953 66 76</span>
 </div>
 ${pendingNote}
 ${sections}
 <style>
 .tcheck{display:flex;align-items:flex-start;gap:.5rem;cursor:pointer;font-size:.98rem}
 .tcheck input{margin-top:.25rem;width:1.1rem;height:1.1rem;flex:none}
-.tsteps{margin:.5rem 0 .5rem 1.2rem;padding:0;font-size:.88rem;color:#33393f}
+.tprio{margin-top:.35rem}
+.tsteps{margin:.5rem 0 .5rem 1.2rem;padding:0;font-size:.92rem;line-height:1.6;color:#33393f}
 .tsteps li{margin:.15rem 0}
-.texpect{font-size:.86rem;background:#f0ede7;border-radius:8px;padding:.5rem .6rem}
+.texpect{font-size:.9rem;line-height:1.6;background:var(--cream-100);border-radius:8px;padding:.55rem .65rem}
 .tcard.done{opacity:.55}
 .tcard.done b{text-decoration:line-through}
 </style>

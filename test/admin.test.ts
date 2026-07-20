@@ -52,11 +52,12 @@ describe("admin auth — ADMIN_USERS parsing", () => {
 });
 
 describe("admin auth — built-in fallback (ADMIN_USERS unset)", () => {
-  it("accepts revive/revive", () => {
-    expect(verifyBasicAuth(basic("revive", "revive"), FALLBACK_USERS)).toBe("revive");
+  it("accepts revive/revive@5000", () => {
+    expect(verifyBasicAuth(basic("revive", "revive@5000"), FALLBACK_USERS)).toBe("revive");
   });
 
-  it("rejects a wrong password and a missing header (never open)", () => {
+  it("rejects the previous password, a wrong password and a missing header", () => {
+    expect(verifyBasicAuth(basic("revive", "revive"), FALLBACK_USERS)).toBeNull();
     expect(verifyBasicAuth(basic("revive", "wrong"), FALLBACK_USERS)).toBeNull();
     expect(verifyBasicAuth(undefined, FALLBACK_USERS)).toBeNull();
   });

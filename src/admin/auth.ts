@@ -8,7 +8,7 @@ import { config } from "../config.js";
  * accepted for scripts/curl but we no longer challenge browsers with
  * WWW-Authenticate (that dialog is what felt like "every time").
  *
- * Accounts from ADMIN_USERS ("user1:pass1,user2:pass2"). Unset → revive/revive.
+ * Accounts from ADMIN_USERS ("user1:pass1,user2:pass2"). Unset → revive/revive@5000.
  */
 
 export const SESSION_COOKIE = "awa_admin_session";
@@ -43,7 +43,7 @@ export function adminUsers(): Map<string, string> {
 /**
  * Built-in fallback when ADMIN_USERS is unset. Dashboard is never open.
  */
-export const FALLBACK_USERS = new Map([["revive", "revive"]]);
+export const FALLBACK_USERS = new Map([["revive", "revive@5000"]]);
 
 /**
  * Check username/password against the account map.
@@ -82,10 +82,11 @@ export function verifyBasicAuth(
 /** Stable HMAC key so sessions survive process restarts without a new env var. */
 export function sessionSecret(): string {
   // Derived from existing env so no extra Railway var is required. Changing
-  // ADMIN_USERS or DATABASE_URL invalidates all sessions (acceptable).
+  // configured OR fallback credentials invalidates all sessions (acceptable).
+  const authMaterial = config.ADMIN_USERS || [...FALLBACK_USERS.entries()].map(([user, pass]) => `${user}:${pass}`).join(",");
   return crypto
     .createHash("sha256")
-    .update(`awa-admin-v1|${config.ADMIN_USERS}|${config.DATABASE_URL}`)
+    .update(`awa-admin-v1|${authMaterial}|${config.DATABASE_URL}`)
     .digest("hex");
 }
 

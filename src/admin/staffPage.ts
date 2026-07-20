@@ -75,8 +75,8 @@ export function renderStaffPlanning(data: StaffPlanningData): string {
 
   if (schedules.length === 0 || !current) {
     return `${data.banner}
-<h2>Planning du personnel 🗓</h2>
-<div class="card"><p class="muted">Aucun planning pour l'instant.</p>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio</span><h2>Planning de l’équipe</h2><p>Créez un premier scénario hebdomadaire pour organiser l’accueil, le bar et l’entretien.</p></div></header>
+<div class="card"><div class="empty"><b>Aucun planning</b><p>Donnez un nom au premier scénario pour commencer.</p></div>
 <form method="post" action="/admin/staff" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
   <input name="name" required placeholder="Nom du planning (ex. Semaine type)" style="flex:1;min-width:220px">
   <button class="act" type="submit">Créer un planning</button>
@@ -95,44 +95,39 @@ export function renderStaffPlanning(data: StaffPlanningData): string {
   }).replace(/</g, "\\u003c");
 
   const inlineForm = (action: string, label: string, extra = "", confirm?: string) =>
-    `<form method="post" action="${esc(action)}" style="display:inline"${confirm ? ` onsubmit="return confirm('${esc(confirm)}')"` : ""}>${extra}<button class="act act--sm" type="submit">${esc(label)}</button></form>`;
+    `<form method="post" action="${esc(action)}" class="inline"${confirm ? ` data-confirm="${esc(confirm)}"` : ""}>${extra}<button class="act act--sm" type="submit">${esc(label)}</button></form>`;
 
   return `${data.banner}
-<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
-  <h2 style="margin:.3rem 0">Planning du personnel 🗓</h2>
-  <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center">
-    <a class="act act--sm act--ghost" href="/admin/staff/${esc(current.id)}/print" target="_blank">🖨 Imprimer</a>
-    ${inlineForm(`/admin/staff/${current.id}/send-all`, "📲 Envoyer à toutes", "", `Envoyer « ${current.name} »${isDraft ? " (brouillon)" : ""} à toutes les employées ?`)}
-  </div>
-</div>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio</span><h2>Planning de l’équipe</h2><p>Testez les rotations, publiez le scénario de référence et envoyez à chacune son planning.</p></div><div class="page-header-actions"><a class="act act--ghost" href="/admin/staff/${esc(current.id)}/print" target="_blank">Imprimer</a>${inlineForm(`/admin/staff/${current.id}/send-all`, "Envoyer à toutes", "", `Envoyer « ${current.name} »${isDraft ? " (brouillon)" : ""} à toutes les employées ?`)}</div></header>
 
-<div class="card" style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+<div class="card cluster planning-toolbar">
   <form method="get" action="/admin/staff" style="margin:0">
     <select name="s" onchange="this.form.submit()" >${selector}</select>
   </form>
   ${scheduleBadge(current)}
   ${inlineForm("/admin/staff/duplicate", "Dupliquer", `<input type="hidden" name="source_id" value="${esc(current.id)}"><input type="hidden" name="name" value="Copie de ${esc(current.name)}">`)}
   ${inlineForm(`/admin/staff/${current.id}/rename`, "Renommer", `<input name="name" value="${esc(current.name)}" style="width:11rem">`)}
-  ${isDraft ? inlineForm(`/admin/staff/${current.id}/publish`, "Publier ✅", "", `Publier « ${current.name} » ? Il remplacera le planning de référence.`) : ""}
-  ${isDraft ? inlineForm(`/admin/staff/${current.id}/delete`, "Supprimer 🗑", "", `Supprimer « ${current.name} » ?`) : ""}
-  <a href="/admin/staff?new=1" style="font-size:.82rem">➕ Nouveau planning</a>
+  ${isDraft ? inlineForm(`/admin/staff/${current.id}/publish`, "Publier", "", `Publier « ${current.name} » ? Il remplacera le planning de référence.`) : ""}
+  ${isDraft ? inlineForm(`/admin/staff/${current.id}/delete`, "Supprimer", "", `Supprimer « ${current.name} » ?`) : ""}
+  <a class="act act--sm act--ghost" href="/admin/staff?new=1">Nouveau planning</a>
 </div>
 ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/admin/staff" style="display:flex;gap:.5rem;flex-wrap:wrap"><input name="name" required placeholder="Nom du planning" style="flex:1;min-width:220px"><button class="act" type="submit">Créer</button></form></div>` : ""}
 
-<div id="savebar" style="display:none;position:sticky;top:0;z-index:6;background:#fff8f0;border:1px solid #f0d8b6;border-radius:8px;padding:.5rem .8rem;margin-bottom:.6rem;align-items:center;gap:.8rem">
-  <span>⚠ Modifications non enregistrées</span>
-  <button class="act" onclick="staffSave()" style="padding:.4rem .9rem">💾 Enregistrer</button>
+<div id="savebar" class="savebar">
+  <span>Modifications non enregistrées</span>
+  <button class="act" onclick="staffSave()">Enregistrer</button>
 </div>
 
-<div class="card" style="overflow-x:auto">
-  <p class="muted" style="margin:.1rem 0 .6rem">Clique une case pour saisir l'horaire · glisse un créneau sur une autre case pour le copier · les totaux déduisent la pause 13h30–14h30.</p>
+<div class="section-header"><div><span class="eyebrow">Rotation hebdomadaire</span><h2>${esc(current.name)} ${scheduleBadge(current)}</h2></div></div>
+<div class="card table-wrap">
+  <p class="muted">Cliquez une case ou utilisez Entrée pour saisir l’horaire. Le glisser-déposer copie un créneau ; le clic reste l’alternative clavier. Les totaux déduisent la pause 13h30–14h30.</p>
   <table id="staffgrid" style="min-width:720px"><thead><tr><th>Employée</th>${WEEKDAYS_FR.map((d) => `<th style="text-align:center">${d.slice(0, 3)}</th>`).join("")}<th class="right">Heures</th></tr></thead>
   <tbody id="gridbody"></tbody>
-  <tfoot><tr id="gridfoot" style="font-size:.78rem;color:#6e7781"></tr></tfoot></table>
+  <tfoot><tr id="gridfoot" class="muted"></tr></tfoot></table>
 </div>
-<h2 style="margin:1.2rem 0 .4rem">L'équipe 👥</h2>
+<div class="section-header"><div><span class="eyebrow">Répertoire</span><h2>L’équipe</h2></div><span class="badge badge--gray">${staff.length}</span></div>
 <div class="card" style="overflow-x:auto">
-  <p class="muted" style="margin:.1rem 0 .7rem">Gère ici tes employées et leurs numéros WhatsApp, puis envoie à chacune SON planning (« ${esc(current.name)} »). L'ajout/retrait d'une employée s'applique à tous les scénarios.</p>
+  <p class="muted" style="margin:.1rem 0 .7rem">Gérez ici les employées et leurs numéros WhatsApp, puis envoyez à chacune son planning (« ${esc(current.name)} »). L’ajout ou le retrait d’une employée s’applique à tous les scénarios.</p>
   <table style="min-width:560px"><thead><tr><th>Employée</th><th>Numéro WhatsApp</th><th class="right">Envoi</th><th></th></tr></thead><tbody>
   ${
     staff.length
@@ -142,14 +137,14 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
 <td><b>${esc(p.name)}</b> <span class="muted">${esc(p.role)}</span></td>
 <td><form method="post" action="/admin/staff/contact/${esc(p.id)}/phone" style="display:flex;gap:.35rem;align-items:center;margin:0">
   <input name="phone" value="${esc(p.phone)}" placeholder="77 123 45 67" style="width:11rem">
-  <button class="act act--sm act--ghost" type="submit" title="Enregistrer le numéro">💾</button>
+  <button class="act act--sm act--ghost" type="submit">Enregistrer</button>
 </form></td>
 <td class="right">${
               p.phone
-                ? `<form method="post" action="/admin/staff/${esc(current.id)}/send/${esc(p.id)}" style="display:inline;margin:0" onsubmit="return confirm('Envoyer son planning à ${esc(p.name)} ?')"><button class="act act--sm" type="submit">📲 Envoyer</button></form>`
-                : `<span class="muted">ajoute un numéro d'abord</span>`
+                ? `<form method="post" action="/admin/staff/${esc(current.id)}/send/${esc(p.id)}" class="inline" data-confirm="Envoyer son planning à ${esc(p.name)} ?"><button class="act act--sm" type="submit">Envoyer</button></form>`
+                : `<span class="muted">Ajoutez d’abord un numéro</span>`
             }</td>
-<td class="right"><form method="post" action="/admin/staff/contact/${esc(p.id)}/delete" style="display:inline;margin:0" onsubmit="return confirm('Retirer ${esc(p.name)} de l\\'équipe ? Ses horaires seront supprimés de TOUS les plannings.')"><button class="act act--sm act--ghost" type="submit" title="Retirer">🗑</button></form></td>
+<td class="right"><form method="post" action="/admin/staff/contact/${esc(p.id)}/delete" class="inline" data-confirm="Retirer ${esc(p.name)} de l’équipe ? Ses horaires seront supprimés de tous les plannings."><button class="act act--sm act--danger" type="submit">Retirer</button></form></td>
 </tr>`,
           )
           .join("")
@@ -160,14 +155,14 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
     <label style="flex:1;min-width:140px">Nouvelle employée<input name="name" required placeholder="Prénom" style="width:100%"></label>
     <label>Rôle<select name="role"><option value="accueil">accueil</option><option value="bar">bar</option><option value="entretien">entretien</option></select></label>
     <label style="min-width:150px">Numéro <span class="muted">(optionnel)</span><input name="phone" placeholder="77 123 45 67" style="width:100%"></label>
-    <button class="act" type="submit">➕ Ajouter</button>
+    <button class="act" type="submit">Ajouter</button>
   </form>
 </div>
 
 <form method="post" action="/admin/staff/${esc(current.id)}/grid" id="gridform" style="display:none"><input type="hidden" name="grid" id="gridinput"></form>
 
-<div id="celleditor" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:20;align-items:center;justify-content:center">
-  <div style="background:#fff;border-radius:12px;padding:1.1rem;max-width:20rem;width:90%">
+<div id="celleditor" class="planning-dialog" role="dialog" aria-modal="true" aria-labelledby="editortitle">
+  <div class="planning-dialog-panel">
     <div id="editortitle" style="font-weight:600;margin-bottom:.6rem"></div>
     <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.6rem">
       <label style="flex:1">Début<input type="time" id="ed_start" step="300" style="width:100%"></label>
@@ -187,7 +182,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   var ST = JSON.parse("${stateJson.replace(/"/g, '\\"')}");
   var BS = ${BREAK_START_MIN}, BE = ${BREAK_END_MIN};
   var DAYS = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
-  var dirty = false, editKey = null;
+  var dirty = false, editKey = null, lastGridFocus = null;
 
   function pad(n){ return (n<10?"0":"")+n; }
   function fmt(x){ return Math.floor(x/60)+"h"+pad(x%60); }
@@ -208,7 +203,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
         var c = ST.cells[p.id+":"+wd];
         if(c){ tot += worked(c.s,c.e); }
         tds += "<td style='text-align:center;cursor:pointer' data-k='"+p.id+":"+wd+"' onclick='edOpen(\\""+p.id+"\\","+wd+")'>"+
-          (c ? "<span class='chip' draggable='true' data-k='"+p.id+":"+wd+"' style='display:inline-block;background:#eef4ef;border:1px solid #cfe2d4;border-radius:6px;padding:.1rem .35rem;font-size:.8rem;white-space:nowrap'>"+fmt(c.s)+"–"+fmt(c.e)+"</span>" : "<span class='muted'>—</span>")+
+          (c ? "<span class='chip' draggable='true' data-k='"+p.id+":"+wd+"' style='display:inline-block;background:#eef4ef;border:1px solid #cfe2d4;border-radius:6px;padding:.12rem .38rem;font-size:.875rem;white-space:nowrap'>"+fmt(c.s)+"–"+fmt(c.e)+"</span>" : "<span class='muted'>—</span>")+
           "</td>";
       }
       tds += "<td style='text-align:right;font-weight:600'>"+dur(tot)+"</td>";
@@ -235,6 +230,12 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
       ch.addEventListener("dragstart", function(ev){ ev.dataTransfer.setData("text/plain", ch.getAttribute("data-k")); });
     });
     document.querySelectorAll("#gridbody td[data-k]").forEach(function(td){
+      td.setAttribute("role","button");td.setAttribute("tabindex","0");
+      td.addEventListener("keydown", function(ev){
+        if(ev.key==="Enter"||ev.key===" "){
+          ev.preventDefault();var key=td.getAttribute("data-k").split(":");edOpen(key[0],parseInt(key[1],10));
+        }
+      });
       td.addEventListener("dragover", function(ev){ ev.preventDefault(); });
       td.addEventListener("drop", function(ev){
         ev.preventDefault();
@@ -248,6 +249,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
 
   // ----- cell editor -----
   window.edOpen = function(id, wd){
+    lastGridFocus = document.activeElement;
     editKey = id+":"+wd;
     var p = ST.staff.find(function(x){ return x.id===id; });
     document.getElementById("editortitle").textContent = p.name + " — " + DAYS[wd];
@@ -261,9 +263,10 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
       return "<button type='button' onclick='edPreset("+v.s+","+v.e+")' class='act act--sm act--ghost'>"+fmt(v.s)+"–"+fmt(v.e)+"</button>";
     }).join("");
     document.getElementById("celleditor").style.display="flex";
+    document.getElementById("ed_start").focus();
   };
   window.edPreset = function(s,e){ document.getElementById("ed_start").value=toTime(s); document.getElementById("ed_end").value=toTime(e); };
-  window.edClose = function(){ document.getElementById("celleditor").style.display="none"; editKey=null; };
+  window.edClose = function(){ document.getElementById("celleditor").style.display="none"; editKey=null;if(lastGridFocus&&lastGridFocus.focus)lastGridFocus.focus(); };
   window.edRepos = function(){ if(editKey){ delete ST.cells[editKey]; markDirty(); render(); } edClose(); };
   window.edOk = function(){
     var s = toMin(document.getElementById("ed_start").value), e = toMin(document.getElementById("ed_end").value);
@@ -279,6 +282,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   };
 
   window.addEventListener("beforeunload", function(ev){ if(dirty){ ev.preventDefault(); ev.returnValue=""; } });
+  document.addEventListener("keydown", function(ev){ if(ev.key==="Escape"&&editKey){ ev.preventDefault();edClose(); } });
   render();
 })();
 </script>`;

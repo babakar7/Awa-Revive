@@ -178,7 +178,7 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
           statements,
           banner: coachPaymentBanner(query.done, query.err),
         });
-        reply.type("text/html").send(await layout("Paiements coachs", BASE, body));
+        reply.type("text/html").send(await layout("Paiements coachs", BASE, body, { subtitle: "États mensuels confidentiels", contentWidth: "wide" }));
       });
 
       section.get("/reglages", async (req, reply) => {
@@ -197,7 +197,7 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
           wixError,
           banner: coachPaymentBanner(query.done, query.err),
         });
-        reply.type("text/html").send(await layout("Réglages paiements coachs", BASE, body));
+        reply.type("text/html").send(await layout("Réglages paiements coachs", BASE, body, { contentWidth: "standard", breadcrumbs: [{ href: BASE, label: "Paiements coachs" }, { label: "Réglages" }] }));
       });
 
       section.post("/reglages/:profileId", async (req, reply) => {
@@ -272,7 +272,7 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
           banner: coachPaymentBanner(query.done, query.err),
           emailEnabled: emailNotificationsEnabled(),
         });
-        reply.type("text/html").send(await layout(`Paiement ${detail.statement.coach_name_snapshot}`, BASE, body));
+        reply.type("text/html").send(await layout(`Paiement ${detail.statement.coach_name_snapshot}`, BASE, body, { contentWidth: "wide", breadcrumbs: [{ href: BASE, label: "Paiements coachs" }, { label: detail.statement.coach_name_snapshot }] }));
       });
 
       section.post("/etats/:id/synchroniser", async (req, reply) => {

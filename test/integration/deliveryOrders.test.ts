@@ -17,7 +17,7 @@ import { makeFetchMock, type FetchMock, truncateAll, waitFor, settle } from "./h
  */
 
 const noopLog = { info: () => {}, warn: () => {}, error: () => {} };
-const AUTH = `Basic ${Buffer.from("revive:revive").toString("base64")}`;
+const AUTH = `Basic ${Buffer.from("revive:revive@5000").toString("base64")}`;
 const RECEPTION = config.RECEPTION_PHONE.replace(/\D/g, "");
 
 let app: FastifyInstance;

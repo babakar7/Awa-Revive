@@ -1,70 +1,135 @@
+import { ADMIN_CLIENT_JS } from "./adminClient.js";
+import { ADMIN_CSS } from "./adminStyles.js";
 import { badgeLabel, escapeHtml } from "./helpers.js";
 import { loadNavBadges, type NavBadges } from "./navBadges.js";
+
+export type ContentWidth = "standard" | "wide" | "full";
 
 export type LayoutOpts = {
   refreshSeconds?: number;
   /** Preloaded badges (home already has them); otherwise fetched. */
   badges?: NavBadges;
+  subtitle?: string;
+  actions?: string;
+  contentWidth?: ContentWidth;
+  breadcrumbs?: Array<{ href?: string; label: string }>;
 };
+
+type IconName =
+  | "home"
+  | "chat"
+  | "handoff"
+  | "review"
+  | "crm"
+  | "booking"
+  | "team"
+  | "wallet"
+  | "invoice"
+  | "quote"
+  | "gift"
+  | "orders"
+  | "delivery"
+  | "menu"
+  | "bell"
+  | "profile"
+  | "tests"
+  | "search"
+  | "logout"
+  | "panel"
+  | "hamburger"
+  | "empty";
 
 type NavLink = {
   href: string;
   label: string;
-  /** Which badge key to show (optional). */
+  icon: IconName;
   badgeKey?: keyof NavBadges;
 };
 
 type NavSection = {
-  title: string | null;
+  title: string;
   muted?: boolean;
   links: NavLink[];
 };
 
 const NAV: NavSection[] = [
   {
-    title: null,
-    links: [{ href: "/admin", label: "À faire", badgeKey: "total" }],
+    title: "Aperçu",
+    links: [{ href: "/admin", label: "À faire", icon: "home", badgeKey: "total" }],
   },
   {
     title: "Clients",
     links: [
-      { href: "/admin/conversations", label: "Conversations" },
-      { href: "/admin/handoffs", label: "Handoffs", badgeKey: "handoffs" },
-      { href: "/admin/reviews", label: "À reprendre", badgeKey: "reviews" },
-      { href: "/admin/factures", label: "Factures 🧾" },
-      { href: "/admin/cartes-cadeaux", label: "Cartes cadeaux 🎁" },
-      // CRM = fiches Wix / liaisons / doublons — same "people" job as conversations,
-      // never under Bar (that was only a missing section header in the first layout).
-      { href: "/admin/crm", label: "CRM", badgeKey: "crmLinks" },
+      { href: "/admin/conversations", label: "Conversations", icon: "chat" },
+      { href: "/admin/handoffs", label: "Handoffs", icon: "handoff", badgeKey: "handoffs" },
+      { href: "/admin/reviews", label: "À reprendre", icon: "review", badgeKey: "reviews" },
+      { href: "/admin/crm", label: "CRM", icon: "crm", badgeKey: "crmLinks" },
     ],
   },
   {
     title: "Studio",
     links: [
-      { href: "/admin/bookings", label: "Réservations" },
-      { href: "/admin/staff", label: "Équipe 🗓" },
-      { href: "/admin/paiements-coachs", label: "Paiements coachs 🔒" },
-      { href: "/admin/devis", label: "Devis 📄" },
+      { href: "/admin/bookings", label: "Réservations", icon: "booking" },
+      { href: "/admin/staff", label: "Équipe", icon: "team" },
+      { href: "/admin/paiements-coachs", label: "Paiements coachs", icon: "wallet" },
+    ],
+  },
+  {
+    title: "Documents",
+    links: [
+      { href: "/admin/factures", label: "Factures", icon: "invoice" },
+      { href: "/admin/devis", label: "Devis", icon: "quote" },
+      { href: "/admin/cartes-cadeaux", label: "Cartes cadeaux", icon: "gift" },
     ],
   },
   {
     title: "Bar",
     links: [
-      { href: "/admin/orders", label: "Commandes payées" },
-      { href: "/admin/livraisons", label: "Livraisons", badgeKey: "livraisons" },
-      { href: "/admin/menu", label: "Menu bar" },
+      { href: "/admin/orders", label: "Commandes payées", icon: "orders" },
+      { href: "/admin/livraisons", label: "Livraisons", icon: "delivery", badgeKey: "livraisons" },
+      { href: "/admin/menu", label: "Menu", icon: "menu" },
     ],
   },
   {
-    title: "Réglages",
+    title: "Configuration",
     muted: true,
     links: [
-      { href: "/admin/notifications", label: "Notifs staff" },
-      { href: "/admin/profile", label: "Profil WhatsApp" },
-      { href: "/admin/tests", label: "À tester" },
+      { href: "/admin/notifications", label: "Notifications", icon: "bell" },
+      { href: "/admin/profile", label: "Profil WhatsApp", icon: "profile" },
+      { href: "/admin/tests", label: "Tests", icon: "tests" },
     ],
   },
 ];
+
+const ICON_PATHS: Record<IconName, string> = {
+  home: '<path d="M3 10.5 10 4l7 6.5"/><path d="M5 9.5V17h10V9.5"/><path d="M8 17v-5h4v5"/>',
+  chat: '<path d="M4 4.5h12v9H9l-4 3v-3H4z"/><path d="M7 8h6M7 10.5h4"/>',
+  handoff: '<circle cx="7" cy="7" r="2.5"/><path d="M2.8 16c.6-3 2.1-4.5 4.2-4.5 1.5 0 2.7.7 3.5 2"/><path d="M12 7h5m-2-2 2 2-2 2"/>',
+  review: '<path d="M4 3.5h12v13H4z"/><path d="M7 7h6M7 10h6M7 13h3"/>',
+  crm: '<circle cx="7" cy="7" r="2.5"/><circle cx="14.5" cy="8" r="2"/><path d="M2.5 16c.7-3 2.2-4.5 4.5-4.5S11 13 11.5 16M12 13c1.8-.8 4 .2 5 2.5"/>',
+  booking: '<rect x="3" y="5" width="14" height="12" rx="2"/><path d="M6 3v4m8-4v4M3 9h14M7 12h2m2 0h2"/>',
+  team: '<circle cx="10" cy="6.5" r="3"/><path d="M4.5 17c.7-3.5 2.5-5.2 5.5-5.2s4.8 1.7 5.5 5.2"/><path d="M15 5.2c1.6.2 2.5 1.2 2.5 2.5s-.8 2.2-2.2 2.5"/>',
+  wallet: '<path d="M3 5h12.5A1.5 1.5 0 0 1 17 6.5V15H4.5A1.5 1.5 0 0 1 3 13.5z"/><path d="M3 6.5 14 3v3M13 9.5h4v3h-4a1.5 1.5 0 0 1 0-3Z"/>',
+  invoice: '<path d="M5 3h8l3 3v11H5z"/><path d="M13 3v4h3M8 10h5M8 13h5"/>',
+  quote: '<path d="M5 3h8l3 3v11H5z"/><path d="M13 3v4h3M8 10h5M8 13h3"/><path d="m3 15 2-2"/>',
+  gift: '<rect x="3" y="8" width="14" height="9" rx="1"/><path d="M2.5 6h15v3h-15zM10 6v11"/><path d="M10 6C8 6 6 5.3 6 4s1-2 2.2-1C9.2 3.8 10 6 10 6Zm0 0s.8-2.2 1.8-3C13 2 14 2.7 14 4s-2 2-4 2Z"/>',
+  orders: '<path d="M4 5h12l-1 12H5zM7 5a3 3 0 0 1 6 0"/><path d="M7.5 9h5"/>',
+  delivery: '<path d="M2.5 5h9v9h-9zM11.5 8h3l3 3v3h-6z"/><circle cx="6" cy="15.5" r="1.5"/><circle cx="15" cy="15.5" r="1.5"/>',
+  menu: '<path d="M4 4h12M4 8h12M4 12h8M4 16h6"/>',
+  bell: '<path d="M5 14h10l-1.5-2V8a3.5 3.5 0 0 0-7 0v4z"/><path d="M8.5 16.5h3"/>',
+  profile: '<circle cx="10" cy="7" r="3"/><path d="M4.5 17c.8-3.5 2.6-5.2 5.5-5.2s4.7 1.7 5.5 5.2"/>',
+  tests: '<path d="M7 3h6M8 3v4l-4 8a1.5 1.5 0 0 0 1.3 2h9.4a1.5 1.5 0 0 0 1.3-2l-4-8V3"/><path d="M6.5 12h7"/>',
+  search: '<circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/>',
+  logout: '<path d="M8 4H4v12h4M12 7l3 3-3 3M7 10h8"/>',
+  panel: '<rect x="3" y="4" width="14" height="12" rx="2"/><path d="M8 4v12m3-9 3 3-3 3"/>',
+  hamburger: '<path d="M3 5.5h14M3 10h14M3 14.5h14"/>',
+  empty: '<path d="M4 6h12v10H4zM7 6V4h6v2"/><path d="M7 11h6"/>',
+};
+
+export function uiIcon(name: IconName, label?: string): string {
+  const aria = label ? `role="img" aria-label="${escapeHtml(label)}"` : 'aria-hidden="true"';
+  return `<span class="ui-icon" ${aria}><svg viewBox="0 0 20 20" focusable="false">${ICON_PATHS[name]}</svg></span>`;
+}
 
 function isActive(href: string, active: string): boolean {
   if (href === "/admin") return active === "/admin";
@@ -78,159 +143,27 @@ function navHtml(active: string, badges: NavBadges): string {
         const n = l.badgeKey ? badges[l.badgeKey] : 0;
         const b =
           typeof n === "number" && n > 0
-            ? `<span class="nav-badge">${escapeHtml(badgeLabel(n))}</span>`
+            ? `<span class="nav-badge" aria-label="${n} en attente">${escapeHtml(badgeLabel(n))}</span>`
             : "";
-        const cls = isActive(l.href, active) ? "active" : "";
-        return `<a href="${l.href}" class="${cls}">${escapeHtml(l.label)}${b}</a>`;
+        const current = isActive(l.href, active);
+        return `<a href="${l.href}" class="nav-link${current ? " active" : ""}"${current ? ' aria-current="page"' : ""} title="${escapeHtml(l.label)}"><span class="nav-icon">${uiIcon(l.icon)}</span><span class="nav-label">${escapeHtml(l.label)}</span>${b}</a>`;
       })
       .join("");
-    const title = section.title
-      ? `<div class="nav-section${section.muted ? " muted-sec" : ""}">${escapeHtml(section.title)}</div>`
-      : "";
-    return `${title}${links}`;
+    return `<div class="nav-section${section.muted ? " muted-sec" : ""}">${escapeHtml(section.title)}</div>${links}`;
   }).join("");
 }
 
-const CSS = `
-:root{
-  color-scheme:light;
-  --bg:#faf7f2;--surface:#fff;--border:#e8e0d8;--border-subtle:#f0eae2;
-  --text:#241c24;--text-2:#5c525c;--muted:#8a7f8a;--faint:#b5abb5;
-  --brand:#6b4a6f;--brand-strong:#5a3d5e;--brand-soft:#f5edf4;--brand-border:#e3d3e2;
-  --ok:#1a7f37;--danger:#cf222e;--danger-strong:#b31d28;--warn:#9a6700;--warn-bg:#fff8f0;--warn-border:#f0d8b6;--info:#0969da;
-  --sidebar:#261c26;--sidebar-hover:#3a2c3a;--sidebar-text:#cfc5cf;
-  --radius:8px;--radius-sm:6px;--radius-lg:10px;
-  --shadow:0 1px 3px rgba(36,28,36,.07);
+function breadcrumbHtml(items?: LayoutOpts["breadcrumbs"]): string {
+  if (!items?.length) return "";
+  const parts = items.map((item, i) => {
+    const label = escapeHtml(item.label);
+    const node = item.href ? `<a href="${escapeHtml(item.href)}">${label}</a>` : `<span>${label}</span>`;
+    return `${i ? '<span aria-hidden="true">/</span>' : ""}${node}`;
+  });
+  return `<nav class="breadcrumbs" aria-label="Fil d’Ariane">${parts.join("")}</nav>`;
 }
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;background:var(--bg);color:var(--text);font-size:15px;line-height:1.45}
-h1,h2,h3{letter-spacing:-.01em}
 
-/* ---------- chrome ---------- */
-.shell{display:flex;min-height:100vh;align-items:stretch}
-.sidebar{width:224px;flex-shrink:0;background:var(--sidebar);color:#fff;padding:1rem .6rem 1.25rem;display:flex;flex-direction:column;gap:2px}
-.sidebar .brand{font-size:.95rem;font-weight:650;padding:.25rem .6rem .1rem;letter-spacing:-.01em;color:#fff}
-.sidebar .brand small{display:block;font-size:.68rem;font-weight:500;color:var(--faint);letter-spacing:.04em;text-transform:uppercase;margin-top:.15rem}
-.sidebar a{color:var(--sidebar-text);text-decoration:none;padding:.42rem .6rem;border-radius:var(--radius-sm);font-size:.87rem;display:flex;align-items:center;justify-content:space-between;gap:.4rem;border-left:2px solid transparent}
-.sidebar a:hover{background:var(--sidebar-hover);color:#fff}
-.sidebar a.active{background:var(--sidebar-hover);color:#fff;border-left-color:#c9a3cc;font-weight:600}
-.nav-section{font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;color:#8d7f8d;padding:.9rem .6rem .3rem;font-weight:600}
-.nav-section.muted-sec{margin-top:.4rem;opacity:.8}
-.nav-badge{background:var(--danger);color:#fff;border-radius:10px;font-size:.68rem;font-weight:700;padding:.05rem .4rem;min-width:1.2rem;text-align:center}
-.sidebar .logout{margin-top:auto;padding-top:1rem}
-.sidebar .logout button{width:100%;background:transparent;border:1px solid #4a3a4a;color:var(--sidebar-text);border-radius:var(--radius-sm);padding:.4rem .55rem;font-size:.8rem;cursor:pointer}
-.sidebar .logout button:hover{background:var(--sidebar-hover);color:#fff}
-.main-wrap{flex:1;min-width:0;display:flex;flex-direction:column}
-.topbar{background:var(--surface);border-bottom:1px solid var(--border);box-shadow:var(--shadow);padding:.6rem 1.25rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;position:sticky;top:0;z-index:5}
-.topbar .page-title{font-size:1rem;font-weight:600;margin:0;white-space:nowrap}
-.topbar form{flex:1;min-width:180px;max-width:380px;margin:0 0 0 auto}
-.topbar input[type=search]{width:100%;padding:.42rem .85rem;border:1px solid var(--border);border-radius:20px;font-size:.86rem;margin:0;background:var(--bg)}
-main{max-width:1040px;width:100%;margin:0 auto;padding:1.25rem 1.25rem 3rem}
-main a:not(.act){color:var(--brand)}
-main a:not(.act):hover{color:var(--brand-strong)}
-h2{font-size:1.02rem;font-weight:600;margin:1.6rem 0 .6rem;scroll-margin-top:4rem}
-h2:first-child{margin-top:.2rem}
-h3{font-size:.92rem;font-weight:600;margin:1.1rem 0 .4rem}
-
-/* ---------- surfaces ---------- */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1rem;margin-bottom:.85rem}
-.card.warn,.warn{background:var(--warn-bg);border-color:var(--warn-border)}
-.card.success{border-color:var(--ok)}
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.6rem}
-.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:.8rem .9rem}
-.stat span{font-size:.74rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
-.stat b{display:block;font-size:1.5rem;font-weight:650;font-variant-numeric:tabular-nums;margin-top:.1rem}
-
-/* ---------- tables ---------- */
-table{width:100%;border-collapse:collapse;font-size:.87rem;font-variant-numeric:tabular-nums}
-th,td{text-align:left;padding:.5rem .55rem;border-top:1px solid var(--border-subtle);vertical-align:top}
-th{border-top:none;color:var(--muted);font-weight:600;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em}
-tbody tr:hover{background:#faf6f0}
-a.rowlink{color:inherit;text-decoration:none;display:block}
-tr.rowlink{cursor:pointer}
-
-/* ---------- badges & text ---------- */
-.badge{color:#fff;border-radius:20px;padding:.12rem .55rem;font-size:.71rem;font-weight:600;white-space:nowrap;display:inline-block}
-.badge--gray{background:#8a7f8a}
-.badge--violet{background:var(--brand)}
-.badge--red{background:var(--danger)}
-.badge--amber{background:var(--warn)}
-.badge--blue{background:var(--info)}
-.badge--green{background:var(--ok)}
-.muted{color:var(--muted);font-size:.82rem}
-.ok{color:var(--ok);font-weight:600}
-.subhead{font-size:.82rem;color:var(--muted);margin:-.3rem 0 .8rem}
-
-/* ---------- buttons ---------- */
-button.act,a.act{background:var(--brand);color:#fff;border:none;border-radius:var(--radius);padding:.48rem .9rem;font-size:.85rem;font-weight:550;cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;transition:background-color .15s,color .15s,border-color .15s}
-button.act:hover,a.act:hover{background:var(--brand-strong);color:#fff}
-.act--sm{padding:.3rem .6rem;font-size:.78rem;border-radius:var(--radius-sm)}
-button.act.act--ok,a.act.act--ok{background:var(--ok);color:#fff}
-button.act.act--ok:hover,a.act.act--ok:hover{background:#166f30;color:#fff}
-button.act.act--danger,a.act.act--danger{background:var(--danger);color:#fff}
-button.act.act--danger:hover,a.act.act--danger:hover{background:var(--danger-strong);color:#fff}
-button.act.act--ghost,a.act.act--ghost{background:transparent;color:var(--brand);border:1px solid var(--brand-border)}
-button.act.act--ghost:hover,a.act.act--ghost:hover{background:var(--brand-soft);color:var(--brand-strong);border-color:var(--brand)}
-button.act:disabled{opacity:.55;cursor:default}
-button.act:disabled:hover{background:var(--brand)}
-button.act.act--ghost:disabled:hover{background:transparent;color:var(--brand)}
-button.act:focus-visible,a.act:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
-
-/* ---------- forms ---------- */
-main input:not([type=checkbox]):not([type=radio]):not([type=search]),main select,main textarea{
-  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  padding:.5rem .65rem;font-size:.88rem;font-family:inherit;color:var(--text);max-width:100%}
-main label>input:not([type=checkbox]):not([type=radio]),main label>select,main label>textarea{width:100%;margin-top:.2rem}
-main input:focus-visible,main select:focus-visible,main textarea:focus-visible{outline:2px solid var(--brand);outline-offset:0;border-color:var(--brand)}
-main input[type=checkbox],main input[type=radio]{accent-color:var(--brand);width:1rem;height:1rem}
-main label{font-size:.85rem;font-weight:500;color:var(--text-2)}
-input[type=search]{width:100%;padding:.55rem .85rem;border:1px solid var(--border);border-radius:var(--radius-lg);font-size:.92rem;margin-bottom:.8rem;background:var(--surface)}
-input[type=search]:focus-visible{outline:2px solid var(--brand);outline-offset:0}
-form.inline{display:inline}
-.is-selected{border-color:var(--brand)!important;background:var(--brand-soft)}
-
-/* ---------- chat ---------- */
-.bubble{max-width:78%;padding:.55rem .8rem;border-radius:12px;margin:.25rem 0;white-space:pre-wrap;word-break:break-word;font-size:.92rem}
-.user{background:var(--surface);border:1px solid var(--border);margin-right:auto}
-.assistant{background:var(--brand-soft);border:1px solid var(--brand-border);margin-left:auto}
-.turnrow{display:flex;flex-direction:column}
-details.tool{margin:.15rem 0;font-size:.78rem;color:var(--muted)}
-details.tool pre{white-space:pre-wrap;word-break:break-all;background:var(--bg);border:1px solid var(--border-subtle);padding:.5rem;border-radius:var(--radius);margin:.3rem 0 0}
-details>summary{cursor:pointer}
-
-/* ---------- nav & utilities ---------- */
-.jump-nav{display:flex;flex-wrap:wrap;gap:.4rem;margin:0 0 1rem}
-.jump-nav a{font-size:.83rem;color:var(--brand);text-decoration:none;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:.25rem .75rem}
-.jump-nav a:hover{background:var(--brand-soft);border-color:var(--brand-border)}
-.row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
-.row.between{justify-content:space-between}
-.col{display:flex;flex-direction:column;gap:.6rem}
-.actionbar{position:sticky;bottom:0;background:var(--bg);padding:.6rem 0;display:flex;align-items:center;gap:1rem;box-shadow:0 -6px 12px -8px rgba(36,28,36,.18)}
-.nowrap{white-space:nowrap}
-.right{text-align:right}
-
-@media(max-width:800px){
-  .shell{flex-direction:column}
-  .sidebar{width:100%;flex-direction:row;flex-wrap:wrap;align-items:center;gap:.2rem;padding:.5rem}
-  .sidebar .brand{width:100%;padding:.2rem .4rem .3rem}
-  .sidebar .brand small{display:inline;margin-left:.4rem}
-  .nav-section{width:100%;padding:.45rem .4rem 0}
-  .sidebar a{padding:.32rem .5rem;font-size:.8rem;border-left:none}
-  .sidebar a.active{box-shadow:inset 0 -2px 0 #c9a3cc}
-  .sidebar .logout{margin:0 0 0 auto;padding:0}
-  .sidebar .logout button{width:auto;font-size:.72rem;padding:.3rem .5rem}
-  main{padding:1rem .8rem 2.5rem}
-}
-@media(max-width:640px){
-  td.hide-sm,th.hide-sm{display:none}
-  .card{overflow-x:auto}
-}
-`;
-
-/**
- * Shared admin chrome: sidebar IA + global client search + badges.
- * Async so badge counts stay fresh without each route reimplementing them.
- */
+/** Shared admin chrome: task-oriented navigation, search and progressive mobile shell. */
 export async function layout(
   title: string,
   active: string,
@@ -241,32 +174,55 @@ export async function layout(
   const refresh = opts.refreshSeconds
     ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">`
     : "";
+  const contentWidth = opts.contentWidth ?? "wide";
   return `<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 ${refresh}
-<title>${escapeHtml(title)} — Awa admin</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>">
-<style>${CSS}</style></head>
+<title>${escapeHtml(title)} — Revive admin</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%237c547d%22/><text x=%2250%22 y=%2268%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22Georgia%22 font-size=%2262%22>r</text></svg>">
+<style>${ADMIN_CSS}</style></head>
 <body>
 <div class="shell">
-<aside class="sidebar">
-  <div class="brand">🤖 Awa<small>Revive Studio</small></div>
-  ${navHtml(active, badges)}
-  <form class="logout" method="post" action="/admin/logout">
-    <button type="submit">Se déconnecter</button>
-  </form>
-</aside>
-<div class="main-wrap">
-  <div class="topbar">
-    <h1 class="page-title">${escapeHtml(title)}</h1>
-    <form method="get" action="/admin/conversations" role="search">
-      <input type="search" name="q" placeholder="Client : nom ou numéro…" aria-label="Rechercher un client">
+<aside class="sidebar" id="admin-sidebar" aria-label="Navigation principale">
+  <a class="brand" href="/admin" aria-label="Revive — Awa admin">
+    <span class="brand-mark" aria-hidden="true">r</span>
+    <span class="brand-copy"><b>revive</b><small>Awa admin</small></span>
+  </a>
+  <nav>${navHtml(active, badges)}</nav>
+  <div class="sidebar-footer">
+    <form method="post" action="/admin/logout">
+      <button type="submit">${uiIcon("logout")}<span>Se déconnecter</span></button>
     </form>
   </div>
-  <main>${body}</main>
+</aside>
+<button class="nav-scrim" id="nav-scrim" type="button" tabindex="-1" aria-label="Fermer le menu"></button>
+<div class="main-wrap">
+  <header class="topbar">
+    <button class="nav-toggle" id="nav-toggle" type="button" aria-controls="admin-sidebar" aria-expanded="false" aria-label="Ouvrir le menu">${uiIcon("hamburger")}</button>
+    <button class="nav-collapse" id="nav-collapse" type="button" aria-controls="admin-sidebar" aria-expanded="true" aria-label="Replier la navigation">${uiIcon("panel")}</button>
+    <div class="topbar-title"><h1 class="page-title">${escapeHtml(title)}</h1>${opts.subtitle ? `<span class="page-subtitle">${escapeHtml(opts.subtitle)}</span>` : ""}</div>
+    <form class="topbar-search" method="get" action="/admin/conversations" role="search">
+      ${uiIcon("search")}
+      <input id="global-client-search" type="search" name="q" placeholder="Rechercher un client…" aria-label="Rechercher un client par nom ou numéro" autocomplete="off">
+      <span class="search-key" aria-hidden="true">⌘ K</span>
+    </form>
+    ${opts.actions ? `<div class="topbar-actions">${opts.actions}</div>` : ""}
+  </header>
+  <main class="content-${contentWidth}">${breadcrumbHtml(opts.breadcrumbs)}${body}</main>
 </div>
 </div>
+<dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title">
+  <div class="confirm-dialog-inner">
+    <h2 id="confirm-title">Confirmer l’action</h2>
+    <p id="confirm-text"></p>
+    <div class="confirm-dialog-actions">
+      <button class="act act--ghost" type="button" onclick="this.closest('dialog').close()">Annuler</button>
+      <button class="act act--danger" id="confirm-ok" type="button">Confirmer</button>
+    </div>
+  </div>
+</dialog>
+<script>${ADMIN_CLIENT_JS}</script>
 </body></html>`;
 }

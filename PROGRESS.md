@@ -1,9 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **19 juillet 2026** — journal notif : ping « nouvelle
-> conversation » source=`new_chat` (plus `reception`). Avant : admin IA
-> redesign §4.34, notifications staff §4.32, livraisons bar, handoffs `wa.me`.
+> Dernière mise à jour : **20 juillet 2026** — refonte premium et UX de tout
+> l’admin (§4.41). Avant : journal notif « nouvelle conversation », admin IA
+> inbox-first, notifications staff, livraisons bar, handoffs `wa.me`.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
@@ -808,7 +808,7 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
       et ne peut ni l'envoyer ni le confirmer ; après `verified` elle PEUT dire
       que le compte est relié (avant, jamais). 169 tests.
     - ~~⚠️ À faire au prochain déploiement : remettre `ADMIN_USERS` en prod~~
-      **Résolu (13/07)** : login fallback en dur `revive`/`revive` quand
+      **Résolu (13/07)** : login fallback en dur `revive`/`revive@5000` quand
       `ADMIN_USERS` est vide ([admin/auth.ts](src/admin/auth.ts)) — la page
       n'est plus jamais servie sans login.
 
@@ -1577,6 +1577,45 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     d'opacity inline) ; transitions 150 ms. Vérifié par galerie de composants
     (états normal + hover simulés en dur) + screenshots.
 
+- **4.41 — Admin premium, task-first et mobile (20/07).** Deuxième passe de
+  fond sur **tout** `/admin`, sans toucher aux routes, requêtes ni actions
+  métier. Le langage Revive reste crème/aubergine mais gagne une hiérarchie
+  éditoriale, des surfaces plus calmes et une UX opérationnelle cohérente.
+  - **Fondation isolée** : `adminStyles.ts` contient désormais tokens, shell et
+    composants, alignés sur les mauves officiels Revive (`#7c547d` principal,
+    `#a98baa` accent) ; `adminClient.ts` contient l’amélioration progressive.
+    `layout.ts` reste le contrat SSR zéro build front/zéro dépendance runtime et
+    accepte largeur, sous-titre, actions et fil d’Ariane sans casser ses appels.
+  - **Navigation orientée tâches** : 6 groupes stables (Aperçu, Clients, Studio,
+    Documents, Bar, Configuration), icônes SVG homogènes, état actif explicite,
+    sidebar repliable mémorisée, recherche client globale (`Cmd/Ctrl+K`). À
+    ≤900 px, vrai drawer avec scrim, `aria-expanded`, Escape, focus piégé puis
+    restauré ; `prefers-reduced-motion` est respecté.
+  - **Accueil opérationnel** : `/admin` n’est plus une collection de tables mais
+    une file priorisée. Remboursements/activations, interventions humaines,
+    CRM et incidents livraison sont des tâches avec action visible ; états vides
+    calmes ; statistiques reléguées après le travail à faire.
+  - **Composants et sécurité UX** : cartes, stats, tables, badges, champs,
+    boutons, en-têtes, filtres, empty states et pages login/unlock harmonisés.
+    Focus visible global ; modale de confirmation progressive via `data-confirm` ;
+    formulaires désactivés après soumission pour éviter le double clic. Aucun
+    changement d’autorité serveur : calculs et validations restent côté backend.
+  - **Lisibilité renforcée (20/07)** : corps global à 16 px / interligne 1,6,
+    texte secondaire à 14 px et `#665c68`, tableaux à ~15 px, labels/boutons à
+    14 px, descriptions à 15 px et titres de page à 26 px. La réduction du corps
+    à 14 px sur mobile est supprimée. Surfaces « papier chaud » (`#f5efe9` fond,
+    `#fbf7f2` cartes, `#fefbf7` champs) à la place du blanc pur pour réduire
+    l’éblouissement ; les documents print autonomes sont exclus.
+  - **Passe complète des écrans** : conversations, réservations/commandes,
+    handoffs/reviews/CRM, factures/devis/cartes cadeaux, livraisons/menu,
+    planning staff, paiements coachs, notifications, profil WhatsApp et checklist.
+    Les tables critiques ont un comportement mobile explicite ; la grille staff
+    conserve le drag-and-drop mais gagne clavier (Entrée/Espace), Escape et retour
+    de focus. Les documents print autonomes conservent leur CSS et leur géométrie.
+  - **Régression** : `test/adminUi.test.ts` couvre structure/a11y/échappement du
+    shell et les états urgent/vide de l’accueil. Vérification de livraison :
+    `npm run build`, suite `npm test`, `git diff --check`.
+
 ## 5. Chronologie condensée
 
 - **19/07 — Factures : Awa émet de vraies factures, et tout part en PDF
@@ -2064,7 +2103,7 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
 
 **Avant lancement (essentiellement côté Babakar, dans Wix) :**
 - [x] **Protéger `/admin`** → **FAIT (13/07)** : login fallback en dur
-  `revive`/`revive` quand `ADMIN_USERS` est vide — plus jamais ouvert sans
+  `revive`/`revive@5000` quand `ADMIN_USERS` est vide — plus jamais ouvert sans
   login. Optionnel plus tard : poser `ADMIN_USERS` sur Railway pour des comptes
   nominatifs (les logs d'action diraient qui a cliqué) et un mot de passe fort.
 - [ ] Activer **« Wait for CI »** sur le service Railway (Settings → Deploy)

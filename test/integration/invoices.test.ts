@@ -10,7 +10,7 @@ import { makeFetchMock, type FetchMock, truncateAll, settle } from "./helpers.js
  * WhatsApp image send (media upload → message) with its notification_log entry.
  */
 
-const AUTH = `Basic ${Buffer.from("revive:revive").toString("base64")}`;
+const AUTH = `Basic ${Buffer.from("revive:revive@5000").toString("base64")}`;
 const YEAR = new Date().getUTCFullYear();
 
 let app: FastifyInstance;

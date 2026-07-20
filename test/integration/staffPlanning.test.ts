@@ -12,7 +12,7 @@ import { makeFetchMock, type FetchMock, truncateAll, settle } from "./helpers.js
  * only runs in beforeAll (except the seed test, which re-runs it explicitly).
  */
 
-const AUTH = `Basic ${Buffer.from("revive:revive").toString("base64")}`;
+const AUTH = `Basic ${Buffer.from("revive:revive@5000").toString("base64")}`;
 
 let app: FastifyInstance;
 let mock: FetchMock;

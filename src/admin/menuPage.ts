@@ -44,33 +44,33 @@ function fieldsRow(prefix: string, it: MenuItemView | null, cats: string[]): str
   const catV = it ? esc(it.category) : "";
   const descV = it ? esc(it.description) : "";
   const fav = it?.favourite ? " checked" : "";
-  return `<input name="name" required maxlength="80" value="${nameV}" placeholder="Nom" style="flex:2;min-width:9rem">
-<input name="price_xof" required type="number" min="1" value="${priceV}" placeholder="Prix" style="width:6rem">
-<input name="category" required maxlength="40" list="${prefix}-cats" value="${catV}" placeholder="Catégorie" style="flex:1;min-width:8rem">
-<input name="description" maxlength="200" value="${descV}" placeholder="Description (optionnel)" style="flex:3;min-width:10rem">
-<label style="display:flex;align-items:center;gap:.3rem;white-space:nowrap"><input type="checkbox" name="favourite"${fav}> ⭐</label>
+  return `<input name="name" required maxlength="80" value="${nameV}" placeholder="Nom" aria-label="Nom de l’article" style="flex:2;min-width:9rem">
+<input name="price_xof" required type="number" min="1" value="${priceV}" placeholder="Prix" aria-label="Prix en francs CFA" style="width:7rem">
+<input name="category" required maxlength="40" list="${prefix}-cats" value="${catV}" placeholder="Catégorie" aria-label="Catégorie" style="flex:1;min-width:8rem">
+<input name="description" maxlength="200" value="${descV}" placeholder="Description (optionnel)" aria-label="Description" style="flex:3;min-width:10rem">
+<label class="cluster nowrap"><input type="checkbox" name="favourite"${fav}> Incontournable</label>
 <datalist id="${prefix}-cats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>`;
 }
 
 function editRow(it: MenuItemView, cats: string[]): string {
-  return `<tr><td colspan="5">
+  return `<tr><td colspan="5" data-label="">
 <form method="post" action="/admin/menu/items/${esc(it.id)}/update" class="row">
   ${fieldsRow("edit", it, cats)}
   <button class="act act--sm" type="submit">Enregistrer</button>
   <a href="/admin/menu">Annuler</a>
-  <span class="muted" style="font-size:.75rem">id ${esc(it.id)}</span>
+  <span class="muted">id ${esc(it.id)}</span>
 </form></td></tr>`;
 }
 
 function viewRow(it: MenuItemView): string {
   return `<tr>
-<td><b>${esc(it.name)}</b>${it.favourite ? " ⭐" : ""}</td>
-<td style="white-space:nowrap">${esc(it.price_xof)} F</td>
-<td class="hide-sm">${esc(it.description)}</td>
-<td class="hide-sm"><span class="muted" style="font-size:.72rem">${esc(it.id)}</span></td>
-<td style="white-space:nowrap">
+<td data-label="Article"><b>${esc(it.name)}</b>${it.favourite ? ` <span class="badge badge--violet">Incontournable</span>` : ""}</td>
+<td data-label="Prix" class="nowrap"><b>${esc(it.price_xof)} F</b></td>
+<td data-label="Description" class="hide-sm">${esc(it.description) || "—"}</td>
+<td data-label="ID" class="hide-sm"><span class="muted">${esc(it.id)}</span></td>
+<td data-label="Actions" class="nowrap">
   <a class="act act--sm act--ghost" href="/admin/menu?edit=${esc(it.id)}">Modifier</a>
-  <form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" style="display:inline" onsubmit="return confirm('Retirer « ${esc(it.name)} » du menu ?')">
+  <form method="post" action="/admin/menu/items/${esc(it.id)}/toggle" class="inline" data-confirm="Retirer « ${esc(it.name)} » du menu ? L’article pourra être restauré plus tard.">
     <button class="act act--sm act--ghost" type="submit">Retirer</button>
   </form>
 </td></tr>`;
@@ -88,8 +88,8 @@ export function renderMenuPage(opts: { items: MenuItemView[]; editId?: string; b
         .filter((i) => i.category === cat)
         .map((it) => (it.id === editId ? editRow(it, cats) : viewRow(it)))
         .join("");
-      return `<h3 style="margin:1rem 0 .3rem">${esc(cat)}</h3>
-<div class="card"><table><thead><tr><th>Article</th><th>Prix</th><th class="hide-sm">Description</th><th class="hide-sm">ID</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      return `<div class="section-header"><h3>${esc(cat)}</h3><span class="badge badge--gray">${enabled.filter((i) => i.category === cat).length}</span></div>
+<div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Article</th><th>Prix</th><th class="hide-sm">Description</th><th class="hide-sm">ID</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
     })
     .join("");
 
@@ -104,16 +104,15 @@ export function renderMenuPage(opts: { items: MenuItemView[]; editId?: string; b
     : "";
 
   return `${banner}
-<h2 style="margin:.4rem 0">Menu bar ☕</h2>
-<p class="muted">Modifie prix, noms et descriptions ici — Awa et le formulaire livraisons se mettent à jour tout de suite, sans redéploiement. Les prix sont toujours calculés côté serveur. « Retirer » archive l'article (restaurable) ; l'ID n'est jamais réutilisé.</p>
-${groups || `<p class="muted">Menu vide.</p>`}
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Menu</h2><p>Les modifications sont immédiatement visibles par Awa et dans le formulaire de livraison. Retirer un article l’archive sans supprimer son historique.</p></div><div class="page-header-actions"><span class="badge badge--green">${enabled.length} actif(s)</span></div></header>
+${groups || `<div class="card"><div class="empty"><b>Menu vide</b><p>Ajoutez le premier article ci-dessous.</p></div></div>`}
 ${retiredBlock}
-<h3 style="margin:1.4rem 0 .3rem">➕ Ajouter un article</h3>
+<div class="section-header"><div><span class="eyebrow">Catalogue</span><h3>Ajouter un article</h3></div></div>
 <div class="card">
   <form method="post" action="/admin/menu/items" class="row">
     ${fieldsRow("add", null, cats)}
     <button class="act" type="submit">Ajouter</button>
   </form>
-  <p class="muted" style="font-size:.75rem;margin:.5rem 0 0">⭐ = incontournable (proposé sur WhatsApp après une réservation, max 10). L'ID est généré automatiquement depuis le nom.</p>
+  <p class="muted">Un incontournable peut être proposé sur WhatsApp après une réservation, avec un maximum de dix. L’ID technique est généré automatiquement.</p>
 </div>`;
 }

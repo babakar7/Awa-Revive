@@ -97,6 +97,7 @@ import * as staffPlan from "../domain/staffPlanningRepo.js";
 import { buildEmployeeScheduleMessage, validateGridPayload } from "../domain/staffPlanningRules.js";
 import { renderStaffPlanning, renderStaffPrint, staffBanner } from "./staffPage.js";
 import { registerCoachPaymentRoutes } from "./coachPaymentsRoutes.js";
+import { ADMIN_AUTH_CSS } from "./adminStyles.js";
 
 export { escapeHtml } from "./helpers.js";
 
@@ -142,25 +143,13 @@ function renderLoginPage(opts: { error?: string; next?: string }): string {
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>Connexion — Awa admin</title>
-<style>
-:root{color-scheme:light}
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f6f3ee;color:#1f2328;padding:1rem}
-.card{background:#fff;border:1px solid #e4ddd3;border-radius:14px;padding:1.5rem;width:100%;max-width:380px;box-shadow:0 8px 24px rgba(31,35,40,.06)}
-h1{font-size:1.15rem;margin:0 0 .3rem}
-p{color:#6e7781;font-size:.9rem;margin:0 0 1.1rem}
-label{display:block;font-size:.82rem;font-weight:600;margin:.7rem 0 .3rem;color:#424a53}
-input{width:100%;padding:.55rem .75rem;border:1px solid #e4ddd3;border-radius:8px;font-size:1rem}
-button{margin-top:1rem;width:100%;background:#6b4a6f;color:#fff;border:none;border-radius:8px;padding:.65rem;font-size:.95rem;font-weight:600;cursor:pointer}
-button:hover{background:#166f30}
-.err{background:#fff8f0;border:1px solid #f0d8b6;border-radius:8px;padding:.55rem .7rem;margin-bottom:.9rem;font-size:.88rem}
-.muted{color:#6e7781;font-size:.78rem;margin-top:1rem;text-align:center}
-</style></head>
+<title>Connexion — Revive admin</title>
+<style>${ADMIN_AUTH_CSS}</style></head>
 <body>
-<div class="card">
-  <h1>🤖 Awa — admin</h1>
-  <p>Connexion réception · une session dure 30 jours</p>
+<main class="auth-card">
+  <div class="auth-brand"><span class="auth-mark" aria-hidden="true">r</span><span><b>revive</b><small>Awa admin</small></span></div>
+  <h1>Bienvenue</h1>
+  <p>Connectez-vous à l’espace opérationnel de la réception. La session reste active pendant 30 jours.</p>
   ${err}
   <form method="post" action="/admin/login">
     <input type="hidden" name="next" value="${escLogin(next)}">
@@ -170,8 +159,8 @@ button:hover{background:#166f30}
     <input id="pass" name="password" type="password" autocomplete="current-password" required>
     <button type="submit">Se connecter</button>
   </form>
-  <p class="muted">Le navigateur se souvient de toi — plus de popup à chaque visite.</p>
-</div>
+  <p class="muted">Accès réservé à l’équipe Revive.</p>
+</main>
 </body></html>`;
 }
 
@@ -227,7 +216,7 @@ export function registerAdmin(app: FastifyInstance): void {
           .catch(() => 0);
         reply
           .type("text/html")
-          .send(await layout("À tester", "/admin/tests", renderTestChecklist(pendingLinks)));
+          .send(await layout("À tester", "/admin/tests", renderTestChecklist(pendingLinks), { subtitle: "Checklist de recette", contentWidth: "standard" }));
       });
 
       // ---------- À faire (inbox) ----------
@@ -283,16 +272,18 @@ export function registerAdmin(app: FastifyInstance): void {
         const rows = clients
           .map(
             (c) => `<tr>
-<td><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b>${c.is_test ? ` <span class="badge badge--gray">🧪 Équipe</span>` : ""}<div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
-<td>${escapeHtml((c.last_message ?? "").slice(0, 90))}${(c.last_message ?? "").length > 90 ? "…" : ""}<div class="muted">${ago(c.last_message_at)} · ${c.message_count} messages</div></td>
-<td class="hide-sm">${escapeHtml(c.language ?? "—")}</td>
+<td data-label="Client"><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b>${c.is_test ? ` <span class="badge badge--gray">Équipe</span>` : ""}<div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
+<td data-label="Dernier message">${escapeHtml((c.last_message ?? "").slice(0, 110))}${(c.last_message ?? "").length > 110 ? "…" : ""}<div class="muted">${ago(c.last_message_at)} · ${c.message_count} messages</div></td>
+<td data-label="Langue" class="hide-sm"><span class="badge badge--gray">${escapeHtml(c.language ?? "—")}</span></td>
+<td data-label=""><a class="act act--ghost act--sm" href="/admin/conversations/${c.id}">Ouvrir</a></td>
 </tr>`,
           )
           .join("");
         const body = `
-<form method="get" action="/admin/conversations"><input type="search" name="q" placeholder="Rechercher un nom ou un numéro…" value="${escapeHtml(search ?? "")}"></form>
-<div class="card"><table><tr><th>Client</th><th>Dernier message</th><th class="hide-sm">Langue</th></tr>${rows || `<tr><td colspan="3" class="muted">Aucun client trouvé.</td></tr>`}</table></div>`;
-        reply.type("text/html").send(await layout("Conversations", "/admin/conversations", body));
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Clients</span><h2>Conversations</h2><p>${search ? `${clients.length} résultat(s) pour « ${escapeHtml(search)} »` : "Les 100 conversations les plus récentes, classées par dernière activité."}</p></div></header>
+<form method="get" action="/admin/conversations" class="card row"><label style="flex:1">Rechercher par nom ou numéro<input type="search" name="q" placeholder="Ex. Marie ou 77 123…" value="${escapeHtml(search ?? "")}"></label><button class="act" type="submit">Rechercher</button>${search ? `<a class="act act--ghost" href="/admin/conversations">Effacer</a>` : ""}</form>
+<div class="card">${rows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Client</th><th>Dernier message</th><th class="hide-sm">Langue</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty"><span class="empty-icon" aria-hidden="true">⌕</span><b>Aucun client trouvé</b><p>Essayez un autre nom ou seulement quelques chiffres du numéro.</p></div>`}</div>`;
+        reply.type("text/html").send(await layout("Conversations", "/admin/conversations", body, { subtitle: "Historique client", contentWidth: "wide" }));
       });
 
       admin.get("/conversations/:clientId", async (req, reply) => {
@@ -306,26 +297,32 @@ export function registerAdmin(app: FastifyInstance): void {
         const thread = turns
           .map((t) => {
             if (t.role === "tool") {
-              return `<details class="tool"><summary>🔧 ${escapeHtml(t.content.slice(0, 80))}…</summary><pre>${escapeHtml(t.content)}</pre></details>`;
+              return `<details class="tool"><summary>Détail technique · ${escapeHtml(t.content.slice(0, 72))}…</summary><pre>${escapeHtml(t.content)}</pre></details>`;
             }
             const side = t.role === "user" ? "user" : "assistant";
-            return `<div class="turnrow"><div class="bubble ${side}">${escapeHtml(t.content)}</div><span class="muted" style="${t.role === "user" ? "" : "text-align:right"}">${fmtDate(t.created_at)}</span></div>`;
+            return `<div class="turnrow ${side}"><div class="bubble ${side}">${escapeHtml(t.content)}</div><span class="muted">${fmtDate(t.created_at)}</span></div>`;
           })
           .join("");
         const isTest = client.is_test === true;
-        const testToggle = `<form class="inline" method="post" action="/admin/conversations/${client.id}/toggle-test" style="float:right">
+        const testToggle = `<form class="inline" method="post" action="/admin/conversations/${client.id}/toggle-test">
 <input type="hidden" name="value" value="${isTest ? "0" : "1"}">
-<button class="act act--sm">${isTest ? "Retirer le tag Équipe" : "🧪 Marquer comme Équipe/test"}</button></form>`;
+<button class="act act--ghost act--sm">${isTest ? "Retirer le tag Équipe" : "Marquer comme Équipe/test"}</button></form>`;
         const body = `
-<div class="card">
-${testToggle}
-<b>${escapeHtml(client.name ?? "(sans nom)")}</b> · +${escapeHtml(client.wa_phone)}${isTest ? ` <span class="badge badge--gray">🧪 Équipe</span>` : ""}
-<div class="muted">Langue : ${escapeHtml(client.language ?? "—")} · Email déclaré : ${escapeHtml(client.claimed_email ?? "—")} · Client depuis : ${fmtDate(client.created_at)}</div>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Conversation client</span><h2>${escapeHtml(client.name ?? "(sans nom)")}</h2><p>Historique des échanges WhatsApp avec Awa.</p></div><div class="page-header-actions"><a class="act act--ghost" href="/admin/conversations">Retour à la liste</a></div></header>
+<div class="conversation-shell">
+<aside class="card client-summary">
+  <div class="row between"><b>${escapeHtml(client.name ?? "(sans nom)")}</b>${isTest ? `<span class="badge badge--gray">Équipe</span>` : ""}</div>
+  <dl class="client-facts"><div><dt>WhatsApp</dt><dd><a href="tel:+${escapeHtml(client.wa_phone)}">+${escapeHtml(client.wa_phone)}</a></dd></div><div><dt>Langue</dt><dd>${escapeHtml(client.language ?? "—")}</dd></div><div><dt>Email déclaré</dt><dd>${escapeHtml(client.claimed_email ?? "—")}</dd></div><div><dt>Client depuis</dt><dd>${fmtDate(client.created_at)}</dd></div></dl>
+  ${testToggle}
+</aside>
+<section class="card thread" aria-label="Messages">
+${thread || `<div class="empty"><b>Aucun message</b><p>Cette conversation ne contient pas encore de tour enregistré.</p></div>`}
+</section>
 </div>
-${thread || `<p class="muted">Aucun message.</p>`}`;
+`;
         reply
           .type("text/html")
-          .send(await layout(client.name ?? client.wa_phone, "/admin/conversations", body));
+          .send(await layout(client.name ?? client.wa_phone, "/admin/conversations", body, { subtitle: "Conversation", contentWidth: "wide", breadcrumbs: [{ href: "/admin/conversations", label: "Conversations" }, { label: client.name ?? client.wa_phone }] }));
       });
 
       admin.post("/conversations/:clientId/toggle-test", async (req, reply) => {
@@ -350,38 +347,40 @@ ${thread || `<p class="muted">Aucun message.</p>`}`;
                 ? `<div class="muted">+ bar : ${fmtFcfa(b.extras_amount_xof)}</div>`
                 : "";
             return `<tr>
-<td>${fmtDate(b.created_at)}</td>
-<td><a href="/admin/conversations/${b.client_id}">${escapeHtml(b.client_name ?? "?")}</a></td>
-<td>${escapeHtml(b.service_name)}<div class="muted">${fmtDate(b.slot_start)} · ${b.participants} pl. · ${escapeHtml(b.payment_method)}</div>${extras}</td>
-<td><b>${fmtFcfa(b.amount_xof)}</b></td>
-<td>${badge(b.status)}</td>
+<td data-label="Créée">${fmtDate(b.created_at)}</td>
+<td data-label="Client"><a href="/admin/conversations/${b.client_id}">${escapeHtml(b.client_name ?? "?")}</a></td>
+<td data-label="Cours"><b>${escapeHtml(b.service_name)}</b><div class="muted">${fmtDate(b.slot_start)} · ${b.participants} pl. · ${escapeHtml(b.payment_method)}</div>${extras}</td>
+<td data-label="Montant"><b>${fmtFcfa(b.amount_xof)}</b></td>
+<td data-label="Statut">${badge(b.status)}</td>
 </tr>`;
           })
           .join("");
         const planRows = planOrders
           .map(
             (p) => `<tr>
-<td>${fmtDate(p.created_at)}</td>
-<td><a href="/admin/conversations/${p.client_id}">${escapeHtml(p.client_name ?? "?")}</a></td>
-<td>${escapeHtml(p.plan_name)}</td>
-<td><b>${fmtFcfa(p.amount_xof)}</b></td>
-<td>${badge(p.status)}</td>
+<td data-label="Créé">${fmtDate(p.created_at)}</td>
+<td data-label="Client"><a href="/admin/conversations/${p.client_id}">${escapeHtml(p.client_name ?? "?")}</a></td>
+<td data-label="Formule"><b>${escapeHtml(p.plan_name)}</b></td>
+<td data-label="Montant"><b>${fmtFcfa(p.amount_xof)}</b></td>
+<td data-label="Statut">${badge(p.status)}</td>
 </tr>`,
           )
           .join("");
+        const statusLabels: Record<string, string> = { "": "Tous", BOOKED: "Confirmées", AWAITING_PAYMENT: "Paiement attendu", REFUND_NEEDED: "À rembourser", REFUNDED: "Remboursées", CANCELLED: "Annulées", EXPIRED: "Expirées" };
         const filters = ["", "BOOKED", "AWAITING_PAYMENT", "REFUND_NEEDED", "REFUNDED", "CANCELLED", "EXPIRED"]
           .map(
             (st) =>
-              `<a href="/admin/bookings${st ? `?status=${st}` : ""}" style="margin-right:.6rem;${(status ?? "") === st ? "font-weight:700" : ""}">${st || "Tous"}</a>`,
+              `<a href="/admin/bookings${st ? `?status=${st}` : ""}" class="${(status ?? "") === st ? "active" : ""}"${(status ?? "") === st ? ' aria-current="page"' : ""}>${statusLabels[st]}</a>`,
           )
           .join("");
         const body = `
-<p class="muted">${filters}</p>
-<h2>Réservations</h2>
-<div class="card"><table><tr><th>Créée</th><th>Client</th><th>Cours</th><th>Montant</th><th>Statut</th></tr>${bookingRows || `<tr><td colspan="5" class="muted">Rien.</td></tr>`}</table></div>
-<h2>Abonnements vendus</h2>
-<div class="card"><table><tr><th>Créé</th><th>Client</th><th>Formule</th><th>Montant</th><th>Statut</th></tr>${planRows || `<tr><td colspan="5" class="muted">Rien.</td></tr>`}</table></div>`;
-        reply.type("text/html").send(await layout("Réservations", "/admin/bookings", body));
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio</span><h2>Réservations et abonnements</h2><p>Suivez les ventes, paiements et statuts traités par Awa.</p></div></header>
+<nav class="filters" aria-label="Filtrer par statut">${filters}</nav>
+<div class="section-header"><h2>Réservations</h2><span class="badge badge--gray">${bookings.length}</span></div>
+<div class="card">${bookingRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créée</th><th>Client</th><th>Cours</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${bookingRows}</tbody></table></div>` : `<div class="empty"><b>Aucune réservation</b><p>Aucune réservation ne correspond à ce filtre.</p></div>`}</div>
+<div class="section-header"><h2>Abonnements vendus</h2><span class="badge badge--gray">${planOrders.length}</span></div>
+<div class="card">${planRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créé</th><th>Client</th><th>Formule</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${planRows}</tbody></table></div>` : `<div class="empty"><b>Aucun abonnement</b><p>Aucune vente d’abonnement ne correspond à ce filtre.</p></div>`}</div>`;
+        reply.type("text/html").send(await layout("Réservations", "/admin/bookings", body, { subtitle: status ? statusLabels[status] ?? status : "Toutes les activités", contentWidth: "wide" }));
       });
 
       // ---------- Commandes bar ----------
@@ -396,10 +395,10 @@ ${thread || `<p class="muted">Aucun message.</p>`}`;
             ? `<div class="muted">📝 ${escapeHtml(b.order_note)}</div>`
             : "";
           return `<tr>
-<td><b>${fmtDate(b.slot_start)}</b><div class="muted">${escapeHtml(b.service_name)}</div></td>
-<td><a href="/admin/conversations/${b.client_id}">${escapeHtml(b.client_name ?? "?")}</a><div class="muted">+${escapeHtml(b.wa_phone)}</div></td>
-<td>${items || "—"}${note}</td>
-<td><b>${fmtFcfa(b.extras_amount_xof)}</b></td>
+<td data-label="Cours"><b>${fmtDate(b.slot_start)}</b><div class="muted">${escapeHtml(b.service_name)}</div></td>
+<td data-label="Client"><a href="/admin/conversations/${b.client_id}"><b>${escapeHtml(b.client_name ?? "?")}</b></a><div class="muted">+${escapeHtml(b.wa_phone)}</div></td>
+<td data-label="Commande">${items || "—"}${note}</td>
+<td data-label="Montant"><b>${fmtFcfa(b.extras_amount_xof)}</b></td>
 </tr>`;
         };
 
@@ -417,36 +416,37 @@ ${thread || `<p class="muted">Aucun message.</p>`}`;
         const cafeTotal = today.reduce((sum, b) => sum + b.extras_amount_xof, 0);
 
         const body = `
-<h2>☕ Commandes du jour ${today.length ? `(${today.length})` : ""}</h2>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Commandes payées</h2><p>Commandes rattachées à une réservation confirmée. Pour une commande téléphonique, utilisez Livraisons.</p></div><div class="page-header-actions"><a class="act" href="/admin/livraisons/new">Nouvelle livraison</a></div></header>
 <div class="stat-grid">
-<div class="stat"><span class="muted">Commandes aujourd'hui</span><b>${today.length}</b></div>
-<div class="stat"><span class="muted">Total bar du jour</span><b>${fmtFcfa(cafeTotal)}</b></div>
+<div class="stat"><span>Commandes aujourd'hui</span><b>${today.length}</b><span>à préparer</span></div>
+<div class="stat"><span>Total bar du jour</span><b>${fmtFcfa(cafeTotal)}</b><span>encaissé</span></div>
 </div>
-${prepList ? `<div class="card" style="margin-top:.8rem">À préparer : ${prepList}</div>` : ""}
-<div class="card" style="margin-top:.8rem">
+${prepList ? `<div class="card"><span class="eyebrow">Préparation du jour</span>${prepList}</div>` : ""}
+<div class="section-header"><h2>Commandes du jour</h2><span class="badge badge--gray">${today.length}</span></div>
+<div class="card">
 ${
   today.length
-    ? `<table><tr><th>Cours</th><th>Client</th><th>Commande</th><th>Montant</th></tr>${today.map(orderRow).join("")}</table>`
-    : `<span class="muted">Aucune commande bar pour aujourd'hui.</span>`
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Cours</th><th>Client</th><th>Commande</th><th>Montant</th></tr></thead><tbody>${today.map(orderRow).join("")}</tbody></table></div>`
+    : `<div class="empty"><b>Aucune commande aujourd’hui</b><p>Les commandes payées apparaîtront ici.</p></div>`
 }
 </div>
 
-<h2>Commandes à venir</h2>
+<div class="section-header"><h2>Commandes à venir</h2><span class="badge badge--gray">${upcoming.length}</span></div>
 <div class="card">
 ${
   upcoming.length
-    ? `<table><tr><th>Cours</th><th>Client</th><th>Commande</th><th>Montant</th></tr>${upcoming.map(orderRow).join("")}</table>`
-    : `<span class="muted">Aucune commande à venir.</span>`
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Cours</th><th>Client</th><th>Commande</th><th>Montant</th></tr></thead><tbody>${upcoming.map(orderRow).join("")}</tbody></table></div>`
+    : `<div class="empty"><b>Aucune commande à venir</b></div>`
 }
-</div>
-<p class="muted">Seules les commandes payées (résa confirmée) apparaissent ici.</p>`;
+</div>`;
         reply
           .type("text/html")
           .send(
             await layout(
               "Commandes payées",
               "/admin/orders",
-              `<p class="subhead">Bar ☕ · commandes rattachées à une résa (paiement Wave / OM). Pour les livraisons téléphoniques → <a href="/admin/livraisons">Livraisons</a>.</p>${body}`,
+              body,
+              { subtitle: "Bar · commandes confirmées", contentWidth: "wide" },
             ),
           );
       });
@@ -467,13 +467,13 @@ ${
           banner: livraisonsBanner(done, err),
         });
         // Auto-refresh only on the board (never on the create form).
-        reply.type("text/html").send(await layout("Livraisons", "/admin/livraisons", body, { refreshSeconds: 60 }));
+        reply.type("text/html").send(await layout("Livraisons", "/admin/livraisons", body, { refreshSeconds: 60, subtitle: "Suivi cuisine et client", contentWidth: "full" }));
       });
 
       admin.get("/livraisons/new", async (req, reply) => {
         const err = (req.query as any)?.err as string | undefined;
         const body = renderLivraisonForm(getCafeMenu().items, livraisonsBanner(undefined, err));
-        reply.type("text/html").send(await layout("Nouvelle livraison", "/admin/livraisons", body));
+        reply.type("text/html").send(await layout("Nouvelle livraison", "/admin/livraisons", body, { subtitle: "Commande téléphonique", contentWidth: "standard", breadcrumbs: [{ href: "/admin/livraisons", label: "Livraisons" }, { label: "Nouvelle" }] }));
       });
 
       admin.post("/livraisons", async (req, reply) => {
@@ -560,14 +560,14 @@ ${
         const err = (req.query as any)?.err as string | undefined;
         const rows = await invoices.listInvoices(100);
         const body = renderFacturesList(rows, facturesBanner(done, err));
-        reply.type("text/html").send(await layout("Factures", "/admin/factures", body));
+        reply.type("text/html").send(await layout("Factures", "/admin/factures", body, { subtitle: "Documents clients", contentWidth: "wide" }));
       });
 
       admin.get("/factures/new", async (req, reply) => {
         const err = (req.query as any)?.err as string | undefined;
         const candidates = await invoices.recentPaidCandidates().catch(() => []);
         const body = renderFactureForm(candidates, facturesBanner(undefined, err));
-        reply.type("text/html").send(await layout("Nouvelle facture", "/admin/factures", body));
+        reply.type("text/html").send(await layout("Nouvelle facture", "/admin/factures", body, { contentWidth: "standard", breadcrumbs: [{ href: "/admin/factures", label: "Factures" }, { label: "Nouvelle" }] }));
       });
 
       admin.post("/factures", async (req, reply) => {
@@ -607,7 +607,7 @@ ${
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
         const body = renderFactureView(inv, facturesBanner(done, err));
-        reply.type("text/html").send(await layout(`Facture ${inv.number}`, "/admin/factures", body));
+        reply.type("text/html").send(await layout(`Facture ${inv.number}`, "/admin/factures", body, { contentWidth: "standard", breadcrumbs: [{ href: "/admin/factures", label: "Factures" }, { label: inv.number }] }));
       });
 
       admin.get("/factures/:id/print", async (req, reply) => {
@@ -662,13 +662,13 @@ ${
         const err = (req.query as any)?.err as string | undefined;
         const rows = await quotes.listQuotes(100);
         const body = renderQuotesList(rows, devisBanner(done, err));
-        reply.type("text/html").send(await layout("Devis", "/admin/devis", body));
+        reply.type("text/html").send(await layout("Devis", "/admin/devis", body, { subtitle: "Propositions commerciales", contentWidth: "wide" }));
       });
 
       admin.get("/devis/new", async (req, reply) => {
         const err = (req.query as any)?.err as string | undefined;
         const body = renderQuoteForm(null, devisBanner(undefined, err));
-        reply.type("text/html").send(await layout("Nouveau devis", "/admin/devis", body));
+        reply.type("text/html").send(await layout("Nouveau devis", "/admin/devis", body, { contentWidth: "standard", breadcrumbs: [{ href: "/admin/devis", label: "Devis" }, { label: "Nouveau" }] }));
       });
 
       admin.post("/devis", async (req, reply) => {
@@ -688,7 +688,7 @@ ${
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
         const body = renderQuoteForm(quote, devisBanner(done, err));
-        reply.type("text/html").send(await layout(`Devis ${quote.number}`, "/admin/devis", body));
+        reply.type("text/html").send(await layout(`Devis ${quote.number}`, "/admin/devis", body, { contentWidth: "standard", breadcrumbs: [{ href: "/admin/devis", label: "Devis" }, { label: quote.number }] }));
       });
 
       admin.post("/devis/:id", async (req, reply) => {
@@ -743,7 +743,7 @@ ${
         const err = (req.query as any)?.err as string | undefined;
         const items = await menu.listMenuItems();
         const body = renderMenuPage({ items, editId, banner: menuBanner(done, err) });
-        reply.type("text/html").send(await layout("Menu bar", "/admin/menu", body));
+        reply.type("text/html").send(await layout("Menu bar", "/admin/menu", body, { subtitle: "Catalogue visible par Awa", contentWidth: "wide" }));
       });
 
       admin.post("/menu/items", async (req, reply) => {
@@ -784,13 +784,13 @@ ${
         const err = (req.query as any)?.err as string | undefined;
         const rows = await giftCards.listGiftCards(100);
         const body = renderGiftCardsList(rows, cartesCadeauxBanner(done, err));
-        reply.type("text/html").send(await layout("Cartes cadeaux", "/admin/cartes-cadeaux", body));
+        reply.type("text/html").send(await layout("Cartes cadeaux", "/admin/cartes-cadeaux", body, { subtitle: "Création et envoi", contentWidth: "wide" }));
       });
 
       admin.get("/cartes-cadeaux/new", async (req, reply) => {
         const err = (req.query as any)?.err as string | undefined;
         const body = renderGiftCardForm(cartesCadeauxBanner(undefined, err));
-        reply.type("text/html").send(await layout("Nouvelle carte cadeau", "/admin/cartes-cadeaux", body));
+        reply.type("text/html").send(await layout("Nouvelle carte cadeau", "/admin/cartes-cadeaux", body, { contentWidth: "standard", breadcrumbs: [{ href: "/admin/cartes-cadeaux", label: "Cartes cadeaux" }, { label: "Nouvelle" }] }));
       });
 
       admin.post("/cartes-cadeaux", async (req, reply) => {
@@ -810,7 +810,7 @@ ${
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
         const body = renderGiftCardView(gc, cartesCadeauxBanner(done, err));
-        reply.type("text/html").send(await layout("Carte cadeau", "/admin/cartes-cadeaux", body));
+        reply.type("text/html").send(await layout("Carte cadeau", "/admin/cartes-cadeaux", body, { contentWidth: "standard", breadcrumbs: [{ href: "/admin/cartes-cadeaux", label: "Cartes cadeaux" }, { label: gc.recipient_name }] }));
       });
 
       admin.get("/cartes-cadeaux/:id/png", async (req, reply) => {
@@ -870,22 +870,21 @@ ${
         const open = handoffs.filter((h) => h.status === "OPEN").length;
         const rows = handoffs
           .map(
-            (h) => `<tr${h.status === "DONE" ? ` style="opacity:.55"` : ""}>
-<td>${fmtDate(h.created_at)}</td>
-<td><a href="/admin/conversations/${h.client_id}">${escapeHtml(h.client_name ?? "?")}</a><div class="muted">+${escapeHtml(h.wa_phone)}</div></td>
-<td>${escapeHtml(h.reason ?? "")}</td>
-<td>${
+            (h) => `<tr class="${h.status === "DONE" ? "is-complete" : ""}">
+<td data-label="Quand">${fmtDate(h.created_at)}</td>
+<td data-label="Client"><a href="/admin/conversations/${h.client_id}"><b>${escapeHtml(h.client_name ?? "?")}</b></a><div class="muted">+${escapeHtml(h.wa_phone)}</div></td>
+<td data-label="Motif">${escapeHtml(h.reason ?? "")}</td>
+<td data-label="Statut">${
               h.status === "OPEN"
-                ? `<form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act act--ok act--sm">✅ Traité</button></form>`
-                : `<span class="muted">✓ ${escapeHtml(h.done_by ?? "")}</span>`
+                ? `<form class="inline" method="post" action="/admin/handoffs/${h.id}/done"><button class="act act--ok act--sm">Marquer traité</button></form>`
+                : `<span class="badge badge--green">Traité · ${escapeHtml(h.done_by ?? "")}</span>`
             }</td>
 </tr>`,
           )
           .join("");
-        const body = `<div class="card ${open ? "warn" : ""}">
-${open ? `<p class="muted">${open} handoff(s) à traiter — un handoff = un client dont le besoin attend un humain. « Traité » = le client a été recontacté (ou son cas réglé).</p>` : `<p class="muted"><span class="ok">✓ Tous les handoffs sont traités.</span></p>`}
-<table><tr><th>Quand</th><th>Client</th><th>Motif</th><th></th></tr>${rows || `<tr><td colspan="4" class="muted">Aucun handoff.</td></tr>`}</table></div>`;
-        reply.type("text/html").send(await layout("Handoffs", "/admin/handoffs", body));
+        const body = `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Suivi client</span><h2>Handoffs</h2><p>Clients dont le besoin nécessite une intervention humaine. Marquez « traité » après le contact ou la résolution.</p></div><div class="page-header-actions"><span class="badge ${open ? "badge--amber" : "badge--green"}">${open} ouvert(s)</span></div></header>
+<div class="card ${open ? "warn" : ""}">${rows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Quand</th><th>Client</th><th>Motif</th><th>Statut</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty"><b>Aucun handoff</b><p>Les demandes nécessitant un humain apparaîtront ici.</p></div>`}</div>`;
+        reply.type("text/html").send(await layout("Handoffs", "/admin/handoffs", body, { subtitle: `${open} ouvert(s)`, contentWidth: "wide" }));
       });
 
       admin.post("/handoffs/:id/done", async (req, reply) => {
@@ -899,15 +898,15 @@ ${open ? `<p class="muted">${open} handoff(s) à traiter — un handoff = un cli
 
       // ---------- À reprendre (boucle de résultat, §4.31) ----------
       const OUTCOME_BADGES: Record<string, [string, string]> = {
-        resolved: ["#1a7f37", "résolue"],
-        handed_off: ["#0969da", "transmise"],
-        dropoff: ["#6e7781", "abandon libre"],
-        deadend: ["#cf222e", "impasse"],
-        technical_failure: ["#9a6700", "échec technique"],
+        resolved: ["badge--green", "résolue"],
+        handed_off: ["badge--blue", "transmise"],
+        dropoff: ["badge--gray", "abandon libre"],
+        deadend: ["badge--red", "impasse"],
+        technical_failure: ["badge--amber", "échec technique"],
       };
       const outcomeBadge = (outcome: string) => {
-        const [color, label] = OUTCOME_BADGES[outcome] ?? ["#6e7781", outcome];
-        return `<span class="badge" style="background:${color}">${escapeHtml(label)}</span>`;
+        const [cls, label] = OUTCOME_BADGES[outcome] ?? ["badge--gray", outcome];
+        return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
       };
 
       admin.get("/reviews", async (_req, reply) => {
@@ -922,16 +921,13 @@ ${open ? `<p class="muted">${open} handoff(s) à traiter — un handoff = un cli
 
         const openCards = open
           .map(
-            (r) => `<div class="card ${r.severity === "severe" ? "warn" : ""}">
-${r.severity === "severe" ? `<span class="badge badge--red">🔴 grave</span> ` : ""}${outcomeBadge(r.outcome)} <span class="badge badge--gray">${escapeHtml(r.need_category)}</span>
-<div style="margin:.45rem 0"><a href="/admin/conversations/${r.client_id}"><b>${escapeHtml(r.client_name ?? "?")}</b></a> <span class="muted">+${escapeHtml(r.wa_phone)} · ${ago(r.created_at)}</span></div>
-<div>${escapeHtml(r.summary ?? "")}</div>
-${r.suggested_action ? `<div class="muted" style="margin-top:.25rem">→ ${escapeHtml(r.suggested_action)}</div>` : ""}
-<div style="margin-top:.55rem">
-<form class="inline" method="post" action="/admin/reviews/${r.id}/done"><button class="act act--ok act--sm">✅ Traité</button></form>
-<form class="inline" method="post" action="/admin/reviews/${r.id}/ignore" style="margin-left:.4rem"><button class="act act--sm act--ghost">Ignorer</button></form>
-</div>
-</div>`,
+            (r) => `<article class="task-item ${r.severity === "severe" ? "warn" : ""}">
+<span class="task-priority ${r.severity === "severe" ? "danger" : "warn"}" aria-hidden="true"></span>
+<div class="task-copy"><div class="cluster">${r.severity === "severe" ? `<span class="badge badge--red">Priorité haute</span>` : ""}${outcomeBadge(r.outcome)}<span class="badge badge--gray">${escapeHtml(r.need_category)}</span></div>
+<b><a href="/admin/conversations/${r.client_id}">${escapeHtml(r.client_name ?? "?")}</a></b><p>${escapeHtml(r.summary ?? "")}</p>
+<div class="task-meta"><span class="muted">+${escapeHtml(r.wa_phone)} · ${ago(r.created_at)}</span>${r.suggested_action ? `<span class="muted">Prochaine étape : ${escapeHtml(r.suggested_action)}</span>` : ""}</div></div>
+<div class="task-action"><form class="inline" method="post" action="/admin/reviews/${r.id}/done"><button class="act act--ok act--sm">Marquer traité</button></form><form class="inline" method="post" action="/admin/reviews/${r.id}/ignore"><button class="act act--sm act--ghost">Ignorer</button></form></div>
+</article>`,
           )
           .join("");
 
@@ -948,35 +944,32 @@ ${r.suggested_action ? `<div class="muted" style="margin-top:.25rem">→ ${escap
         const recentRows = recent
           .map(
             (r) => `<tr>
-<td>${ago(r.created_at)}</td>
-<td><a href="/admin/conversations/${r.client_id}">${escapeHtml(r.client_name ?? "?")}</a></td>
-<td>${outcomeBadge(r.outcome)}</td>
-<td>${escapeHtml((r.summary ?? "").slice(0, 110))}</td>
+<td data-label="Quand">${ago(r.created_at)}</td>
+<td data-label="Client"><a href="/admin/conversations/${r.client_id}">${escapeHtml(r.client_name ?? "?")}</a></td>
+<td data-label="Issue">${outcomeBadge(r.outcome)}</td>
+<td data-label="Résumé">${escapeHtml((r.summary ?? "").slice(0, 110))}</td>
 </tr>`,
           )
           .join("");
 
-        const body = `
+        const body = `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Qualité de service</span><h2>Conversations à reprendre</h2><p>Impasse ou incident technique détecté automatiquement après 45 minutes de silence.</p></div><div class="page-header-actions"><span class="badge ${open.length ? "badge--amber" : "badge--green"}">${open.length} à traiter</span></div></header>
 <div class="stat-grid">
 ${statLine("Clients servis (7 j)", stats7, rate7)}
 ${statLine("Clients servis (30 j)", stats30, rate30)}
-<div class="stat"><span class="muted">À reprendre</span><b>${open.length}</b></div>
+<div class="stat"><span>À reprendre</span><b>${open.length}</b><span>intervention humaine</span></div>
 </div>
 ${
   stats30.topUnserved.length
-    ? `<div class="card"><b>Top besoins non servis (30 j)</b> — la matière pour améliorer Awa :<ul style="margin:.4rem 0 0">${topUnserved}</ul></div>`
+    ? `<div class="card"><span class="eyebrow">Apprentissage</span><b>Principaux besoins non servis sur 30 jours</b><ul>${topUnserved}</ul></div>`
     : ""
 }
-<h2>🔁 À reprendre (${open.length})</h2>
-<p class="muted">Ces clients sont repartis sans obtenir ce qu'ils voulaient à cause d'une impasse ou
-d'un échec technique (les abandons volontaires ne sont PAS listés). À recontacter par la réception —
-« Traité » quand c'est fait. Les cas graves ont déjà déclenché une notification.</p>
-${openCards || `<div class="card"><span class="ok">✓ Personne à reprendre — toutes les conversations classées se sont bien terminées.</span></div>`}
+<div class="section-header"><h2>File de reprise</h2><span class="badge badge--gray">${open.length}</span></div>
+<div class="task-list">${openCards || `<div class="card success"><div class="empty"><span class="empty-icon" aria-hidden="true">✓</span><b>Personne à reprendre</b><p>Toutes les conversations classées se sont bien terminées.</p></div></div>`}</div>
 <h2>Dernières classifications (${recent.length})</h2>
 <div class="card"><details><summary>Voir (contrôle qualité du classement)</summary>
-<table><tr><th>Quand</th><th>Client</th><th>Issue</th><th>Résumé</th></tr>${recentRows || `<tr><td colspan="4" class="muted">Rien de classé encore — le classement tourne toutes les 5 min sur les conversations silencieuses depuis 45 min.</td></tr>`}</table>
+${recentRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Quand</th><th>Client</th><th>Issue</th><th>Résumé</th></tr></thead><tbody>${recentRows}</tbody></table></div>` : `<div class="empty"><b>Aucune classification</b><p>Le classement tourne toutes les cinq minutes.</p></div>`}
 </details></div>`;
-        reply.type("text/html").send(await layout("À reprendre", "/admin/reviews", body));
+        reply.type("text/html").send(await layout("À reprendre", "/admin/reviews", body, { subtitle: `${open.length} conversation(s)`, contentWidth: "wide" }));
       });
 
       const closeReviewRoute = (ignored: boolean) => async (req: any, reply: any) => {
@@ -1252,6 +1245,7 @@ introuvable » — à compléter dans Wix → Contacts avec leur numéro WhatsAp
           : "";
 
         const body = `
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Clients</span><h2>Qualité des contacts</h2><p>Résolvez les liaisons et les anomalies Wix qui empêchent Awa de reconnaître correctement les clientes.</p></div><div class="page-header-actions"><span class="badge ${linkQueue.length || unreachable.length ? "badge--amber" : "badge--green"}">${linkQueue.length + unreachable.length} priorité(s)</span></div></header>
 ${banner}
 <nav class="jump-nav" aria-label="Sections CRM">
   <a href="#liaisons">Liaisons${linkQueue.length ? ` (${linkQueue.length})` : ""}</a>
@@ -1267,7 +1261,7 @@ ${banner}
 <div class="stat"><span class="muted">Fiches sans téléphone</span><b>${audit.noPhone.length}</b></div>
 </div>
 ${linkSection || `<h2 id="liaisons">🔗 Liaisons en attente</h2><div class="card"><span class="ok">✓ Aucune liaison en attente.</span></div>`}
-${unreachableSection || `<h2 id="injoignables" class="muted" style="font-size:.9rem">Abonnés injoignables — aucun</h2>`}
+${unreachableSection || `<h2 id="injoignables">Abonnés injoignables — aucun</h2>`}
 <h2 id="doublons">👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
 <p class="muted">Awa refuse (prudemment) de choisir quand un numéro correspond à plusieurs fiches :
 ces clientes ne sont pas reconnues. Un clic fusionne le groupe — la fiche conservée (✓) est choisie
@@ -1282,7 +1276,7 @@ ${noPhoneActiveBlock}
 <div class="card">
 ${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à venir ni abonnement (${noPhoneDormant.length})</summary><table><tr><th>Nom</th><th>Email</th></tr>${noPhoneRows}</table></details>` : audit.noPhone.length === 0 ? `<span class="ok">✓ Toutes les fiches ont un téléphone.</span>` : `<span class="ok">✓ Aucune fiche dormante.</span>`}
 </div>`;
-        reply.type("text/html").send(await layout("CRM", "/admin/crm", body));
+        reply.type("text/html").send(await layout("CRM", "/admin/crm", body, { subtitle: "Liaisons et hygiène des contacts Wix", contentWidth: "full" }));
       });
 
       admin.post("/crm/merge", async (req, reply) => {
@@ -1488,22 +1482,23 @@ ${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à 
           await layout(
             "Profil WhatsApp",
             "/admin/profile",
-            `<h2>Profil WhatsApp Business</h2>
+            `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Configuration</span><h2>Profil WhatsApp Business</h2><p>Gardez la vitrine visible dans WhatsApp claire, rassurante et à jour.</p></div></header>
 ${banner}
-<div class="card">
+<div class="card form-card">
 ${
   live.profile_picture_url
-    ? `<img src="${escapeHtml(live.profile_picture_url)}" alt="Photo de profil actuelle" style="width:96px;height:96px;border-radius:50%;object-fit:cover;margin-bottom:.8rem">`
+    ? `<div class="profile-preview"><img src="${escapeHtml(live.profile_picture_url)}" alt="Photo de profil actuelle"><div><b>Photo actuelle</b><p class="muted">Utilisez une image carrée, nette et immédiatement reconnaissable.</p></div></div>`
     : ""
 }
-<form method="post" action="/admin/profile" style="display:flex;flex-direction:column;gap:.8rem">
-<label>Description<textarea name="description" rows="5" maxlength="512" style="width:100%">${escapeHtml(description)}</textarea></label>
-<label>Adresse<input type="text" name="address" maxlength="256" value="${escapeHtml(address)}" style="width:100%"></label>
-<label>Horaires <span class="muted">(pas de champ dédié côté WhatsApp — ajoutés automatiquement à la fin de la description)</span><textarea name="hours" rows="4" style="width:100%">${escapeHtml(hours)}</textarea></label>
+<form method="post" action="/admin/profile" class="form-stack">
+<label>Description<span class="field-help">Présentez Revive en quelques phrases simples.</span><textarea name="description" rows="5" maxlength="512">${escapeHtml(description)}</textarea></label>
+<label>Adresse<input type="text" name="address" maxlength="256" value="${escapeHtml(address)}"></label>
+<label>Horaires<span class="field-help">Ajoutés automatiquement à la fin de la description WhatsApp.</span><textarea name="hours" rows="4">${escapeHtml(hours)}</textarea></label>
 ${photoSection}
-<button class="act" style="align-self:flex-start">Enregistrer</button>
+<div class="form-actions"><button class="act">Enregistrer le profil</button></div>
 </form>
 </div>`,
+            { subtitle: "Identité publique du studio", contentWidth: "standard", breadcrumbs: [{ label: "Configuration" }, { label: "Profil WhatsApp" }] },
           ),
         );
       });
@@ -1565,7 +1560,7 @@ ${photoSection}
         const body = renderStaffPlanning(
           Object.assign({ schedules, current, shifts, staff, banner }, { showNewForm: showNew }),
         );
-        reply.type("text/html").send(await layout("Équipe", "/admin/staff", body));
+        reply.type("text/html").send(await layout("Équipe", "/admin/staff", body, { subtitle: "Planning et contacts", contentWidth: "full" }));
       }
 
       admin.get("/staff", async (req, reply) => {
@@ -1825,7 +1820,7 @@ ${photoSection}
           testPhone: config.NOTIF_TEST_PHONE,
           alertsPaused,
         });
-        reply.type("text/html").send(await layout("Notifications", "/admin/notifications", body));
+        reply.type("text/html").send(await layout("Notifications", "/admin/notifications", body, { subtitle: "Règles, destinataires et journal", contentWidth: "full" }));
       });
 
       admin.post("/notifications/pause", async (req, reply) => {
