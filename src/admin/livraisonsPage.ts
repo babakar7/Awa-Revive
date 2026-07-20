@@ -108,7 +108,7 @@ function openRow(o: DeliveryOrder): string {
   const items = orderItems(o);
   return `<tr>
 <td data-label="Délai">${slaBadge(o)}</td>
-<td data-label="Client"><b>${esc(o.client_name)}</b><br><a href="tel:+${esc(o.client_phone)}" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
+<td data-label="Client"><b>${esc(o.client_name)}</b><br><a href="https://wa.me/${esc(o.client_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(items))}<details><summary class="muted">Voir le détail</summary><div style="white-space:pre-wrap">${esc(formatExtrasMultiline(items))}</div></details></td>
 <td data-label="Adresse" class="hide-sm">${esc(o.address)}</td>
 <td data-label="Montant" class="nowrap"><b>${esc(o.amount_xof)} F</b><br><span class="muted">à encaisser</span></td>
