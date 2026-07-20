@@ -114,6 +114,10 @@ describe("happy path", () => {
       catalogItemId: booked.wix_booking_id,
       appId: "13d21c63-b5ec-5912-8397-c3a5ddb27a97",
     });
+    expect(orderBody.lineItems[0].taxDetails).toEqual({
+      taxRate: "0",
+      totalTax: { amount: "0" },
+    });
     expect(mock.wixAddPaymentCalls()[0].body.payments[0]).toMatchObject({
       amount: { amount: "15000" },
       regularPaymentDetails: {

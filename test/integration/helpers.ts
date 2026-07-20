@@ -324,6 +324,9 @@ export function makeFetchMock(): FetchMock {
     }
     if (url.endsWith("/ecom/v1/orders") && method === "POST") {
       if (wix.failCreateOrder) return json(500, { message: "orders exploded" });
+      if (!body?.order?.lineItems?.[0]?.taxDetails && !body?.order?.lineItems?.[0]?.taxInfo) {
+        return json(400, { message: "line item tax details required" });
+      }
       const id = `wo_${++orderSeq}`;
       wix.createdOrderIds.push(id);
       const externalId = body?.order?.channelInfo?.externalOrderId;

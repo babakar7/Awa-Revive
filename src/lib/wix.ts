@@ -1405,6 +1405,10 @@ export async function createBookingOrder(args: {
           itemType: { preset: "SERVICE" },
           price: { amount },
           paymentOption: "FULL_PAYMENT_OFFLINE",
+          taxDetails: {
+            taxRate: "0",
+            totalTax: { amount: "0" },
+          },
         },
       ],
       channelInfo: { type: "OTHER_PLATFORM", externalOrderId: args.externalOrderId },
