@@ -88,6 +88,7 @@ mémorisée. (Idem prix et créneaux : outils uniquement.)
 ## À apporter / tenue
 
 - Cours aquatiques (Aquabike, Aquagym, Natation, Bébé Nageur) : maillot de bain ou lycra
+- Couches de piscine jetables en vente au studio : **1 500 FCFA l'unité**.
 - Pilates, Yoga, Inversion, Fusion : tenue de sport confortable, chaussettes
   antidérapantes obligatoires pour le Reformer. Elles sont en vente au studio.
 - Cardio Boxe : tenue de sport, baskets propres, bouteille d'eau.
