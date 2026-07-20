@@ -106,9 +106,14 @@ function firstName(name: string): string {
   return String(name ?? "").trim().split(/\s+/)[0] ?? "";
 }
 
+const WEEKDAYS_SHORT = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+
 /**
- * The per-employee WhatsApp message (7 lines Mon→Sun, missing day = repos) with
- * the break-deducted weekly total. `shifts` are this employee's shifts only.
+ * The per-employee WhatsApp message. Structured into a few compact blocks
+ * separated by newlines: nice as free-text (inside the 24h window) AND readable
+ * once the template send flattens newlines into " | " (staff are ~always out of
+ * window). Days are grouped — worked days on one line with " · ", repos on
+ * another — so the flattened version is 4 clear segments, not a per-day wall.
  */
 export function buildEmployeeScheduleMessage(
   scheduleName: string,
@@ -117,14 +122,17 @@ export function buildEmployeeScheduleMessage(
 ): { subject: string; body: string } {
   const byDay = new Map<number, { start_min: number; end_min: number }>();
   for (const s of shifts) byDay.set(s.weekday, s);
-  const lines = WEEKDAYS_FR.map((label, wd) => {
+  const worked: string[] = [];
+  const repos: string[] = [];
+  for (let wd = 0; wd < 7; wd++) {
     const s = byDay.get(wd);
-    return s ? `${label} : ${fmtMin(s.start_min)} – ${fmtMin(s.end_min)}` : `${label} : repos`;
-  });
+    if (s) worked.push(`${WEEKDAYS_SHORT[wd]} ${fmtMin(s.start_min)}–${fmtMin(s.end_min)}`);
+    else repos.push(WEEKDAYS_SHORT[wd]);
+  }
   const total = weeklyTotalMinutes(shifts);
-  const body =
-    `🗓 Planning « ${scheduleName} » — ${firstName(staffName) || staffName}\n` +
-    `${lines.join("\n")}\n` +
-    `Total : ${fmtDuration(total)} / semaine (pause 13h30–14h30 déduite)`;
-  return { subject: "Ton planning Revive", body };
+  const blocks = [`🗓 Ton planning — ${firstName(staffName) || staffName} (${scheduleName})`];
+  if (worked.length) blocks.push(worked.join(" · "));
+  if (repos.length) blocks.push(`Repos : ${repos.join(", ")}`);
+  blocks.push(`Total : ${fmtDuration(total)}/semaine (pause déduite)`);
+  return { subject: "Ton planning Revive", body: blocks.join("\n") };
 }

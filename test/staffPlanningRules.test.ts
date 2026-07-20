@@ -100,7 +100,7 @@ describe("validateGridPayload", () => {
 });
 
 describe("buildEmployeeScheduleMessage", () => {
-  it("renders 7 days with repos and a break-deducted total", () => {
+  it("groups worked days and repos into compact blocks with a break-deducted total", () => {
     const { subject, body } = buildEmployeeScheduleMessage("Planning actuel", "Meryl", [
       { weekday: 0, start_min: 555, end_min: 1175 },
       { weekday: 1, start_min: 555, end_min: 1175 },
@@ -109,11 +109,19 @@ describe("buildEmployeeScheduleMessage", () => {
       { weekday: 5, start_min: 555, end_min: 815 },
     ]);
     expect(subject).toBe("Ton planning Revive");
-    expect(body).toContain("Meryl");
-    expect(body).toContain("Lundi : 9h15 – 19h35");
-    expect(body).toContain("Vendredi : repos");
-    expect(body).toContain("Samedi : 9h15 – 13h35");
-    expect(body).toContain("Dimanche : repos");
-    expect(body).toContain("Total : 39h25 / semaine");
+    expect(body).toContain("Ton planning — Meryl (Planning actuel)");
+    // worked days on ONE line, " · " separated, short labels, no inner spaces in ranges
+    expect(body).toContain("Lun 9h15–19h35 · Mar 9h15–19h35 · Mer 11h30–19h35 · Jeu 9h15–19h35 · Sam 9h15–13h35");
+    expect(body).toContain("Repos : Ven, Dim");
+    expect(body).toContain("Total : 39h25/semaine (pause déduite)");
+    // flattened (template) version stays readable: 4 " | " segments, not 9
+    const flattened = body.replace(/\n/g, " | ");
+    expect(flattened.split(" | ")).toHaveLength(4);
+  });
+
+  it("handles an all-repos employee", () => {
+    const { body } = buildEmployeeScheduleMessage("S", "Awa", []);
+    expect(body).toContain("Repos : Lun, Mar, Mer, Jeu, Ven, Sam, Dim");
+    expect(body).toContain("Total : 0h00/semaine");
   });
 });
