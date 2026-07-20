@@ -14,6 +14,7 @@ import {
   reconcileStuckPlanOrders,
   reconcileStuckCafeOrders,
   reconcileUnnotifiedRefunds,
+  reconcileMissingWixOrders,
 } from "./domain/fulfillment.js";
 import { startOmTokenKeepAlive } from "./lib/orangeMoney.js";
 import { initCafeMenu } from "./domain/cafeMenuRepo.js";
@@ -73,6 +74,10 @@ async function main() {
         (await reconcileStuckPlanOrders(app.log)) +
         (await reconcileStuckCafeOrders(app.log));
       if (reconciled > 0) app.log.info({ reconciled }, "Reconciled stuck PAID rows");
+      const wixOrders = await reconcileMissingWixOrders(app.log);
+      if (wixOrders > 0) {
+        app.log.info({ wixOrders }, "Reconciled missing Wix order/payment records");
+      }
       const refunds = await reconcileUnnotifiedRefunds(app.log);
       if (refunds > 0) app.log.info({ refunds }, "Re-notified REFUND_NEEDED rows");
       // OM lost-callback poller via transaction search: ABANDONNED (13/07 probe) —

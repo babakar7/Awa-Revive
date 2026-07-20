@@ -10,6 +10,7 @@ import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/ca
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { classTip } from "../lib/classTips.js";
+import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import {
   receptionLinkInstruction,
   receptionWhatsAppLink,
@@ -111,11 +112,20 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
       return;
     }
 
+    const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
+    const contact = await wix.findContactByPhone(phone, client?.name ?? undefined);
+    const bookingName = contact?.fullName || client?.name || "Client Revive";
+    if (contact?.fullName && contact.fullName !== client?.name) {
+      await repo.updateClientName(booking.client_id, contact.fullName);
+      client.name = contact.fullName;
+    }
+
     wixBookingId = await wix.createBooking({
       slot: fresh.raw ?? booking.slot_json,
-      name: client?.name ?? "Client Revive",
-      phone: `+${client.wa_phone.replace(/^\+/, "")}`,
+      name: bookingName,
+      phone,
       participants,
+      resolvedContact: contact,
     });
 
     await transition(pool, booking.id, "BOOKED", { wix_booking_id: wixBookingId });
@@ -153,6 +163,11 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
         `À faire : écrire au client manuellement (la place EST prise, ne pas rembourser).`,
     );
   }
+
+  // Wix's custom-checkout flow needs a separate eCommerce order after the
+  // booking confirmation. This is post-BOOKED on purpose: an Orders API error
+  // must never refund or delete a seat that is already paid and reserved.
+  await recordWixOrderForBooking(booking.id, log);
 
   // Book-first, menu-after: now that the class is confirmed, offer the bar
   // menu as its own (separate) order. Non-blocking.
@@ -200,6 +215,82 @@ export async function reconcileStuckBookings(log: any): Promise<number> {
     );
   }
   return stuck.length;
+}
+
+/**
+ * Record a BOOKED custom-checkout reservation in Wix eCommerce and attach the
+ * already-collected payment. Safe on retries: recover by externalOrderId and
+ * inspect existing transactions before adding another payment record.
+ */
+export async function recordWixOrderForBooking(
+  bookingId: string,
+  log: PaymentLog,
+): Promise<boolean> {
+  const booking = await repo.claimBookingForWixOrderSync(bookingId);
+  if (!booking) return false;
+
+  try {
+    const clientRes = await pool.query(`select * from clients where id = $1`, [booking.client_id]);
+    const client = clientRes.rows[0];
+    if (!client) throw new Error(`Client ${booking.client_id} not found`);
+
+    const phone = `+${String(client.wa_phone).replace(/^\+/, "")}`;
+    const contact = await wix.findContactByPhone(phone, client.name ?? undefined);
+    const canonicalName = contact?.fullName || client.name || "Client Revive";
+    if (contact?.fullName && contact.fullName !== client.name) {
+      await repo.updateClientName(booking.client_id, contact.fullName);
+    }
+
+    let wixOrderId = booking.wix_order_id;
+    if (!wixOrderId) {
+      wixOrderId = await wix.findOrderIdByExternalId(booking.id);
+      if (!wixOrderId) {
+        wixOrderId = await wix.createBookingOrder({
+          wixBookingId: booking.wix_booking_id!,
+          externalOrderId: booking.id,
+          serviceName: booking.service_name,
+          amountXof: booking.amount_xof,
+          participants: Math.max(1, booking.participants ?? 1),
+          phone,
+          name: canonicalName,
+          contactId: contact?.id,
+        });
+      }
+      await repo.saveWixOrderId(booking.id, wixOrderId);
+    }
+
+    if (!(await wix.hasApprovedOrderPayment(wixOrderId, booking.amount_xof))) {
+      await wix.addApprovedOrderPayment({
+        orderId: wixOrderId,
+        amountXof: booking.amount_xof,
+        paymentMethod: paymentMethodLabel(booking.payment_method),
+      });
+    }
+    await repo.markWixPaymentRecorded(booking.id);
+    log.info(
+      { bookingId: booking.id, wixBookingId: booking.wix_booking_id, wixOrderId },
+      "Wix order and payment recorded",
+    );
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await repo.releaseWixOrderSync(booking.id, message).catch(() => undefined);
+    log.error(
+      { err, bookingId: booking.id, wixBookingId: booking.wix_booking_id },
+      "Wix order/payment recording failed after BOOKED (seat remains confirmed)",
+    );
+    return false;
+  }
+}
+
+/** Recover recent BOOKED rows whose separate Wix order/payment sync failed. */
+export async function reconcileMissingWixOrders(log: PaymentLog): Promise<number> {
+  const missing = await repo.bookingsMissingWixPaymentRecord();
+  for (const booking of missing) {
+    log.warn({ bookingId: booking.id }, "Reconciling missing Wix order/payment record");
+    await recordWixOrderForBooking(booking.id, log);
+  }
+  return missing.length;
 }
 
 /** PAID plan orders never activated / never reception-notified. */

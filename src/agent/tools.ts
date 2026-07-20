@@ -1476,13 +1476,12 @@ export async function executeTool(
         });
       }
 
-      await repo.updateClientName(client.id, clientName);
       const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
 
       // 1. Identify the contact and check plan eligibility BEFORE creating
       //    anything in Wix — a "no" costs nothing and leaves no orphan booking.
-      const contactId = await wix.findContactIdByPhone(phone, clientName || client.name || undefined);
-      if (!contactId) {
+      const contact = await wix.findContactByPhone(phone, clientName || client.name || undefined);
+      if (!contact) {
         return JSON.stringify({
           error: "no_matching_contact",
           message:
@@ -1490,7 +1489,9 @@ export async function executeTool(
             "cannot be verified. Offer normal Wave payment, or reception to link their account.",
         });
       }
-      const benefit = await wix.findEligibleBenefit(serviceId, contactId);
+      const bookingName = contact.fullName || clientName;
+      await repo.updateClientName(client.id, bookingName);
+      const benefit = await wix.findEligibleBenefit(serviceId, contact.id);
       if (!benefit) {
         return JSON.stringify({
           error: "not_eligible",
@@ -1518,10 +1519,11 @@ export async function executeTool(
       // 2. Booking (CREATED) → 3. deduct one credit per spot → 4. confirm in calendar.
       const wixBookingId = await wix.createBookingRaw({
         slot: fresh.raw,
-        name: clientName,
+        name: bookingName,
         phone,
         participants,
         paymentOption: "MEMBERSHIP",
+        resolvedContact: contact,
       });
 
       try {
@@ -1540,7 +1542,7 @@ export async function executeTool(
           notifyReception(
             "⚠️ Résa abonnement à confirmer manuellement",
             `La séance a été décomptée de l'abonnement "${redemption.membershipName}" mais la ` +
-              `confirmation calendrier a échoué.\n  Booking Wix : ${wixBookingId}\n  Client : ${clientName} (${phone})\n` +
+              `confirmation calendrier a échoué.\n  Booking Wix : ${wixBookingId}\n  Client : ${bookingName} (${phone})\n` +
               `À faire : confirmer la réservation dans le dashboard Wix.`,
           );
         }

@@ -65,6 +65,16 @@ alter table pending_bookings
 alter table pending_bookings
   add column if not exists fulfilling_at timestamptz;
 
+-- Wix custom checkout requires a separate eCommerce order after the booking
+-- is confirmed. Keep an independent retry lease because order recording is
+-- post-BOOKED and must never turn a paid, reserved seat into a refund.
+alter table pending_bookings add column if not exists wix_order_id text;
+alter table pending_bookings add column if not exists wix_payment_recorded_at timestamptz;
+alter table pending_bookings add column if not exists wix_order_sync_at timestamptz;
+alter table pending_bookings add column if not exists wix_order_sync_error text;
+create index if not exists idx_pending_bookings_wix_order_sync
+  on pending_bookings (status, wix_payment_recorded_at, updated_at);
+
 -- One-shot follow-up after a payment link expires unused ("ton lien a expiré,
 -- tu en veux un nouveau ?"). Set when the nudge is sent — never nudge twice.
 alter table pending_bookings

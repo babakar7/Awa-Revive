@@ -32,6 +32,14 @@ export interface WixState {
   createdBookingIds: string[];
   /** Make create-booking answer 500 (Wix outage). */
   failCreateBooking: boolean;
+  /** CRM contacts returned for phone lookups. */
+  contacts: any[];
+  /** Ids handed out by eCommerce Create Order. */
+  createdOrderIds: string[];
+  ordersByExternalId: Record<string, string>;
+  orderPayments: Record<string, any[]>;
+  failCreateOrder: boolean;
+  failAddPayment: boolean;
   /** Calendar Events V3 data used by coach-payment snapshots. */
   calendarEvents: any[];
   failCalendar: boolean;
@@ -84,6 +92,8 @@ export interface FetchMock {
   /** Brevo email sends, parsed. */
   emailCalls: () => RecordedCall[];
   wixCreateBookingCalls: () => RecordedCall[];
+  wixCreateOrderCalls: () => RecordedCall[];
+  wixAddPaymentCalls: () => RecordedCall[];
   omTokenCalls: () => RecordedCall[];
   omLookupCalls: () => RecordedCall[];
   install: () => void;
@@ -117,6 +127,7 @@ export function makeFetchMock(): FetchMock {
   const realFetch = globalThis.fetch;
   const calls: RecordedCall[] = [];
   let bookingSeq = 0;
+  let orderSeq = 0;
 
   const wix: WixState = {
     openSpots: 5,
@@ -126,6 +137,12 @@ export function makeFetchMock(): FetchMock {
     eventId: "ev_1",
     createdBookingIds: [],
     failCreateBooking: false,
+    contacts: [],
+    createdOrderIds: [],
+    ordersByExternalId: {},
+    orderPayments: {},
+    failCreateOrder: false,
+    failAddPayment: false,
     calendarEvents: [],
     failCalendar: false,
     staffResources: [],
@@ -283,7 +300,7 @@ export function makeFetchMock(): FetchMock {
 
     // --- Wix contacts (phone → contact match; none = Wix creates its own) ---
     if (url.includes("/contacts/v4/contacts/query")) {
-      return json(200, { contacts: [] });
+      return json(200, { contacts: wix.contacts });
     }
 
     // --- Wix create booking ---
@@ -297,6 +314,35 @@ export function makeFetchMock(): FetchMock {
     // --- Wix confirm booking ---
     if (url.includes(":confirmOrDecline")) {
       return json(200, { booking: { status: "CONFIRMED" } });
+    }
+
+    // --- Wix eCommerce order required by the custom-checkout flow ---
+    if (url.endsWith("/ecom/v1/orders/search") && method === "POST") {
+      const externalId = body?.search?.filter?.["channelInfo.externalOrderId"];
+      const id = typeof externalId === "string" ? wix.ordersByExternalId[externalId] : undefined;
+      return json(200, { orders: id ? [{ id }] : [] });
+    }
+    if (url.endsWith("/ecom/v1/orders") && method === "POST") {
+      if (wix.failCreateOrder) return json(500, { message: "orders exploded" });
+      const id = `wo_${++orderSeq}`;
+      wix.createdOrderIds.push(id);
+      const externalId = body?.order?.channelInfo?.externalOrderId;
+      if (typeof externalId === "string") wix.ordersByExternalId[externalId] = id;
+      wix.orderPayments[id] = [];
+      return json(200, { order: { id } });
+    }
+    if (url.includes("/ecom/v1/payments/orders/") && url.endsWith("/add-payment")) {
+      if (wix.failAddPayment) return json(500, { message: "payment record exploded" });
+      const orderId = decodeURIComponent(url.split("/orders/")[1].split("/add-payment")[0]);
+      const payment = body?.payments?.[0];
+      wix.orderPayments[orderId] = [...(wix.orderPayments[orderId] ?? []), payment];
+      return json(200, { paymentsIds: [`wp_${calls.length}`] });
+    }
+    if (url.includes("/ecom/v1/payments/orders/") && method === "GET") {
+      const orderId = decodeURIComponent(url.split("/orders/")[1]);
+      return json(200, {
+        orderTransactions: { orderId, payments: wix.orderPayments[orderId] ?? [] },
+      });
     }
 
     throw new Error(`Integration fetch mock: unexpected call ${method} ${url}`);
@@ -321,6 +367,10 @@ export function makeFetchMock(): FetchMock {
     emailCalls: () => calls.filter((c) => c.url.includes("api.brevo.com")),
     wixCreateBookingCalls: () =>
       calls.filter((c) => c.url.endsWith("/bookings/v2/bookings") && c.method === "POST"),
+    wixCreateOrderCalls: () =>
+      calls.filter((c) => c.url.endsWith("/ecom/v1/orders") && c.method === "POST"),
+    wixAddPaymentCalls: () =>
+      calls.filter((c) => c.url.endsWith("/add-payment") && c.method === "POST"),
     omTokenCalls: () => calls.filter((c) => c.url.includes("/oauth/token")),
     omLookupCalls: () =>
       calls.filter((c) => c.url.includes("/api/eWallet/v1/transactions") && c.method === "GET"),
@@ -339,6 +389,12 @@ export function makeFetchMock(): FetchMock {
       wix.eventId = "ev_1";
       wix.createdBookingIds.length = 0;
       wix.failCreateBooking = false;
+      wix.contacts = [];
+      wix.createdOrderIds.length = 0;
+      wix.ordersByExternalId = {};
+      wix.orderPayments = {};
+      wix.failCreateOrder = false;
+      wix.failAddPayment = false;
       wix.calendarEvents = [];
       wix.failCalendar = false;
       wix.staffResources = [];

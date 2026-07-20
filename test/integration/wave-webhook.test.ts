@@ -4,6 +4,7 @@ import { buildServer } from "../../src/server.js";
 import { pool, migrate } from "../../src/db/index.js";
 import { initCafeMenu } from "../../src/domain/cafeMenuRepo.js";
 import { reconcileStuckBookings } from "../../src/webhooks/wave.js";
+import { reconcileMissingWixOrders } from "../../src/domain/fulfillment.js";
 import {
   makeFetchMock,
   type FetchMock,
@@ -97,6 +98,31 @@ describe("happy path", () => {
     expect(booked.payer_phone).toBe("+221770000001");
     expect(mock.wixCreateBookingCalls()).toHaveLength(1);
 
+    const orderRecorded = await waitFor(async () => {
+      const row = await bookingById(booking.id);
+      return row.wix_payment_recorded_at ? row : null;
+    }, "Wix order/payment record");
+    expect(orderRecorded.wix_order_id).toBe(mock.wix.createdOrderIds[0]);
+    expect(mock.wixCreateOrderCalls()).toHaveLength(1);
+    expect(mock.wixAddPaymentCalls()).toHaveLength(1);
+    const orderBody = mock.wixCreateOrderCalls()[0].body.order;
+    expect(orderBody.channelInfo).toEqual({
+      type: "OTHER_PLATFORM",
+      externalOrderId: booking.id,
+    });
+    expect(orderBody.lineItems[0].catalogReference).toEqual({
+      catalogItemId: booked.wix_booking_id,
+      appId: "13d21c63-b5ec-5912-8397-c3a5ddb27a97",
+    });
+    expect(mock.wixAddPaymentCalls()[0].body.payments[0]).toMatchObject({
+      amount: { amount: "15000" },
+      regularPaymentDetails: {
+        paymentMethod: "Wave",
+        offlinePayment: true,
+        status: "APPROVED",
+      },
+    });
+
     // Client got the French confirmation, and it was persisted as a turn.
     const texts = await waitFor(
       async () => (mock.waTextsTo(client.wa_phone).length > 0 ? mock.waTextsTo(client.wa_phone) : null),
@@ -140,6 +166,34 @@ describe("happy path", () => {
       `wave:${eventId}`,
     ]);
     expect(processed.rowCount).toBe(1);
+  });
+
+  it("uses the full Wix contact name instead of a one-letter model name", async () => {
+    const client = await seedClient({ name: "L" });
+    const booking = await seedBooking(client.id);
+    mock.wix.contacts = [
+      { id: "contact_lina", info: { name: { first: "Habott", last: "Lina" } } },
+    ];
+
+    await deliverWaveWebhook(app, booking.id);
+    await waitFor(async () => {
+      const row = await bookingById(booking.id);
+      return row.wix_payment_recorded_at ? row : null;
+    }, "canonical-name booking and order");
+
+    expect(mock.wixCreateBookingCalls()[0].body.booking.contactDetails).toMatchObject({
+      contactId: "contact_lina",
+      firstName: "Habott",
+      lastName: "Lina",
+    });
+    expect(mock.wixCreateOrderCalls()[0].body.order).toMatchObject({
+      buyerInfo: { contactId: "contact_lina" },
+      billingInfo: {
+        contactDetails: { firstName: "Habott", lastName: "Lina" },
+      },
+    });
+    const local = await pool.query(`select name from clients where id = $1`, [client.id]);
+    expect(local.rows[0].name).toBe("Habott Lina");
   });
 
   it("late payment on an EXPIRED booking is honored (EXPIRED → PAID → BOOKED)", async () => {
@@ -321,5 +375,38 @@ describe("crash recovery (stuck PAID)", () => {
       ]);
       return r.rowCount === 1 ? true : null;
     }, "event marked processed after terminal state");
+  });
+});
+
+describe("Wix order recovery after BOOKED", () => {
+  it("keeps the seat BOOKED when Create Order fails, then repairs it once", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id);
+    mock.wix.failCreateOrder = true;
+
+    await deliverWaveWebhook(app, booking.id);
+    await waitForStatus(booking.id, "BOOKED");
+    const failed = await waitFor(async () => {
+      const row = await bookingById(booking.id);
+      return row.wix_order_sync_error ? row : null;
+    }, "stored Wix order error");
+    expect(failed.status).toBe("BOOKED");
+    expect(failed.wix_order_id).toBeNull();
+    expect(mock.wixCreateBookingCalls()).toHaveLength(1);
+
+    mock.wix.failCreateOrder = false;
+    await pool.query(
+      `update pending_bookings set updated_at = now() - interval '10 minutes' where id = $1`,
+      [booking.id],
+    );
+    expect(await reconcileMissingWixOrders(noopLog)).toBe(1);
+
+    const repaired = await bookingById(booking.id);
+    expect(repaired.status).toBe("BOOKED");
+    expect(repaired.wix_order_id).toBeTruthy();
+    expect(repaired.wix_payment_recorded_at).not.toBeNull();
+    expect(mock.wixCreateBookingCalls()).toHaveLength(1);
+    expect(mock.wix.createdOrderIds).toHaveLength(1);
+    expect(mock.wixAddPaymentCalls()).toHaveLength(1);
   });
 });

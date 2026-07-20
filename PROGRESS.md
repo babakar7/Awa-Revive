@@ -2178,6 +2178,29 @@ clôture réellement un remboursement, rappels de séance (templates Meta),
 stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
 élargi, vente d'abonnements, report, transcription : déjà en prod ou Phase 1+.)
 
+### 6.6 Réservations Awa — nom CRM + commande Wix (20/07/2026)
+
+- [x] Le nom canonique de la fiche contact Wix est maintenant prioritaire lors
+  de la réservation : un nom WhatsApp/modèle réduit à `L` ne remplace plus
+  `Habott Lina`. Le nom complet est aussi resynchronisé dans l'admin local.
+- [x] Le checkout externe Wave/Orange Money/Max It suit désormais la dernière
+  étape Wix documentée : après confirmation de la réservation, création de
+  l'ordre eCommerce lié au booking puis ajout du paiement déjà encaissé comme
+  transaction offline `APPROVED`. Les réservations abonnement restent sur le
+  ledger Benefit Programs et ne créent pas un ordre par séance.
+- [x] Synchronisation post-`BOOKED` isolée du remboursement, avec lease,
+  recherche par `externalOrderId`, contrôle des paiements existants et reprise
+  automatique des réservations des dernières 48 h. Une panne Orders ne peut
+  donc ni annuler la place ni produire un double paiement au retry.
+- [x] Vérification locale : build, 458 tests unitaires et suite d'intégration
+  complète ; scénarios dédiés nom `L` → `Habott Lina`, ordre/paiement Wix et
+  panne Create Order réparée sans nouvelle réservation.
+- [ ] Après déploiement : vérifier que la clé API Wix possède `Manage Orders`,
+  puis contrôler Habott Lina dans l'admin/Wix. La réservation déjà créée avec
+  `L` peut conserver ce libellé historique (l'API Writer V2 ne propose pas de
+  mise à jour générale de `contactDetails`) ; l'ordre et le nom admin seront
+  repris automatiquement s'ils datent de moins de 48 h.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

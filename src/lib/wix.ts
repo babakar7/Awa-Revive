@@ -43,6 +43,19 @@ async function wixPost(path: string, body: unknown): Promise<any> {
   return res.json();
 }
 
+async function wixGet(path: string): Promise<any> {
+  const res = await fetch(`${WIX_API}${path}`, {
+    method: "GET",
+    headers: headers(),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Wix ${path} failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
 // ---------- Calendar Events V3 (historical coach compensation) ----------
 
 export interface WixCalendarEvent {
@@ -563,38 +576,86 @@ export function phoneMatchVariants(phone: string): string[] {
   return [...variants];
 }
 
-export async function findContactIdByPhone(
-  phone: string,
-  firstName?: string,
-): Promise<string | null> {
-  try {
-    const e164 = phone.startsWith("+") ? phone : `+${phone}`;
-    const data = await wixPost("/contacts/v4/contacts/query", {
-      query: { filter: { "info.phones.e164Phone": { $eq: e164 } } },
-    });
-    let contacts: any[] = data?.contacts ?? [];
-    if (contacts.length === 0) {
-      // No e164 match → try the raw spellings (field verified live 11/07:
-      // info.phones.phone matches the stored string, spaces included).
-      const fallback = await wixPost("/contacts/v4/contacts/query", {
-        query: { filter: { "info.phones.phone": { $in: phoneMatchVariants(phone) } } },
-      });
-      contacts = fallback?.contacts ?? [];
-    }
-    if (contacts.length === 0) return null;
-    if (contacts.length === 1) return contacts[0].id ?? null;
+export interface WixContactMatch {
+  id: string;
+  /** Canonical display name stored on the Wix CRM contact. */
+  fullName: string | null;
+}
 
-    const norm = (s: string) =>
-      (s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
-    if (firstName) {
-      const matches = contacts.filter((c) => norm(c?.info?.name?.first) === norm(firstName));
-      if (matches.length === 1) return matches[0].id ?? null;
-    }
-    return null; // ambiguous
+export function wixContactFullName(contact: any): string | null {
+  const first = String(contact?.info?.name?.first ?? "").trim();
+  const last = String(contact?.info?.name?.last ?? "").trim();
+  const name = [first, last].filter(Boolean).join(" ").trim();
+  return name || null;
+}
+
+export function splitContactName(name: string): { firstName: string; lastName?: string } {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const firstName = parts.shift() || "Client Revive";
+  const lastName = parts.join(" ");
+  return { firstName, ...(lastName ? { lastName } : {}) };
+}
+
+function normalizeContactName(value: string): string {
+  return (value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function chooseContact(contacts: any[], nameHint?: string): any | null {
+  if (contacts.length === 0) return null;
+  if (contacts.length === 1) return contacts[0];
+  if (!nameHint) return null;
+
+  const normalizedHint = normalizeContactName(nameHint);
+  const hintFirst = normalizedHint.split(/\s+/)[0] ?? "";
+  const matches = contacts.filter((contact) => {
+    const fullName = normalizeContactName(wixContactFullName(contact) ?? "");
+    const firstName = normalizeContactName(contact?.info?.name?.first ?? "");
+    return fullName === normalizedHint || (!!hintFirst && firstName === hintFirst);
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export async function findContactByPhone(
+  phone: string,
+  nameHint?: string,
+): Promise<WixContactMatch | null> {
+  try {
+    const contacts = await queryContactsByPhone(phone);
+    const contact = chooseContact(contacts, nameHint);
+    if (!contact?.id) return null;
+    return { id: String(contact.id), fullName: wixContactFullName(contact) };
   } catch (err) {
     console.error("Wix contact lookup failed (booking will create/match contact itself):", err);
     return null;
   }
+}
+
+export async function findContactIdByPhone(
+  phone: string,
+  firstName?: string,
+): Promise<string | null> {
+  return (await findContactByPhone(phone, firstName))?.id ?? null;
+}
+
+async function queryContactsByPhone(phone: string): Promise<any[]> {
+  const e164 = phone.startsWith("+") ? phone : `+${phone}`;
+  const data = await wixPost("/contacts/v4/contacts/query", {
+    query: { filter: { "info.phones.e164Phone": { $eq: e164 } } },
+  });
+  let contacts: any[] = data?.contacts ?? [];
+  if (contacts.length === 0) {
+    // No e164 match → try the raw spellings (field verified live 11/07:
+    // info.phones.phone matches the stored string, spaces included).
+    const fallback = await wixPost("/contacts/v4/contacts/query", {
+      query: { filter: { "info.phones.phone": { $in: phoneMatchVariants(phone) } } },
+    });
+    contacts = fallback?.contacts ?? [];
+  }
+  return contacts;
 }
 
 /**
@@ -607,18 +668,7 @@ export async function findContactIdByPhone(
  */
 export async function findContactsByPhone(phone: string): Promise<any[]> {
   try {
-    const e164 = phone.startsWith("+") ? phone : `+${phone}`;
-    const data = await wixPost("/contacts/v4/contacts/query", {
-      query: { filter: { "info.phones.e164Phone": { $eq: e164 } } },
-    });
-    let contacts: any[] = data?.contacts ?? [];
-    if (contacts.length === 0) {
-      const fallback = await wixPost("/contacts/v4/contacts/query", {
-        query: { filter: { "info.phones.phone": { $in: phoneMatchVariants(phone) } } },
-      });
-      contacts = fallback?.contacts ?? [];
-    }
-    return contacts;
+    return await queryContactsByPhone(phone);
   } catch (err) {
     console.error("findContactsByPhone failed:", err);
     return [];
@@ -1254,16 +1304,24 @@ export async function createBookingRaw(args: {
   phone: string;
   participants?: number;
   paymentOption?: "OFFLINE" | "MEMBERSHIP";
+  /** Pass null to state that lookup was already attempted and found nothing. */
+  resolvedContact?: WixContactMatch | null;
 }): Promise<string> {
-  // Attach to an existing CRM contact when we can identify one unambiguously.
-  const contactId = await findContactIdByPhone(args.phone, args.name);
+  // Attach to the CRM contact and use its canonical name. Previously we sent
+  // the model-provided name even after finding the contact, which is how a
+  // one-letter WhatsApp/profile name such as "L" leaked into Wix bookings.
+  const contact =
+    args.resolvedContact === undefined
+      ? await findContactByPhone(args.phone, args.name)
+      : args.resolvedContact;
+  const contactName = splitContactName(contact?.fullName || args.name);
 
   const data = await wixPost("/bookings/v2/bookings", {
     booking: {
       bookedEntity: { slot: args.slot },
       contactDetails: {
-        ...(contactId ? { contactId } : {}),
-        firstName: args.name,
+        ...(contact?.id ? { contactId: contact.id } : {}),
+        ...contactName,
         phone: args.phone,
       },
       selectedPaymentOption: args.paymentOption ?? "OFFLINE",
@@ -1280,6 +1338,7 @@ export async function createBooking(args: {
   name: string;
   phone: string;
   participants?: number;
+  resolvedContact?: WixContactMatch | null;
 }): Promise<string> {
   const id = await createBookingRaw(args);
 
@@ -1299,4 +1358,111 @@ export async function createBooking(args: {
     console.error(`Wix confirmOrDecline failed for booking ${id} (booking still exists):`, err);
   }
   return id;
+}
+
+export async function findOrderIdByExternalId(externalOrderId: string): Promise<string | null> {
+  const data = await wixPost("/ecom/v1/orders/search", {
+    search: {
+      filter: { "channelInfo.externalOrderId": externalOrderId },
+      cursorPaging: { limit: 1 },
+    },
+  });
+  return data?.orders?.[0]?.id ? String(data.orders[0].id) : null;
+}
+
+/** Create the eCommerce record required after a custom-checkout booking. */
+export async function createBookingOrder(args: {
+  wixBookingId: string;
+  externalOrderId: string;
+  serviceName: string;
+  amountXof: number;
+  participants: number;
+  phone: string;
+  name: string;
+  contactId?: string | null;
+}): Promise<string> {
+  const amount = String(Math.max(0, Math.round(args.amountXof)));
+  const contactName = splitContactName(args.name);
+  const data = await wixPost("/ecom/v1/orders", {
+    order: {
+      ...(args.contactId ? { buyerInfo: { contactId: args.contactId } } : {}),
+      billingInfo: {
+        contactDetails: { ...contactName, phone: args.phone },
+      },
+      lineItems: [
+        {
+          productName: {
+            original:
+              args.participants > 1
+                ? `${args.serviceName} — ${args.participants} places`
+                : args.serviceName,
+          },
+          catalogReference: {
+            catalogItemId: args.wixBookingId,
+            appId: WIX_BOOKINGS_APP_ID,
+          },
+          quantity: 1,
+          itemType: { preset: "SERVICE" },
+          price: { amount },
+          paymentOption: "FULL_PAYMENT_OFFLINE",
+        },
+      ],
+      channelInfo: { type: "OTHER_PLATFORM", externalOrderId: args.externalOrderId },
+      currency: "XOF",
+      currencyConversionDetails: { originalCurrency: "XOF", conversionRate: "1" },
+      taxIncludedInPrices: true,
+      priceSummary: {
+        subtotal: { amount },
+        shipping: { amount: "0" },
+        tax: { amount: "0" },
+        discount: { amount: "0" },
+        total: { amount },
+      },
+    },
+  });
+  const orderId = data?.order?.id;
+  if (!orderId) throw new Error(`Wix create order returned no id: ${JSON.stringify(data)}`);
+  return String(orderId);
+}
+
+/** True when this imported order already has a successful payment record. */
+export async function hasApprovedOrderPayment(
+  orderId: string,
+  amountXof: number,
+): Promise<boolean> {
+  const data = await wixGet(`/ecom/v1/payments/orders/${encodeURIComponent(orderId)}`);
+  const target = Math.max(0, Math.round(amountXof));
+  const payments: any[] = data?.orderTransactions?.payments ?? [];
+  return payments.some(
+    (payment) =>
+      String(payment?.regularPaymentDetails?.status ?? "").toUpperCase() === "APPROVED" &&
+      Math.round(Number(payment?.amount?.amount)) === target,
+  );
+}
+
+/** Record an already-collected Wave/OM/Max It payment; this never charges. */
+export async function addApprovedOrderPayment(args: {
+  orderId: string;
+  amountXof: number;
+  paymentMethod: string;
+}): Promise<void> {
+  const data = await wixPost(
+    `/ecom/v1/payments/orders/${encodeURIComponent(args.orderId)}/add-payment`,
+    {
+      payments: [
+        {
+          amount: { amount: String(Math.max(0, Math.round(args.amountXof))) },
+          refundDisabled: false,
+          regularPaymentDetails: {
+            paymentMethod: args.paymentMethod,
+            offlinePayment: true,
+            status: "APPROVED",
+          },
+        },
+      ],
+    },
+  );
+  if (!Array.isArray(data?.paymentsIds) || data.paymentsIds.length === 0) {
+    throw new Error(`Wix add payment returned no payment id: ${JSON.stringify(data)}`);
+  }
 }

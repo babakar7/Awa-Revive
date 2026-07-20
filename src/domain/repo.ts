@@ -39,6 +39,10 @@ export interface PendingBooking {
   extras_amount_xof: number;
   order_note: string | null;
   fulfilling_at: Date | null;
+  wix_order_id: string | null;
+  wix_payment_recorded_at: Date | null;
+  wix_order_sync_at: Date | null;
+  wix_order_sync_error: string | null;
 }
 
 export interface Turn {
@@ -345,6 +349,77 @@ export async function stuckPaidBookings(
         and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
       order by updated_at asc limit $2`,
     [graceMinutes, limit],
+  );
+  return res.rows;
+}
+
+/**
+ * Claim post-booking order/payment synchronization. This is deliberately
+ * independent from the seat-fulfillment lease: failures here are retried but
+ * can never move a BOOKED reservation to REFUND_NEEDED.
+ */
+export async function claimBookingForWixOrderSync(
+  id: string,
+): Promise<PendingBooking | null> {
+  const res = await pool.query(
+    `update pending_bookings
+        set wix_order_sync_at = now(), updated_at = now()
+      where id = $1 and status = 'BOOKED' and wix_booking_id is not null
+        and amount_xof > 0 and wix_payment_recorded_at is null
+        and (wix_order_sync_at is null or wix_order_sync_at < now() - interval '2 minutes')
+      returning *`,
+    [id],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function saveWixOrderId(bookingId: string, wixOrderId: string): Promise<void> {
+  await pool.query(
+    `update pending_bookings
+        set wix_order_id = $2, wix_order_sync_error = null, updated_at = now()
+      where id = $1 and status = 'BOOKED'`,
+    [bookingId, wixOrderId],
+  );
+}
+
+export async function markWixPaymentRecorded(bookingId: string): Promise<void> {
+  await pool.query(
+    `update pending_bookings
+        set wix_payment_recorded_at = now(), wix_order_sync_at = null,
+            wix_order_sync_error = null, updated_at = now()
+      where id = $1 and status = 'BOOKED'`,
+    [bookingId],
+  );
+}
+
+export async function releaseWixOrderSync(bookingId: string, error: string): Promise<void> {
+  await pool.query(
+    `update pending_bookings
+        set wix_order_sync_at = null, wix_order_sync_error = $2, updated_at = now()
+      where id = $1 and status = 'BOOKED' and wix_payment_recorded_at is null`,
+    [bookingId, error.slice(0, 1000)],
+  );
+}
+
+/**
+ * Recent BOOKED rows missing their Wix order/payment record. The 48-hour cap
+ * repairs current incidents (including a same-day booking) without importing
+ * the entire historical backlog on first deployment.
+ */
+export async function bookingsMissingWixPaymentRecord(
+  graceMinutes = 3,
+  maxAgeHours = 48,
+  limit = 20,
+): Promise<PendingBooking[]> {
+  const res = await pool.query(
+    `select * from pending_bookings
+      where status = 'BOOKED' and wix_booking_id is not null and amount_xof > 0
+        and wix_payment_recorded_at is null
+        and created_at > now() - make_interval(hours => $2)
+        and updated_at < now() - make_interval(mins => $1)
+        and (wix_order_sync_at is null or wix_order_sync_at < now() - interval '2 minutes')
+      order by updated_at asc limit $3`,
+    [graceMinutes, maxAgeHours, limit],
   );
   return res.rows;
 }
