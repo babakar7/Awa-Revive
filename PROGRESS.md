@@ -2582,6 +2582,27 @@ remplir le formulaire GET et recharger. Refonte du catalogue
   `ECONNREFUSED 127.0.0.1:<port>` en plein run = l'autre agent a
   démarré/terminé le sien, pas une vraie casse. Relancer une fois seul.
 
+### 6.16 Articles « sans recette » sur /admin/menu (21/07/2026)
+
+Plainte : « Supplément protéine whey » (une dosette dans un smoothie, rien à
+préparer) était badgé « Recette à compléter ». Livré dans le commit de
+réconciliation 753c724 (détails de la feature, session parallèle de §6.15) :
+
+- **Colonne `no_recipe_needed`** (`cafe_menu_items`, boolean not null default
+  false) + alter-guard. **Pas de backfill dans SCHEMA_SQL** : un booléen non
+  null-guardable serait re-flagué à chaque boot si l'admin décoche → backfill
+  one-off manuel (fait, voir plus bas).
+- `isRecipeComplete` court-circuite à true quand le flag est posé → badge
+  neutre gris « Sans recette » (prime sur tout), stat « À compléter » et filtre
+  corrigés sans branche dédiée. Le flag reste interne (absent du snapshot Awa,
+  testé).
+- **Checkbox** dans la fiche article (carte recette) : « Article sans recette
+  (ex. supplément) » — parsée comme `favourite` dans `parseMenuItemForm`.
+- **Backfill prod exécuté le 21/07** : `update … set no_recipe_needed = true
+  where id like 'SUPP\_%' and recipe_ingredients is null and recipe_steps is
+  null` → 10 lignes (5 supp. smoothie, 4 toast, 1 tapioca), vérifié, aucun
+  autre article touché. Les futurs suppléments se cochent à la création.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
