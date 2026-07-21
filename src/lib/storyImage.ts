@@ -177,6 +177,29 @@ export function renderStoryImage(data: StoryData): Buffer {
     return w;
   }
 
+  /** Largeur d'un texte inter-lettré à une taille donnée. */
+  function trackedWidth(text: string, font: string, size: number, tracking: number): number {
+    ctx.font = `${size}px "${font}"`;
+    return [...text].reduce((a, ch) => a + ctx.measureText(ch).width, 0) + tracking * (text.length - 1);
+  }
+
+  /**
+   * Coupe un nom de cours trop long en deux lignes au dernier espace qui tient,
+   * plutôt que de le rétrécir : les variantes d'un même cours ("… Sculpt",
+   * "… Foundation") gardent ainsi leur tronc commun sur la première ligne, à la
+   * même taille d'un cours à l'autre. Décidé à l'échelle naturelle (58px) pour
+   * que la coupe soit identique quel que soit le facteur d'échelle du jour.
+   */
+  function nameLines(name: string): string[] {
+    const maxW = W - SIDE_MARGIN * 2;
+    if (trackedWidth(name, SANS_SEMI, 58, 8) <= maxW) return [name];
+    const words = name.split(" ");
+    if (words.length < 2) return [name]; // mot unique : spacedCentered rétrécira
+    let split = words.length - 1;
+    while (split > 1 && trackedWidth(words.slice(0, split).join(" "), SANS_SEMI, 58, 8) > maxW) split--;
+    return [words.slice(0, split).join(" "), words.slice(split).join(" ")];
+  }
+
   // ---------- en-tête ----------
   spacedCentered(`PLANNING DU ${data.dayLabel}`, TITLE_FONT, 118, THEME.ink, 220, 6);
   spacedCentered("RÉSERVATION AVEC AWA SUR WHATSAPP", SANS_SEMI, 27, THEME.sub, 300, 9);
@@ -201,13 +224,19 @@ export function renderStoryImage(data: StoryData): Buffer {
 
   // Métriques "naturelles" (échelle 1), scindées ensuite par le facteur `s`.
   const HEADER_H = 110; // nom du cours + ligne coach
+  const NAME_LINE_H = 64; // hauteur d'une 2e ligne de nom (noms coupés)
   const CHIP_H = 82;
   const ROW_BLOCK = CHIP_H + 96; // pastille + libellé + inter-rangée
   const SECTION_GAP = 64;
 
   const rowsPerClass = data.classes.map((c) => rowsFor(c));
+  const linesPerClass = data.classes.map((c) => nameLines(c.name.toUpperCase()));
   const naturalH =
-    data.classes.reduce((sum, _c, i) => sum + HEADER_H + rowsPerClass[i].length * ROW_BLOCK, 0) +
+    data.classes.reduce(
+      (sum, _c, i) =>
+        sum + HEADER_H + (linesPerClass[i].length - 1) * NAME_LINE_H + rowsPerClass[i].length * ROW_BLOCK,
+      0,
+    ) +
     SECTION_GAP * Math.max(0, data.classes.length - 1);
   const available = CONTENT_BOTTOM - CONTENT_TOP;
   const s = Math.min(1, available / naturalH); // ≤ 1 : on ne grossit jamais
@@ -226,20 +255,25 @@ export function renderStoryImage(data: StoryData): Buffer {
   data.classes.forEach((cls, ci) => {
     const color = colors.get(cls.name)!;
     const rows = rowsPerClass[ci];
+    const lines = linesPerClass[ci];
     const nameY = y + 40 * s;
+    // décalage induit par une éventuelle 2e ligne de nom
+    const nameExtra = (lines.length - 1) * NAME_LINE_H * s;
 
-    // nom du cours (Montserrat SemiBold, inter-lettré)
-    spacedCentered(cls.name.toUpperCase(), SANS_SEMI, nameSize, THEME.ink, nameY, 8 * s);
+    // nom du cours (Montserrat SemiBold, inter-lettré), 1 ou 2 lignes
+    lines.forEach((line, li) => {
+      spacedCentered(line, SANS_SEMI, nameSize, THEME.ink, nameY + li * NAME_LINE_H * s, 8 * s);
+    });
 
     // "AVEC {COACH}" avec deux traits latéraux
     if (cls.coach) {
       const coachLabel = `AVEC ${cls.coach.toUpperCase()}`;
       ctx.font = `${coachSize}px "${SANS}"`;
       const cw = [...coachLabel].reduce((a, ch) => a + ctx.measureText(ch).width, 0) + 7 * s * (coachLabel.length - 1);
-      spacedCentered(coachLabel, SANS, coachSize, THEME.sub, nameY + 46 * s, 7 * s);
+      spacedCentered(coachLabel, SANS, coachSize, THEME.sub, nameY + nameExtra + 46 * s, 7 * s);
       ctx.strokeStyle = THEME.rule;
       ctx.lineWidth = 2;
-      const ruleY = nameY + 37 * s;
+      const ruleY = nameY + nameExtra + 37 * s;
       const ruleGap = cw / 2 + 40 * s;
       const ruleLen = 130 * s;
       ctx.beginPath();
@@ -252,7 +286,7 @@ export function renderStoryImage(data: StoryData): Buffer {
 
     // pastilles horaires (rangées centrées, largeur ajustée pour tenir)
     const chipGap = 44 * s;
-    let rowY = nameY + 74 * s;
+    let rowY = nameY + nameExtra + 74 * s;
     for (const row of rows) {
       // largeur de pastille bornée pour que la rangée tienne dans MAX_ROW_W
       const chipW = Math.min(230 * s, (MAX_ROW_W - (row.length - 1) * chipGap) / row.length);
@@ -288,7 +322,7 @@ export function renderStoryImage(data: StoryData): Buffer {
       rowY += rowBlock;
     }
 
-    y += headerH + rows.length * rowBlock + sectionGap;
+    y += headerH + nameExtra + rows.length * rowBlock + sectionGap;
   });
 
   // ---------- footer ----------
