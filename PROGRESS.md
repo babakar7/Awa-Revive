@@ -2404,6 +2404,29 @@ pas → stocké comme un opaque « [non-text message] », type réel perdu à ja
 - Build + 502 tests verts (dont 9 nouveaux : parsing réaction/document +
   libellés).
 
+### 6.11 Nommer les leads « chat-only » depuis leur fiche Wix (21/07/2026)
+
+Rebecca Sharp (+1 301…) parcourt le planning et pose des questions mais ne
+réserve/ne paie jamais → affichée « (sans nom) » dans l'admin alors qu'une
+fiche Wix à son numéro existe. Cause : `clients.name` n'était écrit qu'à la
+réservation/paiement/liaison email, jamais sur un simple message. Correctifs
+(`4d4a024`, `e3f701d`) :
+
+- **Enrichissement passif à l'inbound** (`maybeEnrichClientNameFromWix`,
+  `src/agent/index.ts`) : un message d'un client sans nom déclenche un
+  `findContactByPhone` ; sur match **UNIQUE** (null si 0 ou ambigu → jamais de
+  nom deviné), le nom canonique est copié via `updateClientName`.
+  Fire-and-forget (aucune latence sur la réponse), gardé sur nom vide donc ne
+  refire plus une fois posé.
+- **Route `/admin/crm/link`** : la liaison manuelle synchronise aussi le nom
+  de la fiche vers la ligne locale (avant : numéro ajouté mais nom laissé vide).
+- **Backfill one-shot** : `npm run crm:backfill-names` (`--dry` pour prévisu) —
+  `scripts/backfill-client-names.ts`, idempotent, récupère l'URL Postgres
+  publique via la CLI Railway (comme dev-prod-db). Passé une fois en prod :
+  **6 clients nommés sur 19 sans nom** (Rama Seydi, Tabara DIOUF, Leïla FAHSI,
+  Aghaby Yanni, Rebecca Sharp, Lala Binta), 13 sans fiche unique, 0 erreur.
+- Build + 496 tests unitaires verts.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
