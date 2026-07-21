@@ -3,10 +3,12 @@ import {
   buildStoryData,
   dateLabelFor,
   dayLabelFor,
+  mergeClassVariants,
   storyCaption,
   storyWindowOpen,
   tomorrowWindow,
 } from "../src/domain/dailyStory.js";
+import type { StoryClass } from "../src/lib/storyImage.js";
 import type { WixService, WixSlot, WixStaffResource } from "../src/lib/wix.js";
 
 const svc = (id: string, name: string, type = "CLASS"): WixService => ({
@@ -67,6 +69,53 @@ describe("storyWindowOpen", () => {
     expect(storyWindowOpen(new Date("2026-07-20T18:00:00Z"), 18)).toBe(true);
     expect(storyWindowOpen(new Date("2026-07-20T21:59:00Z"), 18)).toBe(true);
     expect(storyWindowOpen(new Date("2026-07-20T22:00:00Z"), 18)).toBe(false);
+  });
+});
+
+describe("mergeClassVariants", () => {
+  const cls = (name: string, coach: string | null, times: string[]): StoryClass => ({
+    name,
+    coach,
+    slots: times.map((time) => ({ time, openSpots: 3, totalSpots: 8 })),
+  });
+
+  it("merges variants sharing their first two words under the common trunk", () => {
+    const out = mergeClassVariants([
+      cls("Pilates Reformer Sculpt", "Marieme", ["08H00", "12H30"]),
+      cls("Yoga Vinyasa", "Awa", ["09H00"]),
+      cls("Pilates Reformer Foundation", "Marieme", ["10H15"]),
+    ]);
+    expect(out.map((c) => c.name)).toEqual(["Pilates Reformer", "Yoga Vinyasa"]);
+    expect(out[0].slots.map((s) => s.time)).toEqual(["08H00", "10H15", "12H30"]);
+    expect(out[0].coach).toBe("Marieme");
+  });
+
+  it("keeps unrelated classes separate (one shared word is not enough)", () => {
+    const out = mergeClassVariants([
+      cls("Bébé Nageur", "Thierno", ["10H00"]),
+      cls("Natation Enfant", "Thierno", ["11H00"]),
+      cls("Yoga Doux", "Awa", ["12H00"]),
+      cls("Yoga Flow", "Awa", ["13H00"]),
+    ]);
+    expect(out.map((c) => c.name)).toEqual(["Bébé Nageur", "Natation Enfant", "Yoga Doux", "Yoga Flow"]);
+  });
+
+  it("shows both coaches when the variants have different ones", () => {
+    const out = mergeClassVariants([
+      cls("Pilates Reformer Sculpt", "Marieme", ["08H00"]),
+      cls("Pilates Reformer Foundation", "Awa", ["10H15"]),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].coach).toBe("Marieme & Awa");
+  });
+
+  it("absorbs the bare trunk name into the merged section", () => {
+    const out = mergeClassVariants([
+      cls("Pilates Reformer", "Awa", ["08H00"]),
+      cls("Pilates Reformer Sculpt", "Awa", ["10H15"]),
+    ]);
+    expect(out.map((c) => c.name)).toEqual(["Pilates Reformer"]);
+    expect(out[0].slots.map((s) => s.time)).toEqual(["08H00", "10H15"]);
   });
 });
 

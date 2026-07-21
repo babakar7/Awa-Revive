@@ -109,10 +109,66 @@ function pickCoach(votes: Map<string, number>): string | null {
 }
 
 /**
+ * Fusionne les variantes d'un même cours en une seule section : deux cours dont
+ * les noms partagent leurs deux premiers mots (« Pilates Reformer Sculpt » /
+ * « Pilates Reformer Foundation ») sont regroupés sous leur tronc commun
+ * (« Pilates Reformer »), tous horaires confondus, triés par heure (demande
+ * Babakar 21/07). Règle purement lexicale — aucun nom de cours en dur.
+ * Coachs de la section fusionnée : un seul → affiché, deux → « X & Y »,
+ * au-delà → ligne coach omise.
+ */
+export function mergeClassVariants(classes: StoryClass[]): StoryClass[] {
+  const words = classes.map((c) => c.name.trim().split(/\s+/));
+  const twoWordKey = (w: string[]): string => w.slice(0, 2).join(" ").toLowerCase();
+  const keyCount = new Map<string, number>();
+  for (const w of words) keyCount.set(twoWordKey(w), (keyCount.get(twoWordKey(w)) ?? 0) + 1);
+
+  interface Merged {
+    memberWords: string[][];
+    coaches: string[];
+    slots: StorySlot[];
+  }
+  const merged = new Map<string, Merged>(); // clé = tronc 2 mots (ou nom entier si seul)
+  classes.forEach((c, i) => {
+    const shared = words[i].length >= 2 && (keyCount.get(twoWordKey(words[i])) ?? 0) > 1;
+    const key = shared ? twoWordKey(words[i]) : c.name.toLowerCase();
+    let m = merged.get(key);
+    if (!m) {
+      m = { memberWords: [], coaches: [], slots: [] };
+      merged.set(key, m);
+    }
+    m.memberWords.push(words[i]);
+    m.slots.push(...c.slots);
+    if (c.coach && !m.coaches.includes(c.coach)) m.coaches.push(c.coach);
+  });
+
+  // Nom affiché = plus long préfixe de mots commun à toutes les variantes
+  // (casse du premier membre) — « Pilates Reformer Sculpt » + « … Foundation »
+  // → « Pilates Reformer ».
+  const commonPrefix = (ws: string[][]): string => {
+    const first = ws[0];
+    let n = first.length;
+    for (const w of ws.slice(1)) {
+      let i = 0;
+      while (i < n && i < w.length && w[i].toLowerCase() === first[i].toLowerCase()) i++;
+      n = i;
+    }
+    return first.slice(0, n).join(" ");
+  };
+
+  return [...merged.values()].map((m) => ({
+    name: commonPrefix(m.memberWords),
+    coach: m.coaches.length === 1 ? m.coaches[0] : m.coaches.length === 2 ? m.coaches.join(" & ") : null,
+    slots: [...m.slots].sort((a, b) => a.time.localeCompare(b.time)),
+  }));
+}
+
+/**
  * Projette les créneaux Wix de demain en `StoryData` (regroupés par cours). Pur
  * et testable. Filtre les services APPOINTMENT (garde les types inconnus, comme
  * la sweep de notifications) ; résout le coach par `slot.coach` sinon par
- * `coachId` via l'annuaire staff. Jamais de nom de cours en dur.
+ * `coachId` via l'annuaire staff. Les variantes d'un même cours sont fusionnées
+ * (cf. `mergeClassVariants`). Jamais de nom de cours en dur.
  */
 export function buildStoryData(
   slots: WixSlot[],
@@ -158,15 +214,17 @@ export function buildStoryData(
     if (coachName) g.coachVotes.set(coachName, (g.coachVotes.get(coachName) ?? 0) + 1);
   }
 
-  const classes: StoryClass[] = [...groups.values()]
-    .sort((a, b) => a.earliest - b.earliest)
-    .map((g) => ({
-      name: g.name,
-      coach: pickCoach(g.coachVotes),
-      slots: g.slots
-        .sort((a, b) => a.ms - b.ms)
-        .map(({ ms: _ms, ...s }) => s),
-    }));
+  const classes: StoryClass[] = mergeClassVariants(
+    [...groups.values()]
+      .sort((a, b) => a.earliest - b.earliest)
+      .map((g) => ({
+        name: g.name,
+        coach: pickCoach(g.coachVotes),
+        slots: g.slots
+          .sort((a, b) => a.ms - b.ms)
+          .map(({ ms: _ms, ...s }) => s),
+      })),
+  );
 
   return { dayLabel: dayLabelFor(win.dateISO), dateLabel: dateLabelFor(win.dateISO), classes };
 }

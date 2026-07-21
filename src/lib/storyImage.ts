@@ -63,6 +63,12 @@ export function statusLabel(openSpots: number, _totalSpots = 0): string {
   return "DISPO";
 }
 
+// Les cours aquatiques (bébé nageur, natation…) sont TOUJOURS en bleu (demande
+// Babakar 21/07) ; le bleu est retiré de la rotation des autres cours pour
+// éviter une collision le même jour. Mot-clé sémantique, pas un nom de cours.
+const WATER_COLOR = "#5157a8";
+const WATER_RE = /nageur|natation|aqua|swim/i;
+
 /**
  * Couleur d'un cours, stable pour un nom donné sur la durée de vie du process
  * (l'ordre d'apparition détermine l'index dans la palette). Déterministe et
@@ -70,10 +76,14 @@ export function statusLabel(openSpots: number, _totalSpots = 0): string {
  */
 export function classColorMap(classes: StoryClass[]): Map<string, string> {
   const map = new Map<string, string>();
+  const rotation = THEME.classColors.filter((c) => c !== WATER_COLOR);
   let i = 0;
   for (const c of classes) {
-    if (!map.has(c.name)) {
-      map.set(c.name, THEME.classColors[i % THEME.classColors.length]);
+    if (map.has(c.name)) continue;
+    if (WATER_RE.test(c.name)) {
+      map.set(c.name, WATER_COLOR);
+    } else {
+      map.set(c.name, rotation[i % rotation.length]);
       i++;
     }
   }

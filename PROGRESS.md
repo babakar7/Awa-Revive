@@ -2531,11 +2531,21 @@ deux ajustements de layout suite au retour de Babakar :
   noms de cours et rangées de pastilles ne s'approchent plus des bords.
 - **Noms longs sur deux lignes au lieu de rétrécir** : un nom qui ne tient pas
   à 58px est coupé au dernier espace qui tient (`nameLines`), la 2e ligne à la
-  même taille. Résultat voulu : « PILATES REFORMER » rend à la MÊME taille sur
-  tous les cours, la variante (« SCULPT », « FOUNDATION ») descend en ligne 2.
-  Coupe décidée à l'échelle naturelle → identique quel que soit le facteur
-  d'échelle du jour ; hauteur de la 2e ligne comptée dans `naturalH`. Aucun nom
-  de cours en dur — règle purement géométrique.
+  même taille. Coupe décidée à l'échelle naturelle → identique quel que soit le
+  facteur d'échelle du jour ; hauteur de la 2e ligne comptée dans `naturalH`.
+  Aucun nom de cours en dur — règle purement géométrique.
+- **Variantes d'un cours fusionnées en une section**
+  (`mergeClassVariants`, `domain/dailyStory.ts`) : deux cours dont les noms
+  partagent leurs deux premiers mots (« Pilates Reformer Sculpt » /
+  « Pilates Reformer Foundation ») sont regroupés sous leur tronc commun
+  (« PILATES REFORMER »), tous horaires confondus triés par heure. Règle
+  purement lexicale, aucun nom en dur. Coachs : 1 → affiché, 2 → « X & Y »,
+  plus → ligne omise. (1er jet « 2 lignes » ci-dessus conservé pour les autres
+  noms longs, mais les variantes passent désormais par la fusion.)
+- **Cours aquatiques toujours en bleu** (`classColorMap`) : un nom contenant
+  nageur/natation/aqua/swim reçoit le bleu `#5157a8`, retiré de la rotation des
+  autres cours (pas de collision le même jour). Mot-clé sémantique, pas un nom
+  de cours en dur.
 
 ## 7. Runbook ops
 

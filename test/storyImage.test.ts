@@ -53,6 +53,19 @@ describe("classColorMap", () => {
     const dup = classColorMap([...base.classes, cls("Reformer", "Yass", [["19H15", 0, 6]])]);
     expect(dup.get("Reformer")).toBe(map.get("Reformer"));
   });
+
+  it("always gives aquatic classes the blue, never the rotation", () => {
+    const map = classColorMap([
+      cls("Reformer", "Yass", [["08H15", 2, 6]]),
+      cls("Bébé Nageur", "Thierno", [["10H00", 2, 10]]),
+      cls("Natation Enfant", "Thierno", [["11H00", 2, 10]]),
+      cls("Yoga", "Awa", [["12H00", 2, 10]]),
+    ]);
+    expect(map.get("Bébé Nageur")).toBe("#5157a8");
+    expect(map.get("Natation Enfant")).toBe("#5157a8");
+    expect(map.get("Reformer")).not.toBe("#5157a8");
+    expect(map.get("Yoga")).not.toBe("#5157a8");
+  });
 });
 
 describe("renderStoryImage", () => {
