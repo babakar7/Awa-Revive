@@ -276,6 +276,10 @@ form.inline{display:inline}
 .menu-jumpnav{position:sticky;top:calc(var(--topbar-h) + .5rem);z-index:9;flex-wrap:nowrap;overflow-x:auto;white-space:nowrap;width:auto;background:rgba(251,247,242,.97);backdrop-filter:blur(10px);scrollbar-width:thin}
 .menu-jumpnav a{flex:0 0 auto}
 .menu-jumpnav a .badge{margin-left:.35rem}
+/* selected tab: filled brand pill so the active category is unmistakable
+   (the shared .jump-nav a.active tint is too subtle for a one-at-a-time view) */
+.menu-jumpnav a.menu-tab.active{background:var(--brand);color:#fff!important;font-weight:700;box-shadow:var(--shadow-1)}
+.menu-jumpnav a.menu-tab.active .badge{background:rgba(255,255,255,.26);color:#fff}
 .menu-editor{display:grid;gap:.9rem}
 .menu-editor>.card{margin-bottom:0}
 .menu-editor-heading{margin:0 0 1rem}
