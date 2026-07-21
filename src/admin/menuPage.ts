@@ -71,6 +71,7 @@ function selected(value: string | undefined, expected: string): string {
 }
 
 function recipeBadge(item: MenuItemView): string {
+  if (item.no_recipe_needed) return `<span class="badge badge--gray">Sans recette</span>`;
   return isRecipeComplete(item)
     ? `<span class="badge badge--green">Recette complète</span>`
     : `<span class="badge badge--amber">Recette à compléter</span>`;
@@ -80,15 +81,60 @@ function price(value: number): string {
   return `${Math.round(value).toLocaleString("fr-FR").replace(/ /g, " ")} F`;
 }
 
+/** Anchor slug for a category section (lowercase, accents stripped, dashes). */
+function anchorSlug(category: string): string {
+  return (
+    normalized(category)
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "autres"
+  );
+}
+
+/**
+ * Compact clickable row: the whole line links to the item page (data-href +
+ * page script), badges replace the old Statut/Actions columns, and data-search
+ * carries the server-normalized haystack the live filter matches against.
+ */
 function itemRow(item: MenuItemView): string {
-  return `<tr>
-<td data-label="Article"><a href="/admin/menu/items/${query(item.id)}"><b>${esc(item.name)}</b></a>${item.favourite ? ` <span class="badge badge--violet">Incontournable</span>` : ""}<div class="muted">${esc(item.id)}</div></td>
-<td data-label="Prix" class="nowrap"><b>${esc(price(item.price_xof))}</b></td>
+  return `<tr class="rowlink" data-href="/admin/menu/items/${query(item.id)}" data-search="${esc(normalized(`${item.name} ${item.category} ${item.id}`))}">
+<td data-label="Article"><a href="/admin/menu/items/${query(item.id)}"><b>${esc(item.name)}</b></a>${item.favourite ? ` <span class="badge badge--violet">Incontournable</span>` : ""}${item.enabled ? "" : ` <span class="badge badge--gray">Retiré</span>`}<div class="muted">${esc(item.id)} · ${esc(item.category)}</div></td>
 <td data-label="Recette">${recipeBadge(item)}</td>
-<td data-label="Statut">${item.enabled ? `<span class="badge badge--green">Actif</span>` : `<span class="badge badge--gray">Retiré</span>`}</td>
-<td data-label="Actions" class="nowrap"><a class="act act--sm act--ghost" href="/admin/menu/items/${query(item.id)}">Ouvrir la fiche</a></td>
+<td data-label="Prix" class="nowrap right"><b>${esc(price(item.price_xof))}</b></td>
 </tr>`;
 }
+
+/** Live search + row click — no framework; norm() mirrors normalized() above. */
+const MENU_PAGE_SCRIPT = `<script>
+(function(){
+  var norm=function(s){return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase()};
+  var input=document.getElementById('menu-live-search');
+  var count=document.getElementById('menu-live-count');
+  var empty=document.getElementById('menu-live-empty');
+  function apply(){
+    var q=norm(input.value.trim());
+    var total=0;
+    document.querySelectorAll('[data-cat-section]').forEach(function(sec){
+      var visible=0;
+      sec.querySelectorAll('tr[data-search]').forEach(function(tr){
+        var show=!q||tr.dataset.search.indexOf(q)>-1;
+        tr.hidden=!show;if(show)visible++;
+      });
+      sec.hidden=visible===0;
+      var pill=document.querySelector('#menu-jumpnav a[data-cat="'+sec.dataset.catSection+'"]');
+      if(pill)pill.hidden=visible===0;
+      total+=visible;
+    });
+    if(count)count.textContent=total+' article'+(total===1?'':'s');
+    if(empty)empty.hidden=total!==0;
+  }
+  if(input){input.addEventListener('input',apply);apply();}
+  document.addEventListener('click',function(e){
+    var tr=e.target.closest('tr[data-href]');
+    if(!tr||e.target.closest('a,button,form,input,select'))return;
+    location.href=tr.dataset.href;
+  });
+})();
+</script>`;
 
 export function renderMenuPage(opts: {
   items: MenuItemView[];
@@ -96,19 +142,36 @@ export function renderMenuPage(opts: {
   banner: string;
 }): string {
   const { items, filters, banner } = opts;
-  const categories = menuCategories(items);
   const visible = filterMenuItems(items, filters);
   const active = items.filter((item) => item.enabled);
   const missing = active.filter((item) => !isRecipeComplete(item));
   const complete = active.length - missing.length;
 
-  const groups = menuCategories(visible)
+  const visibleCategories = menuCategories(visible);
+  const jumpNav = visibleCategories.length
+    ? `<nav class="jump-nav menu-jumpnav" id="menu-jumpnav">${visibleCategories
+        .map((category) => {
+          const n = visible.filter((item) => item.category === category).length;
+          return `<a href="#cat-${anchorSlug(category)}" data-cat="${anchorSlug(category)}">${esc(category)} <span class="badge badge--gray">${n}</span></a>`;
+        })
+        .join("")}</nav>`
+    : "";
+
+  const groups = visibleCategories
     .map((category) => {
       const categoryItems = visible.filter((item) => item.category === category);
-      return `<div class="section-header"><h2>${esc(category)}</h2><span class="badge badge--gray">${categoryItems.length}</span></div>
-<div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Article</th><th>Prix</th><th>Recette</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${categoryItems.map(itemRow).join("")}</tbody></table></div></div>`;
+      const slug = anchorSlug(category);
+      return `<div data-cat-section="${slug}">
+<div class="section-header"><h2 id="cat-${slug}">${esc(category)}</h2><span class="badge badge--gray">${categoryItems.length}</span></div>
+<div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Article</th><th>Recette</th><th class="right">Prix</th></tr></thead><tbody>${categoryItems.map(itemRow).join("")}</tbody></table></div></div>
+</div>`;
     })
     .join("");
+
+  // Autofocus the search only on the untouched default view (no deep-linked
+  // filter to preserve, no scroll to steal).
+  const pristine =
+    !filters.q?.trim() && (filters.status ?? "active") === "active" && (filters.recipe ?? "all") === "all" && !filters.category?.trim();
 
   return `${banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Menu et recettes</h2><p>Gérez les articles vendus par Awa et les fiches de préparation réservées à l’équipe.</p></div><div class="page-header-actions"><a class="act" href="/admin/menu/new">Ajouter un article</a></div></header>
@@ -118,14 +181,15 @@ export function renderMenuPage(opts: {
   <div class="stat"><span>À compléter</span><b>${missing.length}</b><span>sans impact sur la vente</span></div>
 </div>
 <form class="card menu-filters" method="get" action="/admin/menu">
-  <label class="menu-search">Rechercher<input type="search" name="q" value="${esc(filters.q)}" placeholder="Nom, catégorie ou ID…"></label>
-  <label>Statut<select name="status"><option value="active"${selected(filters.status ?? "active", "active")}>Actifs</option><option value="retired"${selected(filters.status, "retired")}>Retirés</option><option value="all"${selected(filters.status, "all")}>Tous</option></select></label>
-  <label>Recette<select name="recipe"><option value="all"${selected(filters.recipe ?? "all", "all")}>Toutes</option><option value="missing"${selected(filters.recipe, "missing")}>À compléter</option><option value="complete"${selected(filters.recipe, "complete")}>Complètes</option></select></label>
-  <label>Catégorie<select name="category"><option value="">Toutes</option>${categories.map((category) => `<option value="${esc(category)}"${selected(filters.category, category)}>${esc(category)}</option>`).join("")}</select></label>
-  <div class="menu-filter-actions"><button class="act act--ghost" type="submit">Filtrer</button><a href="/admin/menu">Réinitialiser</a></div>
+  <label class="menu-search">Rechercher<input type="search" name="q" id="menu-live-search" value="${esc(filters.q)}" placeholder="Nom, catégorie ou ID…"${pristine ? " autofocus" : ""}></label>
+  <label>Statut<select name="status" onchange="this.form.submit()"><option value="active"${selected(filters.status ?? "active", "active")}>Actifs</option><option value="retired"${selected(filters.status, "retired")}>Retirés</option><option value="all"${selected(filters.status, "all")}>Tous</option></select></label>
+  <label>Recette<select name="recipe" onchange="this.form.submit()"><option value="all"${selected(filters.recipe ?? "all", "all")}>Toutes</option><option value="missing"${selected(filters.recipe, "missing")}>À compléter</option><option value="complete"${selected(filters.recipe, "complete")}>Complètes</option></select></label>
+  <div class="menu-filter-actions"><span class="badge badge--gray" id="menu-live-count">${visible.length} article${visible.length === 1 ? "" : "s"}</span><a href="/admin/menu">Réinitialiser</a></div>
 </form>
-<div class="section-header"><div><span class="eyebrow">Catalogue</span><h2>${visible.length} article(s)</h2></div></div>
-${groups || `<div class="card"><div class="empty"><b>Aucun article trouvé</b><p>Modifiez les filtres ou ajoutez un nouvel article.</p></div></div>`}`;
+${jumpNav}
+${groups || `<div class="card"><div class="empty"><b>Aucun article trouvé</b><p>Modifiez les filtres ou ajoutez un nouvel article.</p></div></div>`}
+<div class="card" id="menu-live-empty" hidden><div class="empty"><b>Aucun article trouvé</b><p>Aucun article ne correspond à cette recherche.</p></div></div>
+${MENU_PAGE_SCRIPT}`;
 }
 
 function recipeState(item: MenuItemView | null): string {
@@ -149,6 +213,7 @@ export function renderMenuItemForm(opts: {
   const optionLabel = esc(item?.option_label);
   const optionChoices = esc(item?.option_choices);
   const favourite = item?.favourite ? " checked" : "";
+  const noRecipeNeeded = item?.no_recipe_needed ? " checked" : "";
 
   return `${banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Menu du bar</span><h2>${creating ? "Nouvel article" : esc(item.name)}</h2><p>${creating ? "Créez l’article vendu et sa fiche de préparation interne." : "Mettez à jour les informations commerciales et la recette utilisée par l’équipe."}</p></div><div class="page-header-actions">${recipeState(item)}${item ? (item.enabled ? `<span class="badge badge--green">Actif</span>` : `<span class="badge badge--gray">Retiré</span>`) : ""}</div></header>
@@ -170,6 +235,7 @@ export function renderMenuItemForm(opts: {
     <div class="section-header menu-editor-heading"><div><span class="eyebrow">Interne équipe</span><h2>Fiche recette</h2><p class="muted">Ces informations ne sont jamais envoyées à Awa ni aux clients.</p></div></div>
     <label>Ingrédients et quantités<span class="field-help">Indiquez les quantités pour une portion vendue, ou précisez le rendement si la préparation se fait en lot.</span><textarea name="recipe_ingredients" rows="10" maxlength="5000" placeholder="Pour 1 portion :&#10;• 150 g de mangue&#10;• 100 ml de lait de coco">${ingredients}</textarea></label>
     <label>Étapes de préparation<span class="field-help">Écrivez les étapes dans l’ordre, avec les temps ou points de contrôle utiles.</span><textarea name="recipe_steps" rows="10" maxlength="5000" placeholder="1. Ajouter les ingrédients dans le blender.&#10;2. Mixer 45 secondes.&#10;3. Servir immédiatement.">${steps}</textarea></label>
+    <label class="menu-favourite"><input type="checkbox" name="no_recipe_needed"${noRecipeNeeded}> Article sans recette (ex. supplément) — ne compte pas dans «&nbsp;À compléter&nbsp;»</label>
   </section>
   <div class="actionbar"><button class="act" type="submit">${creating ? "Créer l’article" : "Enregistrer les modifications"}</button><a class="act act--ghost" href="/admin/menu">Retour au menu</a></div>
 </form>

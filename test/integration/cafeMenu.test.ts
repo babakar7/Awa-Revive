@@ -68,6 +68,9 @@ describe("CRUD → refresh → snapshot", () => {
       description: "citron & menthe",
       recipe_ingredients: "Thé vert\nCitron\nMenthe",
       recipe_steps: "Infuser, refroidir puis servir sur glace.",
+      no_recipe_needed: false,
+      option_label: null,
+      option_choices: null,
       favourite: false,
     });
     expect(id).toBe("THE_GLACE_MAISON");
@@ -88,6 +91,9 @@ describe("CRUD → refresh → snapshot", () => {
       description: "papaye, ananas & orange",
       recipe_ingredients: "Papaye 120 g\nAnanas 80 g",
       recipe_steps: "Mixer puis servir.",
+      no_recipe_needed: false,
+      option_label: null,
+      option_choices: null,
       favourite: true,
     });
     await refreshCafeMenu();
@@ -102,6 +108,31 @@ describe("CRUD → refresh → snapshot", () => {
     await setMenuItemEnabled("SMOOTHIE_JANT_BI", true);
     await refreshCafeMenu();
     expect(getCafeMenu().items.has("SMOOTHIE_JANT_BI")).toBe(true); // restored
+  });
+
+  it("persists the no_recipe_needed flag and keeps it out of the snapshot", async () => {
+    const input = {
+      name: "Supplément Test",
+      price_xof: 500,
+      category: "SMOOTHIES",
+      description: "à ajouter à un smoothie",
+      recipe_ingredients: null,
+      recipe_steps: null,
+      no_recipe_needed: true,
+      option_label: null,
+      option_choices: null,
+      favourite: false,
+    };
+    const { id } = await createMenuItem(input);
+    let stored = (await listMenuItems()).find((row) => row.id === id);
+    expect(stored?.no_recipe_needed).toBe(true);
+
+    await updateMenuItem(id, { ...input, no_recipe_needed: false });
+    stored = (await listMenuItems()).find((row) => row.id === id);
+    expect(stored?.no_recipe_needed).toBe(false);
+
+    await refreshCafeMenu();
+    expect(getCafeMenu().items.get(id)).not.toHaveProperty("no_recipe_needed"); // interne only
   });
 });
 

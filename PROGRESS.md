@@ -2547,6 +2547,41 @@ deux ajustements de layout suite au retour de Babakar :
   autres cours (pas de collision le même jour). Mot-clé sémantique, pas un nom
   de cours en dur.
 
+### 6.15 /admin/menu — UX : recherche instantanée + barre catégories sticky (21/07/2026)
+
+Plainte : retrouver un article = scroller (39 articles / 10 catégories) ou
+remplir le formulaire GET et recharger. Refonte du catalogue
+(`src/admin/menuPage.ts`) :
+
+- **Recherche instantanée** : le champ `q` filtre EN DIRECT pendant la frappe
+  (script inline, premier filtre texte live de l'admin). Chaque `<tr>` porte
+  `data-search` **normalisé côté serveur** avec le même `normalized()` que
+  `filterMenuItems` (minuscule + accents strippés) — le JS ne fait que
+  normaliser la saisie. Sections/pastilles vides masquées, compteur
+  « N articles » live, empty-state pré-rendu. Le formulaire GET reste le
+  fallback sans JS / deep-link ; le bouton « Filtrer » disparaît (selects
+  Statut/Recette en `onchange=submit`, select Catégorie supprimé — le query
+  param `category` reste supporté).
+- **Barre catégories sticky** (`.menu-jumpnav`, CSS dans `adminStyles.ts`) :
+  pastilles `.jump-nav` avec compteur par catégorie, collée sous la topbar
+  pendant le scroll (scroll horizontal sur mobile), saut d'ancre
+  `#cat-<slug>` — les `h2` ont déjà `scroll-margin-top` global.
+- **Lignes compactes cliquables** : 3 colonnes (Article+badges / Recette /
+  Prix) au lieu de 5 ; colonnes Statut/Actions → badges (« Retiré » visible
+  seulement en vue retirés/tous) ; ligne entière cliquable via `data-href` +
+  délégation (les liens/inputs internes gardent la main).
+- **Commit de réconciliation** : ce commit embarque aussi la feature
+  `no_recipe_needed` d'une session parallèle (article « sans recette », badge
+  neutre, exclu du compteur À compléter) — les deux chantiers touchaient
+  `menuPage.ts`/`adminMenuPage.test.ts`, un push partiel aurait cassé le build
+  prod (cf. règle multi-agents de CLAUDE.md).
+- Build + 531 tests unitaires (dont 4 nouveaux UX) ; intégration cafeMenu +
+  deliveryOrders verts. ⚠️ Piège découvert : les runs `test:integration` de
+  deux agents SE TUENT mutuellement (nom de conteneur Docker fixe
+  `resabot-integration-pg`, `docker rm -f` au setup ET teardown) — un
+  `ECONNREFUSED 127.0.0.1:<port>` en plein run = l'autre agent a
+  démarré/terminé le sien, pas une vraie casse. Relancer une fois seul.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

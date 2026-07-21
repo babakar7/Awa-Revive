@@ -269,8 +269,13 @@ form.inline{display:inline}
 
 /* menu catalogue and internal recipes */
 .menu-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
-.menu-filters{display:grid;grid-template-columns:minmax(220px,1.5fr) repeat(3,minmax(130px,.75fr)) auto;align-items:end;gap:.75rem}
+.menu-filters{display:grid;grid-template-columns:minmax(220px,1.5fr) repeat(2,minmax(130px,.75fr)) auto;align-items:end;gap:.75rem}
 .menu-filter-actions{min-height:42px;display:flex;align-items:center;gap:.7rem;white-space:nowrap}
+/* sticky category bar: stays visible while scrolling the catalogue; scrolls
+   horizontally on narrow screens instead of wrapping into a tall block */
+.menu-jumpnav{position:sticky;top:calc(var(--topbar-h) + .5rem);z-index:9;flex-wrap:nowrap;overflow-x:auto;white-space:nowrap;width:auto;background:rgba(251,247,242,.97);backdrop-filter:blur(10px);scrollbar-width:thin}
+.menu-jumpnav a{flex:0 0 auto}
+.menu-jumpnav a .badge{margin-left:.35rem}
 .menu-editor{display:grid;gap:.9rem}
 .menu-editor>.card{margin-bottom:0}
 .menu-editor-heading{margin:0 0 1rem}

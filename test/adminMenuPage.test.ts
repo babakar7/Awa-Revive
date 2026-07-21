@@ -16,6 +16,7 @@ function item(over: Partial<MenuItemView> = {}): MenuItemView {
     description: "Frais et fruité",
     recipe_ingredients: "150 g de mangue",
     recipe_steps: "Mixer 45 secondes",
+    no_recipe_needed: false,
     favourite: true,
     enabled: true,
     sort_order: 10,
@@ -104,6 +105,76 @@ describe("menu admin rendering", () => {
     expect(html).toContain('action="/admin/menu/items"');
     expect(html).toContain('name="recipe_ingredients"');
     expect(html).toContain('name="recipe_steps"');
+    expect(html).toContain('name="no_recipe_needed"');
+    expect(html).not.toContain('name="no_recipe_needed" checked');
     expect(html).toContain("Nouvel article");
+  });
+
+  it("no_recipe_needed items get the neutral badge and leave the à-compléter count", () => {
+    const items = [
+      item(),
+      item({
+        id: "SUPP_SMOOTHIE_WHEY",
+        name: "Supplément protéine whey",
+        category: "SMOOTHIES",
+        recipe_ingredients: null,
+        recipe_steps: null,
+        no_recipe_needed: true,
+        favourite: false,
+        sort_order: 20,
+      }),
+    ];
+    const html = renderMenuPage({ items, filters: {}, banner: "" });
+    expect(html).toContain("Sans recette");
+    expect(html).not.toContain("Recette à compléter");
+    expect(html).toContain("0</b><span>sans impact sur la vente");
+    // le filtre « À compléter » ne le liste plus
+    expect(filterMenuItems(items, { recipe: "missing" })).toHaveLength(0);
+  });
+
+  it("the flag wins over a filled recipe and pre-checks the editor checkbox", () => {
+    const flagged = item({ no_recipe_needed: true });
+    const html = renderMenuItemForm({ item: flagged, categories: ["SMOOTHIES"], banner: "" });
+    expect(html).toContain("Sans recette");
+    expect(html).not.toContain("Recette complète");
+    expect(html).toContain('name="no_recipe_needed" checked');
+  });
+});
+
+describe("menu catalogue UX (sticky nav + live search + clickable rows)", () => {
+  it("renders a jump-nav pill with an anchor and count per visible category", () => {
+    const html = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
+    expect(html).toContain('id="menu-jumpnav"');
+    expect(html).toContain('href="#cat-smoothies"');
+    expect(html).toContain('href="#cat-boissons-chaudes"');
+    expect(html).toContain('id="cat-smoothies"'); // the section anchor itself
+    // Retired-only category is invisible in the default (active) view.
+    expect(html).not.toContain('href="#cat-jus"');
+  });
+
+  it("rows are clickable and carry a normalized search haystack", () => {
+    const html = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
+    expect(html).toContain('data-href="/admin/menu/items/CAFE_TOUBA"');
+    // normalized(): lowercase + accents stripped → « Café Touba » searchable as "cafe touba"
+    expect(html).toContain('data-search="cafe touba boissons chaudes cafe_touba"');
+  });
+
+  it("shows the Retiré badge on rows only in retired/all views", () => {
+    const activeView = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
+    expect(activeView).not.toContain(">Retiré</span>");
+    const retiredView = renderMenuPage({ items: ITEMS, filters: { status: "retired" }, banner: "" });
+    expect(retiredView).toContain(">Retiré</span>");
+    expect(retiredView).toContain('data-href="/admin/menu/items/ANCIEN_JUS"');
+  });
+
+  it("ships the live-search plumbing: input id, count, hidden empty state, page script", () => {
+    const html = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
+    expect(html).toContain('id="menu-live-search"');
+    expect(html).toContain('id="menu-live-count"');
+    expect(html).toContain('id="menu-live-empty" hidden');
+    expect(html).toContain("addEventListener('input'");
+    // No more full-page-reload button; selects submit themselves.
+    expect(html).not.toContain(">Filtrer</button>");
+    expect(html).toContain('onchange="this.form.submit()"');
   });
 });

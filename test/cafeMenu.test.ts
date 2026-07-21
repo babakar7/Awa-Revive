@@ -356,7 +356,12 @@ describe("parseMenuItemForm", () => {
       description: null,
       recipe_ingredients: null,
       recipe_steps: null,
+      no_recipe_needed: false,
     });
+  });
+  it("reads the no_recipe_needed checkbox", () => {
+    expect(parseMenuItemForm({ ...base, no_recipe_needed: "on" })).toMatchObject({ no_recipe_needed: true });
+    expect(parseMenuItemForm(base)).toMatchObject({ no_recipe_needed: false });
   });
   it("rejects an oversized recipe field", () => {
     expect(parseMenuItemForm({ ...base, recipe_ingredients: "x".repeat(5_001) })).toEqual({
@@ -389,9 +394,13 @@ describe("parseMenuItemForm", () => {
 
 describe("internal recipes", () => {
   it("is complete only when ingredients and steps are both present", () => {
-    expect(isRecipeComplete({ recipe_ingredients: "Mangue", recipe_steps: "Mixer" })).toBe(true);
-    expect(isRecipeComplete({ recipe_ingredients: "Mangue", recipe_steps: null })).toBe(false);
-    expect(isRecipeComplete({ recipe_ingredients: " ", recipe_steps: "Mixer" })).toBe(false);
+    expect(isRecipeComplete({ recipe_ingredients: "Mangue", recipe_steps: "Mixer", no_recipe_needed: false })).toBe(true);
+    expect(isRecipeComplete({ recipe_ingredients: "Mangue", recipe_steps: null, no_recipe_needed: false })).toBe(false);
+    expect(isRecipeComplete({ recipe_ingredients: " ", recipe_steps: "Mixer", no_recipe_needed: false })).toBe(false);
+  });
+
+  it("no_recipe_needed short-circuits to complete (supplements have no recipe)", () => {
+    expect(isRecipeComplete({ recipe_ingredients: null, recipe_steps: null, no_recipe_needed: true })).toBe(true);
   });
 
   it("never reaches the Awa snapshot or prompt even if attached to input rows", () => {

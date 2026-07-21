@@ -26,6 +26,7 @@ export interface MenuItemView {
   description: string | null;
   recipe_ingredients: string | null;
   recipe_steps: string | null;
+  no_recipe_needed: boolean;
   option_label: string | null;
   option_choices: string | null;
   favourite: boolean;
@@ -51,7 +52,7 @@ function rowToSnapshot(r: MenuItemView): CafeMenuRow {
 }
 
 const ITEM_COLUMNS = `id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
-            option_label, option_choices, favourite, enabled, sort_order, updated_at`;
+            no_recipe_needed, option_label, option_choices, favourite, enabled, sort_order, updated_at`;
 
 export async function listMenuItems(): Promise<MenuItemView[]> {
   const res = await pool.query(
@@ -75,6 +76,7 @@ export interface MenuItemInput {
   description: string | null;
   recipe_ingredients: string | null;
   recipe_steps: string | null;
+  no_recipe_needed: boolean;
   option_label: string | null;
   option_choices: string | null;
   favourite: boolean;
@@ -87,7 +89,10 @@ const MAX_RECIPE_FIELD = 5_000;
 const MAX_OPTION_LABEL = 40;
 const MAX_OPTION_CHOICES = 200;
 
-export function isRecipeComplete(item: Pick<MenuItemView, "recipe_ingredients" | "recipe_steps">): boolean {
+export function isRecipeComplete(
+  item: Pick<MenuItemView, "recipe_ingredients" | "recipe_steps" | "no_recipe_needed">,
+): boolean {
+  if (item.no_recipe_needed) return true;
   return Boolean(item.recipe_ingredients?.trim() && item.recipe_steps?.trim());
 }
 
@@ -135,6 +140,8 @@ export function parseMenuItemForm(body: Record<string, string>): MenuItemInput |
     description: desc || null,
     recipe_ingredients: recipeIngredients || null,
     recipe_steps: recipeSteps || null,
+    no_recipe_needed:
+      body.no_recipe_needed === "on" || body.no_recipe_needed === "true" || body.no_recipe_needed === "1",
     option_label: optionChoices ? optionLabel : null,
     option_choices: optionChoices || null,
     favourite: body.favourite === "on" || body.favourite === "true" || body.favourite === "1",
@@ -153,8 +160,8 @@ export async function createMenuItem(input: MenuItemInput): Promise<{ id: string
   await pool.query(
     `insert into cafe_menu_items
        (id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
-        option_label, option_choices, favourite, sort_order)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        no_recipe_needed, option_label, option_choices, favourite, sort_order)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [
       id,
       input.name,
@@ -163,6 +170,7 @@ export async function createMenuItem(input: MenuItemInput): Promise<{ id: string
       input.description,
       input.recipe_ingredients,
       input.recipe_steps,
+      input.no_recipe_needed,
       input.option_label,
       input.option_choices,
       input.favourite,
@@ -176,8 +184,8 @@ export async function updateMenuItem(id: string, input: MenuItemInput): Promise<
   const res = await pool.query(
     `update cafe_menu_items set
        name = $2, price_xof = $3, category = $4, description = $5,
-       recipe_ingredients = $6, recipe_steps = $7, option_label = $8,
-       option_choices = $9, favourite = $10, updated_at = now()
+       recipe_ingredients = $6, recipe_steps = $7, no_recipe_needed = $8, option_label = $9,
+       option_choices = $10, favourite = $11, updated_at = now()
      where id = $1`,
     [
       id,
@@ -187,6 +195,7 @@ export async function updateMenuItem(id: string, input: MenuItemInput): Promise<
       input.description,
       input.recipe_ingredients,
       input.recipe_steps,
+      input.no_recipe_needed,
       input.option_label,
       input.option_choices,
       input.favourite,

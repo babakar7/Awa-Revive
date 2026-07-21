@@ -727,6 +727,7 @@ create table if not exists cafe_menu_items (
   description text,
   recipe_ingredients text,                  -- interne équipe, jamais envoyé à Awa / clients
   recipe_steps text,                        -- préparation interne, texte libre
+  no_recipe_needed boolean not null default false, -- article sans fiche recette (ex. suppléments) ; exclu du compteur « À compléter »
   favourite boolean not null default false,  -- « incontournables » (liste WhatsApp post-résa, cap 10)
   enabled boolean not null default true,     -- false = retiré du menu (restaurable)
   sort_order integer not null default 0,
@@ -750,6 +751,10 @@ update cafe_menu_items set option_label = 'Lait',
        option_choices = 'Lait d''avoine | Lait de vache'
   where id in ('MATCHA_VANILLE','MATCHA_PISTACHE','MATCHA_MANGUE','MATCHA_MADD','MATCHA_CAFE')
     and option_label is null;
+-- Article sans fiche recette (suppléments…) : badge neutre sur /admin/menu au
+-- lieu de « à compléter ». Pas de backfill ici (booléen non null-guardable, un
+-- UPDATE au boot re-flaguerait un article décoché) → one-off manuel en prod.
+alter table cafe_menu_items add column if not exists no_recipe_needed boolean not null default false;
 
 -- ═══ Planning hebdo du personnel (accueil / bar / entretien) ═══
 -- Un scénario = une ligne staff_schedules ; UN SEUL est 'published' à la fois
