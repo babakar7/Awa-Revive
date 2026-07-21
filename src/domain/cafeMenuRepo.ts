@@ -257,3 +257,100 @@ export async function initCafeMenu(): Promise<void> {
   await seedMenuIfEmpty();
   await refreshCafeMenu();
 }
+
+// ---------- managed categories (table menu_categories) ----------
+
+/** Trim + collapse internal whitespace so "  Iced   Matcha " → "Iced Matcha". */
+export function normalizeCategoryName(raw: string): string {
+  return String(raw ?? "").trim().replace(/\s+/g, " ");
+}
+
+/** Pure: validate a category name from the admin form. */
+export function validateCategoryName(raw: string): { name: string } | { error: string } {
+  const name = normalizeCategoryName(raw);
+  if (!name) return { error: "le nom de la catégorie est requis." };
+  if (name.length > MAX_CATEGORY) return { error: `nom trop long (max ${MAX_CATEGORY}).` };
+  return { name };
+}
+
+export interface CategoryView {
+  name: string;
+  itemCount: number; // articles (actifs ou retirés) qui utilisent la catégorie
+}
+
+/** Managed categories with how many items use each (for the manager page). */
+export async function listCategories(): Promise<CategoryView[]> {
+  const res = await pool.query(
+    `select c.name, count(i.id)::int as item_count
+       from menu_categories c
+       left join cafe_menu_items i on i.category = c.name
+      group by c.name, c.sort_order
+      order by c.sort_order, c.name`,
+  );
+  return res.rows.map((r) => ({ name: r.name as string, itemCount: Number(r.item_count) }));
+}
+
+/** Just the ordered names — for the item-form dropdown. */
+export async function categoryNames(): Promise<string[]> {
+  const res = await pool.query(`select name from menu_categories order by sort_order, name`);
+  return res.rows.map((r) => r.name as string);
+}
+
+/** Add a category. Case-insensitive unique; error if it already exists. */
+export async function createCategory(raw: string): Promise<{ error?: string }> {
+  const v = validateCategoryName(raw);
+  if ("error" in v) return v;
+  const ord = await pool.query(`select coalesce(max(sort_order), 0) + 10 as n from menu_categories`);
+  const res = await pool.query(
+    `insert into menu_categories (name, sort_order) values ($1, $2)
+       on conflict (lower(name)) do nothing`,
+    [v.name, Number(ord.rows[0]?.n ?? 10)],
+  );
+  if ((res.rowCount ?? 0) === 0) return { error: `la catégorie « ${v.name} » existe déjà.` };
+  return {};
+}
+
+/**
+ * Rename a category and cascade the new name onto every item using it (one
+ * transaction). Rejects if the target name already exists (no silent merge).
+ */
+export async function renameCategory(oldName: string, rawNew: string): Promise<{ error?: string }> {
+  const v = validateCategoryName(rawNew);
+  if ("error" in v) return v;
+  if (normalizeCategoryName(oldName) === v.name) return {}; // no-op
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const exists = await client.query(
+      `select 1 from menu_categories where lower(name) = lower($1) and lower(name) <> lower($2)`,
+      [v.name, oldName],
+    );
+    if ((exists.rowCount ?? 0) > 0) {
+      await client.query("rollback");
+      return { error: `la catégorie « ${v.name} » existe déjà.` };
+    }
+    const upd = await client.query(`update menu_categories set name = $2 where name = $1`, [oldName, v.name]);
+    if ((upd.rowCount ?? 0) === 0) {
+      await client.query("rollback");
+      return { error: "catégorie introuvable." };
+    }
+    await client.query(`update cafe_menu_items set category = $2, updated_at = now() where category = $1`, [oldName, v.name]);
+    await client.query("commit");
+    return {};
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Delete a category — only when no item still uses it. */
+export async function deleteCategory(name: string): Promise<{ error?: string }> {
+  const n = normalizeCategoryName(name);
+  const used = await pool.query(`select count(*)::int as c from cafe_menu_items where category = $1`, [n]);
+  if (Number(used.rows[0]?.c ?? 0) > 0)
+    return { error: `« ${n} » est utilisée par des articles — déplacez-les d'abord.` };
+  await pool.query(`delete from menu_categories where name = $1`, [n]);
+  return {};
+}

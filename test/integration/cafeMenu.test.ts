@@ -3,10 +3,15 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { pool, migrate } from "../../src/db/index.js";
 import {
+  categoryNames,
+  createCategory,
   createMenuItem,
+  deleteCategory,
   initCafeMenu,
+  listCategories,
   listMenuItems,
   refreshCafeMenu,
+  renameCategory,
   seedMenuIfEmpty,
   setMenuItemEnabled,
   updateMenuItem,
@@ -191,5 +196,77 @@ describe("admin recipe workflow", () => {
     });
     expect(legacy.statusCode).toBe(303);
     expect(legacy.headers.location).toBe("/admin/menu/items/SMOOTHIE_JANT_BI");
+  });
+});
+
+describe("managed categories", () => {
+  const itemInCategory = (id: string, category: string) => ({
+    name: id,
+    price_xof: 1000,
+    category,
+    description: null,
+    recipe_ingredients: null,
+    recipe_steps: null,
+    no_recipe_needed: true,
+    option_label: null,
+    option_choices: null,
+    favourite: false,
+  });
+
+  beforeEach(async () => {
+    await pool.query("delete from cafe_menu_items");
+    await pool.query("delete from menu_categories");
+  });
+
+  it("adds a category (case-insensitive unique) and lists it", async () => {
+    expect(await createCategory("  Pâtisseries ")).toEqual({});
+    expect(await categoryNames()).toContain("Pâtisseries");
+    // duplicate (different case) is rejected
+    const dup = await createCategory("pâtisseries");
+    expect(dup.error).toBeTruthy();
+  });
+
+  it("rename cascades to every item using the old category", async () => {
+    await createCategory("BOISSONS");
+    await createMenuItem(itemInCategory("X_ONE", "BOISSONS"));
+    await createMenuItem(itemInCategory("X_TWO", "BOISSONS"));
+
+    expect(await renameCategory("BOISSONS", "BOISSONS FRAÎCHES")).toEqual({});
+    const items = await listMenuItems();
+    expect(items.every((i) => i.category === "BOISSONS FRAÎCHES")).toBe(true);
+    expect(await categoryNames()).toEqual(["BOISSONS FRAÎCHES"]);
+  });
+
+  it("refuses to rename onto an existing category name (no silent merge)", async () => {
+    await createCategory("A");
+    await createCategory("B");
+    const r = await renameCategory("A", "b");
+    expect(r.error).toBeTruthy();
+    expect((await categoryNames()).sort()).toEqual(["A", "B"]);
+  });
+
+  it("blocks deleting a category still in use, allows it once empty", async () => {
+    await createCategory("SHOTS");
+    await createMenuItem(itemInCategory("SHOT_X", "SHOTS"));
+    const blocked = await deleteCategory("SHOTS");
+    expect(blocked.error).toBeTruthy();
+
+    // move the item away, then delete succeeds
+    await pool.query("update cafe_menu_items set category='AUTRE' where category='SHOTS'");
+    await createCategory("AUTRE");
+    expect(await deleteCategory("SHOTS")).toEqual({});
+    expect(await categoryNames()).not.toContain("SHOTS");
+  });
+
+  it("counts items per category on the manager list", async () => {
+    await createCategory("SMOOTHIES");
+    await createCategory("SHOTS");
+    await createMenuItem(itemInCategory("S1", "SMOOTHIES"));
+    await createMenuItem(itemInCategory("S2", "SMOOTHIES"));
+    const list = await listCategories();
+    const smoothies = list.find((c) => c.name === "SMOOTHIES");
+    const shots = list.find((c) => c.name === "SHOTS");
+    expect(smoothies?.itemCount).toBe(2);
+    expect(shots?.itemCount).toBe(0);
   });
 });

@@ -2627,6 +2627,37 @@ une seule catégorie visible à la fois, la **première ouverte** au chargement.
   noscript, logique de bascule) ; script vérifié `node --check` ; cafeMenu
   intégration verte. Pas de mémorisation de l'onglet (v1 ouvre toujours la 1re).
 
+### 6.18 Catégories du menu GÉRÉES (liste + page dédiée) (21/07/2026)
+
+Avant : la catégorie d'un article était du **texte libre** (champ `<input list>`
++ datalist) → risque de typos (« SMOOTHIES »/« Smoothies ») qui fragmentent le
+menu, et le datalist ne s'ouvrait pas au clic (bug Safari signalé). Babakar :
+pas de saisie libre sur la fiche, une **page dédiée** pour gérer les catégories.
+
+- **Table canonique `menu_categories`** (`name` unique insensible à la casse via
+  `unique index (lower(name))`, `sort_order`). Les articles gardent la catégorie
+  en **texte** (pas de FK) ; renommer met à jour les deux. Seed idempotent au
+  boot depuis les catégories déjà utilisées (`insert … select category, min(sort_order)
+  … group by category on conflict do nothing`) → une catégorie supprimée (donc
+  sans article) n'est jamais ré-ajoutée.
+- **Repo** (`cafeMenuRepo.ts`) : `listCategories` (avec compte d'articles),
+  `categoryNames`, `createCategory`, `renameCategory` (transaction : rename +
+  cascade `update cafe_menu_items set category=new where category=old`, refuse un
+  merge si le nom cible existe), `deleteCategory` (bloqué si des articles
+  l'utilisent), `validateCategoryName`/`normalizeCategoryName` (purs).
+- **Fiche article** : la catégorie devient un vrai `<select name="category">`
+  (menu déroulant des catégories gérées, catégorie courante présélectionnée,
+  plus de saisie libre) + lien vers la page de gestion. La catégorie courante
+  reste sélectionnable même si (défensivement) absente de la liste.
+- **Page `/admin/menu/categories`** (`renderCategoriesPage`, routes GET + POST
+  add/rename/delete) : liste avec compteur d'articles, renommage inline,
+  suppression (désactivée = « Utilisée » tant qu'il reste des articles), form
+  d'ajout. Lien « Catégories » dans l'en-tête de /admin/menu. Rename appelle
+  `refreshCafeMenu` (les catégories des articles ont changé).
+- Build + 541 tests unitaires (validation pure, select fiche, page manager) +
+  112 intégration (ajout/unicité casse, rename cascade, refus merge, delete
+  bloqué puis autorisé, compteur). Aucun nom de catégorie en dur.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

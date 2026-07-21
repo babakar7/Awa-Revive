@@ -1,4 +1,4 @@
-import { isRecipeComplete, type MenuItemView } from "../domain/cafeMenuRepo.js";
+import { isRecipeComplete, type CategoryView, type MenuItemView } from "../domain/cafeMenuRepo.js";
 
 /** Server-rendered menu catalogue and internal recipe editor. */
 
@@ -20,6 +20,9 @@ const BANNERS: Record<string, string> = {
   updated: "Article et recette mis à jour.",
   retired: "Article retiré du menu.",
   restored: "Article remis au menu.",
+  cat_created: "Catégorie ajoutée.",
+  cat_renamed: "Catégorie renommée — les articles ont suivi.",
+  cat_deleted: "Catégorie supprimée.",
 };
 
 export function menuBanner(done?: string, err?: string): string {
@@ -213,7 +216,7 @@ export function renderMenuPage(opts: {
     : visible.length;
 
   return `${banner}
-<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Menu et recettes</h2><p>Gérez les articles vendus par Awa et les fiches de préparation réservées à l’équipe.</p></div><div class="page-header-actions"><a class="act" href="/admin/menu/new">Ajouter un article</a></div></header>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Menu et recettes</h2><p>Gérez les articles vendus par Awa et les fiches de préparation réservées à l’équipe.</p></div><div class="page-header-actions"><a class="act act--ghost" href="/admin/menu/categories">Catégories</a><a class="act" href="/admin/menu/new">Ajouter un article</a></div></header>
 <div class="stat-grid menu-stats">
   <div class="stat"><span>Articles actifs</span><b>${active.length}</b><span>visibles par Awa</span></div>
   <div class="stat"><span>Recettes complètes</span><b>${complete}</b><span>ingrédients et étapes</span></div>
@@ -263,8 +266,16 @@ export function renderMenuItemForm(opts: {
     <div class="menu-form-grid">
       <label class="menu-name">Nom de l’article<input name="name" required maxlength="80" value="${name}" placeholder="Ex. Smoothie Jant Bi"></label>
       <label>Prix en FCFA<input name="price_xof" required type="number" min="1" max="1000000" step="1" value="${item ? esc(item.price_xof) : ""}" placeholder="3000"></label>
-      <label>Catégorie<input name="category" required maxlength="40" list="menu-categories" value="${category}" placeholder="Ex. Smoothies"></label>
-      <datalist id="menu-categories">${categories.map((value) => `<option value="${esc(value)}">`).join("")}</datalist>
+      <label>Catégorie<span class="field-help">Gérez la liste sur <a href="/admin/menu/categories">Catégories</a>.</span><select name="category" required>${
+        // Keep the item's current category selectable even if (defensively) it's
+        // not in the managed list.
+        (item && item.category && !categories.includes(item.category)
+          ? [item.category, ...categories]
+          : categories
+        )
+          .map((value) => `<option value="${esc(value)}"${item && item.category === value ? " selected" : ""}>${esc(value)}</option>`)
+          .join("")
+      }</select></label>
       <label class="menu-description">Description commerciale<span class="field-help">Courte présentation visible par Awa et les clients.</span><textarea name="description" rows="3" maxlength="200" placeholder="Goût, ingrédients principaux ou bénéfice client…">${description}</textarea></label>
       <label>Choix — libellé<span class="field-help">Laissez vide si l’article n’a pas de choix. Ex. « Boisson », « Lait ».</span><input name="option_label" maxlength="40" value="${optionLabel}" placeholder="Boisson"></label>
       <label>Choix — options<span class="field-help">Séparez les options par une barre «&nbsp;|&nbsp;». Ex. « Jus d’orange | Boisson chaude ». À la commande, le choix devient obligatoire.</span><input name="option_choices" maxlength="200" value="${optionChoices}" placeholder="Jus d’orange | Boisson chaude"></label>
@@ -280,4 +291,30 @@ export function renderMenuItemForm(opts: {
   <div class="actionbar"><button class="act" type="submit">${creating ? "Créer l’article" : "Enregistrer les modifications"}</button><a class="act act--ghost" href="/admin/menu">Retour au menu</a></div>
 </form>
 ${item ? `<div class="card menu-danger-zone"><div><b>${item.enabled ? "Retirer cet article" : "Remettre cet article au menu"}</b><p class="muted">La recette et l’historique sont conservés.</p></div><form class="inline" method="post" action="/admin/menu/items/${query(item.id)}/toggle"${item.enabled ? ` data-confirm="Retirer « ${esc(item.name)} » du menu ? L’article pourra être restauré plus tard."` : ""}><button class="act ${item.enabled ? "act--danger" : "act--ok"}" type="submit">${item.enabled ? "Retirer du menu" : "Remettre au menu"}</button></form></div>` : ""}`;
+}
+
+/** Category manager: add + per-row rename / delete (delete disabled when used). */
+export function renderCategoriesPage(opts: { categories: CategoryView[]; banner: string }): string {
+  const { categories, banner } = opts;
+  const rows = categories
+    .map((c) => {
+      const used = c.itemCount > 0;
+      const del = used
+        ? `<span class="muted" title="Déplacez d'abord les ${c.itemCount} article(s)">Utilisée</span>`
+        : `<form class="inline" method="post" action="/admin/menu/categories/delete" data-confirm="Supprimer la catégorie « ${esc(c.name)} » ?"><input type="hidden" name="name" value="${esc(c.name)}"><button class="act act--sm act--danger" type="submit">Supprimer</button></form>`;
+      return `<tr>
+<td data-label="Catégorie"><b>${esc(c.name)}</b></td>
+<td data-label="Articles" class="nowrap">${c.itemCount}</td>
+<td data-label="Renommer"><form class="inline row" method="post" action="/admin/menu/categories/rename"><input type="hidden" name="old" value="${esc(c.name)}"><input name="new" maxlength="40" value="${esc(c.name)}" required style="width:11rem"><button class="act act--sm act--ghost" type="submit">Renommer</button></form></td>
+<td data-label="Actions" class="nowrap">${del}</td>
+</tr>`;
+    })
+    .join("");
+  const table = categories.length
+    ? `<div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Catégorie</th><th>Articles</th><th>Renommer</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`
+    : `<div class="card"><div class="empty"><b>Aucune catégorie</b><p>Ajoutez-en une ci-dessous.</p></div></div>`;
+  return `${banner}
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Catégories du menu</h2><p>La liste dans laquelle la fiche article choisit sa catégorie. Renommer met à jour tous les articles concernés ; on ne peut supprimer qu'une catégorie inutilisée.</p></div><div class="page-header-actions"><a class="act act--ghost" href="/admin/menu">Retour au menu</a></div></header>
+${table}
+<div class="card form-card"><form class="row" method="post" action="/admin/menu/categories"><label style="flex:1">Nouvelle catégorie<input name="name" maxlength="40" required placeholder="Ex. Pâtisseries"></label><button class="act" type="submit">Ajouter</button></form></div>`;
 }

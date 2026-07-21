@@ -3,6 +3,7 @@ import type { MenuItemView } from "../src/domain/cafeMenuRepo.js";
 import {
   filterMenuItems,
   menuCategories,
+  renderCategoriesPage,
   renderMenuItemForm,
   renderMenuPage,
 } from "../src/admin/menuPage.js";
@@ -110,6 +111,31 @@ describe("menu admin rendering", () => {
     expect(html).toContain("Nouvel article");
   });
 
+  it("category is a pure dropdown of managed categories (no free-text/datalist)", () => {
+    const html = renderMenuItemForm({
+      item: item({ category: "BOISSONS CHAUDES" }),
+      categories: ["SMOOTHIES", "BOISSONS CHAUDES"],
+      banner: "",
+    });
+    expect(html).toContain('<select name="category" required>');
+    expect(html).toContain('<option value="BOISSONS CHAUDES" selected>');
+    expect(html).not.toContain("<datalist");
+    expect(html).not.toContain('list="menu-categories"');
+    // no free-text category input any more
+    expect(html).not.toContain('<input name="category"');
+    // link to the manager
+    expect(html).toContain('href="/admin/menu/categories"');
+  });
+
+  it("keeps the item's current category selectable even if not in the managed list", () => {
+    const html = renderMenuItemForm({
+      item: item({ category: "ORPHELINE" }),
+      categories: ["SMOOTHIES"],
+      banner: "",
+    });
+    expect(html).toContain('<option value="ORPHELINE" selected>');
+  });
+
   it("no_recipe_needed items get the neutral badge and leave the à-compléter count", () => {
     const items = [
       item(),
@@ -203,5 +229,41 @@ describe("menu catalogue UX (category tabs + live search + clickable rows)", () 
     // No more full-page-reload button; selects submit themselves.
     expect(html).not.toContain(">Filtrer</button>");
     expect(html).toContain('onchange="this.form.submit()"');
+  });
+
+  it("links to the category manager from the menu header", () => {
+    const html = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
+    expect(html).toContain('href="/admin/menu/categories"');
+  });
+});
+
+describe("category manager page", () => {
+  it("lists categories with item counts and an add form", () => {
+    const html = renderCategoriesPage({
+      categories: [
+        { name: "SMOOTHIES", itemCount: 7 },
+        { name: "SHOTS", itemCount: 0 },
+      ],
+      banner: "",
+    });
+    expect(html).toContain("Catégories du menu");
+    expect(html).toContain("SMOOTHIES");
+    expect(html).toContain('action="/admin/menu/categories"'); // add form
+    expect(html).toContain('action="/admin/menu/categories/rename"');
+  });
+
+  it("disables delete for a category still in use, allows it when empty", () => {
+    const html = renderCategoriesPage({
+      categories: [
+        { name: "SMOOTHIES", itemCount: 7 }, // used
+        { name: "SHOTS", itemCount: 0 }, // empty
+      ],
+      banner: "",
+    });
+    // The empty one gets a delete form; the used one shows "Utilisée" instead.
+    expect(html).toContain('action="/admin/menu/categories/delete"');
+    expect(html).toContain("Utilisée");
+    // Exactly one delete form (only the empty category).
+    expect(html.match(/action="\/admin\/menu\/categories\/delete"/g)).toHaveLength(1);
   });
 });

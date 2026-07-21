@@ -76,7 +76,7 @@ import { devisBanner, renderQuoteForm, renderQuotesList } from "./devisPage.js";
 import * as menu from "../domain/cafeMenuRepo.js";
 import {
   menuBanner,
-  menuCategories,
+  renderCategoriesPage,
   renderMenuItemForm,
   renderMenuPage,
   type MenuFilters,
@@ -950,12 +950,50 @@ ${
         reply.type("text/html").send(await layout("Menu bar", "/admin/menu", body, { subtitle: "Catalogue et recettes internes", contentWidth: "wide" }));
       });
 
+      // ---------- managed categories ----------
+      admin.get("/menu/categories", async (req, reply) => {
+        const queryIn = (req.query ?? {}) as Record<string, string>;
+        const body = renderCategoriesPage({
+          categories: await menu.listCategories(),
+          banner: menuBanner(queryIn.done, queryIn.err),
+        });
+        reply.type("text/html").send(await layout("Catégories du menu", "/admin/menu", body, {
+          subtitle: "Catalogue du bar",
+          contentWidth: "standard",
+          breadcrumbs: [{ href: "/admin/menu", label: "Menu" }, { label: "Catégories" }],
+        }));
+      });
+
+      admin.post("/menu/categories", async (req, reply) => {
+        const { name } = (req.body ?? {}) as Record<string, string>;
+        const r = await menu.createCategory(String(name ?? ""));
+        if (r.error) return reply.redirect(`/admin/menu/categories?err=${encodeURIComponent(r.error)}`, 303);
+        req.log.info({ by: req.adminUser, name }, "Menu category created");
+        return reply.redirect("/admin/menu/categories?done=cat_created", 303);
+      });
+
+      admin.post("/menu/categories/rename", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const r = await menu.renameCategory(String(b.old ?? ""), String(b.new ?? ""));
+        if (r.error) return reply.redirect(`/admin/menu/categories?err=${encodeURIComponent(r.error)}`, 303);
+        await menu.refreshCafeMenu(); // items' category strings changed
+        req.log.info({ by: req.adminUser, from: b.old, to: b.new }, "Menu category renamed");
+        return reply.redirect("/admin/menu/categories?done=cat_renamed", 303);
+      });
+
+      admin.post("/menu/categories/delete", async (req, reply) => {
+        const { name } = (req.body ?? {}) as Record<string, string>;
+        const r = await menu.deleteCategory(String(name ?? ""));
+        if (r.error) return reply.redirect(`/admin/menu/categories?err=${encodeURIComponent(r.error)}`, 303);
+        req.log.info({ by: req.adminUser, name }, "Menu category deleted");
+        return reply.redirect("/admin/menu/categories?done=cat_deleted", 303);
+      });
+
       admin.get("/menu/new", async (req, reply) => {
         const queryIn = (req.query ?? {}) as Record<string, string>;
-        const items = await menu.listMenuItems();
         const body = renderMenuItemForm({
           item: null,
-          categories: menuCategories(items),
+          categories: await menu.categoryNames(),
           banner: menuBanner(undefined, queryIn.err),
         });
         reply.type("text/html").send(await layout("Nouvel article", "/admin/menu", body, {
@@ -968,11 +1006,11 @@ ${
       admin.get("/menu/items/:id", async (req, reply) => {
         const { id } = req.params as { id: string };
         const queryIn = (req.query ?? {}) as Record<string, string>;
-        const [item, items] = await Promise.all([menu.getMenuItem(id), menu.listMenuItems()]);
+        const [item, categories] = await Promise.all([menu.getMenuItem(id), menu.categoryNames()]);
         if (!item) return reply.redirect("/admin/menu?err=article introuvable", 303);
         const body = renderMenuItemForm({
           item,
-          categories: menuCategories(items),
+          categories,
           banner: menuBanner(queryIn.done, queryIn.err),
         });
         reply.type("text/html").send(await layout(item.name, "/admin/menu", body, {

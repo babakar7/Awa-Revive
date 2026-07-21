@@ -756,6 +756,26 @@ update cafe_menu_items set option_label = 'Lait',
 -- UPDATE au boot re-flaguerait un article décoché) → one-off manuel en prod.
 alter table cafe_menu_items add column if not exists no_recipe_needed boolean not null default false;
 
+-- Liste CANONIQUE des catégories du bar (avant : catégorie = simple texte libre
+-- sur chaque article → typos « SMOOTHIES »/« Smoothies »). La fiche article
+-- choisit désormais dans cette liste (menu déroulant), gérée sur
+-- /admin/menu/categories (ajout / renommage cascade / suppression si inutilisée).
+-- Les articles gardent la catégorie en texte (pas de FK) ; renommer met à jour
+-- les deux. Unicité insensible à la casse.
+create table if not exists menu_categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_menu_categories_name_ci on menu_categories (lower(name));
+-- Seed idempotent depuis les catégories déjà utilisées par des articles :
+-- sort_order = ordre d'apparition (min sort_order des articles de la catégorie).
+-- Une catégorie supprimée (donc sans article) ne sera pas ré-ajoutée.
+insert into menu_categories (name, sort_order)
+  select category, min(sort_order) from cafe_menu_items group by category
+  on conflict (lower(name)) do nothing;
+
 -- ═══ Planning hebdo du personnel (accueil / bar / entretien) ═══
 -- Un scénario = une ligne staff_schedules ; UN SEUL est 'published' à la fois
 -- (invariant appliqué côté app par un UPDATE CASE unique — pas d'index unique

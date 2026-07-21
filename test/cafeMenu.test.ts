@@ -17,7 +17,12 @@ import {
   setCafeMenu,
   slugifyMenuId,
 } from "../src/lib/cafeMenu.js";
-import { isRecipeComplete, parseMenuItemForm } from "../src/domain/cafeMenuRepo.js";
+import {
+  isRecipeComplete,
+  normalizeCategoryName,
+  parseMenuItemForm,
+  validateCategoryName,
+} from "../src/domain/cafeMenuRepo.js";
 import { systemPrompt } from "../src/agent/systemPrompt.js";
 
 /** The real menu file, parsed as the DB seed would — items are the source. */
@@ -416,5 +421,17 @@ describe("internal recipes", () => {
     expect(getCafeMenu().items.get(rows[0].id)).not.toHaveProperty("recipe_ingredients");
     expect(getCafeMenu().items.get(rows[0].id)).not.toHaveProperty("recipe_steps");
     setCafeMenu(rowsFromMenu());
+  });
+});
+
+describe("category name validation", () => {
+  it("trims and collapses internal whitespace", () => {
+    expect(normalizeCategoryName("  Iced   Matcha ")).toBe("Iced Matcha");
+    expect(normalizeCategoryName("")).toBe("");
+  });
+  it("accepts a clean name, rejects empty and oversized", () => {
+    expect(validateCategoryName("  Pâtisseries ")).toEqual({ name: "Pâtisseries" });
+    expect("error" in validateCategoryName("   ")).toBe(true);
+    expect("error" in validateCategoryName("x".repeat(41))).toBe(true);
   });
 });
