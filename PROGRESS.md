@@ -2521,6 +2521,22 @@ article**, obligatoire à la saisie.
 - Build + 518 tests unitaires + 17 tests intégration livraison (+ choix requis
   rejeté, choix figé sur la ligne + visible sur le ticket cuisine).
 
+### 6.14 Story Instagram quotidienne — raffinements de mise en page (21/07/2026)
+
+La story « PLANNING DU {JOUR} » (rendu déterministe 1080×1920 dans
+`lib/storyImage.ts`, données Wix live, charte prune validée le 20/07) a reçu
+deux ajustements de layout suite au retour de Babakar :
+
+- **Marges latérales 120px** (constante `SIDE_MARGIN`, avant 60px) : titres,
+  noms de cours et rangées de pastilles ne s'approchent plus des bords.
+- **Noms longs sur deux lignes au lieu de rétrécir** : un nom qui ne tient pas
+  à 58px est coupé au dernier espace qui tient (`nameLines`), la 2e ligne à la
+  même taille. Résultat voulu : « PILATES REFORMER » rend à la MÊME taille sur
+  tous les cours, la variante (« SCULPT », « FOUNDATION ») descend en ligne 2.
+  Coupe décidée à l'échelle naturelle → identique quel que soit le facteur
+  d'échelle du jour ; hauteur de la 2e ligne comptée dans `naturalH`. Aucun nom
+  de cours en dur — règle purement géométrique.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
