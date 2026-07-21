@@ -16,7 +16,12 @@ import {
   handleFailedImage,
 } from "../agent/index.js";
 import { transcribeWhatsAppAudio, transcriptionEnabled } from "../lib/transcribe.js";
-import { describeWhatsAppImage, imageTurnText } from "../lib/imageInput.js";
+import {
+  describeWhatsAppImage,
+  imageTurnText,
+  describeWhatsAppSticker,
+  stickerTurnText,
+} from "../lib/imageInput.js";
 import { wasProcessed, markProcessed } from "../domain/repo.js";
 import { allowMessage } from "../lib/rateLimit.js";
 import { enqueue } from "../lib/serialize.js";
@@ -143,6 +148,24 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
             } catch (err) {
               req.log.error({ err, from: msg.from }, "Inbound image description failed");
               await handleFailedImage(msg.from, msg.id);
+            }
+          } else if (msg.type === "sticker" && msg.mediaId) {
+            // Sticker (a WebP image) → describe it in a few words so the admin
+            // thread is readable and the model reacts naturally, instead of the
+            // canned "I can't read this" that read as a bug for a 👍 sticker.
+            try {
+              const description = await describeWhatsAppSticker(msg.mediaId);
+              req.log.info({ from: msg.from, description }, "Inbound sticker described");
+              await handleInboundText({
+                waPhone: msg.from,
+                text: stickerTurnText(description),
+                waMessageId: msg.id,
+                profileName: msg.profileName,
+              });
+            } catch (err) {
+              req.log.error({ err, from: msg.from }, "Inbound sticker description failed");
+              // Still readable in the admin thread, just without the description.
+              await handleUnsupportedMedia(msg.from, msg.id, "[sticker]");
             }
           } else if (msg.type === "reaction") {
             // Emoji reaction — logged for the admin thread, never replied to.

@@ -549,7 +549,13 @@ export function parseInboundMessages(payload: any): InboundMessage[] {
           text: msg.type === "text" ? msg.text?.body : reply?.title,
           interactiveId: reply?.id,
           mediaId:
-            msg.type === "audio" ? msg.audio?.id : msg.type === "image" ? msg.image?.id : undefined,
+            msg.type === "audio"
+              ? msg.audio?.id
+              : msg.type === "image"
+                ? msg.image?.id
+                : msg.type === "sticker"
+                  ? msg.sticker?.id
+                  : undefined,
           caption: msg.type === "image" ? msg.image?.caption : undefined,
           reactionEmoji: msg.type === "reaction" ? msg.reaction?.emoji : undefined,
           filename: msg.type === "document" ? msg.document?.filename : undefined,

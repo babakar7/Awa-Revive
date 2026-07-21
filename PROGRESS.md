@@ -2396,13 +2396,19 @@ pas → stocké comme un opaque « [non-text message] », type réel perdu à ja
   peux pas lire ce type de message » à un ❤️ était perçu comme un bug. NB :
   un emoji TAPÉ comme message arrive en type `text` normal — seul le
   long-press réaction passait par le fallback.
+- **Stickers** (WebP) : décrits par le modèle en quelques mots
+  (`describeWhatsAppSticker`, prompt dédié, réutilise le chemin image
+  `image/webp` déjà supporté) et injectés comme tour user « [sticker reçu :
+  pouce levé] » → lisibles dans l'admin ET Awa y réagit naturellement (au lieu
+  du « je ne peux pas lire » canné, même bug qu'un ❤️). Échec de description →
+  repli « [sticker] » loggé, toujours lisible.
 - **Autres types non gérés** : libellé descriptif via `unsupportedMediaLabel`
-  — « [sticker] », « [vidéo] », « [document : nom.pdf] », « [localisation
-  partagée] », « [contact partagé] », sinon « [message non pris en charge :
-  <type>] ». Même libellé pour le fil admin ET les pings réception (avant :
-  « [message non lisible] » partout).
-- Build + 502 tests verts (dont 9 nouveaux : parsing réaction/document +
-  libellés).
+  — « [vidéo] », « [document : nom.pdf] », « [localisation partagée] »,
+  « [contact partagé] », sinon « [message non pris en charge : <type>] ». Même
+  libellé pour le fil admin ET les pings réception (avant : « [message non
+  lisible] » partout).
+- Build + 504 tests verts (parsing réaction/document/sticker, libellés,
+  `stickerTurnText`).
 
 ### 6.11 Nommer les leads « chat-only » depuis leur fiche Wix (21/07/2026)
 

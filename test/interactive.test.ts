@@ -223,6 +223,18 @@ describe("parseInboundMessages — interactive replies", () => {
     expect(msg).toMatchObject({ type: "reaction", reactionEmoji: undefined });
   });
 
+  it("extracts the media id from a sticker message", () => {
+    const [msg] = parseInboundMessages(
+      envelope({
+        from: "221771234567",
+        id: "wamid.sticker",
+        type: "sticker",
+        sticker: { id: "media_sticker", mime_type: "image/webp", animated: false },
+      }),
+    );
+    expect(msg).toMatchObject({ type: "sticker", mediaId: "media_sticker", text: undefined });
+  });
+
   it("extracts the filename from a document message", () => {
     const [msg] = parseInboundMessages(
       envelope({

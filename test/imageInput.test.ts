@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { imageTurnText } from "../src/lib/imageInput.js";
+import { imageTurnText, stickerTurnText } from "../src/lib/imageInput.js";
 
 describe("imageTurnText", () => {
   it("prefixes the description with [image reçue]", () => {
@@ -18,5 +18,11 @@ describe("imageTurnText", () => {
   it("ignores an empty or whitespace-only caption", () => {
     expect(imageTurnText("Une photo du studio.", "   ")).toBe("[image reçue] Une photo du studio.");
     expect(imageTurnText("Une photo du studio.", undefined)).toBe("[image reçue] Une photo du studio.");
+  });
+});
+
+describe("stickerTurnText", () => {
+  it("wraps the description in a [sticker reçu : …] marker", () => {
+    expect(stickerTurnText("pouce levé")).toBe("[sticker reçu : pouce levé]");
   });
 });

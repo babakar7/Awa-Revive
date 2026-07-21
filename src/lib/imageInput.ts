@@ -36,12 +36,13 @@ const DESCRIBE_PROMPT = `Cette image a été envoyée par un client sur le Whats
 - si c'est une photo (lieu, document, personne, objet), décris ce qu'on voit de pertinent.
 Réponds uniquement avec la description, sans préambule.`;
 
-/**
- * Download one WhatsApp image and return a short French description of it
- * (visible text transcribed). Throws on any failure — the caller falls back
- * to the polite "can't read this" reply.
- */
-export async function describeWhatsAppImage(mediaId: string): Promise<string> {
+// Stickers are expressive, not informative (a 👍, a laughing character, a
+// heart). We only need a few words so the admin can read WHAT was sent and the
+// model can react naturally — not a paragraph.
+const DESCRIBE_STICKER_PROMPT = `C'est un sticker WhatsApp envoyé par un client. Décris en français, en quelques mots seulement (max ~10), ce qu'il représente : l'emoji/personnage, l'émotion ou le geste (pouce levé, cœur, rire, applaudissements…) et tout texte visible. Réponds uniquement avec la description, sans préambule ni ponctuation finale.`;
+
+/** Download one WhatsApp media item and describe it with the given prompt. */
+async function describeMedia(mediaId: string, prompt: string, maxTokens: number): Promise<string> {
   const { data, mimeType } = await downloadWhatsAppMedia(mediaId);
   const mediaType = mimeType.split(";")[0].trim() as ImageMediaType;
   if (!SUPPORTED_MEDIA_TYPES.includes(mediaType)) {
@@ -50,7 +51,7 @@ export async function describeWhatsAppImage(mediaId: string): Promise<string> {
 
   const response = await anthropic.messages.create({
     model: config.CLAUDE_MODEL,
-    max_tokens: 500,
+    max_tokens: maxTokens,
     messages: [
       {
         role: "user",
@@ -59,7 +60,7 @@ export async function describeWhatsAppImage(mediaId: string): Promise<string> {
             type: "image",
             source: { type: "base64", media_type: mediaType, data: data.toString("base64") },
           },
-          { type: "text", text: DESCRIBE_PROMPT },
+          { type: "text", text: prompt },
         ],
       },
     ],
@@ -70,8 +71,26 @@ export async function describeWhatsAppImage(mediaId: string): Promise<string> {
     .map((b) => b.text)
     .join("\n")
     .trim();
-  if (!text) throw new Error("image description returned empty text");
+  if (!text) throw new Error("media description returned empty text");
   return text;
+}
+
+/**
+ * Download one WhatsApp image and return a short French description of it
+ * (visible text transcribed). Throws on any failure — the caller falls back
+ * to the polite "can't read this" reply.
+ */
+export function describeWhatsAppImage(mediaId: string): Promise<string> {
+  return describeMedia(mediaId, DESCRIBE_PROMPT, 500);
+}
+
+/**
+ * Download one WhatsApp sticker (a WebP image) and return a few-word French
+ * description of what it depicts — so the admin thread is readable and the
+ * model can react to it naturally. Throws on any failure.
+ */
+export function describeWhatsAppSticker(mediaId: string): Promise<string> {
+  return describeMedia(mediaId, DESCRIBE_STICKER_PROMPT, 60);
 }
 
 /**
@@ -81,4 +100,9 @@ export async function describeWhatsAppImage(mediaId: string): Promise<string> {
 export function imageTurnText(description: string, caption?: string): string {
   const capt = (caption ?? "").trim();
   return capt ? `[image reçue] ${description}\n[légende du client] ${capt}` : `[image reçue] ${description}`;
+}
+
+/** User turn injected for one inbound sticker (kept pure for unit tests). */
+export function stickerTurnText(description: string): string {
+  return `[sticker reçu : ${description}]`;
 }
