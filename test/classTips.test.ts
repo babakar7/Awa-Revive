@@ -36,7 +36,8 @@ describe("classTip — keyword matching", () => {
     expect(classTip("Éveil Bébé", "fr")).toBeNull();
   });
 
-  it("Cardio Boxe → trainers + water", () => {
+  it("sneaker classes (Step, Cardio Boxe) → trainers + water", () => {
+    expect(classTip("Step", "fr")).toMatch(/baskets|eau/i);
     expect(classTip("Cardio Boxe", "fr")).toMatch(/baskets|eau/i);
     expect(classTip("Boxe", "en")).toMatch(/trainers|water/i);
   });

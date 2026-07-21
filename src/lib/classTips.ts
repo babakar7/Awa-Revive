@@ -10,7 +10,7 @@
 
 export type TipLang = "fr" | "en" | "wo";
 
-const TIPS: Record<"reformer" | "studio" | "aqua" | "babyswim" | "boxe", Record<TipLang, string>> = {
+const TIPS: Record<"reformer" | "studio" | "aqua" | "babyswim" | "sneakers", Record<TipLang, string>> = {
   reformer: {
     fr: "💡 Tenue de sport confortable + chaussettes antidérapantes obligatoires pour le Reformer (en vente au studio).",
     en: "💡 Comfortable sports clothes + non-slip socks are required for Reformer (available at the studio).",
@@ -31,7 +31,8 @@ const TIPS: Record<"reformer" | "studio" | "aqua" | "babyswim" | "boxe", Record<
     en: "💡 A disposable swim diaper is required for baby (sold at the studio) + swimsuit for the accompanying parent.",
     wo: "💡 Couche de piscine jetable dafa war ci bébé bi (jëndees na ko ci studio bi) + maillot ngir waajur bi.",
   },
-  boxe: {
+  // Cours en baskets (step, cardio, boxe…) — même tenue quel que soit le nom.
+  sneakers: {
     fr: "💡 Tenue de sport, baskets propres et une bouteille d'eau.",
     en: "💡 Sports clothes, clean trainers, and a water bottle.",
     wo: "💡 Tenue sport, baskets yu set ak benn butel d'eau.",
@@ -45,7 +46,7 @@ function normalizeLang(lang: string | null | undefined): TipLang {
 
 /**
  * Return a one-line tip for this class name, or null if unknown.
- * Order: aqua → boxe → reformer (socks) → other studio-floor activities.
+ * Order: aqua → sneakers (step/boxe) → reformer (socks) → other studio-floor activities.
  */
 export function classTip(serviceName: string, lang?: string | null): string | null {
   const s = serviceName
@@ -73,8 +74,8 @@ export function classTip(serviceName: string, lang?: string | null): string | nu
   ) {
     return TIPS.aqua[l];
   }
-  if (s.includes("boxe") || s.includes("boxing")) {
-    return TIPS.boxe[l];
+  if (s.includes("step") || s.includes("boxe") || s.includes("boxing") || s.includes("cardio")) {
+    return TIPS.sneakers[l];
   }
   // Non-slip socks ONLY for Reformer (not generic Pilates / yoga / fusion).
   if (s.includes("reformer")) {

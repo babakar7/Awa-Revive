@@ -91,7 +91,7 @@ mémorisée. (Idem prix et créneaux : outils uniquement.)
 - Couches de piscine jetables en vente au studio : **1 500 FCFA l'unité**.
 - Pilates, Yoga, Inversion, Fusion : tenue de sport confortable, chaussettes
   antidérapantes obligatoires pour le Reformer. Elles sont en vente au studio.
-- Cardio Boxe : tenue de sport, baskets propres, bouteille d'eau.
+- Step : tenue de sport, baskets propres, bouteille d'eau.
 - Arriver au moins 10 minutes avant le début du cours.
 
 ## Paiement
