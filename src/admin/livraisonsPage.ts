@@ -207,11 +207,18 @@ export function renderLivraisonForm(items: Map<string, CafeMenuItem>, banner: st
   const sections = [...groups.entries()]
     .map(([cat, list]) => {
       const rows = list
-        .map(
-          (it) => `<label class="row" style="padding:.3rem 0;border-top:1px solid var(--border-subtle)">
+        .map((it) => {
+          const choices = it.optionChoices ?? [];
+          const optionSelect = choices.length
+            ? `<select name="choice_${esc(it.id)}" style="margin-top:.3rem;width:100%"><option value="">— ${esc(it.optionLabel || "Choix")} (à préciser) —</option>${choices
+                .map((c) => `<option value="${esc(c)}">${esc(c)}</option>`)
+                .join("")}</select>`
+            : "";
+          return `<div class="row" style="flex-wrap:wrap;padding:.3rem 0;border-top:1px solid var(--border-subtle)">
 <span style="flex:1">${esc(it.name)} <span class="muted">— ${esc(it.priceXof)} F</span></span>
-<input type="number" name="qty_${esc(it.id)}" min="0" max="10" value="0" data-price="${esc(it.priceXof)}" style="width:4.5rem" oninput="livTotal()"></label>`,
-        )
+<input type="number" name="qty_${esc(it.id)}" min="0" max="10" value="0" data-price="${esc(it.priceXof)}" style="width:4.5rem" oninput="livTotal()">
+${optionSelect}</div>`;
+        })
         .join("");
       return `<details class="card"><summary style="font-weight:600;cursor:pointer">${esc(cat || "Autres")} <span class="muted">(${list.length})</span></summary>${rows}</details>`;
     })

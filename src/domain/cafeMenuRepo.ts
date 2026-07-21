@@ -5,6 +5,7 @@ import {
   type CafeMenuRow,
   FAVOURITE_SEED_IDS,
   parseCafeMenu,
+  parseOptionChoices,
   setCafeMenu,
   slugifyMenuId,
 } from "../lib/cafeMenu.js";
@@ -25,6 +26,8 @@ export interface MenuItemView {
   description: string | null;
   recipe_ingredients: string | null;
   recipe_steps: string | null;
+  option_label: string | null;
+  option_choices: string | null;
   favourite: boolean;
   enabled: boolean;
   sort_order: number;
@@ -32,32 +35,34 @@ export interface MenuItemView {
 }
 
 function rowToSnapshot(r: MenuItemView): CafeMenuRow {
+  const optionChoices = parseOptionChoices(r.option_choices);
   return {
     id: r.id,
     name: r.name,
     priceXof: r.price_xof,
     category: r.category,
     description: r.description ?? undefined,
+    optionLabel: r.option_label?.trim() || undefined,
+    optionChoices: optionChoices.length ? optionChoices : undefined,
     favourite: r.favourite,
     enabled: r.enabled,
     sortOrder: r.sort_order,
   };
 }
 
+const ITEM_COLUMNS = `id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
+            option_label, option_choices, favourite, enabled, sort_order, updated_at`;
+
 export async function listMenuItems(): Promise<MenuItemView[]> {
   const res = await pool.query(
-    `select id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
-            favourite, enabled, sort_order, updated_at
-       from cafe_menu_items order by sort_order, name`,
+    `select ${ITEM_COLUMNS} from cafe_menu_items order by sort_order, name`,
   );
   return res.rows as MenuItemView[];
 }
 
 export async function getMenuItem(id: string): Promise<MenuItemView | null> {
   const res = await pool.query(
-    `select id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
-            favourite, enabled, sort_order, updated_at
-       from cafe_menu_items where id = $1`,
+    `select ${ITEM_COLUMNS} from cafe_menu_items where id = $1`,
     [id],
   );
   return (res.rows[0] as MenuItemView) ?? null;
@@ -70,6 +75,8 @@ export interface MenuItemInput {
   description: string | null;
   recipe_ingredients: string | null;
   recipe_steps: string | null;
+  option_label: string | null;
+  option_choices: string | null;
   favourite: boolean;
 }
 
@@ -77,6 +84,8 @@ const MAX_NAME = 80;
 const MAX_CATEGORY = 40;
 const MAX_DESC = 200;
 const MAX_RECIPE_FIELD = 5_000;
+const MAX_OPTION_LABEL = 40;
+const MAX_OPTION_CHOICES = 200;
 
 export function isRecipeComplete(item: Pick<MenuItemView, "recipe_ingredients" | "recipe_steps">): boolean {
   return Boolean(item.recipe_ingredients?.trim() && item.recipe_steps?.trim());
@@ -108,6 +117,17 @@ export function parseMenuItemForm(body: Record<string, string>): MenuItemInput |
   if (recipeSteps.length > MAX_RECIPE_FIELD)
     return { error: `préparation trop longue (max ${MAX_RECIPE_FIELD} caractères).` };
 
+  const optionLabel = String(body.option_label ?? "").trim();
+  if (optionLabel.length > MAX_OPTION_LABEL)
+    return { error: `libellé du choix trop long (max ${MAX_OPTION_LABEL}).` };
+  // Normalize the pipe-separated list (trim, drop empties) so what's stored is
+  // exactly what the order form and validation compare against.
+  const optionChoices = parseOptionChoices(body.option_choices).join(" | ");
+  if (optionChoices.length > MAX_OPTION_CHOICES)
+    return { error: `liste des options trop longue (max ${MAX_OPTION_CHOICES}).` };
+  if (optionChoices && !optionLabel)
+    return { error: "indique un libellé de choix (ex. « Boisson ») pour les options." };
+
   return {
     name,
     price_xof,
@@ -115,6 +135,8 @@ export function parseMenuItemForm(body: Record<string, string>): MenuItemInput |
     description: desc || null,
     recipe_ingredients: recipeIngredients || null,
     recipe_steps: recipeSteps || null,
+    option_label: optionChoices ? optionLabel : null,
+    option_choices: optionChoices || null,
     favourite: body.favourite === "on" || body.favourite === "true" || body.favourite === "1",
   };
 }
@@ -130,8 +152,9 @@ export async function createMenuItem(input: MenuItemInput): Promise<{ id: string
   const sortOrder = Number(ord.rows[0]?.n ?? 10);
   await pool.query(
     `insert into cafe_menu_items
-       (id, name, price_xof, category, description, recipe_ingredients, recipe_steps, favourite, sort_order)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+       (id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
+        option_label, option_choices, favourite, sort_order)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
       id,
       input.name,
@@ -140,6 +163,8 @@ export async function createMenuItem(input: MenuItemInput): Promise<{ id: string
       input.description,
       input.recipe_ingredients,
       input.recipe_steps,
+      input.option_label,
+      input.option_choices,
       input.favourite,
       sortOrder,
     ],
@@ -151,7 +176,8 @@ export async function updateMenuItem(id: string, input: MenuItemInput): Promise<
   const res = await pool.query(
     `update cafe_menu_items set
        name = $2, price_xof = $3, category = $4, description = $5,
-       recipe_ingredients = $6, recipe_steps = $7, favourite = $8, updated_at = now()
+       recipe_ingredients = $6, recipe_steps = $7, option_label = $8,
+       option_choices = $9, favourite = $10, updated_at = now()
      where id = $1`,
     [
       id,
@@ -161,6 +187,8 @@ export async function updateMenuItem(id: string, input: MenuItemInput): Promise<
       input.description,
       input.recipe_ingredients,
       input.recipe_steps,
+      input.option_label,
+      input.option_choices,
       input.favourite,
     ],
   );

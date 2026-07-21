@@ -13,6 +13,19 @@ export interface CafeMenuItem {
   priceXof: number;
   category: string;
   description?: string;
+  /** Label of a built-in choice (e.g. "Boisson"); undefined = no choice. */
+  optionLabel?: string;
+  /** The choices the client picks from (e.g. ["Jus d'orange", "Boisson chaude"]). */
+  optionChoices?: string[];
+}
+
+/** Parse the pipe-separated option_choices column into a clean list. */
+export function parseOptionChoices(raw: string | null | undefined): string[] {
+  return String(raw ?? "")
+    .split("|")
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .slice(0, 12);
 }
 
 /** A menu row as stored in DB (snapshot input). */
@@ -28,6 +41,8 @@ export interface ExtraLine {
   qty: number;
   unitPriceXof: number;
   lineTotalXof: number;
+  /** The picked option for an item with a choice (e.g. "Jus d'orange"). */
+  choice?: string;
 }
 
 export interface CafeMenu {
@@ -149,6 +164,8 @@ export function setCafeMenu(rows: CafeMenuRow[]): void {
       priceXof: r.priceXof,
       category: r.category,
       description: r.description,
+      optionLabel: r.optionLabel,
+      optionChoices: r.optionChoices,
     });
   }
   snapshot = { items, promptText: buildPromptText(rows) };
@@ -216,8 +233,18 @@ export type ExtrasResult =
 /**
  * Resolve the model-provided extras (item ids + quantities) against the menu.
  * Rejects rather than clamps, so the model corrects itself explicitly.
+ *
+ * An entry may carry a `choice` for an item that has options (e.g. the Brunch
+ * Mykonos drink). A provided choice is validated against the item's option list
+ * and frozen onto the line. With `requireChoices` (the admin delivery form), an
+ * option-item with no choice is rejected; without it (the bot, which records
+ * the choice in order_note) a missing choice is simply left off the line.
  */
-export function computeExtras(items: Map<string, CafeMenuItem>, input: unknown): ExtrasResult {
+export function computeExtras(
+  items: Map<string, CafeMenuItem>,
+  input: unknown,
+  opts: { requireChoices?: boolean } = {},
+): ExtrasResult {
   if (!Array.isArray(input) || input.length === 0 || input.length > 15)
     return { ok: false, error: "invalid_extras", message: "extras must be an array of 1 to 15 {item_id, qty} entries." };
   const lines: ExtraLine[] = [];
@@ -232,13 +259,33 @@ export function computeExtras(items: Map<string, CafeMenuItem>, input: unknown):
       unknownIds.push(itemId);
       continue;
     }
-    lines.push({
+    const line: ExtraLine = {
       id: item.id,
       name: item.name,
       qty,
       unitPriceXof: item.priceXof,
       lineTotalXof: item.priceXof * qty,
-    });
+    };
+    const options = item.optionChoices ?? [];
+    if (options.length > 0) {
+      const choice = String((entry as any)?.choice ?? "").trim();
+      if (choice) {
+        if (!options.includes(choice))
+          return {
+            ok: false,
+            error: "invalid_extras",
+            message: `« ${choice} » n'est pas un choix valide pour ${item.name} (${options.join(", ")}).`,
+          };
+        line.choice = choice;
+      } else if (opts.requireChoices) {
+        return {
+          ok: false,
+          error: "invalid_extras",
+          message: `choisis une option (${item.optionLabel ?? "choix"}) pour ${item.name} : ${options.join(", ")}.`,
+        };
+      }
+    }
+    lines.push(line);
   }
   if (unknownIds.length > 0)
     return {
@@ -251,21 +298,28 @@ export function computeExtras(items: Map<string, CafeMenuItem>, input: unknown):
   return { ok: true, lines, totalXof: lines.reduce((sum, l) => sum + l.lineTotalXof, 0) };
 }
 
+/** ` (Jus d'orange)` when the line carries a chosen option, else "". */
+function choiceSuffix(l: ExtraLine): string {
+  return l.choice ? ` (${l.choice})` : "";
+}
+
 /** `• 2× Jant Bi — 6000 FCFA` per line — for client-facing messages. */
 export function formatExtrasMultiline(lines: ExtraLine[]): string {
-  return lines.map((l) => `• ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n");
+  return lines.map((l) => `• ${l.qty}× ${l.name}${choiceSuffix(l)} — ${l.lineTotalXof} FCFA`).join("\n");
 }
 
 /** `2× Jant Bi + 1× Iced Matcha Vanille` — for one-line summaries. */
 export function formatExtrasOneLine(lines: ExtraLine[]): string {
-  return lines.map((l) => `${l.qty}× ${l.name}`).join(" + ");
+  return lines.map((l) => `${l.qty}× ${l.name}${choiceSuffix(l)}`).join(" + ");
 }
 
 /** Defensive parse of the extras_json column (jsonb → ExtraLine[]). */
 export function extrasFromJson(value: unknown): ExtraLine[] {
   if (!Array.isArray(value)) return [];
-  return value.filter(
-    (l): l is ExtraLine =>
-      typeof l?.name === "string" && Number.isInteger(l?.qty) && Number.isInteger(l?.lineTotalXof),
-  );
+  return value
+    .filter(
+      (l): l is ExtraLine =>
+        typeof l?.name === "string" && Number.isInteger(l?.qty) && Number.isInteger(l?.lineTotalXof),
+    )
+    .map((l) => (typeof l.choice === "string" && l.choice ? l : { ...l, choice: undefined }));
 }

@@ -2484,6 +2484,43 @@ depuis les 3 états ouverts).
   départ lien magique + double-POST idempotent, départ admin, livrée-direct sans
   ping route, annulation depuis OUT sans message, sweep enlèvement one-shot).
 
+### 6.13 Choix intégré à un article de menu (jus d'orange / boisson chaude…) (21/07/2026)
+
+Certains articles ont un choix (Brunch Mykonos : jus d'orange **ou** boisson
+chaude ; Iced Matcha : lait d'avoine **ou** lait de vache). Avant : le choix
+vivait dans le texte de la description + une consigne au prompt (`order_note`),
+et le **formulaire livraison admin n'avait aucun champ** — la réception devait
+le taper dans la note globale. Désormais c'est un **choix structuré par
+article**, obligatoire à la saisie.
+
+- **Modèle** (`lib/cafeMenu.ts`) : `CafeMenuItem` gagne `optionLabel?` +
+  `optionChoices?[]` ; `ExtraLine` gagne `choice?` (option figée sur la ligne).
+  `computeExtras(items, input, { requireChoices })` valide un choix fourni
+  contre la liste de l'article et le fige ; avec `requireChoices` (formulaire
+  admin) un article à choix sans choix est **rejeté**, sans (chemin **bot**,
+  inchangé) il est simplement laissé vide. `formatExtras*` affichent
+  « Brunch Mykonos (Jus d'orange) » ; `extrasFromJson` conserve `choice`.
+- **Stockage** (`cafe_menu_items`) : colonnes `option_label` +
+  `option_choices` (options séparées par « | »). Éditables dans
+  **/admin/menu** (2 champs : libellé + options). Backfill one-shot dans
+  SCHEMA_SQL pour BRUNCH_MYKONOS (Boisson) et les 5 Iced Matcha (Lait), guardé
+  `option_label is null`.
+- **Formulaire livraison** (`livraisonsPage.ts`) : un `<select choice_<ID>>`
+  apparaît sous l'article quand il a des options ; `parseDeliveryQtyFields`
+  apparie `qty_<ID>` ↔ `choice_<ID>` ; la route create passe
+  `requireChoices:true` → erreur claire si oubli.
+- **Le choix se propage partout** : ticket cuisine, confirmation/prête/en-route
+  client, board admin, snapshot `items_json` (via les formatters partagés).
+- **⚠️ Backfill = prod only** : le seed `cafe-menu.md` (sans syntaxe d'options)
+  tourne APRÈS `migrate()`, donc sur une **base neuve** l'UPDATE ne trouve rien →
+  Brunch/Matcha sans options tant qu'on ne les pose pas via /admin/menu. En prod
+  la table est déjà peuplée → le backfill s'applique au prochain boot. (Tests
+  intégration : options posées explicitement puis `refreshCafeMenu`.)
+- **Limite v2** : un seul choix par article, et qty>1 = même choix pour toute la
+  ligne (2 brunchs = 2 fois la même boisson) ; exception → note globale.
+- Build + 518 tests unitaires + 17 tests intégration livraison (+ choix requis
+  rejeté, choix figé sur la ligne + visible sur le ticket cuisine).
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

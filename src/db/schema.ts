@@ -735,6 +735,21 @@ create table if not exists cafe_menu_items (
 );
 alter table cafe_menu_items add column if not exists recipe_ingredients text;
 alter table cafe_menu_items add column if not exists recipe_steps text;
+-- Choix intégré à un article (ex. Brunch Mykonos : jus d'orange ou boisson
+-- chaude). option_label = le libellé du choix (« Boisson »), option_choices =
+-- les options séparées par « | » (« Jus d'orange | Boisson chaude »). Null =
+-- article sans choix. À la saisie d'une commande le choix devient obligatoire.
+alter table cafe_menu_items add column if not exists option_label text;
+alter table cafe_menu_items add column if not exists option_choices text;
+-- Backfill one-shot des choix déjà documentés dans cafe-menu.md (guardé sur
+-- null → ne réécrit pas un choix édité ensuite via /admin/menu).
+update cafe_menu_items set option_label = 'Boisson',
+       option_choices = 'Jus d''orange | Boisson chaude'
+  where id = 'BRUNCH_MYKONOS' and option_label is null;
+update cafe_menu_items set option_label = 'Lait',
+       option_choices = 'Lait d''avoine | Lait de vache'
+  where id in ('MATCHA_VANILLE','MATCHA_PISTACHE','MATCHA_MANGUE','MATCHA_MADD','MATCHA_CAFE')
+    and option_label is null;
 
 -- ═══ Planning hebdo du personnel (accueil / bar / entretien) ═══
 -- Un scénario = une ligne staff_schedules ; UN SEUL est 'published' à la fois

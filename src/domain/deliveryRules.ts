@@ -92,20 +92,23 @@ export function magicLinkUrl(baseUrl: string, token: string): string {
 // ---------- admin form parsing ----------
 
 /**
- * Collect the `qty_<ID>` fields of the create form into computeExtras entries.
- * Only quantities ≥ 1 are kept (zeros are the untouched default for every menu
- * row); an empty basket is rejected here, BEFORE computeExtras (which also
- * rejects unknown ids / qty > 10). Pure.
+ * Collect the `qty_<ID>` fields of the create form into computeExtras entries,
+ * pairing each with its `choice_<ID>` field (the picked option for items that
+ * have one). Only quantities ≥ 1 are kept (zeros are the untouched default for
+ * every menu row); an empty basket is rejected here, BEFORE computeExtras (which
+ * also validates the choice and rejects unknown ids / qty > 10). Pure.
  */
 export function parseDeliveryQtyFields(
   body: Record<string, string>,
-): { entries: { item_id: string; qty: number }[] } | { error: string } {
-  const entries: { item_id: string; qty: number }[] = [];
+): { entries: { item_id: string; qty: number; choice?: string }[] } | { error: string } {
+  const entries: { item_id: string; qty: number; choice?: string }[] = [];
   for (const [key, val] of Object.entries(body)) {
     if (!key.startsWith("qty_")) continue;
     const qty = parseInt(String(val ?? "").trim(), 10);
     if (!Number.isFinite(qty) || qty <= 0) continue;
-    entries.push({ item_id: key.slice(4), qty });
+    const item_id = key.slice(4);
+    const choice = String(body[`choice_${item_id}`] ?? "").trim();
+    entries.push(choice ? { item_id, qty, choice } : { item_id, qty });
   }
   if (entries.length === 0) return { error: "sélectionne au moins un article." };
   return { entries };

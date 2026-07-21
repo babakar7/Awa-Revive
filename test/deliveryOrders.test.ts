@@ -99,6 +99,20 @@ describe("parseDeliveryQtyFields", () => {
       error: expect.stringContaining("au moins un"),
     });
   });
+  it("pairs each ordered item with its choice_<ID> field", () => {
+    const r = parseDeliveryQtyFields({
+      qty_BRUNCH_MYKONOS: "1",
+      choice_BRUNCH_MYKONOS: "Jus d'orange",
+      qty_SMOOTHIE_JANT_BI: "2",
+      choice_SMOOTHIE_JANT_BI: "", // no choice for this one → omitted
+    });
+    expect(r).toEqual({
+      entries: [
+        { item_id: "BRUNCH_MYKONOS", qty: 1, choice: "Jus d'orange" },
+        { item_id: "SMOOTHIE_JANT_BI", qty: 2 },
+      ],
+    });
+  });
 });
 
 describe("magic-link token", () => {

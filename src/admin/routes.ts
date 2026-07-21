@@ -659,8 +659,9 @@ ${
         if (!address) return backErr("l'adresse de livraison est obligatoire");
         const parsed = parseDeliveryQtyFields(b);
         if ("error" in parsed) return backErr(parsed.error);
-        // Prices/total resolved server-side from the menu (never trusted from the form).
-        const priced = computeExtras(getCafeMenu().items, parsed.entries);
+        // Prices/total resolved server-side from the menu (never trusted from the
+        // form); choices for option-items are required and validated here too.
+        const priced = computeExtras(getCafeMenu().items, parsed.entries, { requireChoices: true });
         if (!priced.ok) return backErr(priced.message);
         const slaRaw = parseInt(String(b.sla_minutes ?? "").trim(), 10);
         const sla = Number.isFinite(slaRaw) && slaRaw >= 5 && slaRaw <= 180 ? slaRaw : config.DELIVERY_SLA_MINUTES;

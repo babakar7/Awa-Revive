@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { pool, migrate } from "../../src/db/index.js";
-import { initCafeMenu } from "../../src/domain/cafeMenuRepo.js";
+import { initCafeMenu, refreshCafeMenu } from "../../src/domain/cafeMenuRepo.js";
 import { config } from "../../src/config.js";
 import { sweepDeliveries } from "../../src/domain/deliveryNotify.js";
 import { markLogFailedByWamid, recordDeliveryLog } from "../../src/domain/notificationRepo.js";
@@ -195,6 +195,63 @@ describe("SLA alert sweep", () => {
     // One-shot: a second sweep does not re-alert this order.
     const n2 = await sweepDeliveries(noopLog);
     expect(n2).toBe(0);
+  });
+});
+
+describe("item with a built-in choice", () => {
+  // cafe_menu_items isn't truncated between tests, so restore the item afterwards
+  // to avoid leaking the option into other suites sharing this DB.
+  afterAll(async () => {
+    await pool.query(
+      `update cafe_menu_items set option_label=null, option_choices=null where id='BRUNCH_MYKONOS'`,
+    );
+  });
+  async function giveBrunchAChoice(): Promise<void> {
+    await pool.query(
+      `update cafe_menu_items set option_label='Boisson', option_choices=$1 where id='BRUNCH_MYKONOS'`,
+      ["Jus d'orange | Boisson chaude"],
+    );
+    await refreshCafeMenu();
+  }
+  async function postBrunch(choice?: string) {
+    const fields: Record<string, string> = {
+      client_name: "Rama",
+      client_phone: "770009988",
+      address: "Almadies",
+      sla_minutes: "20",
+      qty_BRUNCH_MYKONOS: "1",
+    };
+    if (choice !== undefined) fields.choice_BRUNCH_MYKONOS = choice;
+    return app.inject({
+      method: "POST",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams(fields).toString(),
+    });
+  }
+
+  it("rejects the order when the choice is missing and creates nothing", async () => {
+    await seedKitchenContact();
+    await giveBrunchAChoice();
+    const res = await postBrunch(); // no choice
+    expect(res.statusCode).toBe(303);
+    expect(res.headers.location).toContain("/livraisons/new?err=");
+    expect((await pool.query(`select count(*)::int as n from delivery_orders`)).rows[0].n).toBe(0);
+  });
+
+  it("records the choice on the line and shows it on the kitchen ticket", async () => {
+    await seedKitchenContact();
+    await giveBrunchAChoice();
+    const res = await postBrunch("Jus d'orange");
+    expect(res.statusCode).toBe(303);
+    expect(res.headers.location).not.toContain("err=");
+
+    const order = (await pool.query(`select * from delivery_orders order by created_at desc limit 1`)).rows[0];
+    expect(order.amount_xof).toBe(7500);
+    expect(order.items_json[0].choice).toBe("Jus d'orange");
+
+    const kitchenText = mock.waTextsTo("221770000099").join("\n");
+    expect(kitchenText).toContain("Brunch Mykonos (Jus d'orange)");
   });
 });
 

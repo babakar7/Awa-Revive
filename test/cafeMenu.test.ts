@@ -11,7 +11,9 @@ import {
   formatExtrasMultiline,
   formatExtrasOneLine,
   getCafeMenu,
+  type CafeMenuItem,
   parseCafeMenu,
+  parseOptionChoices,
   setCafeMenu,
   slugifyMenuId,
 } from "../src/lib/cafeMenu.js";
@@ -136,6 +138,64 @@ describe("computeExtras", () => {
   });
 });
 
+describe("computeExtras — item choices", () => {
+  const optionItems = new Map<string, CafeMenuItem>([
+    [
+      "BRUNCH_MYKONOS",
+      {
+        id: "BRUNCH_MYKONOS",
+        name: "Brunch Mykonos",
+        priceXof: 7500,
+        category: "BRUNCH",
+        optionLabel: "Boisson",
+        optionChoices: ["Jus d'orange", "Boisson chaude"],
+      },
+    ],
+    ["TOAST_TUNA", { id: "TOAST_TUNA", name: "Tuna Toast", priceXof: 4000, category: "TOASTS" }],
+  ]);
+
+  it("freezes a valid choice onto the line", () => {
+    const r = computeExtras(optionItems, [{ item_id: "BRUNCH_MYKONOS", qty: 1, choice: "Jus d'orange" }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lines[0].choice).toBe("Jus d'orange");
+  });
+
+  it("rejects a choice that isn't one of the item's options", () => {
+    const r = computeExtras(optionItems, [{ item_id: "BRUNCH_MYKONOS", qty: 1, choice: "Champagne" }]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("invalid_extras");
+  });
+
+  it("with requireChoices, an option-item without a choice is rejected", () => {
+    const r = computeExtras(optionItems, [{ item_id: "BRUNCH_MYKONOS", qty: 1 }], { requireChoices: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toContain("Boisson");
+  });
+
+  it("without requireChoices (bot path), a missing choice is simply left off", () => {
+    const r = computeExtras(optionItems, [{ item_id: "BRUNCH_MYKONOS", qty: 1 }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lines[0].choice).toBeUndefined();
+  });
+
+  it("ignores a choice sent for an item that has no options", () => {
+    const r = computeExtras(optionItems, [{ item_id: "TOAST_TUNA", qty: 1, choice: "whatever" }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lines[0].choice).toBeUndefined();
+  });
+});
+
+describe("parseOptionChoices", () => {
+  it("splits on | and trims, dropping empties", () => {
+    expect(parseOptionChoices(" Jus d'orange | Boisson chaude | ")).toEqual([
+      "Jus d'orange",
+      "Boisson chaude",
+    ]);
+    expect(parseOptionChoices(null)).toEqual([]);
+    expect(parseOptionChoices("")).toEqual([]);
+  });
+});
+
 describe("formatters", () => {
   const lines = [
     { id: "A", name: "Jant Bi", qty: 2, unitPriceXof: 3000, lineTotalXof: 6000 },
@@ -150,6 +210,14 @@ describe("formatters", () => {
 
   it("one-line: qty× name joined with +", () => {
     expect(formatExtrasOneLine(lines)).toBe("2× Jant Bi + 1× Iced Matcha Vanille");
+  });
+
+  it("appends the chosen option in parentheses when a line has a choice", () => {
+    const withChoice = [
+      { id: "M", name: "Brunch Mykonos", qty: 1, unitPriceXof: 7500, lineTotalXof: 7500, choice: "Jus d'orange" },
+    ];
+    expect(formatExtrasMultiline(withChoice)).toBe("• 1× Brunch Mykonos (Jus d'orange) — 7500 FCFA");
+    expect(formatExtrasOneLine(withChoice)).toBe("1× Brunch Mykonos (Jus d'orange)");
   });
 
   it("extrasFromJson filters garbage defensively", () => {
@@ -296,6 +364,25 @@ describe("parseMenuItemForm", () => {
     });
     expect(parseMenuItemForm({ ...base, recipe_steps: "x".repeat(5_001) })).toEqual({
       error: "préparation trop longue (max 5000 caractères).",
+    });
+  });
+  it("normalizes the option label + pipe-separated choices", () => {
+    const r = parseMenuItemForm({
+      ...base,
+      option_label: " Boisson ",
+      option_choices: " Jus d'orange |  Boisson chaude | ",
+    });
+    expect(r).toMatchObject({
+      option_label: "Boisson",
+      option_choices: "Jus d'orange | Boisson chaude",
+    });
+  });
+  it("defaults option fields to null when no choices are given", () => {
+    expect(parseMenuItemForm(base)).toMatchObject({ option_label: null, option_choices: null });
+  });
+  it("rejects choices without a label", () => {
+    expect(parseMenuItemForm({ ...base, option_choices: "A | B" })).toEqual({
+      error: expect.stringContaining("libellé"),
     });
   });
 });

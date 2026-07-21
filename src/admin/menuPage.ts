@@ -146,6 +146,8 @@ export function renderMenuItemForm(opts: {
   const description = esc(item?.description);
   const ingredients = esc(item?.recipe_ingredients);
   const steps = esc(item?.recipe_steps);
+  const optionLabel = esc(item?.option_label);
+  const optionChoices = esc(item?.option_choices);
   const favourite = item?.favourite ? " checked" : "";
 
   return `${banner}
@@ -159,6 +161,8 @@ export function renderMenuItemForm(opts: {
       <label>Catégorie<input name="category" required maxlength="40" list="menu-categories" value="${category}" placeholder="Ex. Smoothies"></label>
       <datalist id="menu-categories">${categories.map((value) => `<option value="${esc(value)}">`).join("")}</datalist>
       <label class="menu-description">Description commerciale<span class="field-help">Courte présentation visible par Awa et les clients.</span><textarea name="description" rows="3" maxlength="200" placeholder="Goût, ingrédients principaux ou bénéfice client…">${description}</textarea></label>
+      <label>Choix — libellé<span class="field-help">Laissez vide si l’article n’a pas de choix. Ex. « Boisson », « Lait ».</span><input name="option_label" maxlength="40" value="${optionLabel}" placeholder="Boisson"></label>
+      <label>Choix — options<span class="field-help">Séparez les options par une barre «&nbsp;|&nbsp;». Ex. « Jus d’orange | Boisson chaude ». À la commande, le choix devient obligatoire.</span><input name="option_choices" maxlength="200" value="${optionChoices}" placeholder="Jus d’orange | Boisson chaude"></label>
       <label class="menu-favourite"><input type="checkbox" name="favourite"${favourite}> Incontournable proposé sur WhatsApp</label>
     </div>
   </section>
