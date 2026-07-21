@@ -111,6 +111,9 @@ function registerFonts(): void {
 
 const W = 1080;
 const H = 1920;
+// Marge latérale de respiration : aucun texte ni pastille ne s'approche à moins
+// de cette distance des bords (retour de Babakar 21/07 : 60px était trop serré).
+const SIDE_MARGIN = 120;
 
 /**
  * Rend la story en PNG (1080×1920). Lève une erreur s'il n'y a aucun cours —
@@ -145,7 +148,7 @@ export function renderStoryImage(data: StoryData): Buffer {
     color: string,
     y: number,
     tracking: number,
-    maxW = W - 120,
+    maxW = W - SIDE_MARGIN * 2,
   ): void {
     let s = size;
     let t = tracking;
@@ -185,7 +188,7 @@ export function renderStoryImage(data: StoryData): Buffer {
   // créneaux) tienne entre l'en-tête et le footer sans jamais rogner un cours.
   const CONTENT_TOP = 400;
   const CONTENT_BOTTOM = H - 250; // laisse la place au wordmark + tagline
-  const MAX_ROW_W = W - 120; // largeur utile pour une rangée de pastilles
+  const MAX_ROW_W = W - SIDE_MARGIN * 2; // largeur utile pour une rangée de pastilles
 
   // Rangées équilibrées, au plus 4 pastilles par rangée.
   const rowsFor = (cls: StoryClass): StorySlot[][] => {
