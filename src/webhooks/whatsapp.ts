@@ -1,9 +1,16 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { config } from "../config.js";
-import { verifyWhatsAppSignature, parseInboundMessages, parseStatuses, sendText } from "../lib/whatsapp.js";
+import {
+  verifyWhatsAppSignature,
+  parseInboundMessages,
+  parseStatuses,
+  sendText,
+  unsupportedMediaLabel,
+} from "../lib/whatsapp.js";
 import { markLogFailedByWamid } from "../domain/notificationRepo.js";
 import {
   handleInboundText,
+  handleReaction,
   handleUnsupportedMedia,
   handleFailedVoiceNote,
   handleFailedImage,
@@ -137,8 +144,11 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
               req.log.error({ err, from: msg.from }, "Inbound image description failed");
               await handleFailedImage(msg.from, msg.id);
             }
+          } else if (msg.type === "reaction") {
+            // Emoji reaction — logged for the admin thread, never replied to.
+            await handleReaction(msg.from, msg.id, msg.reactionEmoji);
           } else {
-            await handleUnsupportedMedia(msg.from, msg.id);
+            await handleUnsupportedMedia(msg.from, msg.id, unsupportedMediaLabel(msg));
           }
           // Success only: so a crash mid-handling leaves the id free for Meta retry.
           await markProcessed(dedupeId, "whatsapp");

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildInteractivePayload, parseInboundMessages, parseStatuses } from "../src/lib/whatsapp.js";
+import {
+  buildInteractivePayload,
+  parseInboundMessages,
+  parseStatuses,
+  unsupportedMediaLabel,
+} from "../src/lib/whatsapp.js";
 import { slotChoiceKey } from "../src/domain/repo.js";
 
 describe("buildInteractivePayload", () => {
@@ -192,6 +197,66 @@ describe("parseInboundMessages — interactive replies", () => {
       }),
     );
     expect(msg).toMatchObject({ type: "image", mediaId: "media_789", caption: undefined });
+  });
+
+  it("extracts the emoji from a reaction message", () => {
+    const [msg] = parseInboundMessages(
+      envelope({
+        from: "221771234567",
+        id: "wamid.7",
+        type: "reaction",
+        reaction: { message_id: "wamid.reacted-to", emoji: "❤️" },
+      }),
+    );
+    expect(msg).toMatchObject({ type: "reaction", reactionEmoji: "❤️", text: undefined });
+  });
+
+  it("leaves reactionEmoji undefined when a reaction is removed", () => {
+    const [msg] = parseInboundMessages(
+      envelope({
+        from: "221771234567",
+        id: "wamid.8",
+        type: "reaction",
+        reaction: { message_id: "wamid.reacted-to" },
+      }),
+    );
+    expect(msg).toMatchObject({ type: "reaction", reactionEmoji: undefined });
+  });
+
+  it("extracts the filename from a document message", () => {
+    const [msg] = parseInboundMessages(
+      envelope({
+        from: "221771234567",
+        id: "wamid.9",
+        type: "document",
+        document: { id: "media_doc", filename: "recu-wave.pdf", mime_type: "application/pdf" },
+      }),
+    );
+    expect(msg).toMatchObject({ type: "document", filename: "recu-wave.pdf" });
+  });
+});
+
+describe("unsupportedMediaLabel", () => {
+  const base = { from: "221771234567", id: "wamid.x" };
+
+  it("labels known unsupported types in French", () => {
+    expect(unsupportedMediaLabel({ ...base, type: "sticker" })).toBe("[sticker]");
+    expect(unsupportedMediaLabel({ ...base, type: "video" })).toBe("[vidéo]");
+    expect(unsupportedMediaLabel({ ...base, type: "location" })).toBe("[localisation partagée]");
+    expect(unsupportedMediaLabel({ ...base, type: "contacts" })).toBe("[contact partagé]");
+  });
+
+  it("includes the filename for documents when present", () => {
+    expect(unsupportedMediaLabel({ ...base, type: "document", filename: "recu-wave.pdf" })).toBe(
+      "[document : recu-wave.pdf]",
+    );
+    expect(unsupportedMediaLabel({ ...base, type: "document" })).toBe("[document]");
+  });
+
+  it("falls back to the raw type for unknown types", () => {
+    expect(unsupportedMediaLabel({ ...base, type: "order" })).toBe(
+      "[message non pris en charge : order]",
+    );
   });
 });
 

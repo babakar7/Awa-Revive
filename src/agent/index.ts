@@ -576,13 +576,33 @@ export async function handleFailedImage(waPhone: string, waMessageId: string): P
   await repo.addTurn(client.id, "assistant", reply);
 }
 
-/** Polite reply for stickers / documents / other unreadable media (SPEC §8). */
-export async function handleUnsupportedMedia(waPhone: string, waMessageId: string): Promise<void> {
+/**
+ * Emoji reaction (client long-pressed a message and tapped ❤️/👍) — log it so
+ * the admin thread shows it, but NEVER reply: answering a ❤️ with « je ne peux
+ * pas lire ce type de message » read as a bug (client du 21/07).
+ */
+export async function handleReaction(
+  waPhone: string,
+  waMessageId: string,
+  emoji: string | null | undefined,
+): Promise<void> {
   const client = await repo.upsertClient(waPhone);
-  await maybeNotifyConversationStart(client, "[message non lisible]");
-  await repo.addTurn(client.id, "user", "[non-text message]", waMessageId);
+  const label = emoji ? `[réaction ${emoji}]` : "[réaction retirée]";
+  await repo.addTurn(client.id, "user", label, waMessageId);
+  if (isHumanTakeoverActive(client)) notifyHumanTakeoverInbound(client, label);
+}
+
+/** Polite reply for stickers / documents / other unreadable media (SPEC §8). */
+export async function handleUnsupportedMedia(
+  waPhone: string,
+  waMessageId: string,
+  label = "[non-text message]",
+): Promise<void> {
+  const client = await repo.upsertClient(waPhone);
+  await maybeNotifyConversationStart(client, label);
+  await repo.addTurn(client.id, "user", label, waMessageId);
   if (isHumanTakeoverActive(client)) {
-    notifyHumanTakeoverInbound(client, "[message non lisible]");
+    notifyHumanTakeoverInbound(client, label);
     return;
   }
   void sendTypingIndicator(waMessageId);

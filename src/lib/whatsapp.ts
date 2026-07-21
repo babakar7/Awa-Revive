@@ -458,7 +458,32 @@ export interface InboundMessage {
   interactiveId?: string; // clicked option id (list_reply / button_reply)
   mediaId?: string; // Meta media id for audio (voice notes) and image messages
   caption?: string; // client-typed caption on an image message
+  reactionEmoji?: string; // the emoji of a 'reaction' message (empty = reaction removed)
+  filename?: string; // original filename of a 'document' message
   profileName?: string;
+}
+
+/**
+ * Human-readable label stored in the conversation for message types Awa can't
+ * process (video, sticker, document…) — so the admin thread shows WHAT arrived
+ * instead of an opaque "[non-text message]". Reactions are handled separately
+ * (handleReaction) and never reach this.
+ */
+export function unsupportedMediaLabel(msg: InboundMessage): string {
+  switch (msg.type) {
+    case "sticker":
+      return "[sticker]";
+    case "video":
+      return "[vidéo]";
+    case "document":
+      return msg.filename ? `[document : ${msg.filename}]` : "[document]";
+    case "location":
+      return "[localisation partagée]";
+    case "contacts":
+      return "[contact partagé]";
+    default:
+      return `[message non pris en charge : ${msg.type}]`;
+  }
 }
 
 /**
@@ -526,6 +551,8 @@ export function parseInboundMessages(payload: any): InboundMessage[] {
           mediaId:
             msg.type === "audio" ? msg.audio?.id : msg.type === "image" ? msg.image?.id : undefined,
           caption: msg.type === "image" ? msg.image?.caption : undefined,
+          reactionEmoji: msg.type === "reaction" ? msg.reaction?.emoji : undefined,
+          filename: msg.type === "document" ? msg.document?.filename : undefined,
           profileName: contact?.profile?.name,
         });
       }

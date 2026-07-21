@@ -2382,6 +2382,28 @@ incomplet en silence). Correctifs livrés :
   ajouté à business-info (`a34e84e`, autre agent, 22:43 le soir même).
 - Build + 491 tests unitaires + 96 intégration verts.
 
+### 6.10 Messages non-texte lisibles dans l'admin + réactions silencieuses (21/07/2026)
+
+Un client (+1 301…, takeover actif) envoie un message que le webhook ne gère
+pas → stocké comme un opaque « [non-text message] », type réel perdu à jamais
+(ni en DB ni dans les logs — irrécupérable rétroactivement). Correctifs :
+
+- **`parseInboundMessages`** capture désormais `reactionEmoji` (type
+  `reaction`) et `filename` (type `document`).
+- **Réactions emoji** (❤️/👍 sur un message) : nouveau `handleReaction` —
+  loggé « [réaction ❤️] » (ou « [réaction retirée] ») dans le fil admin,
+  ping réception si takeover, mais **jamais de réponse** : répondre « je ne
+  peux pas lire ce type de message » à un ❤️ était perçu comme un bug. NB :
+  un emoji TAPÉ comme message arrive en type `text` normal — seul le
+  long-press réaction passait par le fallback.
+- **Autres types non gérés** : libellé descriptif via `unsupportedMediaLabel`
+  — « [sticker] », « [vidéo] », « [document : nom.pdf] », « [localisation
+  partagée] », « [contact partagé] », sinon « [message non pris en charge :
+  <type>] ». Même libellé pour le fil admin ET les pings réception (avant :
+  « [message non lisible] » partout).
+- Build + 502 tests verts (dont 9 nouveaux : parsing réaction/document +
+  libellés).
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
