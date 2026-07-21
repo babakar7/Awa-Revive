@@ -5,6 +5,7 @@ import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
 import { shouldOfferLinking } from "../lib/linkAsk.js";
 import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
+import { findContactByPhone } from "../lib/wix.js";
 import { getCafeMenu } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { systemPrompt, dynamicContext } from "./systemPrompt.js";
@@ -173,6 +174,32 @@ async function maybeNotifyConversationStart(
   }
 }
 
+/**
+ * Passive CRM name enrichment. A lead who only ever chats — browses the
+ * schedule, asks a question, never books or gives a name — shows as "(sans nom)"
+ * in the admin even when a Wix contact with a matching number already exists
+ * (`clients.name` is only written on booking/payment/email-link, never on a plain
+ * message). This copies the canonical Wix contact name onto the local row.
+ *
+ * Only a UNIQUE fiche match is used: `findContactByPhone` returns null on zero OR
+ * ambiguous matches, so we never guess a name onto the wrong person. Gated on an
+ * empty local name, so once it lands the lookup stops firing. Fire-and-forget and
+ * swallow-safe — a Wix hiccup never blocks the reply; the name is there for the
+ * admin and the next turn.
+ */
+async function maybeEnrichClientNameFromWix(client: repo.Client): Promise<void> {
+  if (client.name && client.name.trim() !== "") return;
+  try {
+    const contact = await findContactByPhone(client.wa_phone);
+    const fullName = contact?.fullName?.trim();
+    if (!fullName) return;
+    await repo.updateClientName(client.id, fullName);
+    client.name = fullName;
+  } catch (err) {
+    console.error("maybeEnrichClientNameFromWix failed (non-blocking):", err);
+  }
+}
+
 function notifyHumanTakeoverInbound(client: repo.Client, preview: string): void {
   notifyReception(
     "Nouveau message pendant un relais humain",
@@ -256,6 +283,10 @@ export async function handleInboundText(args: {
   profileName?: string;
 }): Promise<void> {
   const client = await repo.upsertClient(args.waPhone);
+
+  // Name a chat-only lead from their matching Wix fiche (fire-and-forget) so the
+  // admin stops showing "(sans nom)" for someone who never books.
+  void maybeEnrichClientNameFromWix(client);
 
   // Conversation-start ping (before the incoming turn is persisted, so the gap
   // query sees only prior activity).

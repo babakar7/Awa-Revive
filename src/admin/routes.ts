@@ -43,6 +43,7 @@ import {
   listAllActiveOrders,
   findMemberContactIds,
   phoneMatchVariants,
+  wixContactFullName,
 } from "../lib/wix.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import {
@@ -1629,6 +1630,14 @@ ${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à 
         }
         await links.markLinked(request.id, contactId, req.adminUser ?? "?");
         invalidateMembershipCache(request.client_id);
+        // Copy the fiche's canonical name onto the local client row so the
+        // conversation stops showing "(sans nom)" now that it's linked.
+        const linkedName = wixContactFullName(contact)?.trim();
+        if (linkedName) {
+          await repo.updateClientName(request.client_id, linkedName).catch((e) => {
+            req.log.warn({ err: e, request: request.id }, "CRM link name sync failed");
+          });
+        }
         req.log.info(
           { contactId, request: request.id, wa, by: req.adminUser },
           "WhatsApp number linked to Wix contact from admin dashboard",
