@@ -2603,6 +2603,30 @@ réconciliation 753c724 (détails de la feature, session parallèle de §6.15) :
   null` → 10 lignes (5 supp. smoothie, 4 toast, 1 tapioca), vérifié, aucun
   autre article touché. Les futurs suppléments se cochent à la création.
 
+### 6.17 /admin/menu — catégories en ONGLETS (une à la fois) (21/07/2026)
+
+Suite de §6.15 : afficher tout le menu d'entrée n'avait pas de sens (retour
+Babakar). Les pastilles catégories (déjà sticky) deviennent des **onglets** :
+une seule catégorie visible à la fois, la **première ouverte** au chargement.
+
+- **Défaut rendu côté serveur** (`menuPage.ts`, `renderMenuPage`) : 1re section
+  visible, les autres avec l'attribut `hidden` ; 1re pastille `.active` ;
+  compteur initialisé sur la 1re catégorie (pas le menu entier) → zéro flash,
+  testable.
+- **Fallback no-JS** : `<noscript><style>[data-cat-section][hidden]{display:block
+  !important}</style></noscript>` → sans JS, toutes les catégories réapparaissent
+  (liste complète, comme avant). L'admin dépend déjà de JS ailleurs.
+- **Script onglets** : `showCategory(slug)` masque tout sauf la catégorie
+  choisie ; clic pastille → vide la recherche + bascule. **La recherche reste
+  GLOBALE** : `runSearch(q)` matche sur toutes les catégories (onglet actif
+  ignoré), effacer revient à l'onglet actif. Compteur live selon ce qui est
+  montré. Clic-ligne inchangé.
+- Aucun changement CSS (réutilise `.jump-nav a.active` et `.menu-jumpnav`
+  existants) ni de route.
+- Build + 534 tests unitaires (dont 3 nouveaux : onglet défaut serveur,
+  noscript, logique de bascule) ; script vérifié `node --check` ; cafeMenu
+  intégration verte. Pas de mémorisation de l'onglet (v1 ouvre toujours la 1re).
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

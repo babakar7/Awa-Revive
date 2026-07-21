@@ -141,7 +141,7 @@ describe("menu admin rendering", () => {
   });
 });
 
-describe("menu catalogue UX (sticky nav + live search + clickable rows)", () => {
+describe("menu catalogue UX (category tabs + live search + clickable rows)", () => {
   it("renders a jump-nav pill with an anchor and count per visible category", () => {
     const html = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
     expect(html).toContain('id="menu-jumpnav"');
@@ -150,6 +150,33 @@ describe("menu catalogue UX (sticky nav + live search + clickable rows)", () => 
     expect(html).toContain('id="cat-smoothies"'); // the section anchor itself
     // Retired-only category is invisible in the default (active) view.
     expect(html).not.toContain('href="#cat-jus"');
+  });
+
+  it("opens on the first category as an active tab, the rest hidden (server default)", () => {
+    const html = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
+    // First category = SMOOTHIES: its pill is active, its section is not hidden.
+    expect(html).toContain('class="menu-tab active" href="#cat-smoothies"');
+    expect(html).toContain('<div data-cat-section="smoothies">');
+    // Second category is present but hidden until its tab is chosen.
+    expect(html).toContain('<div data-cat-section="boissons-chaudes" hidden>');
+    // Only the first pill is active.
+    expect(html).not.toContain('class="menu-tab active" href="#cat-boissons-chaudes"');
+    // Count starts on the first category (1 smoothie), not the whole menu.
+    expect(html).toContain('id="menu-live-count">1 article<');
+  });
+
+  it("keeps a no-JS fallback that reveals every category", () => {
+    const html = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
+    expect(html).toContain("<noscript>");
+    expect(html).toContain("[data-cat-section][hidden]{display:block!important}");
+  });
+
+  it("ships the tab-switch logic in the page script", () => {
+    const html = renderMenuPage({ items: ITEMS, filters: {}, banner: "" });
+    expect(html).toContain("function showCategory");
+    expect(html).toContain("function runSearch"); // search overrides the active tab
+    // Clicking a tab clears the search box before switching.
+    expect(html).toContain("input.value=''");
   });
 
   it("rows are clickable and carry a normalized search haystack", () => {

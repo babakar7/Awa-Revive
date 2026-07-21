@@ -103,36 +103,65 @@ function itemRow(item: MenuItemView): string {
 </tr>`;
 }
 
-/** Live search + row click — no framework; norm() mirrors normalized() above. */
+/**
+ * Category tabs + global live search + row click. One category shows at a time;
+ * typing in the search overrides the active tab and matches across ALL
+ * categories; clearing the search returns to the active tab. norm() mirrors
+ * normalized() above. No framework.
+ */
 const MENU_PAGE_SCRIPT = `<script>
 (function(){
   var norm=function(s){return s.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase()};
   var input=document.getElementById('menu-live-search');
   var count=document.getElementById('menu-live-count');
   var empty=document.getElementById('menu-live-empty');
-  function apply(){
-    var q=norm(input.value.trim());
-    var total=0;
-    document.querySelectorAll('[data-cat-section]').forEach(function(sec){
-      var visible=0;
-      sec.querySelectorAll('tr[data-search]').forEach(function(tr){
-        var show=!q||tr.dataset.search.indexOf(q)>-1;
-        tr.hidden=!show;if(show)visible++;
-      });
-      sec.hidden=visible===0;
-      var pill=document.querySelector('#menu-jumpnav a[data-cat="'+sec.dataset.catSection+'"]');
-      if(pill)pill.hidden=visible===0;
-      total+=visible;
+  var nav=document.getElementById('menu-jumpnav');
+  var sections=[].slice.call(document.querySelectorAll('[data-cat-section]'));
+  var pills=nav?[].slice.call(nav.querySelectorAll('a[data-cat]')):[];
+  var activeCat=sections.length?sections[0].dataset.catSection:null;
+  function setCount(n){if(count)count.textContent=n+' article'+(n===1?'':'s')}
+  // Category mode: only activeCat visible, all its rows shown.
+  function showCategory(slug){
+    activeCat=slug;var shown=0;
+    sections.forEach(function(sec){
+      var on=sec.dataset.catSection===slug;
+      sec.hidden=!on;
+      sec.querySelectorAll('tr[data-search]').forEach(function(tr){tr.hidden=false});
+      if(on)shown=sec.querySelectorAll('tr[data-search]').length;
     });
-    if(count)count.textContent=total+' article'+(total===1?'':'s');
-    if(empty)empty.hidden=total!==0;
+    pills.forEach(function(p){var on=p.dataset.cat===slug;p.hidden=false;p.classList.toggle('active',on);p.setAttribute('aria-pressed',on)});
+    setCount(shown);if(empty)empty.hidden=true;
   }
-  if(input){input.addEventListener('input',apply);apply();}
+  // Search mode: match across all categories, active tab ignored.
+  function runSearch(q){
+    var total=0;
+    sections.forEach(function(sec){
+      var vis=0;
+      sec.querySelectorAll('tr[data-search]').forEach(function(tr){
+        var show=tr.dataset.search.indexOf(q)>-1;tr.hidden=!show;if(show)vis++;
+      });
+      sec.hidden=vis===0;
+      var pill=nav&&nav.querySelector('a[data-cat="'+sec.dataset.catSection+'"]');
+      if(pill){pill.hidden=vis===0;pill.classList.remove('active');pill.setAttribute('aria-pressed','false')}
+      total+=vis;
+    });
+    setCount(total);if(empty)empty.hidden=total!==0;
+  }
+  function apply(){
+    var q=norm(input?input.value.trim():'');
+    if(q)runSearch(q);else showCategory(activeCat);
+  }
+  if(input)input.addEventListener('input',apply);
+  if(nav)nav.addEventListener('click',function(e){
+    var a=e.target.closest('a[data-cat]');if(!a)return;
+    e.preventDefault();if(input)input.value='';showCategory(a.dataset.cat);
+  });
   document.addEventListener('click',function(e){
     var tr=e.target.closest('tr[data-href]');
     if(!tr||e.target.closest('a,button,form,input,select'))return;
     location.href=tr.dataset.href;
   });
+  apply();
 })();
 </script>`;
 
@@ -147,21 +176,25 @@ export function renderMenuPage(opts: {
   const missing = active.filter((item) => !isRecipeComplete(item));
   const complete = active.length - missing.length;
 
+  // Category tabs: only one category shows at a time. The first is the default
+  // active tab (rendered server-side so there's no flash); the rest are `hidden`
+  // and revealed as full list by the <noscript> fallback below.
   const visibleCategories = menuCategories(visible);
   const jumpNav = visibleCategories.length
     ? `<nav class="jump-nav menu-jumpnav" id="menu-jumpnav">${visibleCategories
-        .map((category) => {
+        .map((category, i) => {
           const n = visible.filter((item) => item.category === category).length;
-          return `<a href="#cat-${anchorSlug(category)}" data-cat="${anchorSlug(category)}">${esc(category)} <span class="badge badge--gray">${n}</span></a>`;
+          const active = i === 0 ? " active" : "";
+          return `<a class="menu-tab${active}" href="#cat-${anchorSlug(category)}" data-cat="${anchorSlug(category)}" aria-pressed="${i === 0}">${esc(category)} <span class="badge badge--gray">${n}</span></a>`;
         })
         .join("")}</nav>`
     : "";
 
   const groups = visibleCategories
-    .map((category) => {
+    .map((category, i) => {
       const categoryItems = visible.filter((item) => item.category === category);
       const slug = anchorSlug(category);
-      return `<div data-cat-section="${slug}">
+      return `<div data-cat-section="${slug}"${i === 0 ? "" : " hidden"}>
 <div class="section-header"><h2 id="cat-${slug}">${esc(category)}</h2><span class="badge badge--gray">${categoryItems.length}</span></div>
 <div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Article</th><th>Recette</th><th class="right">Prix</th></tr></thead><tbody>${categoryItems.map(itemRow).join("")}</tbody></table></div></div>
 </div>`;
@@ -172,6 +205,12 @@ export function renderMenuPage(opts: {
   // filter to preserve, no scroll to steal).
   const pristine =
     !filters.q?.trim() && (filters.status ?? "active") === "active" && (filters.recipe ?? "all") === "all" && !filters.category?.trim();
+
+  // Default view shows only the first category, so the count starts on it (not
+  // the whole menu) — JS keeps it in sync as tabs switch / search runs.
+  const firstCatCount = visibleCategories.length
+    ? visible.filter((item) => item.category === visibleCategories[0]).length
+    : visible.length;
 
   return `${banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Menu et recettes</h2><p>Gérez les articles vendus par Awa et les fiches de préparation réservées à l’équipe.</p></div><div class="page-header-actions"><a class="act" href="/admin/menu/new">Ajouter un article</a></div></header>
@@ -184,8 +223,9 @@ export function renderMenuPage(opts: {
   <label class="menu-search">Rechercher<input type="search" name="q" id="menu-live-search" value="${esc(filters.q)}" placeholder="Nom, catégorie ou ID…"${pristine ? " autofocus" : ""}></label>
   <label>Statut<select name="status" onchange="this.form.submit()"><option value="active"${selected(filters.status ?? "active", "active")}>Actifs</option><option value="retired"${selected(filters.status, "retired")}>Retirés</option><option value="all"${selected(filters.status, "all")}>Tous</option></select></label>
   <label>Recette<select name="recipe" onchange="this.form.submit()"><option value="all"${selected(filters.recipe ?? "all", "all")}>Toutes</option><option value="missing"${selected(filters.recipe, "missing")}>À compléter</option><option value="complete"${selected(filters.recipe, "complete")}>Complètes</option></select></label>
-  <div class="menu-filter-actions"><span class="badge badge--gray" id="menu-live-count">${visible.length} article${visible.length === 1 ? "" : "s"}</span><a href="/admin/menu">Réinitialiser</a></div>
+  <div class="menu-filter-actions"><span class="badge badge--gray" id="menu-live-count">${firstCatCount} article${firstCatCount === 1 ? "" : "s"}</span><a href="/admin/menu">Réinitialiser</a></div>
 </form>
+<noscript><style>[data-cat-section][hidden]{display:block!important}</style></noscript>
 ${jumpNav}
 ${groups || `<div class="card"><div class="empty"><b>Aucun article trouvé</b><p>Modifiez les filtres ou ajoutez un nouvel article.</p></div></div>`}
 <div class="card" id="menu-live-empty" hidden><div class="empty"><b>Aucun article trouvé</b><p>Aucun article ne correspond à cette recherche.</p></div></div>
