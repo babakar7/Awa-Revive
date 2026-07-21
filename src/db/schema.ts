@@ -581,11 +581,13 @@ create index if not exists idx_notification_log_rule_event
 -- la cuisine est notifiée (WhatsApp + lien magique « ✅ prête »), un SLA déclenche
 -- une alerte réception, et le client est prévenu quand c'est prêt. Paiement HORS
 -- système (encaissé à la livraison) — on ne mémorise que le montant dû.
--- Statuts : IN_KITCHEN → READY → DELIVERED ; IN_KITCHEN|READY → CANCELLED.
--- items_json = snapshot figé (shape ExtraLine) : prix résolus côté serveur depuis
--- cafe-menu.md à la création, jamais rejoués après. Le token du lien magique n'est
--- JAMAIS stocké : seul son sha256 (ready_token_hash) l'est. Les envois cuisine/
--- client sont suivis en « pending → sent|sent_template|... » et réconciliés par le
+-- Statuts : IN_KITCHEN → READY → OUT_FOR_DELIVERY → DELIVERED ; les 3 états
+-- ouverts → CANCELLED (READY→DELIVERED reste permis si la réception saute
+-- l'étape départ). items_json = snapshot figé (shape ExtraLine) : prix résolus
+-- côté serveur depuis cafe-menu.md à la création, jamais rejoués après. Le token
+-- du lien magique n'est JAMAIS stocké : seul son sha256 (ready_token_hash) l'est.
+-- Le client reçoit 3 pings : confirmation (création), prête, en route (départ) —
+-- chacun suivi en « pending → sent|sent_template|... » et réconcilié par le
 -- sweep 60 s (un crash entre commit et envoi ne perd pas la notification).
 create table if not exists delivery_orders (
   id uuid primary key default gen_random_uuid(),
@@ -618,6 +620,24 @@ create table if not exists delivery_orders (
 );
 create index if not exists idx_delivery_orders_status
   on delivery_orders (status, created_at);
+
+-- v2 : OUT_FOR_DELIVERY + ping confirmation (création) + ping départ + SLA
+-- enlèvement. created_notify_status ajouté default 'sent' PUIS default repassé à
+-- 'pending' → les commandes déjà ouvertes au moment du déploiement ne reçoivent
+-- pas de confirmation rétroactive ; les nouvelles lignes partent bien 'pending'.
+alter table delivery_orders add column if not exists created_notify_status text not null default 'sent';
+alter table delivery_orders alter column created_notify_status set default 'pending';
+alter table delivery_orders add column if not exists created_notified_at timestamptz;
+alter table delivery_orders add column if not exists created_notify_attempts integer not null default 0;
+alter table delivery_orders add column if not exists route_notify_status text not null default 'pending';
+alter table delivery_orders add column if not exists route_notified_at timestamptz;
+alter table delivery_orders add column if not exists route_notify_attempts integer not null default 0;
+alter table delivery_orders add column if not exists out_for_delivery_at timestamptz;
+alter table delivery_orders add column if not exists out_for_delivery_by text;   -- 'kitchen-link' | 'admin-<user>'
+alter table delivery_orders add column if not exists pickup_alerted_at timestamptz; -- alerte enlèvement one-shot
+alter table delivery_orders drop constraint if exists delivery_orders_status_check;
+alter table delivery_orders add constraint delivery_orders_status_check
+  check (status in ('IN_KITCHEN','READY','OUT_FOR_DELIVERY','DELIVERED','CANCELLED'));
 
 -- Factures réception : un client demande une facture (aujourd'hui → handoff, la
 -- réception n'avait aucun outil). Elle la crée ici, l'imprime (PDF navigateur) et

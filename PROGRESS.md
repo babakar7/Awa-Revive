@@ -2433,6 +2433,57 @@ réservation/paiement/liaison email, jamais sur un simple message. Correctifs
   Aghaby Yanni, Rebecca Sharp, Lala Binta), 13 sans fiche unique, 0 erreur.
 - Build + 496 tests unitaires verts.
 
+### 6.12 Livraisons v2 — notifs client de bout en bout + statut « en route » (21/07/2026)
+
+Avant : le client d'une commande livraison (passée par téléphone, payée cash)
+ne recevait qu'UN message (« prête »). Rien à la création, rien au départ.
+Désormais **3 pings client** + un nouveau statut **OUT_FOR_DELIVERY** et une
+2ᵉ alerte réception. Cycle : `IN_KITCHEN → READY → OUT_FOR_DELIVERY → DELIVERED`
+(READY→DELIVERED reste permis si la réception saute l'étape départ ; CANCELLED
+depuis les 3 états ouverts).
+
+- **3 notifications client** (`deliveryRules.ts`) : ① `createdClientMessage`
+  (confirmation à la création : récap + montant à régler + adresse),
+  ② `readyClientMessage` **reformulée** (retrait de « va partir en livraison »,
+  le départ a son propre ping), ③ `routeClientMessage` (« en route » au départ).
+  Pas de message d'annulation ni de « livrée » (refusés par le proprio).
+- **Déclenchement du départ par 2 chemins** : lien magique cuisine (2ᵉ bouton
+  « 🛵 Partie en livraison » sur `/livraison/:token`, nouveau POST
+  `/depart`, GET toujours read-only) ET board admin
+  (`POST /admin/livraisons/:id/depart`). « Livrée » reste admin-only.
+- **Outbox réutilisée** (`deliveryRepo.ts`) : triplets `created_notify_*` et
+  `route_notify_*` (+ `client_notify_*` = ping prête inchangé), généralisés via
+  une map `CLIENT_PING_COLS` whitelistée (noms de colonnes JAMAIS construits
+  depuis une entrée). Gating des claims : created = ouvert
+  (IN_KITCHEN/READY/OUT), ready = READY, route = OUT_FOR_DELIVERY. Retries par
+  le sweep 60 s comme les autres.
+- **1 seul nouveau template Meta** : `livraison_update` générique
+  ({{1}} prénom, {{2}} texte) en fallback 131047 pour created + route ; « prête »
+  garde `livraison_prete`. Le code shippe AVANT l'approbation (sans var →
+  dégradation propre).
+- **Alerte enlèvement one-shot** : `claimDeliveryPickupAlerts` — commande READY
+  depuis > `DELIVERY_PICKUP_SLA_MINUTES` (env global, défaut 15) sans départ →
+  ping réception, même mécanique que l'alerte retard cuisine.
+- **Board** (`livraisonsPage.ts`) : badge « en route (N min) », badge « prête »
+  qui vire au rouge après le SLA enlèvement, `clientFlag` par statut (confirmation
+  / prête / en route), boutons `🛵 Partie` + `✓ Livrée` selon l'état, bannière
+  `departed`.
+- **Schéma auto-migré** : colonnes ajoutées via `alter table … add column if not
+  exists` ; le CHECK statut est `drop`/`add` à chaque boot (idempotent).
+  `created_notify_status` ajouté default 'sent' PUIS repassé 'pending' → pas de
+  confirmation rétroactive pour les commandes déjà ouvertes au déploiement.
+- **Edge cases assumés** : messages création/prête possibles dans le désordre si
+  cuisine instantanée ; livrée direct depuis READY → pas de ping route (parcours
+  s'arrête à « prête ») ; ping prête encore pending au départ → le sweep arrête
+  de le retenter, le ping route supersède.
+- **Ops** : le proprio crée le template Meta `livraison_update` (code langue
+  `en`, corps FR `Bonjour {{1}} ! Mise à jour de votre commande Revive : {{2}}`),
+  puis l'agent pose `WA_DELIVERY_UPDATE_TEMPLATE=livraison_update` (+
+  `_LANG=en`) sur Railway. `DELIVERY_PICKUP_SLA_MINUTES` optionnel (défaut 15).
+- Build + 507 tests unitaires + 15 tests intégration livraison (créa confirm,
+  départ lien magique + double-POST idempotent, départ admin, livrée-direct sans
+  ping route, annulation depuis OUT sans message, sweep enlèvement one-shot).
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

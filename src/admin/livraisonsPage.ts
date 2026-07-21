@@ -19,9 +19,10 @@ function esc(s: unknown): string {
 }
 
 const BANNERS: Record<string, string> = {
-  created: "Commande créée — cuisine notifiée.",
+  created: "Commande créée — cuisine notifiée, confirmation envoyée au client.",
   "created-kitchen-failed": "Commande créée, mais l'envoi à la cuisine a échoué — utilisez « 🔁 Renvoyer ».",
   ready: "Commande marquée prête — le client est prévenu.",
+  departed: "Commande partie en livraison — le client est prévenu.",
   delivered: "Commande marquée livrée.",
   cancelled: "Commande annulée.",
   renotified: "Cuisine renotifiée.",
@@ -40,9 +41,15 @@ function minutesSince(d: Date | string): number {
 
 /** Colored SLA badge: green <10 min, amber <SLA, red ≥SLA; distinct once READY. */
 function slaBadge(o: DeliveryOrder): string {
+  if (o.status === "OUT_FOR_DELIVERY") {
+    const since = o.out_for_delivery_at ? minutesSince(o.out_for_delivery_at) : 0;
+    return `<span class="badge badge--green">en route (${since} min)</span>`;
+  }
   if (o.status === "READY") {
     const since = o.ready_at ? minutesSince(o.ready_at) : 0;
-    return `<span class="badge badge--green">prête (${since} min)</span>`;
+    // Colour against the pickup SLA: red once it's been ready too long without departing.
+    const cls = since < config.DELIVERY_PICKUP_SLA_MINUTES ? "badge--green" : "badge--red";
+    return `<span class="badge ${cls}">prête (${since} min)</span>`;
   }
   const elapsed = minutesSince(o.created_at);
   const remaining = o.sla_minutes - elapsed;
@@ -86,22 +93,47 @@ function actionsCell(o: DeliveryOrder): string {
     if (kitchenBad) parts.push(inlineForm(`${base}/renotify-kitchen`, "🔁 Renvoyer", undefined, "ghost"));
     parts.push(inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande ?", "danger"));
   } else if (o.status === "READY") {
-    parts.push(inlineForm(`${base}/delivered`, "🛵 Livrée", undefined, "ok"));
+    parts.push(inlineForm(`${base}/depart`, "🛵 Partie", undefined, "ok"));
+    parts.push(inlineForm(`${base}/delivered`, "✓ Livrée", undefined, "ghost"));
     parts.push(
-      inlineForm(`${base}/cancel`, "✖ Annuler", "Le client a peut-être été prévenu « en route » — annuler quand même ?", "danger"),
+      inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande prête ?", "danger"),
+    );
+  } else if (o.status === "OUT_FOR_DELIVERY") {
+    parts.push(inlineForm(`${base}/delivered`, "✓ Livrée", undefined, "ok"));
+    parts.push(
+      inlineForm(`${base}/cancel`, "✖ Annuler", "La commande est en route — annuler quand même ?", "danger"),
     );
   }
   return parts.join(" ");
 }
 
-/** Red "call the client" flag when a READY order's ready-ping didn't land. */
+/**
+ * Client-ping flag for the status-relevant ping: the confirmation (IN_KITCHEN),
+ * the ready-ping (READY), or the en-route ping (OUT_FOR_DELIVERY). A failed
+ * confirmation is a soft warning (nothing is blocked yet); a failed ready/route
+ * ping is the red "call the client" the runner must act on.
+ */
 function clientFlag(o: DeliveryOrder): string {
-  if (o.status !== "READY") return "";
-  if (o.client_notify_status === "sent" || o.client_notify_status === "sent_template")
-    return `<div class="ok">✓ client prévenu</div>`;
-  if (o.client_notify_status === "pending" || o.client_notify_status === "claimed")
-    return `<div class="muted">notification en cours…</div>`;
-  return `<div class="danger-text">Appeler le client : +${esc(o.client_phone)}</div>`;
+  const ok = (label: string) => `<div class="ok">✓ ${label}</div>`;
+  const pending = `<div class="muted">notification en cours…</div>`;
+  const sent = (s: string) => s === "sent" || s === "sent_template";
+  const inFlight = (s: string) => s === "pending" || s === "claimed";
+  if (o.status === "IN_KITCHEN") {
+    if (sent(o.created_notify_status)) return ok("confirmation envoyée");
+    if (inFlight(o.created_notify_status)) return pending;
+    return `<div class="warn-text">Confirmation non envoyée</div>`;
+  }
+  if (o.status === "READY") {
+    if (sent(o.client_notify_status)) return ok("client prévenu");
+    if (inFlight(o.client_notify_status)) return pending;
+    return `<div class="danger-text">Appeler le client : +${esc(o.client_phone)}</div>`;
+  }
+  if (o.status === "OUT_FOR_DELIVERY") {
+    if (sent(o.route_notify_status)) return ok("client prévenu (en route)");
+    if (inFlight(o.route_notify_status)) return pending;
+    return `<div class="danger-text">Appeler le client : +${esc(o.client_phone)}</div>`;
+  }
+  return "";
 }
 
 function openRow(o: DeliveryOrder): string {

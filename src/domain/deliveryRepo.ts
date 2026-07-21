@@ -43,12 +43,21 @@ export interface DeliveryOrder {
   kitchen_notify_status: NotifyStatus;
   kitchen_notified_at: Date | null;
   kitchen_notify_attempts: number;
-  client_notify_status: NotifyStatus;
+  client_notify_status: NotifyStatus; // the "ready" ping
   client_notified_at: Date | null;
   client_notify_attempts: number;
-  alerted_at: Date | null;
+  created_notify_status: NotifyStatus; // the creation-confirmation ping
+  created_notified_at: Date | null;
+  created_notify_attempts: number;
+  route_notify_status: NotifyStatus; // the "out for delivery" ping
+  route_notified_at: Date | null;
+  route_notify_attempts: number;
+  alerted_at: Date | null; // kitchen SLA (prep) alert, one-shot
+  pickup_alerted_at: Date | null; // pickup SLA (READY not departed) alert, one-shot
   ready_at: Date | null;
   ready_by: string | null;
+  out_for_delivery_at: Date | null;
+  out_for_delivery_by: string | null;
   delivered_at: Date | null;
   delivered_by: string | null;
   cancelled_at: Date | null;
@@ -143,14 +152,30 @@ export function markReady(id: string, by: string): Promise<DeliveryOrder | null>
   return transition(id, ["IN_KITCHEN"], "status='READY', ready_at=now(), ready_by=$3", [by]);
 }
 
+/** READY → OUT_FOR_DELIVERY. Null if not READY (idempotent double-tap). */
+export function markOutForDelivery(id: string, by: string): Promise<DeliveryOrder | null> {
+  return transition(
+    id,
+    ["READY"],
+    "status='OUT_FOR_DELIVERY', out_for_delivery_at=now(), out_for_delivery_by=$3",
+    [by],
+  );
+}
+
+/** READY|OUT_FOR_DELIVERY → DELIVERED (reception may skip the departure step). */
 export function markDelivered(id: string, by: string): Promise<DeliveryOrder | null> {
-  return transition(id, ["READY"], "status='DELIVERED', delivered_at=now(), delivered_by=$3", [by]);
+  return transition(
+    id,
+    ["READY", "OUT_FOR_DELIVERY"],
+    "status='DELIVERED', delivered_at=now(), delivered_by=$3",
+    [by],
+  );
 }
 
 export function markCancelled(id: string, by: string): Promise<DeliveryOrder | null> {
   return transition(
     id,
-    ["IN_KITCHEN", "READY"],
+    ["IN_KITCHEN", "READY", "OUT_FOR_DELIVERY"],
     "status='CANCELLED', cancelled_at=now(), cancelled_by=$3",
     [by],
   );
@@ -209,33 +234,101 @@ export async function setKitchenNotifyOutcome(
   );
 }
 
-/** Same claim discipline for the client "order ready" ping (only once READY). */
-export async function claimClientNotify(id: string): Promise<DeliveryOrder | null> {
+/**
+ * The three client-facing pings share one claim/outcome/pending discipline; only
+ * the tracking columns and the order-statuses in which each is (still) relevant
+ * differ. Column names and status IN-lists come ONLY from this hardcoded
+ * whitelist — never from input — so interpolating them into SQL is safe.
+ *  - created: claimable while still open (a fast READY mustn't lose the
+ *    confirmation); dropped if cancelled/delivered before it ever landed.
+ *  - client (the "ready" ping): only once READY; NOT retried after departure —
+ *    the route ping supersedes a stale "prête".
+ *  - route: once OUT_FOR_DELIVERY (covers a depart→delivered within seconds).
+ */
+type ClientPing = "created" | "client" | "route";
+const CLIENT_PING_COLS: Record<
+  ClientPing,
+  { status: string; at: string; attempts: string; claimIn: string; pendingIn: string }
+> = {
+  created: {
+    status: "created_notify_status",
+    at: "created_notified_at",
+    attempts: "created_notify_attempts",
+    claimIn: "('IN_KITCHEN','READY','OUT_FOR_DELIVERY')",
+    pendingIn: "('IN_KITCHEN','READY','OUT_FOR_DELIVERY')",
+  },
+  client: {
+    status: "client_notify_status",
+    at: "client_notified_at",
+    attempts: "client_notify_attempts",
+    claimIn: "('READY','DELIVERED')",
+    pendingIn: "('READY')",
+  },
+  route: {
+    status: "route_notify_status",
+    at: "route_notified_at",
+    attempts: "route_notify_attempts",
+    claimIn: "('OUT_FOR_DELIVERY','DELIVERED')",
+    pendingIn: "('OUT_FOR_DELIVERY')",
+  },
+};
+
+async function claimClientPing(id: string, kind: ClientPing): Promise<DeliveryOrder | null> {
+  const c = CLIENT_PING_COLS[kind];
   const res = await pool.query(
     `update delivery_orders
-        set client_notify_status = 'claimed',
-            client_notify_attempts = client_notify_attempts + 1,
+        set ${c.status} = 'claimed',
+            ${c.attempts} = ${c.attempts} + 1,
             updated_at = now()
-      where id = $1 and status in ('READY','DELIVERED')
-        and client_notify_attempts < $2
-        and ( client_notify_status in ('pending','failed')
-              or (client_notify_status = 'claimed' and updated_at < now() - interval '2 minutes') )
+      where id = $1 and status in ${c.claimIn}
+        and ${c.attempts} < $2
+        and ( ${c.status} in ('pending','failed')
+              or (${c.status} = 'claimed' and updated_at < now() - interval '2 minutes') )
       returning *`,
     [id, MAX_NOTIFY_ATTEMPTS],
   );
   return (res.rows[0] as DeliveryOrder) ?? null;
 }
 
-export async function setClientNotifyOutcome(id: string, status: NotifyStatus): Promise<void> {
+async function setClientPingOutcome(
+  id: string,
+  kind: ClientPing,
+  status: NotifyStatus,
+): Promise<void> {
+  const c = CLIENT_PING_COLS[kind];
   await pool.query(
     `update delivery_orders
-        set client_notify_status = $2,
-            client_notified_at = case when $2 in ('sent','sent_template') then now() else client_notified_at end,
+        set ${c.status} = $2,
+            ${c.at} = case when $2 in ('sent','sent_template') then now() else ${c.at} end,
             updated_at = now()
       where id = $1`,
     [id, status],
   );
 }
+
+async function pendingClientPings(kind: ClientPing): Promise<string[]> {
+  const c = CLIENT_PING_COLS[kind];
+  const res = await pool.query(
+    `select id from delivery_orders
+      where status in ${c.pendingIn} and ${c.attempts} < $1
+        and ( ${c.status} in ('pending','failed')
+              or (${c.status} = 'claimed' and updated_at < now() - interval '2 minutes') )`,
+    [MAX_NOTIFY_ATTEMPTS],
+  );
+  return res.rows.map((r: any) => r.id as string);
+}
+
+// Named entry points (call sites stay explicit; the "ready" ping keeps its
+// original client_* names for backward compatibility).
+export const claimClientNotify = (id: string) => claimClientPing(id, "client");
+export const claimCreatedNotify = (id: string) => claimClientPing(id, "created");
+export const claimRouteNotify = (id: string) => claimClientPing(id, "route");
+export const setClientNotifyOutcome = (id: string, status: NotifyStatus) =>
+  setClientPingOutcome(id, "client", status);
+export const setCreatedNotifyOutcome = (id: string, status: NotifyStatus) =>
+  setClientPingOutcome(id, "created", status);
+export const setRouteNotifyOutcome = (id: string, status: NotifyStatus) =>
+  setClientPingOutcome(id, "route", status);
 
 /** Orders whose kitchen notification still needs a (re)attempt (sweep input). */
 export async function pendingKitchenNotifies(): Promise<string[]> {
@@ -249,17 +342,12 @@ export async function pendingKitchenNotifies(): Promise<string[]> {
   return res.rows.map((r: any) => r.id as string);
 }
 
-/** Orders (READY) whose client "ready" ping still needs a (re)attempt. */
-export async function pendingClientNotifies(): Promise<string[]> {
-  const res = await pool.query(
-    `select id from delivery_orders
-      where status = 'READY' and client_notify_attempts < $1
-        and ( client_notify_status in ('pending','failed')
-              or (client_notify_status = 'claimed' and updated_at < now() - interval '2 minutes') )`,
-    [MAX_NOTIFY_ATTEMPTS],
-  );
-  return res.rows.map((r: any) => r.id as string);
-}
+/** Orders whose client "ready" ping still needs a (re)attempt (sweep input). */
+export const pendingClientNotifies = () => pendingClientPings("client");
+/** Orders whose creation-confirmation ping still needs a (re)attempt. */
+export const pendingCreatedNotifies = () => pendingClientPings("created");
+/** Orders whose "out for delivery" ping still needs a (re)attempt. */
+export const pendingRouteNotifies = () => pendingClientPings("route");
 
 /** One-shot SLA alert claim: IN_KITCHEN orders past their per-order deadline. */
 export async function claimDeliverySlaAlerts(): Promise<DeliveryOrder[]> {
@@ -273,11 +361,26 @@ export async function claimDeliverySlaAlerts(): Promise<DeliveryOrder[]> {
   return res.rows as DeliveryOrder[];
 }
 
+/** One-shot pickup-SLA claim: orders READY longer than `pickupSlaMinutes`
+ *  (global threshold) without departing. Mirrors claimDeliverySlaAlerts. */
+export async function claimDeliveryPickupAlerts(pickupSlaMinutes: number): Promise<DeliveryOrder[]> {
+  const res = await pool.query(
+    `update delivery_orders
+        set pickup_alerted_at = now(), updated_at = now()
+      where status = 'READY' and pickup_alerted_at is null
+        and ready_at < now() - make_interval(mins => $1)
+      returning *`,
+    [pickupSlaMinutes],
+  );
+  return res.rows as DeliveryOrder[];
+}
+
 // ---------- admin board reads ----------
 
 export async function listOpenDeliveryOrders(): Promise<DeliveryOrder[]> {
   const res = await pool.query(
-    `select * from delivery_orders where status in ('IN_KITCHEN','READY') order by created_at asc`,
+    `select * from delivery_orders
+      where status in ('IN_KITCHEN','READY','OUT_FOR_DELIVERY') order by created_at asc`,
   );
   return res.rows as DeliveryOrder[];
 }
@@ -300,7 +403,7 @@ export interface DeliveryStats {
 export async function deliveryStats(): Promise<DeliveryStats> {
   const res = await pool.query(
     `select
-       count(*) filter (where status in ('IN_KITCHEN','READY')) as open_count,
+       count(*) filter (where status in ('IN_KITCHEN','READY','OUT_FOR_DELIVERY')) as open_count,
        count(*) filter (where alerted_at is not null and alerted_at::date = now()::date) as late_today,
        avg(extract(epoch from (ready_at - created_at)) / 60.0)
          filter (where ready_at is not null and created_at > now() - interval '30 days') as avg_prep

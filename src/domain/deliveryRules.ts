@@ -15,14 +15,23 @@ import { toTemplateParam } from "../lib/notify.js";
  * effects in deliveryNotify.
  */
 
-export type DeliveryStatus = "IN_KITCHEN" | "READY" | "DELIVERED" | "CANCELLED";
+export type DeliveryStatus =
+  | "IN_KITCHEN"
+  | "READY"
+  | "OUT_FOR_DELIVERY"
+  | "DELIVERED"
+  | "CANCELLED";
 
 const TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
-  IN_KITCHEN: ["READY", "CANCELLED"],
-  READY: ["DELIVERED", "CANCELLED"], // cancel-after-ready allowed (order aborted en route)
+  IN_KITCHEN: ["READY", "CANCELLED"], // no skipping straight to departure
+  READY: ["OUT_FOR_DELIVERY", "DELIVERED", "CANCELLED"], // DELIVERED kept: reception may skip the departure step
+  OUT_FOR_DELIVERY: ["DELIVERED", "CANCELLED"], // cancel-en-route allowed (order aborted)
   DELIVERED: [],
   CANCELLED: [],
 };
+
+/** Which of the three client pings a given kind is. */
+export type ClientPingKind = "created" | "ready" | "route";
 
 export function canTransition(from: DeliveryStatus, to: DeliveryStatus): boolean {
   return TRANSITIONS[from]?.includes(to) ?? false;
@@ -121,23 +130,59 @@ export function kitchenMessage(
     `Total : ${o.amount_xof} FCFA (à encaisser à la livraison)`,
   ];
   if (o.note) lines.push(`Note : ${o.note}`);
-  lines.push("", `✅ Quand c'est prêt, touchez ici : ${magicLink}`);
+  lines.push(
+    "",
+    `✅ Quand c'est prêt, touchez ici (puis « 🛵 Partie en livraison » au départ) : ${magicLink}`,
+  );
   return { subject: "🛵 Nouvelle commande livraison", body: lines.join("\n") };
 }
 
-/** Client "your order is ready" free-text (localized; template fallback is FR-only). */
+/** Client "order received" free-text confirmation, sent at creation (localized). */
+export function createdClientMessage(lang: string | null, o: DeliveryOrderView): string {
+  const first = firstName(o.client_name);
+  const summary = formatExtrasOneLine(o.items);
+  if (lang === "en") {
+    return (
+      `📝 Thanks${first ? ` ${first}` : ""}! Your Revive order is confirmed: ${summary} — ` +
+      `${o.amount_xof} FCFA to pay on delivery, to ${o.address}. We'll let you know as soon as it's ready!`
+    );
+  }
+  return (
+    `📝 Merci${first ? ` ${first}` : ""} ! Votre commande Revive est bien reçue : ${summary} — ` +
+    `${o.amount_xof} FCFA à régler à la livraison, à ${o.address}. On vous prévient dès qu'elle est prête !`
+  );
+}
+
+/** Client "your order is ready" free-text (localized; template fallback is FR-only).
+ *  Departure now has its own ping (routeClientMessage), so this no longer says
+ *  "va partir en livraison". */
 export function readyClientMessage(lang: string | null, o: DeliveryOrderView): string {
   const first = firstName(o.client_name);
   const summary = formatExtrasOneLine(o.items);
   if (lang === "en") {
     return (
-      `🛵 Good news${first ? ` ${first}` : ""}! Your Revive order is ready and on its way: ` +
-      `${summary} — ${o.amount_xof} FCFA to pay on delivery. See you soon!`
+      `✅ Good news${first ? ` ${first}` : ""}! Your Revive order is ready: ${summary} — ` +
+      `${o.amount_xof} FCFA to pay on delivery. It's leaving very soon!`
     );
   }
   return (
-    `🛵 Bonne nouvelle${first ? ` ${first}` : ""} ! Votre commande Revive est prête et va partir ` +
-    `en livraison : ${summary} — ${o.amount_xof} FCFA à régler à la livraison. À tout de suite !`
+    `✅ Bonne nouvelle${first ? ` ${first}` : ""} ! Votre commande Revive est prête : ${summary} — ` +
+    `${o.amount_xof} FCFA à régler à la livraison. Elle part très vite !`
+  );
+}
+
+/** Client "your order is out for delivery" free-text (localized). */
+export function routeClientMessage(lang: string | null, o: DeliveryOrderView): string {
+  const first = firstName(o.client_name);
+  if (lang === "en") {
+    return (
+      `🛵 On its way${first ? ` ${first}` : ""}! Your Revive order is out for delivery — ` +
+      `${o.amount_xof} FCFA to pay on delivery. See you soon!`
+    );
+  }
+  return (
+    `🛵 C'est parti${first ? ` ${first}` : ""} ! Votre commande Revive est en route — ` +
+    `${o.amount_xof} FCFA à régler à la livraison. À tout de suite !`
   );
 }
 
@@ -151,6 +196,25 @@ export function deliveryTemplateParams(o: DeliveryOrderView): [string, string] {
   return [
     toTemplateParam(firstName(o.client_name) || o.client_name || "client", 60),
     toTemplateParam(`${formatExtrasOneLine(o.items)} — ${o.amount_xof} FCFA`, 200),
+  ];
+}
+
+/**
+ * Body params for the generic `livraison_update` template (131047 fallback for
+ * the creation-confirmation and out-for-delivery pings): {{1}} first name,
+ * {{2}} the update text (FR, no newlines). Kept FR-only like `livraison_prete`.
+ */
+export function deliveryUpdateTemplateParams(
+  kind: "created" | "route",
+  o: DeliveryOrderView,
+): [string, string] {
+  const text =
+    kind === "created"
+      ? `bien reçue : ${formatExtrasOneLine(o.items)} — ${o.amount_xof} FCFA à régler à la livraison`
+      : `en route ! ${o.amount_xof} FCFA à régler à la livraison — à tout de suite`;
+  return [
+    toTemplateParam(firstName(o.client_name) || o.client_name || "client", 60),
+    toTemplateParam(text, 200),
   ];
 }
 

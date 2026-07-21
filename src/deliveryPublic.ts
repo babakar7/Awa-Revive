@@ -1,14 +1,24 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { formatExtrasMultiline } from "./lib/cafeMenu.js";
-import { attemptClientNotify } from "./domain/deliveryNotify.js";
-import { findDeliveryOrderByToken, markReady, orderItems, type DeliveryOrder } from "./domain/deliveryRepo.js";
+import { attemptClientNotify, attemptRouteNotify } from "./domain/deliveryNotify.js";
+import {
+  findDeliveryOrderByToken,
+  markOutForDelivery,
+  markReady,
+  orderItems,
+  type DeliveryOrder,
+} from "./domain/deliveryRepo.js";
 
 /**
- * Public, no-auth "mark ready" page the kitchen opens from its WhatsApp ticket.
+ * Public, no-auth page the kitchen opens from its WhatsApp ticket. Two one-tap
+ * actions on the same token: "✅ Marquer prête" (IN_KITCHEN → READY) and then
+ * "🛵 Partie en livraison" (READY → OUT_FOR_DELIVERY), each notifying the client.
  *
  * SECURITY / OPS invariants:
  *  - GET is READ-ONLY. WhatsApp and other clients PREFETCH links for previews;
- *    a mutating GET would mark orders ready on preview. Only the POST mutates.
+ *    a mutating GET would mark orders ready on preview. Only the POSTs mutate.
+ *  - Each action is its own POST subpath (/ = ready, /depart = out-for-delivery)
+ *    so an action is idempotent by URL and needs no body parsing on this no-JS page.
  *  - The URL carries ONLY the token (no order id — nothing enumerable). The
  *    order is found by the token's stored HASH; the cleartext is never queried
  *    or logged. Any unknown/expired token → a uniform 404.
@@ -49,6 +59,8 @@ h1{font-size:1.2rem;margin:0 0 .2rem}
 .total{font-weight:600;margin:.3rem 0 1rem}
 button{width:100%;padding:1rem;font-size:1.15rem;font-weight:700;color:#fff;background:#1a7f37;border:none;border-radius:12px;cursor:pointer}
 button:active{background:#166f30}
+button.route{background:#1f6feb}
+button.route:active{background:#1a5fca}
 .done{font-size:1.05rem;color:#1a7f37;font-weight:600}`;
 
 function shell(title: string, inner: string): string {
@@ -60,7 +72,8 @@ function shell(title: string, inner: string): string {
 const notFound = () =>
   shell("Lien invalide", `<h1>Lien invalide ou expiré</h1><p class="muted">Ce lien ne correspond à aucune commande active.</p>`);
 
-/** Read-only order card with the big "mark ready" button (IN_KITCHEN only). */
+/** Read-only order card. IN_KITCHEN → "prête" button; READY → "partie en
+ *  livraison" button; other states show a terminal message (no address). */
 function orderCard(order: DeliveryOrder, token: string): string {
   const items = formatExtrasMultiline(orderItems(order));
   if (order.status === "IN_KITCHEN") {
@@ -73,11 +86,23 @@ function orderCard(order: DeliveryOrder, token: string): string {
 <form method="post" action="/livraison/${esc(token)}"><button type="submit">✅ Marquer prête</button></form>`,
     );
   }
-  // Terminal / already-ready: no address repeated.
+  if (order.status === "READY") {
+    // Second action on the same token: mark the order as gone for delivery.
+    return shell(
+      "Commande prête",
+      `<h1>🛵 Commande livraison</h1>
+<p class="done">✅ Prête — le client est prévenu.</p>
+<p class="muted">Touchez ci-dessous quand le livreur part avec la commande.</p>
+<form method="post" action="/livraison/${esc(token)}/depart"><button class="route" type="submit">🛵 Partie en livraison</button></form>`,
+    );
+  }
+  // Terminal / en-route: no address repeated.
   const msg =
     order.status === "CANCELLED"
       ? "Cette commande a été annulée."
-      : "✅ Commande déjà marquée prête — le client est prévenu.";
+      : order.status === "OUT_FOR_DELIVERY"
+        ? "🛵 Commande partie en livraison — le client est prévenu."
+        : "✅ Commande livrée.";
   return shell("Commande", `<h1>🛵 Commande livraison</h1><p class="done">${esc(msg)}</p>`);
 }
 
@@ -114,6 +139,25 @@ export function registerDeliveryPublic(app: FastifyInstance): void {
       req.log.info({ order: order.id }, "Delivery order marked ready via kitchen magic link");
     }
     // Redirect to the read-only view (idempotent; no form re-submit on refresh).
+    return reply.redirect(`/livraison/${token}`, 303);
+  });
+
+  // Second action on the same token: mark the order gone for delivery + ping
+  // the client, then 303 → GET. Double-POST is idempotent (markOutForDelivery
+  // returns null once the order is no longer READY).
+  app.post("/livraison/:token/depart", async (req, reply) => {
+    harden(reply);
+    const { token } = req.params as { token: string };
+    const order = await load(token);
+    if (!order) {
+      reply.type("text/html");
+      return reply.code(404).send(notFound());
+    }
+    const updated = await markOutForDelivery(order.id, "kitchen-link");
+    if (updated) {
+      void attemptRouteNotify(order.id, req.log);
+      req.log.info({ order: order.id }, "Delivery order marked out-for-delivery via kitchen magic link");
+    }
     return reply.redirect(`/livraison/${token}`, 303);
   });
 }

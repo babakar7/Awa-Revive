@@ -62,9 +62,20 @@ export const config = {
   // under the `en` language code (same convention as the others).
   WA_KITCHEN_TICKET_TEMPLATE: optional("WA_KITCHEN_TICKET_TEMPLATE", ""),
   WA_KITCHEN_TICKET_TEMPLATE_LANG: optional("WA_KITCHEN_TICKET_TEMPLATE_LANG", "en"),
+  // Generic CLIENT-facing "order update" template, used as the 131047 fallback
+  // for BOTH the creation-confirmation and the "out for delivery" pings (one
+  // template instead of two Meta approvals). 2 body variables: {{1}} first name,
+  // {{2}} update text. Empty = those pings degrade gracefully outside the 24h
+  // window. FR body under the `en` language code (same convention as the others).
+  WA_DELIVERY_UPDATE_TEMPLATE: optional("WA_DELIVERY_UPDATE_TEMPLATE", ""),
+  WA_DELIVERY_UPDATE_TEMPLATE_LANG: optional("WA_DELIVERY_UPDATE_TEMPLATE_LANG", "en"),
   // Minutes after a delivery order is created before reception gets a "late"
   // alert (snapshotted per order at creation, so orders in flight keep their SLA).
   DELIVERY_SLA_MINUTES: parseInt(optional("DELIVERY_SLA_MINUTES", "20"), 10),
+  // Minutes an order can stay READY (prepared) without departing before reception
+  // gets a one-shot "not picked up" alert. Global (not per-order, unlike the
+  // kitchen SLA above).
+  DELIVERY_PICKUP_SLA_MINUTES: parseInt(optional("DELIVERY_PICKUP_SLA_MINUTES", "15"), 10),
 
   // Wix
   WIX_API_KEY: required("WIX_API_KEY"),

@@ -16,6 +16,8 @@ import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
 import {
   attemptClientNotify,
+  attemptCreatedNotify,
+  attemptRouteNotify,
   notifyKitchenForOrder,
   renotifyKitchen,
 } from "../domain/deliveryNotify.js";
@@ -674,6 +676,8 @@ ${
           created_by: req.adminUser ?? null,
         });
         req.log.info({ order: order.id, by: req.adminUser }, "Delivery order created");
+        // Confirm receipt to the client (fire-and-forget; the sweep reconciles).
+        void attemptCreatedNotify(order.id, req.log);
         // Notify the kitchen now (await so the banner is truthful). Claim first
         // so a concurrent sweep can't double-send.
         let kitchenOk = false;
@@ -697,6 +701,17 @@ ${
           req.log.info({ order: id, by: req.adminUser }, "Delivery order marked ready from dashboard");
           await attemptClientNotify(id, req.log); // await so the board shows the ping outcome
           return reply.redirect("/admin/livraisons?done=ready", 303);
+        }
+        return reply.redirect("/admin/livraisons?err=commande déjà traitée — recharge la page", 303);
+      });
+
+      admin.post("/livraisons/:id/depart", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const updated = await delivery.markOutForDelivery(id, `admin-${req.adminUser ?? "?"}`);
+        if (updated) {
+          req.log.info({ order: id, by: req.adminUser }, "Delivery order marked out-for-delivery from dashboard");
+          await attemptRouteNotify(id, req.log); // await so the board shows the ping outcome
+          return reply.redirect("/admin/livraisons?done=departed", 303);
         }
         return reply.redirect("/admin/livraisons?err=commande déjà traitée — recharge la page", 303);
       });

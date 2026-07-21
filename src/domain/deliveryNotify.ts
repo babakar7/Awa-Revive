@@ -6,24 +6,35 @@ import { normalizeName } from "./notificationRules.js";
 import { listStaffContacts, phoneDigits, recordDeliveryLog } from "./notificationRepo.js";
 import {
   aggregateKitchenOutcome,
+  createdClientMessage,
   deliveryTemplateParams,
+  deliveryUpdateTemplateParams,
   kitchenMessage,
   kitchenTemplateParams,
   magicLinkUrl,
   readyClientMessage,
+  routeClientMessage,
   shouldFallbackDeliveryTemplate,
+  type ClientPingKind,
   type DeliveryOrderView,
 } from "./deliveryRules.js";
 import {
   claimClientNotify,
+  claimCreatedNotify,
+  claimDeliveryPickupAlerts,
   claimDeliverySlaAlerts,
   claimKitchenNotify,
+  claimRouteNotify,
   findDeliveryOrder,
   orderItems,
   pendingClientNotifies,
+  pendingCreatedNotifies,
   pendingKitchenNotifies,
+  pendingRouteNotifies,
   rotateReadyToken,
   setClientNotifyOutcome,
+  setCreatedNotifyOutcome,
+  setRouteNotifyOutcome,
   setKitchenNotifyOutcome,
   type DeliveryOrder,
 } from "./deliveryRepo.js";
@@ -159,48 +170,93 @@ export async function notifyKitchenForOrder(
   }
 }
 
+// Per-ping wiring: message body, the 131047 template fallback, and the outcome
+// setter. `ready` keeps the dedicated livraison_prete template; created/route
+// share the generic livraison_update template (one Meta approval for both).
+const CLIENT_PING: Record<
+  ClientPingKind,
+  {
+    message: (lang: string | null, o: DeliveryOrderView) => string;
+    template: string;
+    templateLang: string;
+    templateParams: (o: DeliveryOrderView) => string[];
+    setOutcome: (id: string, status: "sent" | "sent_template" | "failed") => Promise<void>;
+    label: string;
+  }
+> = {
+  created: {
+    message: createdClientMessage,
+    template: config.WA_DELIVERY_UPDATE_TEMPLATE,
+    templateLang: config.WA_DELIVERY_UPDATE_TEMPLATE_LANG,
+    templateParams: (o) => deliveryUpdateTemplateParams("created", o),
+    setOutcome: setCreatedNotifyOutcome,
+    label: "created-confirmation",
+  },
+  ready: {
+    message: readyClientMessage,
+    template: config.WA_DELIVERY_READY_TEMPLATE,
+    templateLang: config.WA_DELIVERY_READY_TEMPLATE_LANG,
+    templateParams: deliveryTemplateParams,
+    setOutcome: setClientNotifyOutcome,
+    label: "ready-ping",
+  },
+  route: {
+    message: routeClientMessage,
+    template: config.WA_DELIVERY_UPDATE_TEMPLATE,
+    templateLang: config.WA_DELIVERY_UPDATE_TEMPLATE_LANG,
+    templateParams: (o) => deliveryUpdateTemplateParams("route", o),
+    setOutcome: setRouteNotifyOutcome,
+    label: "route-ping",
+  },
+};
+
 /**
- * Tell the client their order is ready (free-text inside the 24h window; the
- * FR Utility template on 131047). Never throws — a `failed`/`call_required`
- * status is what surfaces "📞 appeler le client" on the board. Caller has
- * already claimed the attempt.
+ * Send one client-facing delivery ping (created / ready / route): free-text
+ * inside the 24h window, the Utility template on 131047. Never throws — a
+ * `failed` status is what surfaces "📞 appeler le client" (or a softer flag) on
+ * the board. Caller has already claimed the attempt.
  */
-export async function notifyClientOrderReady(order: DeliveryOrder, log: Log): Promise<void> {
+async function sendClientPing(
+  order: DeliveryOrder,
+  kind: ClientPingKind,
+  log: Log,
+): Promise<void> {
+  const cfg = CLIENT_PING[kind];
   const tag = `[livraison ${order.id.slice(0, 8)}]`;
   const view = viewOf(order);
   const client = await repo.findClientByPhone([order.client_phone]).catch(() => null);
   const lang = client?.language ?? "fr";
-  const msg = readyClientMessage(lang, view);
+  const msg = cfg.message(lang, view);
 
   try {
     const wamid = await sendText(order.client_phone, msg);
     await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "sent", null, wamid);
-    await setClientNotifyOutcome(order.id, "sent");
+    await cfg.setOutcome(order.id, "sent");
     if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
     return;
   } catch (err) {
-    if (shouldFallbackDeliveryTemplate(err, config.WA_DELIVERY_READY_TEMPLATE)) {
+    if (shouldFallbackDeliveryTemplate(err, cfg.template)) {
       try {
         const wamid = await sendTemplate(
           order.client_phone,
-          config.WA_DELIVERY_READY_TEMPLATE,
-          config.WA_DELIVERY_READY_TEMPLATE_LANG,
-          deliveryTemplateParams(view),
+          cfg.template,
+          cfg.templateLang,
+          cfg.templateParams(view),
         );
         await recordDeliveryLog(order.client_phone, `${tag} (template) ${msg}`, "sent_template", null, wamid);
-        await setClientNotifyOutcome(order.id, "sent_template");
+        await cfg.setOutcome(order.id, "sent_template");
         if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
         return;
       } catch (err2) {
         await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "failed", String(err2).slice(0, 300));
-        await setClientNotifyOutcome(order.id, "failed");
-        log.error({ err: err2, order: order.id }, "Delivery client template send failed");
+        await cfg.setOutcome(order.id, "failed");
+        log.error({ err: err2, order: order.id }, `Delivery ${cfg.label} template send failed`);
         return;
       }
     }
     await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "failed", String(err).slice(0, 300));
-    await setClientNotifyOutcome(order.id, "failed");
-    log.error({ err, order: order.id }, "Delivery client ready-ping failed");
+    await cfg.setOutcome(order.id, "failed");
+    log.error({ err, order: order.id }, `Delivery ${cfg.label} send failed`);
   }
 }
 
@@ -208,7 +264,21 @@ export async function notifyClientOrderReady(order: DeliveryOrder, log: Log): Pr
 export async function attemptClientNotify(id: string, log: Log): Promise<void> {
   const order = await claimClientNotify(id);
   if (!order) return; // not claimable (already sent, capped, or in-flight)
-  await notifyClientOrderReady(order, log);
+  await sendClientPing(order, "ready", log);
+}
+
+/** Claim + attempt the creation-confirmation ping (create route + sweep entry). */
+export async function attemptCreatedNotify(id: string, log: Log): Promise<void> {
+  const order = await claimCreatedNotify(id);
+  if (!order) return;
+  await sendClientPing(order, "created", log);
+}
+
+/** Claim + attempt the "out for delivery" ping (depart routes + sweep entry). */
+export async function attemptRouteNotify(id: string, log: Log): Promise<void> {
+  const order = await claimRouteNotify(id);
+  if (!order) return;
+  await sendClientPing(order, "route", log);
 }
 
 /** Claim + attempt the kitchen notification for one order id, minting a fresh
@@ -233,13 +303,25 @@ export async function sweepDeliveries(log: Log): Promise<number> {
       log.error({ err, order: id }, "Delivery kitchen retry failed"),
     );
   }
-  // 2. Client "ready" pings still pending/failed.
+  // 2. Creation-confirmation pings still pending/failed.
+  for (const id of await pendingCreatedNotifies()) {
+    await attemptCreatedNotify(id, log).catch((err) =>
+      log.error({ err, order: id }, "Delivery created-confirmation retry failed"),
+    );
+  }
+  // 3. Client "ready" pings still pending/failed.
   for (const id of await pendingClientNotifies()) {
     await attemptClientNotify(id, log).catch((err) =>
       log.error({ err, order: id }, "Delivery client retry failed"),
     );
   }
-  // 3. SLA alerts (one-shot per order).
+  // 4. "Out for delivery" pings still pending/failed.
+  for (const id of await pendingRouteNotifies()) {
+    await attemptRouteNotify(id, log).catch((err) =>
+      log.error({ err, order: id }, "Delivery route retry failed"),
+    );
+  }
+  // 5. Prep SLA alerts (one-shot per order): never marked ready in time.
   const late = await claimDeliverySlaAlerts();
   for (const order of late) {
     const elapsed = Math.round((Date.now() - new Date(order.created_at).getTime()) / 60000);
@@ -252,7 +334,22 @@ export async function sweepDeliveries(log: Log): Promise<number> {
       { whatsappFirst: true },
     );
   }
-  return late.length;
+  // 6. Pickup SLA alerts (one-shot): ready but not departed within the window.
+  const stuck = await claimDeliveryPickupAlerts(config.DELIVERY_PICKUP_SLA_MINUTES);
+  for (const order of stuck) {
+    const waiting = order.ready_at
+      ? Math.round((Date.now() - new Date(order.ready_at).getTime()) / 60000)
+      : config.DELIVERY_PICKUP_SLA_MINUTES;
+    notifyReception(
+      `⏱️ Commande prête non partie (+${waiting} min)`,
+      `Prête depuis ${waiting} min et toujours pas partie en livraison.\n` +
+        `Client : ${order.client_name} (+${order.client_phone})\n` +
+        `Adresse : ${order.address}\n` +
+        `Voir /admin/livraisons.`,
+      { whatsappFirst: true },
+    );
+  }
+  return late.length + stuck.length;
 }
 
 /** Manual "🔁 Renvoyer à la cuisine": rotate the token and resend now. */
