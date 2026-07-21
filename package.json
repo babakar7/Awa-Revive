@@ -23,6 +23,7 @@
     "whatsapp:test": "tsx scripts/test-whatsapp-notify.ts",
     "crm:audit": "tsx scripts/crm-audit.ts",
     "crm:merge": "tsx scripts/merge-duplicates.ts",
+    "crm:backfill-names": "tsx scripts/backfill-client-names.ts",
     "wix:probe-member": "tsx scripts/probe-create-member.ts",
     "wix:probe-contact-plan": "tsx scripts/probe-contact-plan.ts"
   },
