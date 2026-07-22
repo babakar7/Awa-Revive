@@ -7,6 +7,7 @@ import { config } from "../../src/config.js";
 import { sweepDeliveries } from "../../src/domain/deliveryNotify.js";
 import { markLogFailedByWamid, recordDeliveryLog } from "../../src/domain/notificationRepo.js";
 import { hashReadyToken, newReadyToken } from "../../src/domain/deliveryRules.js";
+import { planningNowSlot } from "../../src/domain/staffPlanningRules.js";
 import { makeFetchMock, type FetchMock, truncateAll, waitFor, settle } from "./helpers.js";
 
 /**
@@ -118,6 +119,73 @@ describe("delivery order creation → kitchen notify", () => {
       async () => mock.waTextsTo(RECEPTION).some((t) => t.includes("Nouvelle commande livraison")),
       "reception new-order ping",
     );
+  });
+});
+
+describe("kitchen shift gate (published staff planning)", () => {
+  const OWNER = config.OWNER_PHONE.replace(/\D/g, "");
+
+  async function seedBarContact(name: string, phone: string): Promise<string> {
+    const r = await pool.query(
+      `insert into staff_contacts (name, phone, role, muted) values ($1,$2,'bar',false) returning id`,
+      [name, phone],
+    );
+    return r.rows[0].id as string;
+  }
+
+  async function publishShifts(
+    shifts: { staff_id: string; weekday: number; start_min: number; end_min: number }[],
+  ): Promise<void> {
+    const s = await pool.query(
+      `insert into staff_schedules (name, status) values ('Gate test','published') returning id`,
+    );
+    for (const sh of shifts) {
+      await pool.query(
+        `insert into staff_shifts (schedule_id, staff_id, weekday, start_min, end_min)
+         values ($1,$2,$3,$4,$5)`,
+        [s.rows[0].id, sh.staff_id, sh.weekday, sh.start_min, sh.end_min],
+      );
+    }
+  }
+
+  // Seed shifts relative to the REAL current instant (no clock mocking): a
+  // full-day shift today = on shift now; a shift tomorrow only = off shift now.
+  const today = () => planningNowSlot(new Date()).weekday;
+
+  it("pings only the bar contact on shift now; the off-shift one stays quiet", async () => {
+    const onId = await seedBarContact("OnShift", "221770000031");
+    await seedBarContact("OffShift", "221770000032");
+    await publishShifts([{ staff_id: onId, weekday: today(), start_min: 0, end_min: 1440 }]);
+
+    const id = await createOrder();
+    expect(magicLinkFrom(mock.waTextsTo("221770000031"))).toMatch(/\/livraison\/[0-9a-f]{32}$/);
+    expect(mock.waTextsTo("221770000032")).toHaveLength(0);
+    const order = (await pool.query(`select kitchen_notify_status from delivery_orders where id=$1`, [id])).rows[0];
+    expect(["sent", "sent_template"]).toContain(order.kitchen_notify_status);
+  });
+
+  it("nobody on shift → warning ticket to reception AND the owner, status fallback_reception", async () => {
+    const offId = await seedBarContact("OffShift", "221770000033");
+    await publishShifts([{ staff_id: offId, weekday: (today() + 1) % 7, start_min: 0, end_min: 1440 }]);
+
+    const id = await createOrder();
+    await settle();
+    expect(mock.waTextsTo("221770000033")).toHaveLength(0);
+    expect(mock.waTextsTo(RECEPTION).some((t) => t.includes("en service"))).toBe(true);
+    expect(mock.waTextsTo(OWNER).some((t) => t.includes("en service"))).toBe(true);
+    const order = (await pool.query(`select kitchen_notify_status from delivery_orders where id=$1`, [id])).rows[0];
+    expect(order.kitchen_notify_status).toBe("fallback_reception");
+  });
+
+  it("no published planning → no gating, every reachable bar contact gets the ticket", async () => {
+    await seedBarContact("A", "221770000034");
+    await seedBarContact("B", "221770000035");
+    // Draft schedules don't gate either.
+    await pool.query(`insert into staff_schedules (name, status) values ('Brouillon','draft')`);
+
+    await createOrder();
+    expect(magicLinkFrom(mock.waTextsTo("221770000034"))).toMatch(/\/livraison\//);
+    expect(magicLinkFrom(mock.waTextsTo("221770000035"))).toMatch(/\/livraison\//);
   });
 });
 

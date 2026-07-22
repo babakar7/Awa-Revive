@@ -4,6 +4,8 @@ import { notifyReception, sendWhatsAppNotification } from "../lib/notify.js";
 import * as repo from "./repo.js";
 import { normalizeName } from "./notificationRules.js";
 import { listStaffContacts, phoneDigits, recordDeliveryLog } from "./notificationRepo.js";
+import { planningNowSlot } from "./staffPlanningRules.js";
+import { onShiftStaffIds } from "./staffPlanningRepo.js";
 import {
   aggregateKitchenOutcome,
   createdClientMessage,
@@ -37,11 +39,12 @@ import {
  * WhatsApp effects for delivery orders + the 60-second reconciliation sweep.
  * Kitchen contacts are staff_contacts with the EXACT role `bar` (the bar team IS
  * the kitchen at Revive; no fuzzy match — a typo/bilingual role shouldn't
- * silently opt a person in or out) that have a usable phone; if none is
- * configured the ticket falls back to reception with a warning. Every send is
- * journaled (source='delivery'). Notifications never throw to their caller — a
- * failed send flips a status the dashboard/sweep act on, it never breaks the
- * order.
+ * silently opt a person in or out) that have a usable phone AND are on shift
+ * right now per the published staff planning (nobody gets pinged off-hours;
+ * no published planning = no gating). If nobody qualifies, the ticket falls
+ * back to reception + the owner with a warning. Every send is journaled
+ * (source='delivery'). Notifications never throw to their caller — a failed
+ * send flips a status the dashboard/sweep act on, it never breaks the order.
  */
 
 type Log = { info: (o: unknown, m?: string) => void; error: (o: unknown, m?: string) => void };
@@ -118,9 +121,15 @@ export async function notifyKitchenForOrder(
   const view = viewOf(order);
   const magicLink = magicLinkUrl(config.BASE_URL, token);
 
-  const contacts = (await listStaffContacts()).filter(
+  const reachable = (await listStaffContacts()).filter(
     (c) => normalizeName(c.role) === KITCHEN_ROLE && !c.muted && phoneDigits(c.phone).length >= 8,
   );
+  // Shift gate: only ping the bar staff ON SHIFT right now per the PUBLISHED
+  // staff planning (/admin/staff). No published planning (null) → no gating.
+  // Re-evaluated at every attempt (create, sweep retry, manual « Renvoyer »).
+  const slot = planningNowSlot(new Date());
+  const onShift = await onShiftStaffIds(slot.weekday, slot.minute);
+  const contacts = onShift === null ? reachable : reachable.filter((c) => onShift.has(c.id));
   // Dedup by phone (two contacts, same number).
   const seen = new Set<string>();
   const kitchen = contacts.filter((c) => {
@@ -131,17 +140,31 @@ export async function notifyKitchenForOrder(
   });
 
   if (kitchen.length === 0) {
-    // No kitchen contact: route the ticket to reception so it's never lost.
+    // Nobody to ping (no reachable bar contact, or none on shift): route the
+    // ticket to reception AND the owner so it's never lost.
     const { subject, body } = kitchenMessage(view, magicLink);
-    const warnBody =
-      `⚠️ Aucun contact « bar » joignable dans le répertoire (/admin/notifications) — ` +
-      `commande envoyée à la réception :\n\n${body}`;
-    try {
-      const path = await sendWhatsAppNotification(config.RECEPTION_PHONE, subject, warnBody);
-      await recordDeliveryLog(config.RECEPTION_PHONE, `${tag} ${warnBody}`, path, null);
-    } catch (err) {
-      await recordDeliveryLog(config.RECEPTION_PHONE, `${tag} ${warnBody}`, "failed", String(err).slice(0, 300));
-      log.error({ err, order: order.id }, "Delivery kitchen fallback-to-reception send failed");
+    const reason =
+      reachable.length > 0
+        ? `Aucun contact « bar » en service en ce moment (planning /admin/staff)`
+        : `Aucun contact « bar » joignable dans le répertoire (/admin/notifications)`;
+    const warnBody = `⚠️ ${reason} — commande envoyée à la réception :\n\n${body}`;
+    const recipients = [
+      { phone: config.RECEPTION_PHONE, preferTemplate: false },
+      { phone: config.OWNER_PHONE, preferTemplate: true }, // owner's 24h window is ~always closed
+    ].filter(
+      // Skip the owner leg if unset or same number as reception.
+      (r, i) => i === 0 || (phoneDigits(r.phone).length >= 8 && phoneDigits(r.phone) !== phoneDigits(config.RECEPTION_PHONE)),
+    );
+    for (const r of recipients) {
+      try {
+        const path = await sendWhatsAppNotification(r.phone, subject, warnBody, {
+          preferTemplate: r.preferTemplate,
+        });
+        await recordDeliveryLog(r.phone, `${tag} ${warnBody}`, path, null);
+      } catch (err) {
+        await recordDeliveryLog(r.phone, `${tag} ${warnBody}`, "failed", String(err).slice(0, 300));
+        log.error({ err, order: order.id, phone: r.phone }, "Delivery kitchen fallback send failed");
+      }
     }
     await setKitchenNotifyOutcome(order.id, "fallback_reception", false);
     return;

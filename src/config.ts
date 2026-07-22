@@ -120,6 +120,11 @@ export const config = {
   DATABASE_URL: required("DATABASE_URL"),
   BASE_URL: required("BASE_URL"),
   RECEPTION_PHONE: optional("RECEPTION_PHONE", "+221784644329"),
+  // Babakar's own WhatsApp. Used when a delivery kitchen ticket has no bar
+  // contact ON SHIFT (published staff planning): the warning goes to reception
+  // AND here, so the owner sees stranded orders. Template-first send (this
+  // number ~never messages Awa, its 24h window is closed).
+  OWNER_PHONE: optional("OWNER_PHONE", "+221774982711"),
   // WhatsApp number to ping whenever someone STARTS a conversation with Awa
   // (a new lead, or a returning client after a quiet gap). Empty = disabled.
   // Free-text lands only inside the 24h window; outside it we fall back to the

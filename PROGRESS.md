@@ -2759,6 +2759,40 @@ Trois demandes de Babakar, facilitées par un fait clé : **`delivery_orders`
   contact `bar` sans téléphone → repli réception ; ping réception à la
   création ; livrée-direct depuis IN_KITCHEN sans ping route).
 
+### 6.22 Ticket cuisine filtré par le planning staff PUBLIÉ (22/07/2026)
+
+Demande Babakar : ne pas pinguer un membre du bar hors de ses heures
+(Jacqueline pas le week-end, Fatma pas le lundi). Plutôt que des règles en dur,
+**le ticket cuisine ne part qu'aux contacts `bar` EN SERVICE à l'instant T selon
+le planning publié** (`/admin/staff`) — le planning existant devient la source de
+vérité des horaires (le publié « Planning V1 » encode déjà ces contraintes).
+
+- `planningNowSlot(now)` (`staffPlanningRules.ts`, pur) : instant → {weekday
+  0=Lundi (remap `(getUTCDay()+6)%7`, convention grille ≠ getUTCDay), minute}.
+  Dakar == UTC, pattern maison (cf. scheduleImage).
+- `onShiftStaffIds(weekday, minute)` (`staffPlanningRepo.ts`) : staff_ids en
+  poste selon le planning **publié**. Retourne `null` si AUCUN planning publié →
+  pas de filtrage (dégradation = comportement précédent, tout le monde).
+  Set vide = vraie réponse « personne en poste » → repli. La pause déjeuner
+  13h30–14h30 n'est PAS exclue (le staff est sur place).
+- `notifyKitchenForOrder` : filtre les contacts `bar` joignables par le Set ;
+  ré-évalué à CHAQUE tentative (création, retry sweep, « 🔁 Renvoyer » — choix
+  Babakar : le bouton manuel respecte aussi le planning). Personne à pinguer →
+  repli **réception + Babakar** (`OWNER_PHONE`, défaut +221774982711,
+  template-first car sa fenêtre 24 h est ~toujours fermée ; dédupliqué si =
+  réception), message d'avertissement qui distingue « aucun contact en service
+  (planning) » de « aucun contact joignable (répertoire) ». Statut inchangé
+  `fallback_reception`.
+- Tests : +1 unitaire (`planningNowSlot`), +3 intégration (filtre en poste /
+  personne en poste → réception+owner / pas de planning publié → pas de
+  filtrage). Les shifts de test sont semés relativement à l'instant réel (poste
+  toute la journée aujourd'hui vs demain) — pas de mock d'horloge.
+- ⚠️ Ops : c'est le planning **publié** qui gouverne (« Planning actuel » est un
+  brouillon ignoré). Le publié donne à Jacqueline un samedi matin 9h15–13h35 —
+  si c'est obsolète (« pas de week-end »), éditer /admin/staff et publier.
+  Commande créée hors service (soir/dimanche après-midi) → repli
+  réception+owner, attendu.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

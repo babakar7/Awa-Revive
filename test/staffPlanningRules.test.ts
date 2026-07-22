@@ -4,10 +4,21 @@ import {
   fmtDuration,
   fmtMin,
   parseTimeToMin,
+  planningNowSlot,
   validateGridPayload,
   weeklyTotalMinutes,
   workedMinutes,
 } from "../src/domain/staffPlanningRules.js";
+
+describe("planningNowSlot", () => {
+  it("remaps getUTCDay (0=Sunday) to the grid convention (0=Monday) with minute-of-day", () => {
+    // 2026-07-20 is a Monday.
+    expect(planningNowSlot(new Date("2026-07-20T09:15:00Z"))).toEqual({ weekday: 0, minute: 555 });
+    expect(planningNowSlot(new Date("2026-07-25T13:35:00Z"))).toEqual({ weekday: 5, minute: 815 }); // Saturday
+    expect(planningNowSlot(new Date("2026-07-26T00:00:00Z"))).toEqual({ weekday: 6, minute: 0 }); // Sunday midnight
+    expect(planningNowSlot(new Date("2026-07-24T23:59:00Z"))).toEqual({ weekday: 4, minute: 1439 }); // Friday end of day
+  });
+});
 
 describe("parseTimeToMin", () => {
   it("parses h and colon forms", () => {

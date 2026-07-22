@@ -57,6 +57,26 @@ export async function getPublishedSchedule(): Promise<StaffSchedule | null> {
   return (res.rows[0] as StaffSchedule) ?? null;
 }
 
+/**
+ * staff_ids on shift at (weekday 0=Monday, minute-of-day) per the PUBLISHED
+ * schedule. Returns null when no schedule is published — the caller must then
+ * NOT gate by planning (feature degrades to "everyone"). An empty Set is a real
+ * answer: a planning exists and says nobody works right now.
+ */
+export async function onShiftStaffIds(
+  weekday: number,
+  minute: number,
+): Promise<Set<string> | null> {
+  const published = await getPublishedSchedule();
+  if (!published) return null;
+  const res = await pool.query(
+    `select staff_id from staff_shifts
+      where schedule_id = $1 and weekday = $2 and start_min <= $3 and end_min > $3`,
+    [published.id, weekday, minute],
+  );
+  return new Set(res.rows.map((r: any) => r.staff_id as string));
+}
+
 export async function createSchedule(name: string, createdBy: string | null): Promise<StaffSchedule> {
   const res = await pool.query(
     `insert into staff_schedules (name, status, created_by) values ($1, 'draft', $2) returning *`,

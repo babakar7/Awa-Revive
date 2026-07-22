@@ -14,6 +14,18 @@ export const WEEKDAYS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "
 /** staff_contacts roles that appear in the planning (coaches are Wix-driven, out). */
 export const PLANNING_ROLES = ["accueil", "bar", "entretien"] as const;
 
+/**
+ * Current instant → planning coordinates: weekday 0=Monday…6=Sunday (the grid
+ * convention, NOT getUTCDay's 0=Sunday) and minute-of-day. Dakar == UTC
+ * year-round, so UTC fields ARE local time (same pattern as scheduleImage).
+ */
+export function planningNowSlot(now: Date): { weekday: number; minute: number } {
+  return {
+    weekday: (now.getUTCDay() + 6) % 7,
+    minute: now.getUTCHours() * 60 + now.getUTCMinutes(),
+  };
+}
+
 export interface GridShift {
   staff_id: string;
   weekday: number;
