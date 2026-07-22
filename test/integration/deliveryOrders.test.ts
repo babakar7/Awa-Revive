@@ -316,8 +316,12 @@ describe("item with a built-in choice", () => {
     await seedKitchenContact();
     await giveBrunchAChoice();
     const res = await postBrunch(); // no choice
-    expect(res.statusCode).toBe(303);
-    expect(res.headers.location).toContain("/livraisons/new?err=");
+    // Since the tap-friendly form (22/07), validation errors re-render the
+    // submitted form in place so the receptionist does not lose quantities.
+    expect(res.statusCode).toBe(200);
+    expect(res.headers.location).toBeUndefined();
+    expect(res.body).toContain("choisis une option");
+    expect(res.body).toContain(`name="qty_BRUNCH_MYKONOS" value="1"`);
     expect((await pool.query(`select count(*)::int as n from delivery_orders`)).rows[0].n).toBe(0);
   });
 

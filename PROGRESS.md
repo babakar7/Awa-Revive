@@ -2852,6 +2852,11 @@ transformé en panne, même si aucun interactif n'avait été envoyé dans CE to
 - Régression : `test/noReplyRecovery.test.ts` reproduit « liste interactive →
   Ok merci » et verrouille que `<NO_REPLY>` n'est silencieux que dans le même
   tour qu'un `present_options` réussi.
+- **CI débloquée au passage, sans changement produit** : le test d'intégration
+  Livraison attendait encore l'ancienne redirection 303 sur erreur, alors que
+  §6.23 ré-affiche désormais volontairement le formulaire prérempli en 200. Le
+  test vérifie maintenant le 200, le message et la quantité conservée. C'était
+  l'unique échec sur 112 scénarios et la raison du premier déploiement `SKIPPED`.
 
 ## 7. Runbook ops
 
