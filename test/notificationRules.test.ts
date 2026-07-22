@@ -8,6 +8,7 @@ import {
   fixedDedupKey,
   isFixedScheduleDue,
   matchesPattern,
+  matchesRuleService,
   normalizeName,
   renderMessage,
   type NotificationRule,
@@ -19,6 +20,7 @@ const baseRule: NotificationRule = {
   label: "Aquabikes à l'eau",
   kind: "class_reminder",
   enabled: true,
+  service_id: null,
   class_pattern: "aquabike",
   exclude_pattern: null,
   lead_minutes: 15,
@@ -87,6 +89,41 @@ describe("dueClassReminders — due window", () => {
   it("ignores classes whose name doesn't match the pattern", () => {
     const s = slot({ serviceName: "Pilates" });
     expect(dueClassReminders(baseRule, [s], new Date("2026-07-15T09:45:00Z"))).toHaveLength(0);
+  });
+});
+
+describe("exact Wix service targeting", () => {
+  const exactRule: NotificationRule = {
+    ...baseRule,
+    service_id: "service-aqua-intermediate",
+    // Exact selection must win even if stale filters somehow remain in a row.
+    class_pattern: "yoga",
+    exclude_pattern: "aquabike",
+    suppress_gap_minutes: null,
+  };
+
+  it("matches by stable service id, not by a similar or renamed course title", () => {
+    const selected = slot({
+      serviceId: "service-aqua-intermediate",
+      serviceName: "Aquabike — nouveau nom",
+    });
+    const other = slot({
+      serviceId: "service-aqua-beginner",
+      serviceName: "Aquabike — nouveau nom",
+    });
+    expect(matchesRuleService(exactRule, selected)).toBe(true);
+    expect(matchesRuleService(exactRule, other)).toBe(false);
+  });
+
+  it("only makes the selected Wix course due", () => {
+    const selected = slot({ eventId: "selected", serviceId: "service-aqua-intermediate" });
+    const other = slot({ eventId: "other", serviceId: "service-aqua-beginner" });
+    const due = dueClassReminders(
+      exactRule,
+      [selected, other],
+      new Date("2026-07-15T09:45:00Z"),
+    );
+    expect(due.map((d) => d.slot.eventId)).toEqual(["selected"]);
   });
 });
 

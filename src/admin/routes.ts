@@ -42,6 +42,7 @@ import {
   mergeContacts,
   getContactById,
   listAllActiveOrders,
+  listServices,
   findMemberContactIds,
   phoneMatchVariants,
   wixContactFullName,
@@ -2049,7 +2050,9 @@ ${photoSection}
       }
 
       /** Build a RuleInput from a posted form, normalizing per-kind fields. */
-      function parseRuleInput(b: Record<string, string>): nrepo.RuleInput | { error: string } {
+      async function parseRuleInput(
+        b: Record<string, string>,
+      ): Promise<nrepo.RuleInput | { error: string }> {
         const label = String(b.label ?? "").trim();
         const kind = b.kind === "fixed_schedule" ? "fixed_schedule" : "class_reminder";
         const message = String(b.message_template ?? "").trim();
@@ -2067,11 +2070,26 @@ ${photoSection}
             return { error: "les minutes avant le cours sont obligatoires" };
           if (recipientKind === "phone" && !phone)
             return { error: "un numéro destinataire est requis (ou choisir « coach »)" };
+          const selectedServiceId = String(b.service_id ?? "").trim() || null;
+          if (selectedServiceId) {
+            let selectedService;
+            try {
+              selectedService = (await listServices()).find((s) => s.id === selectedServiceId);
+            } catch {
+              return { error: "catalogue Wix indisponible — réessayer avant de sélectionner ce cours" };
+            }
+            if (!selectedService || selectedService.type === "APPOINTMENT") {
+              return { error: "cours Wix sélectionné invalide ou indisponible" };
+            }
+          }
           return {
             label,
             kind,
-            class_pattern: String(b.class_pattern ?? "").trim() || null,
-            exclude_pattern: String(b.exclude_pattern ?? "").trim() || null,
+            service_id: selectedServiceId,
+            // Exact selection and pattern mode are mutually exclusive. Clear
+            // stale filters server-side too (never trust disabled form fields).
+            class_pattern: selectedServiceId ? null : String(b.class_pattern ?? "").trim() || null,
+            exclude_pattern: selectedServiceId ? null : String(b.exclude_pattern ?? "").trim() || null,
             lead_minutes: intOrNull(b.lead_minutes),
             suppress_gap_minutes: intOrNull(b.suppress_gap_minutes),
             recipient_kind: recipientKind,
@@ -2091,6 +2109,7 @@ ${photoSection}
         return {
           label,
           kind,
+          service_id: null,
           class_pattern: null,
           exclude_pattern: null,
           lead_minutes: null,
@@ -2108,12 +2127,23 @@ ${photoSection}
         const editId = (req.query as any)?.edit as string | undefined;
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
-        const [rules, contacts, log, lastByRule, alertsPaused] = await Promise.all([
+        const [rules, contacts, log, lastByRule, alertsPaused, serviceOptions] = await Promise.all([
           q.listNotificationRules(),
           q.listStaffContacts(),
           q.listNotificationLog(100),
           q.lastLogPerRule(),
           nrepo.areStaffAlertsPaused(),
+          listServices()
+            .then((services) =>
+              services
+                .filter((s) => s.type !== "APPOINTMENT")
+                .map((s) => ({ id: s.id, name: s.name }))
+                .sort((a, b) => a.name.localeCompare(b.name, "fr")),
+            )
+            .catch((error) => {
+              req.log.error({ err: error }, "Notification course selector: Wix catalogue unavailable");
+              return [];
+            }),
         ]);
         const editRule = editId ? (rules.find((r) => r.id === editId) ?? null) : null;
         const body = renderNotificationsPage({
@@ -2122,6 +2152,7 @@ ${photoSection}
           log,
           lastByRule,
           coachHints: cachedCoachNames(),
+          serviceOptions,
           editRule,
           banner: banner(done, err),
           testPhone: config.NOTIF_TEST_PHONE,
@@ -2141,7 +2172,7 @@ ${photoSection}
       });
 
       admin.post("/notifications/rules", async (req, reply) => {
-        const parsed = parseRuleInput((req.body ?? {}) as Record<string, string>);
+        const parsed = await parseRuleInput((req.body ?? {}) as Record<string, string>);
         if ("error" in parsed) {
           return reply.redirect(`/admin/notifications?err=${encodeURIComponent(parsed.error)}`, 303);
         }
@@ -2152,7 +2183,7 @@ ${photoSection}
 
       admin.post("/notifications/rules/:id/update", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const parsed = parseRuleInput((req.body ?? {}) as Record<string, string>);
+        const parsed = await parseRuleInput((req.body ?? {}) as Record<string, string>);
         if ("error" in parsed) {
           return reply.redirect(`/admin/notifications?edit=${id}&err=${encodeURIComponent(parsed.error)}`, 303);
         }

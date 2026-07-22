@@ -15,6 +15,8 @@ export interface NotificationRule {
   label: string;
   kind: "class_reminder" | "fixed_schedule";
   enabled: boolean;
+  /** Exact Wix service target. When set, it takes precedence over name filters. */
+  service_id: string | null;
   class_pattern: string | null;
   /** Substring to EXCLUDE (e.g. "reformer") — matched slots are dropped. */
   exclude_pattern: string | null;
@@ -89,6 +91,20 @@ export function excludes(serviceName: string, pattern: string | null): boolean {
   return normalizeName(serviceName).includes(normalizeName(p));
 }
 
+/**
+ * Exact service selection wins over the legacy name-pattern mode. Service ids
+ * come from the live Wix catalogue selected in /admin/notifications; matching
+ * by id keeps the rule stable if the course is renamed.
+ */
+export function matchesRuleService(rule: NotificationRule, slot: SlotWithName): boolean {
+  const serviceId = rule.service_id?.trim();
+  if (serviceId) return slot.serviceId === serviceId;
+  return (
+    matchesPattern(slot.serviceName, rule.class_pattern) &&
+    !excludes(slot.serviceName, rule.exclude_pattern)
+  );
+}
+
 /** One due class occurrence for a rule (to send, or suppressed with a reason). */
 export interface DueClassReminder {
   slot: SlotWithName;
@@ -119,9 +135,8 @@ export function dueClassReminders(
   const nowMs = now.getTime();
   const matching = slots.filter(
     (s) =>
-      matchesPattern(s.serviceName, rule.class_pattern) &&
-      (!rule.group_only || s.isGroup) &&
-      !excludes(s.serviceName, rule.exclude_pattern),
+      matchesRuleService(rule, s) &&
+      (!rule.group_only || s.isGroup),
   );
   const out: DueClassReminder[] = [];
 
@@ -192,9 +207,8 @@ export function buildChain(
   const forward = slots
     .filter(
       (s) =>
-        matchesPattern(s.serviceName, rule.class_pattern) &&
+        matchesRuleService(rule, s) &&
         (!rule.group_only || s.isGroup) &&
-        !excludes(s.serviceName, rule.exclude_pattern) &&
         chainKeyFor(rule, s) === key &&
         new Date(s.startDate).getTime() >= firstStart,
     )

@@ -518,6 +518,9 @@ create table if not exists notification_rules (
   label text not null,
   kind text not null,
   enabled boolean not null default true,
+  -- Ciblage exact d'un service Wix (prioritaire sur les motifs de nom).
+  -- Pas de FK : le catalogue vit dans Wix, pas dans Postgres.
+  service_id text,
   class_pattern text,
   exclude_pattern text,
   lead_minutes int,
@@ -537,6 +540,8 @@ alter table notification_rules
   add column if not exists group_only boolean not null default false;
 alter table notification_rules
   add column if not exists exclude_pattern text;
+alter table notification_rules
+  add column if not exists service_id text;
 
 -- Journal de tout envoi. source ∈ rule | reception | new_chat | delivery |
 -- invoice | gift_card | staff_planning | test. new_chat = ping owner

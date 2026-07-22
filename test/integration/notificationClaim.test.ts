@@ -3,8 +3,12 @@ import { pool, migrate } from "../../src/db/index.js";
 import {
   areStaffAlertsPaused,
   claimOrReclaim,
+  createRule,
+  deleteRule,
   finishLog,
+  getRule,
   setStaffAlertsPaused,
+  updateRule,
 } from "../../src/domain/notificationRepo.js";
 import { truncateAll } from "./helpers.js";
 
@@ -36,6 +40,35 @@ beforeEach(async () => {
 });
 
 describe("claimOrReclaim (notification dedup)", () => {
+  it("persists an exact Wix service target on create and update", async () => {
+    const input = {
+      label: "specific service persistence",
+      kind: "class_reminder" as const,
+      service_id: "svc-aquabike-intermediate",
+      class_pattern: null,
+      exclude_pattern: null,
+      lead_minutes: 180,
+      suppress_gap_minutes: 30,
+      recipient_kind: "coach" as const,
+      recipient_phone: null,
+      days_of_week: null,
+      send_time: null,
+      message_template: "{class_name}: {booked_count}",
+      group_only: true,
+    };
+    await createRule(input);
+    const created = await pool.query<{ id: string }>(
+      `select id from notification_rules where label=$1`,
+      [input.label],
+    );
+    const id = created.rows[0].id;
+    expect((await getRule(id))?.service_id).toBe("svc-aquabike-intermediate");
+
+    await updateRule(id, { ...input, service_id: "svc-aquabike-advanced" });
+    expect((await getRule(id))?.service_id).toBe("svc-aquabike-advanced");
+    await deleteRule(id);
+  });
+
   it("claims a fresh key, then refuses the same key (no 42P10)", async () => {
     expect(await claimOrReclaim("k1", RULE_ID, SLOT)).toBe(true);
     // Second claim of the same occurrence: silently refused, NOT a DB error.

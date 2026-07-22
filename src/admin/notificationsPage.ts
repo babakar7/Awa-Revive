@@ -95,11 +95,25 @@ function daysLabel(csv: string | null): string {
     .join(", ");
 }
 
-function ruleSummary(r: NotificationRuleRow): string {
+export interface NotificationServiceOption {
+  id: string;
+  name: string;
+}
+
+function ruleSummary(
+  r: NotificationRuleRow,
+  serviceNames: Map<string, string>,
+): string {
   if (r.kind === "class_reminder") {
-    let pat = r.class_pattern?.trim() ? `« ${esc(r.class_pattern)} »` : "tous les cours";
+    let pat: string;
+    if (r.service_id) {
+      const name = serviceNames.get(r.service_id);
+      pat = name ? `le cours « ${esc(name)} »` : "un cours Wix sélectionné";
+    } else {
+      pat = r.class_pattern?.trim() ? `les cours contenant « ${esc(r.class_pattern)} »` : "tous les cours";
+    }
     if (r.group_only) pat += " (collectifs)";
-    if (r.exclude_pattern?.trim()) pat += ` sauf « ${esc(r.exclude_pattern)} »`;
+    if (!r.service_id && r.exclude_pattern?.trim()) pat += ` sauf « ${esc(r.exclude_pattern)} »`;
     const gap = r.suppress_gap_minutes ? ` · anti dos-à-dos ${r.suppress_gap_minutes} min` : "";
     const to =
       r.recipient_kind === "coach" ? "coach du cours" : `+${esc((r.recipient_phone ?? "").replace(/^\+/, ""))}`;
@@ -110,12 +124,23 @@ function ruleSummary(r: NotificationRuleRow): string {
 
 // ---------- rule form (create + edit) ----------
 
-function ruleForm(edit: NotificationRuleRow | null): string {
+function ruleForm(
+  edit: NotificationRuleRow | null,
+  serviceOptions: NotificationServiceOption[],
+): string {
   const v = (x: unknown) => esc(x ?? "");
   const action = edit ? `/admin/notifications/rules/${edit.id}/update` : "/admin/notifications/rules";
   const kind = edit?.kind ?? "class_reminder";
   const rkind = edit?.recipient_kind ?? "phone";
   const sel = (a: string, b: string) => (a === b ? " selected" : "");
+  const selectedServiceId = edit?.service_id ?? "";
+  const options = [...serviceOptions];
+  if (selectedServiceId && !options.some((s) => s.id === selectedServiceId)) {
+    options.unshift({ id: selectedServiceId, name: "Cours configuré — indisponible dans Wix" });
+  }
+  const serviceSelectOptions = options
+    .map((s) => `<option value="${v(s.id)}"${sel(s.id, selectedServiceId)}>${v(s.name)}</option>`)
+    .join("");
   return `
 <form method="post" action="${action}" class="notif-form" style="display:flex;flex-direction:column;gap:.6rem">
   <div class="row">
@@ -132,11 +157,19 @@ function ruleForm(edit: NotificationRuleRow | null): string {
 
   <fieldset class="kf class-fields" style="border:1px solid var(--border);border-radius:8px;padding:.6rem">
     <legend class="muted">Avant un cours</legend>
+    <label style="display:block;margin-bottom:.6rem">Cours précis <span class="muted">(facultatif)</span>
+      <select name="service_id" id="service-select" style="width:100%">
+        <option value="">Tous les cours / utiliser les filtres ci-dessous</option>
+        ${serviceSelectOptions}
+      </select>
+      <span class="muted">Le catalogue vient de Wix. Un cours choisi ici est ciblé exactement, même si son nom change.</span>
+    </label>
+    ${serviceOptions.length === 0 ? `<div class="card warn">Catalogue Wix momentanément indisponible. Les règles existantes restent actives ; réessayez pour sélectionner un cours.</div>` : ""}
     <div class="row">
-      <label style="flex:1;min-width:160px">Motif du nom de cours <span class="muted">(vide = tous)</span>
+      <label class="pattern-field" style="flex:1;min-width:160px">Filtrer les noms contenant <span class="muted">(vide = tous)</span>
         <input name="class_pattern" value="${v(edit?.class_pattern)}" placeholder="aquabike" style="width:100%">
       </label>
-      <label style="flex:1;min-width:160px">Exclure les cours contenant <span class="muted">(vide = aucun)</span>
+      <label class="pattern-field" style="flex:1;min-width:160px">Exclure les cours contenant <span class="muted">(vide = aucun)</span>
         <input name="exclude_pattern" value="${v(edit?.exclude_pattern)}" placeholder="reformer" style="width:100%">
       </label>
       <label style="min-width:120px">Minutes avant
@@ -188,7 +221,7 @@ function ruleForm(edit: NotificationRuleRow | null): string {
 <script>
 (function(){
   var f=document.querySelector('.notif-form'); if(!f) return;
-  var k=f.querySelector('#kind-select'), rk=f.querySelector('#rkind-select');
+  var k=f.querySelector('#kind-select'), rk=f.querySelector('#rkind-select'), svc=f.querySelector('#service-select');
   function upd(){
     var isClass=k.value==='class_reminder';
     f.querySelector('.class-fields').style.display=isClass?'':'none';
@@ -196,8 +229,11 @@ function ruleForm(edit: NotificationRuleRow | null): string {
     // Phone field hidden only when a class rule targets the coach.
     var needsPhone=!(isClass && rk.value==='coach');
     f.querySelector('.phone-field').style.display=needsPhone?'':'none';
+    // Exact Wix selection and name filters are two alternative targeting modes.
+    var exact=!!svc.value;
+    f.querySelectorAll('.pattern-field input').forEach(function(input){ input.disabled=exact; });
   }
-  k.addEventListener('change',upd); rk.addEventListener('change',upd); upd();
+  k.addEventListener('change',upd); rk.addEventListener('change',upd); svc.addEventListener('change',upd); upd();
 })();
 </script>`;
 }
@@ -210,6 +246,7 @@ export interface NotificationsPageData {
   log: NotificationLogRow[];
   lastByRule: Map<string, { status: string; error: string | null; created_at: Date }>;
   coachHints: string[];
+  serviceOptions: NotificationServiceOption[];
   editRule: NotificationRuleRow | null;
   banner: string;
   testPhone: string;
@@ -217,6 +254,7 @@ export interface NotificationsPageData {
 }
 
 export function renderNotificationsPage(d: NotificationsPageData): string {
+  const serviceNames = new Map(d.serviceOptions.map((s) => [s.id, s.name]));
   const ruleRows = d.rules
     .map((r) => {
       const preview = esc(renderMessage(r.message_template, SAMPLE_VARS));
@@ -225,7 +263,7 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
         ? `${statusBadge(last.status)} <span class="muted">${ago(last.created_at)}${last.error ? ` · ${esc(last.error.slice(0, 40))}` : ""}</span>`
         : `<span class="muted">jamais envoyée</span>`;
       return `<tr class="${r.enabled ? "" : "is-complete"}">
-<td data-label="Règle"><b>${esc(r.label)}</b><div class="muted">${ruleSummary(r)}</div><div class="muted">Message : ${preview}</div></td>
+<td data-label="Règle"><b>${esc(r.label)}</b><div class="muted">${ruleSummary(r, serviceNames)}</div><div class="muted">Message : ${preview}</div></td>
 <td data-label="Dernier envoi">${lastLine}</td>
 <td data-label="Actions" class="nowrap">
   <form class="inline" method="post" action="/admin/notifications/rules/${r.id}/toggle"><button class="act act--sm ${r.enabled ? "act--ghost" : "act--ok"}">${r.enabled ? "Pause" : "Activer"}</button></form>
@@ -291,7 +329,7 @@ ${templateNote}
 </nav>
 
 <h2 id="regles">${d.editRule ? "Modifier la règle" : "Nouvelle règle"}</h2>
-<div class="card">${ruleForm(d.editRule)}</div>
+<div class="card">${ruleForm(d.editRule, d.serviceOptions)}</div>
 
 <h2>Règles (${d.rules.length})</h2>
 <p class="muted">« Test » envoie le message avec des valeurs d'exemple à ${d.testPhone ? `<b>+${esc(d.testPhone.replace(/^\+/, ""))}</b>` : "un numéro non configuré"} (jamais au vrai gardien / coach).</p>

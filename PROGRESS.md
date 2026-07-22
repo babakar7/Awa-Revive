@@ -1247,7 +1247,7 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
     (CRUD + claim + journal), `notificationSweep.ts` (sweep + cache planning +
     contacts coach Wix), `admin/notificationsPage.ts` + routes
     `/admin/notifications`. Logique pure couverte par
-    `test/notificationRules.test.ts` (28 cas).
+    `test/notificationRules.test.ts` (30 cas).
 
 - **4.33 — Création de compte en un aller-retour + escalade réception honnête
   (14/07, incident Rama).** Cliente nouvelle : Awa l'invite (« envoie-moi ton
@@ -2857,6 +2857,29 @@ transformé en panne, même si aucun interactif n'avait été envoyé dans CE to
   §6.23 ré-affiche désormais volontairement le formulaire prérempli en 200. Le
   test vérifie maintenant le 200, le message et la quantité conservée. C'était
   l'unique échec sur 112 scénarios et la raison du premier déploiement `SKIPPED`.
+
+### 6.25 Alerte d'effectif ciblée sur un cours Wix (22/07/2026)
+
+Dans `/admin/notifications`, une règle « Avant un cours » peut maintenant viser
+un cours précis depuis un sélecteur alimenté par le catalogue Wix. Le mode
+historique reste disponible : tous les cours ou filtrage par texte.
+
+- La règle conserve le `service_id` Wix dans `notification_rules.service_id`.
+  Le sweep compare cet identifiant exact aux créneaux : deux cours aux noms
+  proches ne se mélangent pas et un renommage du cours ne casse pas l'alerte.
+- La sélection exacte est prioritaire et exclusive des filtres de nom. Les
+  filtres sont désactivés dans l'interface et aussi vidés côté serveur.
+- Le serveur revalide le cours dans le catalogue Wix à la création/modification
+  et refuse les rendez-vous individuels (`APPOINTMENT`). Si Wix est
+  momentanément indisponible, la page reste utilisable pour les règles
+  générales et affiche un avertissement au lieu d'échouer entièrement.
+- Une ancienne règle visant tous les cours continue donc à fonctionner sans
+  migration manuelle. Une règle ciblée garde son identifiant même si le cours
+  disparaît temporairement du catalogue affiché.
+- Régressions : ciblage exact et calcul d'échéance dans
+  `test/notificationRules.test.ts`, rendu du sélecteur dans
+  `test/adminNotificationsPage.test.ts`, persistance création/modification dans
+  `test/integration/notificationClaim.test.ts`.
 
 ## 7. Runbook ops
 

@@ -39,7 +39,7 @@ export interface StaffContact {
   muted: boolean;
 }
 
-const RULE_COLUMNS = `id, label, kind, enabled, class_pattern, exclude_pattern, lead_minutes,
+const RULE_COLUMNS = `id, label, kind, enabled, service_id, class_pattern, exclude_pattern, lead_minutes,
   suppress_gap_minutes, recipient_kind, recipient_phone, days_of_week, send_time,
   message_template, group_only`;
 
@@ -49,6 +49,7 @@ function rowToRule(r: any): NotificationRule {
     label: r.label,
     kind: r.kind,
     enabled: r.enabled,
+    service_id: r.service_id,
     class_pattern: r.class_pattern,
     exclude_pattern: r.exclude_pattern,
     lead_minutes: r.lead_minutes,
@@ -74,6 +75,7 @@ export async function listEnabledRules(): Promise<NotificationRule[]> {
 export interface RuleInput {
   label: string;
   kind: "class_reminder" | "fixed_schedule";
+  service_id: string | null;
   class_pattern: string | null;
   exclude_pattern: string | null;
   lead_minutes: number | null;
@@ -89,12 +91,13 @@ export interface RuleInput {
 export async function createRule(input: RuleInput): Promise<void> {
   await pool.query(
     `insert into notification_rules
-       (label, kind, class_pattern, exclude_pattern, lead_minutes, suppress_gap_minutes,
+       (label, kind, service_id, class_pattern, exclude_pattern, lead_minutes, suppress_gap_minutes,
         recipient_kind, recipient_phone, days_of_week, send_time, message_template, group_only)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [
       input.label,
       input.kind,
+      input.service_id,
       input.class_pattern,
       input.exclude_pattern,
       input.lead_minutes,
@@ -112,14 +115,15 @@ export async function createRule(input: RuleInput): Promise<void> {
 export async function updateRule(id: string, input: RuleInput): Promise<void> {
   await pool.query(
     `update notification_rules set
-       label=$2, kind=$3, class_pattern=$4, exclude_pattern=$5, lead_minutes=$6,
-       suppress_gap_minutes=$7, recipient_kind=$8, recipient_phone=$9, days_of_week=$10,
-       send_time=$11, message_template=$12, group_only=$13, updated_at=now()
+       label=$2, kind=$3, service_id=$4, class_pattern=$5, exclude_pattern=$6, lead_minutes=$7,
+       suppress_gap_minutes=$8, recipient_kind=$9, recipient_phone=$10, days_of_week=$11,
+       send_time=$12, message_template=$13, group_only=$14, updated_at=now()
      where id=$1`,
     [
       id,
       input.label,
       input.kind,
+      input.service_id,
       input.class_pattern,
       input.exclude_pattern,
       input.lead_minutes,
