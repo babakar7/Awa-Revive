@@ -2706,6 +2706,19 @@ sans auth, ZÉRO JavaScript client) :
   Railway + CNAME chez le registrar de revive.sn (action Babakar). `/menu`
   fonctionne en attendant.
 
+**Passe UX (22/07, revue demandée par Babakar)** : fondu au bord droit de la
+nav catégories (débordement invisible sinon — 10 pastilles, ~4 visibles sur
+375px), `section:target h2` marque la catégorie atteinte (toujours zéro JS),
+contrastes corrigés (`#a98baa` → `#7d5f80`, 2,8:1 → 5,1:1 WCAG AA), pastilles
+agrandies (~38px), **CTA WhatsApp flottant** (safe-area iOS, le footer garde le
+bouton pleine largeur), `prefers-reduced-motion`, `color-scheme: only light`
+(anti-inversion Android), favicon SVG chevron en `data:` (CSP élargie à
+`img-src data:` — seule relaxation), et **og:image** pour les aperçus de lien
+WhatsApp : [src/lib/menuOgImage.ts](src/lib/menuOgImage.ts) (1200×630,
+@napi-rs/canvas, polices bundlées, pattern scheduleImage) servie sur
+`GET /menu/og.png` (buffer caché par process, max-age=86400), URL absolue via
+`BASE_URL`. 15 tests sur la page (3 nouveaux : CSP, PNG og, hygiène markup).
+
 ### 6.21 Livraisons v3 — étape unique « partie en livraison », cuisine = rôle `bar`, ping réception à la création (22/07/2026)
 
 Trois demandes de Babakar, facilitées par un fait clé : **`delivery_orders`

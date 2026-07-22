@@ -96,6 +96,16 @@ describe("renderPublicMenuPage", () => {
     const html = renderPublicMenuPage([]);
     expect(html).toContain("Le menu arrive bientôt");
   });
+
+  it("stays script-free with a labelled nav, favicon, og:image and one floating CTA", () => {
+    const html = renderPublicMenuPage(groupPublicMenu([item()], ["Cafés"]));
+    expect(html).not.toContain("<script");
+    expect(html).toContain(`aria-label="Catégories"`);
+    expect(html).toContain(`rel="icon" href="data:image/svg+xml`);
+    expect(html).toContain(`property="og:image"`);
+    expect(html).toContain(`content="only light"`);
+    expect(html.match(/wa-float/g)).toHaveLength(2); // 1 CSS rule + 1 anchor
+  });
 });
 
 /** Mock the two public-page queries (items + categories); any other query
@@ -145,6 +155,25 @@ describe("public menu routes", () => {
       expect(res.statusCode).toBe(200);
       expect(res.body).toContain("Café latte");
     }
+    await app.close();
+  });
+
+  it("keeps the strict CSP with only the data: image relaxation", async () => {
+    mockMenuDb([item()], ["Cafés"]);
+    const app = buildServer();
+    const res = await app.inject({ method: "GET", url: "/menu" });
+    expect(res.headers["content-security-policy"]).toContain("default-src 'none'");
+    expect(res.headers["content-security-policy"]).toContain("img-src data:");
+    await app.close();
+  });
+
+  it("serves the og:image as a cacheable PNG", async () => {
+    const app = buildServer();
+    const res = await app.inject({ method: "GET", url: "/menu/og.png" });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/image\/png/);
+    expect(res.headers["cache-control"]).toContain("public");
+    expect(res.rawPayload.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     await app.close();
   });
 
