@@ -2832,6 +2832,27 @@ saisie de commandes téléphoniques par réception/owner souvent au téléphone
   partagé (script inline de la page uniquement). Build + 567 tests (6 nouveaux,
   [test/livraisonForm.test.ts](test/livraisonForm.test.ts)).
 
+### 6.24 Faux « souci technique » après une liste interactive (22/07/2026)
+
+Incident Modou Lo, 10:38 : après la liste des prochains Aquabike, le client
+répond « Ok merci » et reçoit le repli technique + lien réception. Le journal
+ajouté en §6.19 prouve l'absence d'exception (« aucune réponse produite »). Cause :
+`<NO_REPLY>` sert à éviter le doublon juste après `present_options`, mais un
+silence / sentinel renvoyé sur le tour client suivant était systématiquement
+transformé en panne, même si aucun interactif n'avait été envoyé dans CE tour.
+
+- `classifyReplyOutcome` distingue maintenant texte livrable, silence légitime
+  après interactif du tour courant et silence inattendu.
+- Un silence inattendu déclenche UNE seconde génération sans outils, avec une
+  consigne explicite de répondre au dernier message (un simple merci reçoit une
+  clôture courte) et de ne pas répéter la liste. La réception n'est alertée que
+  si cette récupération échoue aussi ou si une vraie exception existe.
+- Une sentinel ne peut jamais fuiter telle quelle au client. Le second échec
+  stocke `stop_reason` dans le motif technique pour rester diagnostiquable.
+- Régression : `test/noReplyRecovery.test.ts` reproduit « liste interactive →
+  Ok merci » et verrouille que `<NO_REPLY>` n'est silencieux que dans le même
+  tour qu'un `present_options` réussi.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

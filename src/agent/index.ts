@@ -72,6 +72,17 @@ const REPLY_MAX_TOKENS_RETRY = 4096;
 // ids of a result, without replaying a full class list byte for byte.
 const TOOL_REPLAY_MAXLEN = 700;
 
+// A past present_options result is replayed in conversation history. On a later
+// turn, the model can occasionally carry the old "reply <NO_REPLY>" instruction
+// forward even though no interactive message was sent in the CURRENT turn
+// (prod 22/07: Modou answered "Ok merci" after an Aquabike slot list). This
+// suffix is used for one no-tools recovery call before declaring a real outage.
+const UNEXPECTED_SILENCE_RECOVERY_INSTRUCTION =
+  "Current-turn delivery guard: no interactive WhatsApp message was sent during this turn. " +
+  "Respond now to the latest user with one natural, concise message. Do not output <NO_REPLY>. " +
+  "If the latest message is only thanks or an acknowledgement, answer briefly and warmly. " +
+  "Do not repeat an earlier list and do not invent information.";
+
 /** Concatenate the text blocks of a model response into the reply string. */
 export function extractText(response: Anthropic.Message): string {
   return response.content
@@ -79,6 +90,26 @@ export function extractText(response: Anthropic.Message): string {
     .map((b) => b.text)
     .join("\n")
     .trim();
+}
+
+export type ReplyOutcome = "deliver" | "silent_after_interactive" | "recover";
+
+/**
+ * Decide whether the model produced a client reply, a valid current-turn
+ * present_options sentinel, or an unexpected silence that deserves one retry.
+ * `<NO_REPLY>` is valid ONLY when this turn actually delivered an interactive
+ * message; a stale sentinel from history must never become a technical error.
+ */
+export function classifyReplyOutcome(
+  replyText: string | null,
+  interactiveSent: boolean,
+): ReplyOutcome {
+  const text = replyText?.trim() ?? "";
+  if (interactiveSent && (text === "" || text === NO_REPLY_SENTINEL)) {
+    return "silent_after_interactive";
+  }
+  if (text === "" || text === NO_REPLY_SENTINEL) return "recover";
+  return "deliver";
 }
 
 export function technicalFallbackMessage(clientName?: string | null): string {
@@ -538,10 +569,50 @@ export async function handleInboundText(args: {
     console.error("Agent loop failed:", err);
   }
 
+  // A stale <NO_REPLY> (or an unexplained empty end_turn) without a message
+  // delivered in THIS turn is not a real outage. Retry once without tools and
+  // with an explicit current-turn guard. This is intentionally before the
+  // technical fallback: a normal "Ok merci" must never be sent to reception.
+  let replyOutcome = classifyReplyOutcome(replyText, interactiveSent);
+  if (replyOutcome === "recover" && loopError == null && lastResponse) {
+    const silenceKind = replyText?.trim() === NO_REPLY_SENTINEL ? NO_REPLY_SENTINEL : "empty reply";
+    console.warn(
+      `Model returned ${silenceKind} without a current-turn interactive message — forcing one reply`,
+    );
+    try {
+      const recovered = await withOverloadRetry(
+        () =>
+          anthropic.messages.create({
+            model: config.CLAUDE_MODEL,
+            max_tokens: REPLY_MAX_TOKENS,
+            output_config: { effort: "low" },
+            system: [
+              ...system,
+              { type: "text", text: UNEXPECTED_SILENCE_RECOVERY_INSTRUCTION },
+            ],
+            messages,
+          }),
+        () => void sendTypingIndicator(args.waMessageId),
+      );
+      replyText = extractText(recovered);
+      replyOutcome = classifyReplyOutcome(replyText, false);
+      if (replyOutcome === "recover") {
+        const repeated = replyText?.trim() === NO_REPLY_SENTINEL ? NO_REPLY_SENTINEL : "empty reply";
+        loopError = new Error(
+          `model returned ${repeated} twice (stop_reason: ${recovered.stop_reason ?? "unknown"})`,
+        );
+      }
+    } catch (err) {
+      loopError = err;
+      console.error("Unexpected-silence recovery failed:", err);
+    }
+  }
+
   // present_options already delivered (and logged) the reply — send nothing
-  // more. Only honored when an interactive message actually went out, so a
-  // spurious sentinel can never leave the client without an answer.
-  if (replyText?.trim() === NO_REPLY_SENTINEL) replyText = null;
+  // more. A failed recovery is also cleared here so the literal sentinel can
+  // never leak to the client; the normal technical fallback handles that case.
+  replyOutcome = classifyReplyOutcome(replyText, interactiveSent);
+  if (replyOutcome !== "deliver") replyText = null;
   if (!replyText && !interactiveSent) {
     replyText = technicalFallbackMessage(client.name ?? args.profileName ?? null);
     usedTechnicalFallback = true;
