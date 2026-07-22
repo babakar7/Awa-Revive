@@ -209,12 +209,29 @@ function notifyHumanTakeoverInbound(client: repo.Client, preview: string): void 
 }
 
 /**
+ * Turn whatever the agent loop threw (or the absence of a throw) into one short,
+ * safe line for the reception alert + notification_log — enough to tell an API
+ * hiccup (overload/timeout) from a real bug without dumping a stack. `null` =
+ * the loop produced no reply without throwing (e.g. empty model output).
+ */
+export function describeLoopFailure(err: unknown): string {
+  if (err == null) return "aucune réponse produite (pas d'exception)";
+  const status = (err as { status?: number })?.status;
+  const raw =
+    err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err);
+  const msg = String(raw ?? "").replace(/\s+/g, " ").trim().slice(0, 200) || "erreur inconnue";
+  return status ? `${status} — ${msg}` : msg;
+}
+
+/**
  * The client just received the technical fallback: the agent loop crashed or produced
  * nothing. Record it in the handoffs register and tell reception (fire and
  * forget — this must never delay or break the reply path). Deduped 24h per
- * client so a retry-spam doesn't flood anyone.
+ * client so a retry-spam doesn't flood anyone. `reason` is the underlying
+ * failure (see describeLoopFailure) so the incident stays diagnosable after
+ * Railway's short log window rolls over.
  */
-async function notifyTechnicalFailure(client: repo.Client): Promise<void> {
+async function notifyTechnicalFailure(client: repo.Client, reason?: string): Promise<void> {
   try {
     if (await repo.recentHandoffExists(client.id, TECH_FAILURE_HANDOFF_PREFIX, 24)) return;
     await repo.recordHandoff(client.id, TECH_FAILURE_HANDOFF_PREFIX);
@@ -222,6 +239,7 @@ async function notifyTechnicalFailure(client: repo.Client): Promise<void> {
       "⚠️ Échec technique — un client est planté",
       `Awa n'a pas réussi à répondre à ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")}) ` +
         `et lui a envoyé le message d'erreur avec un lien WhatsApp prérempli vers la réception.\n\n` +
+        (reason ? `Motif technique : ${reason}\n\n` : "") +
         `À faire : jeter un œil à sa conversation (${config.BASE_URL}/admin/conversations) et le ` +
         `recontacter si son besoin est visible. Si ça se répète, prévenir le support technique.`,
     );
@@ -404,6 +422,7 @@ export async function handleInboundText(args: {
   let cafeMenuShown = false;
 
   let lastResponse: Anthropic.Message | null = null;
+  let loopError: unknown = null;
   try {
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
       // Meta drops the "typing…" bubble after ~25s; re-arm it at every model
@@ -515,6 +534,7 @@ export async function handleInboundText(args: {
       replyText = extractText(final);
     }
   } catch (err) {
+    loopError = err;
     console.error("Agent loop failed:", err);
   }
 
@@ -528,7 +548,10 @@ export async function handleInboundText(args: {
     // Boucle de résultat (§4.31) : le client vient de recevoir « souci
     // technique » — la réception DOIT le savoir (avant : un console.error que
     // personne ne lit, client planté en silence). Dédup 24h par client.
-    void notifyTechnicalFailure(client);
+    // On y joint le motif d'erreur réel : les logs Railway ont une fenêtre
+    // courte, donc le stocker dans le notification_log rend l'incident
+    // diagnosticable après coup (cas Zoé Dourthe 22/07 — erreur déjà défilée).
+    void notifyTechnicalFailure(client, describeLoopFailure(loopError));
   }
 
   if (replyText) {

@@ -2658,6 +2658,19 @@ pas de saisie libre sur la fiche, une **page dédiée** pour gérer les catégor
   112 intégration (ajout/unicité casse, rename cascade, refus merge, delete
   bloqué puis autorisé, compteur). Aucun nom de catégorie en dur.
 
+### 6.19 Motif d'erreur dans l'alerte « échec technique » (22/07/2026)
+
+Incident Zoé Dourthe (22/07 08:06) : Awa a renvoyé le repli « souci technique »
+sur un simple « Mince merci » (erreur transitoire isolée, 1 seule en 3 jours,
+aucune résa perdue, réception prévenue). Impossible de nommer l'exception : les
+logs Railway ont une fenêtre courte et la ligne avait défilé. Fix : la boucle
+agent (`src/agent/index.ts`) capture l'erreur (`loopError`) et joint son
+**motif** à l'alerte réception via `describeLoopFailure` (nouveau, pur, testé) —
+« <status> — <message> » (ex. « 529 — Overloaded »), tronqué 200 car., ou
+« aucune réponse produite (pas d'exception) » si la boucle n'a rien renvoyé
+sans throw. Le motif atterrit dans `notification_log.body` → diagnostic possible
+après coup, sans dépendre des logs éphémères. Build + 545 tests (4 nouveaux).
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
