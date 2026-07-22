@@ -61,6 +61,28 @@ export async function listMenuItems(): Promise<MenuItemView[]> {
   return res.rows as MenuItemView[];
 }
 
+/** Public menu page (menu.revive.sn): enabled items only, and ONLY the
+ *  client-facing columns — recipe fields must never reach the public module. */
+export interface PublicMenuItem {
+  id: string;
+  name: string;
+  price_xof: number;
+  category: string;
+  description: string | null;
+  option_label: string | null;
+  option_choices: string | null;
+  favourite: boolean;
+  sort_order: number;
+}
+
+export async function listPublicMenuItems(): Promise<PublicMenuItem[]> {
+  const res = await pool.query(
+    `select id, name, price_xof, category, description, option_label, option_choices, favourite, sort_order
+       from cafe_menu_items where enabled order by sort_order, name`,
+  );
+  return res.rows as PublicMenuItem[];
+}
+
 export async function getMenuItem(id: string): Promise<MenuItemView | null> {
   const res = await pool.query(
     `select ${ITEM_COLUMNS} from cafe_menu_items where id = $1`,

@@ -4,6 +4,7 @@ import { registerWaveWebhook } from "./webhooks/wave.js";
 import { registerOrangeMoneyWebhook } from "./webhooks/orangeMoney.js";
 import { registerAdmin } from "./admin/routes.js";
 import { registerDeliveryPublic } from "./deliveryPublic.js";
+import { MENU_HOST, registerMenuPublic, serveMenuPage } from "./menuPublic.js";
 import { pool } from "./db/index.js";
 
 const HEALTHCHECK_TIMEOUT_MS = 2_000;
@@ -62,10 +63,15 @@ export function buildServer() {
     return reply.code(ok ? 200 : 503).send({ ok });
   });
 
-  // Root → admin dashboard, so the custom domain (awa.revive.sn) lands straight
-  // on it (then /admin/login if no session). Webhooks/payment/magic-link paths
-  // are explicit, so this only affects a bare "/" hit.
-  app.get("/", async (_req, reply) => reply.redirect("/admin", 302));
+  // Root is host-aware: menu.revive.sn serves the public café menu directly;
+  // any other host (awa.revive.sn) keeps landing on the admin dashboard (then
+  // /admin/login if no session). Webhooks/payment/magic-link paths are
+  // explicit, so this only affects a bare "/" hit. trustProxy is on, so
+  // req.hostname honors X-Forwarded-Host from Railway's edge (port stripped).
+  app.get("/", async (req, reply) =>
+    req.hostname?.toLowerCase() === MENU_HOST
+      ? serveMenuPage(reply)
+      : reply.redirect("/admin", 302));
 
   registerWhatsAppWebhook(app);
   registerWaveWebhook(app);
@@ -73,6 +79,8 @@ export function buildServer() {
   registerAdmin(app);
   // Public, no-auth "mark ready" magic-link pages for the kitchen (outside /admin).
   registerDeliveryPublic(app);
+  // Public café-menu page (menu.revive.sn, stable path /menu — outside /admin).
+  registerMenuPublic(app);
 
   // Minimal "return to WhatsApp" pages for Wave success/error redirects (SPEC §4.3).
   // wa.me link is bare (no ?text= prefill): Awa never confirms a booking from

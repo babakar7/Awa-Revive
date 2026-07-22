@@ -183,6 +183,13 @@ description/address/hours still work.
 
 Deploy target: Railway / Render / Fly.io — anything that runs Node and exposes HTTPS. Set all env vars, point `DATABASE_URL` at managed Postgres; migrations run automatically at boot. The service is stateless apart from Postgres, so restarts mid-flow lose nothing (acceptance #8) — the in-memory rate limiter and Wix catalog cache rebuild themselves.
 
+**Domains** (both point at the same Railway service): `awa.revive.sn` → admin
+dashboard (`/` redirects to `/admin`); `menu.revive.sn` → public café-menu page
+([src/menuPublic.ts](src/menuPublic.ts)), always live from `cafe_menu_items`
+(edits on `/admin/menu` show up within ~1 min, no redeploy). The menu is also
+served at the stable path `/menu` on every host. QR codes should encode
+`https://menu.revive.sn/`.
+
 ## Notes & known unknowns
 
 - **Wix API shapes**: paths follow the current Wix REST docs (Services V2, Availability Calendar V1, Bookings V2). Per the spec, verify request/response shapes against [the Wix docs](https://dev.wix.com/docs/rest/business-solutions/bookings) once real credentials are available — [src/lib/wix.ts](src/lib/wix.ts) is the only file to adjust.

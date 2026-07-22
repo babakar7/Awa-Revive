@@ -2671,6 +2671,41 @@ agent (`src/agent/index.ts`) capture l'erreur (`loopError`) et joint son
 sans throw. Le motif atterrit dans `notification_log.body` → diagnostic possible
 après coup, sans dépendre des logs éphémères. Build + 545 tests (4 nouveaux).
 
+### 6.20 Page menu publique — menu.revive.sn (22/07/2026)
+
+Demande : une page web publique (hors admin) où les clients consultent le menu
+du bar, toujours à jour avec `/admin/menu`. Implémentation
+([src/menuPublic.ts](src/menuPublic.ts), pattern deliveryPublic — autonome,
+sans auth, ZÉRO JavaScript client) :
+
+- **Toujours frais** : rendu à chaque requête depuis `cafe_menu_items` +
+  `menu_categories` via `listPublicMenuItems()` (nouvelle requête dédiée qui ne
+  sélectionne QUE les colonnes publiques — les colonnes recette n'entrent
+  jamais dans le module, garde anti-fuite testée). Pas le snapshot mémoire :
+  par-processus (stale multi-instances) et il perd `favourite`/`sort_order`.
+  `Cache-Control: public, max-age=60` → édits admin visibles sous ~1 min.
+- **Routage host** : `/` devient host-aware dans `server.ts` — Host
+  `menu.revive.sn` → page menu, sinon redirect `/admin` inchangé (garde-fou
+  testé). Chemin stable `GET /menu` servi sur tout host (marche avant le
+  cutover DNS). Canonical SEO par markup (`https://menu.revive.sn/`) ; page
+  **indexable** (pas de noindex — divergence délibérée des autres pages
+  publiques).
+- **Design** : charte Revive (crème/prune/mauve, chevron SVG inline), polices
+  système (pas d'embed TTF ~400 Ko — clients sur data mobile, décision
+  Babakar), nav sticky d'ancres par catégorie (scroll CSS, CSP stricte
+  `default-src 'none'` conservée), badge « ★ Incontournable », bouton
+  « Commander sur WhatsApp ». Catégories dans l'ordre curé de
+  `menu_categories` ; catégories vides masquées ; catégorie supprimée de la
+  liste mais encore portée par un article → groupe en dernier.
+- Tests : 12 nouveaux (groupement, rendu/échappement, routes host, anti-fuite
+  recette). ⚠️ Vérifié build+tests sur **l'arbre commité + mes seuls fichiers**
+  (checkout scratch) : l'arbre de travail portait un refactor livraisons
+  inachevé d'un autre agent (deliveryRepo/deliveryRules) qui casse `tsc` — pas
+  touché, pas commité.
+- **Ops restant** : ajouter le domaine custom `menu.revive.sn` au service
+  Railway + CNAME chez le registrar de revive.sn (action Babakar). `/menu`
+  fonctionne en attendant.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
