@@ -2719,6 +2719,16 @@ WhatsApp : [src/lib/menuOgImage.ts](src/lib/menuOgImage.ts) (1200×630,
 `GET /menu/og.png` (buffer caché par process, max-age=86400), URL absolue via
 `BASE_URL`. 15 tests sur la page (3 nouveaux : CSP, PNG og, hygiène markup).
 
+**Itération 2 (retour Babakar, 22/07)** : (a) double CTA supprimé — seul le
+bouton flottant reste, le footer garde juste « Revive — Dakar » ; (b) nav
+**centrée** (`justify-content: safe center` — centre quand ça tient, scroll
+sûr sinon) ; (c) **une catégorie à la fois** (même choix que l'admin §6.17) :
+onglets 100 % CSS — sections masquées sauf `.default` (la première) ou celle
+en `:target`, pastille active remplie via `body:has(#id:target)` (spécificité
+ID > reset, ordre indifférent). Tout le menu reste dans le DOM (SEO,
+deep-links `/menu#cat-…`) ; sans `:has()` (vieux navigateurs) dégradation
+douce : défaut + ciblée visibles. Toujours zéro JS, CSP inchangée. 17 tests.
+
 ### 6.21 Livraisons v3 — étape unique « partie en livraison », cuisine = rôle `bar`, ping réception à la création (22/07/2026)
 
 Trois demandes de Babakar, facilitées par un fait clé : **`delivery_orders`

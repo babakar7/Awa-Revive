@@ -17,8 +17,14 @@ import {
  * (delivery magic links, payment returns), this one is MEANT to be indexed —
  * it's a marketing surface, so no noindex anywhere.
  *
- * The category anchor nav works with CSS smooth scrolling alone; keep the page
- * script-free or the strict CSP below must change.
+ * The category nav is a CSS-only tab system (retour Babakar 22/07 — même choix
+ * que l'admin §6.17 : une catégorie à la fois, tout le menu d'un coup était
+ * trop) : sections masquées sauf la première (.default) ou celle ciblée par le
+ * fragment (:target), pastille active via body:has(...) — zéro JavaScript,
+ * tout le menu reste dans le DOM (SEO + deep-links /menu#cat-…). Vieux
+ * navigateurs sans :has() : dégradation douce (la catégorie par défaut reste
+ * visible en plus de celle ciblée). Keep the page script-free or the strict
+ * CSP below must change.
  */
 
 export const MENU_HOST = "menu.revive.sn";
@@ -111,13 +117,12 @@ h1{font-family:Georgia,"Times New Roman",serif;font-weight:500;font-size:2.2rem;
 .tagline{color:#7d5f80;font-size:.72rem;letter-spacing:.28em;text-transform:uppercase;margin:0}
 .catsbar{position:sticky;top:0;z-index:2;background:rgba(251,246,240,.95);backdrop-filter:blur(4px);border-bottom:1px solid #f2e7e2}
 .catsbar::after{content:"";position:absolute;top:0;right:0;bottom:1px;width:2.4rem;background:linear-gradient(to left,rgba(251,246,240,.95),rgba(251,246,240,0));pointer-events:none}
-nav.cats{display:flex;gap:.5rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:.55rem 1.1rem;scrollbar-width:none}
+nav.cats{display:flex;gap:.5rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:.55rem 1.1rem;scrollbar-width:none;justify-content:safe center}
 nav.cats::-webkit-scrollbar{display:none}
 nav.cats a{flex:0 0 auto;background:#f2e7e2;color:#7c547d;text-decoration:none;font-size:.8rem;line-height:1;font-weight:600;letter-spacing:.04em;padding:.75rem 1.05rem;border-radius:999px}
 main{max-width:42rem;margin:0 auto;padding:0 1.1rem 7rem}
 section{scroll-margin-top:4.6rem;padding-top:1.7rem}
 h2{font-family:Georgia,"Times New Roman",serif;font-weight:500;text-transform:uppercase;letter-spacing:.16em;font-size:1.05rem;color:#7c547d;border-bottom:1px solid #f2e7e2;padding-bottom:.45rem;margin:0 0 .3rem}
-section:target h2{color:#211921;border-bottom:2px solid #7c547d;padding-bottom:calc(.45rem - 1px)}
 .item{padding:.7rem 0}
 .line{display:flex;align-items:baseline;gap:.6rem}
 .name{font-weight:600}
@@ -128,9 +133,26 @@ section:target h2{color:#211921;border-bottom:2px solid #7c547d;padding-bottom:c
 .opts{margin:.15rem 0 0;color:#7d5f80;font-size:.85rem;font-style:italic}
 .empty{text-align:center;color:#6b5c6c;margin-top:3rem}
 footer{text-align:center;margin-top:3rem}
-a.wa{display:inline-block;padding:.9rem 1.7rem;background:#7c547d;color:#fbf6f0;text-decoration:none;border-radius:999px;font-weight:600;font-size:1.02rem}
 a.wa-float{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(.9rem + env(safe-area-inset-bottom));z-index:3;padding:.8rem 1.4rem;background:#7c547d;color:#fbf6f0;text-decoration:none;border-radius:999px;font-weight:600;font-size:.95rem;white-space:nowrap;box-shadow:0 2px 10px rgba(33,25,33,.18)}
 .foot-note{color:#7d5f80;font-size:.7rem;letter-spacing:.22em;text-transform:uppercase;margin-top:1.5rem}`;
+
+/** Onglets CSS-only : une seule catégorie visible (la première par défaut),
+ *  pastille active remplie. Le reset de la pastille par défaut perd face aux
+ *  règles actives par catégorie (elles portent un #id dans :has → spécificité
+ *  supérieure), donc l'ordre des règles est indifférent. */
+function tabsCss(slugs: string[]): string {
+  if (!slugs.length) return "";
+  const active = "{background:#7c547d;color:#fbf6f0}";
+  return [
+    `main section{display:none}`,
+    `main section:target{display:block}`,
+    `main section.default{display:block}`,
+    `body:has(main section:target) main section.default:not(:target){display:none}`,
+    `nav.cats a[href="#cat-${slugs[0]}"]${active}`,
+    `body:has(main section:target) nav.cats a[href="#cat-${slugs[0]}"]{background:#f2e7e2;color:#7c547d}`,
+    ...slugs.map((s) => `body:has(#cat-${s}:target) nav.cats a[href="#cat-${s}"]${active}`),
+  ].join("\n");
+}
 
 // Chevron Revive (évocation du logo de la charte) en SVG inline — le markup
 // n'est pas soumis à img-src, donc compatible avec default-src 'none'.
@@ -152,16 +174,17 @@ function itemHtml(item: PublicMenuItem): string {
 }
 
 export function renderPublicMenuPage(groups: MenuGroup[]): string {
+  const slugs = groups.map((g) => anchorSlug(g.category));
   const nav = groups.length
     ? `<div class="catsbar"><nav class="cats" aria-label="Catégories">${groups
-        .map((g) => `<a href="#cat-${anchorSlug(g.category)}">${esc(g.category)}</a>`)
+        .map((g, i) => `<a href="#cat-${slugs[i]}">${esc(g.category)}</a>`)
         .join("")}</nav></div>`
     : "";
   const content = groups.length
     ? groups
         .map(
-          (g) =>
-            `<section id="cat-${anchorSlug(g.category)}"><h2>${esc(g.category)}</h2>${g.items
+          (g, i) =>
+            `<section id="cat-${slugs[i]}"${i === 0 ? ` class="default"` : ""}><h2>${esc(g.category)}</h2>${g.items
               .map(itemHtml)
               .join("")}</section>`,
         )
@@ -185,13 +208,13 @@ export function renderPublicMenuPage(groups: MenuGroup[]): string {
 <meta name="theme-color" content="#fbf6f0">
 <meta name="color-scheme" content="only light">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 28'%3E%3Cpath d='M18 0 36 28h-9L18 14 9 28H0Z' fill='%237c547d'/%3E%3C/svg%3E">
-<style>${STYLE}</style></head><body>
+<style>${STYLE}
+${tabsCss(slugs)}</style></head><body>
 <header class="brand"><span class="wordmark">${LOGO_SVG}revive</span>
 <h1>Le Menu</h1>
 <p class="tagline">Pilates | Wellness | Community</p></header>
 ${nav}<main>${content}
-<footer><a class="wa" href="${AWA_WA_ME}">Commander sur WhatsApp 📲</a>
-<p class="foot-note">Revive — Dakar</p></footer></main>
+<footer><p class="foot-note">Revive — Dakar</p></footer></main>
 <a class="wa-float" href="${AWA_WA_ME}">Commander sur WhatsApp 📲</a></body></html>`;
 }
 

@@ -104,7 +104,28 @@ describe("renderPublicMenuPage", () => {
     expect(html).toContain(`rel="icon" href="data:image/svg+xml`);
     expect(html).toContain(`property="og:image"`);
     expect(html).toContain(`content="only light"`);
-    expect(html.match(/wa-float/g)).toHaveLength(2); // 1 CSS rule + 1 anchor
+    expect(html.match(/Commander sur WhatsApp/g)).toHaveLength(1); // floating CTA only
+  });
+
+  it("shows one category at a time: first is default, others revealed by :target", () => {
+    const html = renderPublicMenuPage(
+      groupPublicMenu(
+        [item({ id: "A", category: "Cafés" }), item({ id: "B", category: "Jus" })],
+        ["Cafés", "Jus"],
+      ),
+    );
+    expect(html).toContain(`<section id="cat-cafes" class="default">`);
+    expect(html).toContain(`<section id="cat-jus">`);
+    expect(html).toContain("main section{display:none}");
+    expect(html).toContain("main section:target{display:block}");
+    // Active-pill rules for the default and each targeted category.
+    expect(html).toContain(`nav.cats a[href="#cat-cafes"]{background:#7c547d`);
+    expect(html).toContain(`body:has(#cat-jus:target) nav.cats a[href="#cat-jus"]{background:#7c547d`);
+  });
+
+  it("emits no tab CSS for an empty menu", () => {
+    const html = renderPublicMenuPage([]);
+    expect(html).not.toContain("main section{display:none}");
   });
 });
 
