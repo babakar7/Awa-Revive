@@ -47,6 +47,17 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(html).toContain(`data-search="iced matcha matcha matcha"`);
   });
 
+
+  it("offers a test mode and preserves it after a validation error", () => {
+    const normal = renderLivraisonForm(menu(), "");
+    expect(normal).toContain(`name="is_test" type="checkbox" value="1"`);
+    expect(normal).not.toContain(`name="is_test" type="checkbox" value="1" checked`);
+
+    const test = renderLivraisonForm(menu(), "", [], { is_test: "1" });
+    expect(test).toContain(`name="is_test" type="checkbox" value="1" checked`);
+    expect(test).toContain("exclue des statistiques");
+  });
+
   it("prefills client fields on error re-render, escaping HTML", () => {
     const html = renderLivraisonForm(menu(), "", [], {
       client_name: `A<script>x</script>`,

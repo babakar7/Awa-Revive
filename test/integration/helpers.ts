@@ -100,6 +100,8 @@ export interface FetchMock {
   waCalls: () => RecordedCall[];
   /** WhatsApp text messages sent to one number. */
   waTextsTo: (waId: string) => string[];
+  /** Template names that Meta should reject synchronously (test-only). */
+  waTemplateFailures: Set<string>;
   /** Brevo email sends, parsed. */
   emailCalls: () => RecordedCall[];
   wixCreateBookingCalls: () => RecordedCall[];
@@ -163,6 +165,7 @@ export function makeFetchMock(): FetchMock {
   };
 
   let failEmail = false;
+  const waTemplateFailures = new Set<string>();
 
   const om: OmState = defaultOmState();
 
@@ -192,6 +195,14 @@ export function makeFetchMock(): FetchMock {
       return json(200, { id: `media_test_${calls.length}` });
     }
     if (url.includes("graph.facebook.com")) {
+      if (body?.type === "template" && waTemplateFailures.has(body?.template?.name)) {
+        return json(400, {
+          error: {
+            code: 132018,
+            message: "There's an issue with the parameters in your template",
+          },
+        });
+      }
       return json(200, { messages: [{ id: `wamid.test.${calls.length}` }] });
     }
 
@@ -405,6 +416,7 @@ export function makeFetchMock(): FetchMock {
             c.body?.type === "text",
         )
         .map((c) => c.body.text.body as string),
+    waTemplateFailures,
     emailCalls: () => calls.filter((c) => c.url.includes("api.brevo.com")),
     wixCreateBookingCalls: () =>
       calls.filter((c) => c.url.endsWith("/bookings/v2/bookings") && c.method === "POST"),
@@ -443,6 +455,7 @@ export function makeFetchMock(): FetchMock {
       wix.failCalendar = false;
       wix.staffResources = [];
       failEmail = false;
+      waTemplateFailures.clear();
       const d = defaultOmState();
       om.failToken = d.failToken;
       om.failLookup = d.failLookup;

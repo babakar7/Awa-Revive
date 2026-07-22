@@ -43,6 +43,7 @@ export interface DeliveryOrderView {
   note: string | null;
   items: ExtraLine[];
   amount_xof: number;
+  is_test?: boolean;
 }
 
 /**
@@ -135,21 +136,25 @@ export function kitchenMessage(
     "",
     `🛵 Quand le livreur part avec la commande, touchez ici : ${magicLink}`,
   );
-  return { subject: "🛵 Nouvelle commande livraison", body: lines.join("\n") };
+  return {
+    subject: o.is_test ? "🧪 TEST — commande livraison" : "🛵 Nouvelle commande livraison",
+    body: `${o.is_test ? "🧪 COMMANDE DE TEST — ne pas encaisser ni préparer comme une vente réelle.\n\n" : ""}${lines.join("\n")}`,
+  };
 }
 
 /** Client "order received" free-text confirmation, sent at creation (localized). */
 export function createdClientMessage(lang: string | null, o: DeliveryOrderView): string {
   const first = firstName(o.client_name);
   const summary = formatExtrasOneLine(o.items);
+  const testPrefix = o.is_test ? "🧪 TEST — " : "";
   if (lang === "en") {
     return (
-      `📝 Thanks${first ? ` ${first}` : ""}! Your Revive order is confirmed: ${summary} — ` +
+      `${testPrefix}📝 Thanks${first ? ` ${first}` : ""}! Your Revive order is confirmed: ${summary} — ` +
       `${o.amount_xof} FCFA to pay on delivery, to ${o.address}. We'll let you know as soon as it's on its way!`
     );
   }
   return (
-    `📝 Merci${first ? ` ${first}` : ""} ! Votre commande Revive est bien reçue : ${summary} — ` +
+    `${testPrefix}📝 Merci${first ? ` ${first}` : ""} ! Votre commande Revive est bien reçue : ${summary} — ` +
     `${o.amount_xof} FCFA à régler à la livraison, à ${o.address}. On vous prévient dès qu'elle part en livraison !`
   );
 }
@@ -157,14 +162,15 @@ export function createdClientMessage(lang: string | null, o: DeliveryOrderView):
 /** Client "your order is out for delivery" free-text (localized). */
 export function routeClientMessage(lang: string | null, o: DeliveryOrderView): string {
   const first = firstName(o.client_name);
+  const testPrefix = o.is_test ? "🧪 TEST — " : "";
   if (lang === "en") {
     return (
-      `🛵 On its way${first ? ` ${first}` : ""}! Your Revive order is out for delivery — ` +
+      `${testPrefix}🛵 On its way${first ? ` ${first}` : ""}! Your Revive order is out for delivery — ` +
       `${o.amount_xof} FCFA to pay on delivery. See you soon!`
     );
   }
   return (
-    `🛵 C'est parti${first ? ` ${first}` : ""} ! Votre commande Revive est en route — ` +
+    `${testPrefix}🛵 C'est parti${first ? ` ${first}` : ""} ! Votre commande Revive est en route — ` +
     `${o.amount_xof} FCFA à régler à la livraison. À tout de suite !`
   );
 }
@@ -189,7 +195,7 @@ export function deliveryUpdateTemplateParams(
       : `en route ! ${o.amount_xof} FCFA à régler à la livraison — à tout de suite`;
   return [
     toTemplateParam(firstName(o.client_name) || o.client_name || "client", 60),
-    toTemplateParam(text, 200),
+    toTemplateParam(`${o.is_test ? "TEST — " : ""}${text}`, 200),
   ];
 }
 

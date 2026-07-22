@@ -272,11 +272,12 @@ export function registerAdmin(app: FastifyInstance): void {
             .listOpenDeliveryOrders()
             .catch(() => [] as Awaited<ReturnType<typeof delivery.listOpenDeliveryOrders>>),
         ]);
+        const realOpenDeliveries = openDeliveries.filter((o) => !o.is_test);
         const now = Date.now();
         let late = 0;
         let kitchenFailed = 0;
         let clientFailed = 0;
-        for (const o of openDeliveries) {
+        for (const o of realOpenDeliveries) {
           if (o.status === "IN_KITCHEN" && o.kitchen_notify_status === "failed") kitchenFailed++;
           if (o.status === "IN_KITCHEN") {
             const slaMs = (o.sla_minutes ?? 20) * 60_000;
@@ -294,7 +295,7 @@ export function registerAdmin(app: FastifyInstance): void {
             late,
             kitchenFailed,
             clientFailed,
-            open: openDeliveries.length,
+            open: realOpenDeliveries.length,
           },
           stats: s,
           badges,
@@ -653,6 +654,7 @@ ${
         const name = String(b.client_name ?? "").trim();
         const address = String(b.address ?? "").trim();
         const note = String(b.note ?? "").trim() || null;
+        const isTest = b.is_test === "1";
         const phone = normalizeDeliveryPhone(String(b.client_phone ?? ""));
         // On a validation error, re-render the form (200) with everything the
         // user already typed + the message, instead of redirecting to a blank
@@ -675,6 +677,7 @@ ${
             address: b.address,
             note: b.note,
             sla_minutes: b.sla_minutes,
+            is_test: b.is_test,
             qty,
             choice,
           });
@@ -703,6 +706,7 @@ ${
           amount_xof: priced.totalXof,
           sla_minutes: sla,
           created_by: req.adminUser ?? null,
+          is_test: isTest,
         });
         req.log.info({ order: order.id, by: req.adminUser }, "Delivery order created");
         // Confirm receipt to the client (fire-and-forget; the sweep reconciles).
@@ -711,14 +715,15 @@ ${
         // reception must see them to manage the delivery. Harmless self-echo
         // when reception entered the order herself.
         notifyReception(
-          "🛵 Nouvelle commande livraison",
-          `Client : ${name} (+${phone})\n` +
+          isTest ? "🧪 TEST — nouvelle commande livraison" : "🛵 Nouvelle commande livraison",
+          `${isTest ? "🧪 COMMANDE DE TEST — exclue des statistiques.\n" : ""}` +
+            `Client : ${name} (+${phone})\n` +
             `Commande : ${formatExtrasOneLine(priced.lines)}\n` +
             `Total : ${priced.totalXof} FCFA (à encaisser à la livraison)\n` +
             `Adresse : ${address}\n` +
             (note ? `Note : ${note}\n` : "") +
             `Suivi : /admin/livraisons`,
-          { whatsappFirst: true },
+          { whatsappFirst: true, preferTemplate: true },
         );
         // Notify the kitchen now (await so the banner is truthful). Claim first
         // so a concurrent sweep can't double-send.

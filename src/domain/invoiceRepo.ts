@@ -208,8 +208,8 @@ export async function recentPaidCandidates(): Promise<InvoiceCandidate[]> {
     pool.query(
       `select id, client_name, client_phone, items_json, amount_xof, delivered_at,
               updated_at, created_at
-         from delivery_orders
-        where status = 'DELIVERED'
+        from delivery_orders
+        where status = 'DELIVERED' and is_test = false
           and coalesce(delivered_at, updated_at) > now() - interval '30 days'
         order by coalesce(delivered_at, updated_at) desc limit 10`,
     ),

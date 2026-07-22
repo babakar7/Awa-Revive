@@ -36,6 +36,7 @@ export interface DeliveryOrder {
   note: string | null;
   items_json: unknown;
   amount_xof: number;
+  is_test: boolean;
   status: DeliveryStatus;
   sla_minutes: number;
   ready_token_hash: string;
@@ -46,9 +47,11 @@ export interface DeliveryOrder {
   created_notify_status: NotifyStatus; // the creation-confirmation ping
   created_notified_at: Date | null;
   created_notify_attempts: number;
+  created_notify_wamid: string | null;
   route_notify_status: NotifyStatus; // the "out for delivery" ping
   route_notified_at: Date | null;
   route_notify_attempts: number;
+  route_notify_wamid: string | null;
   alerted_at: Date | null; // SLA (not departed in time) alert, one-shot
   out_for_delivery_at: Date | null;
   out_for_delivery_by: string | null;
@@ -76,6 +79,7 @@ export interface CreateDeliveryInput {
   amount_xof: number;
   sla_minutes: number;
   created_by: string | null;
+  is_test: boolean;
 }
 
 /** Insert an order (status IN_KITCHEN). Returns the row AND the cleartext token
@@ -86,9 +90,9 @@ export async function createDeliveryOrder(
   const token = newReadyToken();
   const res = await pool.query(
     `insert into delivery_orders
-       (client_name, client_phone, address, note, items_json, amount_xof, sla_minutes,
-        ready_token_hash, created_by)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (client_name, client_phone, address, note, items_json, amount_xof,
+        sla_minutes, ready_token_hash, created_by, is_test)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      returning *`,
     [
       input.client_name,
@@ -100,6 +104,7 @@ export async function createDeliveryOrder(
       input.sla_minutes,
       hashReadyToken(token),
       input.created_by,
+      input.is_test,
     ],
   );
   return { order: res.rows[0] as DeliveryOrder, token };
@@ -236,12 +241,13 @@ export async function setKitchenNotifyOutcome(
 type ClientPing = "created" | "route";
 const CLIENT_PING_COLS: Record<
   ClientPing,
-  { status: string; at: string; attempts: string; claimIn: string; pendingIn: string }
+  { status: string; at: string; attempts: string; wamid: string; claimIn: string; pendingIn: string }
 > = {
   created: {
     status: "created_notify_status",
     at: "created_notified_at",
     attempts: "created_notify_attempts",
+    wamid: "created_notify_wamid",
     claimIn: "('IN_KITCHEN','OUT_FOR_DELIVERY')",
     pendingIn: "('IN_KITCHEN','OUT_FOR_DELIVERY')",
   },
@@ -249,6 +255,7 @@ const CLIENT_PING_COLS: Record<
     status: "route_notify_status",
     at: "route_notified_at",
     attempts: "route_notify_attempts",
+    wamid: "route_notify_wamid",
     claimIn: "('OUT_FOR_DELIVERY','DELIVERED')",
     pendingIn: "('OUT_FOR_DELIVERY')",
   },
@@ -260,6 +267,7 @@ async function claimClientPing(id: string, kind: ClientPing): Promise<DeliveryOr
     `update delivery_orders
         set ${c.status} = 'claimed',
             ${c.attempts} = ${c.attempts} + 1,
+            ${c.wamid} = null,
             updated_at = now()
       where id = $1 and status in ${c.claimIn}
         and ${c.attempts} < $2
@@ -275,15 +283,17 @@ async function setClientPingOutcome(
   id: string,
   kind: ClientPing,
   status: NotifyStatus,
+  waMessageId: string | null = null,
 ): Promise<void> {
   const c = CLIENT_PING_COLS[kind];
   await pool.query(
     `update delivery_orders
         set ${c.status} = $2,
             ${c.at} = case when $2 in ('sent','sent_template') then now() else ${c.at} end,
+            ${c.wamid} = case when $2 in ('sent','sent_template') then $3 else null end,
             updated_at = now()
       where id = $1`,
-    [id, status],
+    [id, status, waMessageId],
   );
 }
 
@@ -302,10 +312,35 @@ async function pendingClientPings(kind: ClientPing): Promise<string[]> {
 // Named entry points (call sites stay explicit).
 export const claimCreatedNotify = (id: string) => claimClientPing(id, "created");
 export const claimRouteNotify = (id: string) => claimClientPing(id, "route");
-export const setCreatedNotifyOutcome = (id: string, status: NotifyStatus) =>
-  setClientPingOutcome(id, "created", status);
-export const setRouteNotifyOutcome = (id: string, status: NotifyStatus) =>
-  setClientPingOutcome(id, "route", status);
+export const setCreatedNotifyOutcome = (
+  id: string,
+  status: NotifyStatus,
+  waMessageId: string | null = null,
+) => setClientPingOutcome(id, "created", status, waMessageId);
+export const setRouteNotifyOutcome = (
+  id: string,
+  status: NotifyStatus,
+  waMessageId: string | null = null,
+) => setClientPingOutcome(id, "route", status, waMessageId);
+
+/**
+ * Meta may accept free text with HTTP 200 and reject it asynchronously because
+ * the 24h window is closed. Match the CURRENT wamid only, flip that ping back
+ * to failed, and let the 60s sweep retry it (up to the normal attempt cap).
+ */
+export async function markClientPingFailedByWamid(waMessageId: string): Promise<number> {
+  let changed = 0;
+  for (const c of Object.values(CLIENT_PING_COLS)) {
+    const res = await pool.query(
+      `update delivery_orders
+          set ${c.status} = 'failed', ${c.at} = null, ${c.wamid} = null, updated_at = now()
+        where ${c.wamid} = $1 and ${c.status} in ('sent','sent_template')`,
+      [waMessageId],
+    );
+    changed += res.rowCount ?? 0;
+  }
+  return changed;
+}
 
 /** Orders whose kitchen notification still needs a (re)attempt (sweep input). */
 export async function pendingKitchenNotifies(): Promise<string[]> {
@@ -368,7 +403,7 @@ export async function recentDeliveryClients(limit = 30): Promise<RecentDeliveryC
   const res = await pool.query(
     `select client_name, client_phone, address from (
        select distinct on (client_phone) client_name, client_phone, address, created_at
-         from delivery_orders order by client_phone, created_at desc
+         from delivery_orders where is_test = false order by client_phone, created_at desc
      ) t order by t.created_at desc limit $1`,
     [limit],
   );
@@ -389,7 +424,8 @@ export async function deliveryStats(): Promise<DeliveryStats> {
        count(*) filter (where alerted_at is not null and alerted_at::date = now()::date) as late_today,
        avg(extract(epoch from (out_for_delivery_at - created_at)) / 60.0)
          filter (where out_for_delivery_at is not null and created_at > now() - interval '30 days') as avg_prep
-     from delivery_orders`,
+     from delivery_orders
+     where is_test = false`,
   );
   const r = res.rows[0];
   return {

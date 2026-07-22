@@ -637,15 +637,22 @@ alter table delivery_orders add column if not exists created_notify_status text 
 alter table delivery_orders alter column created_notify_status set default 'pending';
 alter table delivery_orders add column if not exists created_notified_at timestamptz;
 alter table delivery_orders add column if not exists created_notify_attempts integer not null default 0;
+alter table delivery_orders add column if not exists created_notify_wamid text;
 alter table delivery_orders add column if not exists route_notify_status text not null default 'pending';
 alter table delivery_orders add column if not exists route_notified_at timestamptz;
 alter table delivery_orders add column if not exists route_notify_attempts integer not null default 0;
+alter table delivery_orders add column if not exists route_notify_wamid text;
+alter table delivery_orders add column if not exists is_test boolean not null default false;
 alter table delivery_orders add column if not exists out_for_delivery_at timestamptz;
 alter table delivery_orders add column if not exists out_for_delivery_by text;   -- 'kitchen-link' | 'admin-<user>'
 alter table delivery_orders add column if not exists pickup_alerted_at timestamptz; -- alerte enlèvement one-shot
 alter table delivery_orders drop constraint if exists delivery_orders_status_check;
 alter table delivery_orders add constraint delivery_orders_status_check
   check (status in ('IN_KITCHEN','OUT_FOR_DELIVERY','DELIVERED','CANCELLED'));
+create index if not exists idx_delivery_orders_created_wamid
+  on delivery_orders (created_notify_wamid) where created_notify_wamid is not null;
+create index if not exists idx_delivery_orders_route_wamid
+  on delivery_orders (route_notify_wamid) where route_notify_wamid is not null;
 
 -- Factures réception : un client demande une facture (aujourd'hui → handoff, la
 -- réception n'avait aucun outil). Elle la crée ici, l'imprime (PDF navigateur) et

@@ -1,9 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **20 juillet 2026** — refonte premium et UX de tout
-> l’admin (§4.41). Avant : journal notif « nouvelle conversation », admin IA
-> inbox-first, notifications staff, livraisons bar, handoffs `wa.me`.
+> Dernière mise à jour : **22 juillet 2026** — fiabilisation des alertes
+> livraison + mode commande de test (§6.26). Avant : refonte premium et UX de
+> tout l’admin (§4.41), notifications staff, livraisons bar, handoffs `wa.me`.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
@@ -2880,6 +2880,37 @@ historique reste disponible : tous les cours ou filtrage par texte.
   `test/notificationRules.test.ts`, rendu du sélecteur dans
   `test/adminNotificationsPage.test.ts`, persistance création/modification dans
   `test/integration/notificationClaim.test.ts`.
+
+### 6.26 Alertes livraison hors fenêtre + commandes de test (22/07/2026)
+
+Incident réel sur la première commande livraison (Linsey, `6cb12809`, créée à
+11:46) : ni le client ni la réception n'ont reçu leurs alertes. La base a montré
+les deux pings client rejetés **asynchroniquement** par Meta avec `131047`, alors
+que `delivery_orders` les avait déjà marqués `sent`. Le ping réception avait le
+même faux positif mais son `wamid` n'était pas conservé. En parallèle, le
+template `ticket_cuisine` est approuvé avec un bouton URL **fixe** alors que le
+code lui passe un token dynamique → `132018`, puis le repli texte était exposé
+au même rejet hors fenêtre.
+
+- **Template-first partout sur une livraison** : client via
+  `livraison_update`, réception/SLA/repli cuisine via `awa_notification`. Le
+  ticket cuisine dédié reste tenté, mais son échec retombe désormais sur le
+  template générique (qui contient le lien magique dans son corps), jamais sur
+  un texte libre en premier.
+- **Vérité async** : les pings client stockent leur `wamid` courant
+  (`created_notify_wamid` / `route_notify_wamid`). Un callback Meta `failed`
+  repasse l'outbox correspondante à `failed`; le sweep 60 s la retente dans la
+  limite habituelle de 3 essais. Les pings réception stockent aussi leur wamid,
+  donc le journal n'affiche plus un faux `sent` silencieux.
+- **Mode commande de test** : case « 🧪 Commande de test » dans le formulaire.
+  Le parcours complet reste exercé (client, réception, bar, départ, SLA), avec
+  mentions TEST et badges explicites, mais `is_test=true` exclut la commande
+  des stats livraison, de la file d'accueil, des clients récents et des
+  candidats facture.
+- Validation : build + **576 tests unitaires** + suite d'intégration complète
+  verte, dont template-first client/réception, repli `ticket_cuisine` →
+  `awa_notification`, retry après échec async et exclusion statistique du mode
+  test.
 
 ## 7. Runbook ops
 

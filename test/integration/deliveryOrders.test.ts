@@ -5,6 +5,11 @@ import { pool, migrate } from "../../src/db/index.js";
 import { initCafeMenu, refreshCafeMenu } from "../../src/domain/cafeMenuRepo.js";
 import { config } from "../../src/config.js";
 import { sweepDeliveries } from "../../src/domain/deliveryNotify.js";
+import {
+  deliveryStats,
+  markClientPingFailedByWamid,
+  recentDeliveryClients,
+} from "../../src/domain/deliveryRepo.js";
 import { markLogFailedByWamid, recordDeliveryLog } from "../../src/domain/notificationRepo.js";
 import { hashReadyToken, newReadyToken } from "../../src/domain/deliveryRules.js";
 import { planningNowSlot } from "../../src/domain/staffPlanningRules.js";
@@ -119,6 +124,32 @@ describe("delivery order creation → kitchen notify", () => {
       async () => mock.waTextsTo(RECEPTION).some((t) => t.includes("Nouvelle commande livraison")),
       "reception new-order ping",
     );
+  });
+
+  it("falls back to the approved generic template when ticket_cuisine is misconfigured", async () => {
+    const previousKitchen = config.WA_KITCHEN_TICKET_TEMPLATE;
+    const previousReception = config.WA_RECEPTION_TEMPLATE;
+    const previousLang = config.WA_RECEPTION_TEMPLATE_LANG;
+    config.WA_KITCHEN_TICKET_TEMPLATE = "ticket_cuisine";
+    config.WA_RECEPTION_TEMPLATE = "awa_notification";
+    config.WA_RECEPTION_TEMPLATE_LANG = "en";
+    mock.waTemplateFailures.add("ticket_cuisine");
+    try {
+      await seedKitchenContact();
+      const id = await createOrder();
+      const kitchenCalls = mock.waCalls().filter((c) => c.body?.to === "221770000099");
+      expect(kitchenCalls.some((c) => c.body?.template?.name === "ticket_cuisine")).toBe(true);
+      expect(kitchenCalls.some((c) => c.body?.template?.name === "awa_notification")).toBe(true);
+      expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+      const order = (
+        await pool.query(`select kitchen_notify_status from delivery_orders where id=$1`, [id])
+      ).rows[0];
+      expect(order.kitchen_notify_status).toBe("sent_template");
+    } finally {
+      config.WA_KITCHEN_TICKET_TEMPLATE = previousKitchen;
+      config.WA_RECEPTION_TEMPLATE = previousReception;
+      config.WA_RECEPTION_TEMPLATE_LANG = previousLang;
+    }
   });
 });
 
@@ -352,6 +383,96 @@ describe("creation confirmation ping", () => {
     const order = (await pool.query(`select created_notify_status from delivery_orders where id=$1`, [id])).rows[0];
     expect(["sent", "sent_template"]).toContain(order.created_notify_status);
   });
+
+  it("uses the approved delivery template first when it is configured", async () => {
+    const previousTemplate = config.WA_DELIVERY_UPDATE_TEMPLATE;
+    const previousLang = config.WA_DELIVERY_UPDATE_TEMPLATE_LANG;
+    config.WA_DELIVERY_UPDATE_TEMPLATE = "livraison_update";
+    config.WA_DELIVERY_UPDATE_TEMPLATE_LANG = "en";
+    try {
+      await seedKitchenContact();
+      const id = await createOrder();
+      await waitFor(
+        async () =>
+          mock.waCalls().some(
+            (c) =>
+              c.body?.to === "221770009988" &&
+              c.body?.type === "template" &&
+              c.body?.template?.name === "livraison_update",
+          ),
+        "client delivery template",
+      );
+      expect(mock.waTextsTo("221770009988")).toHaveLength(0);
+      const order = (
+        await pool.query(
+          `select created_notify_status, created_notify_wamid from delivery_orders where id=$1`,
+          [id],
+        )
+      ).rows[0];
+      expect(order.created_notify_status).toBe("sent_template");
+      expect(order.created_notify_wamid).toMatch(/^wamid\.test\./);
+    } finally {
+      config.WA_DELIVERY_UPDATE_TEMPLATE = previousTemplate;
+      config.WA_DELIVERY_UPDATE_TEMPLATE_LANG = previousLang;
+    }
+  });
+
+  it("sends the new-order reception alert template-first and stores its wamid", async () => {
+    const previousTemplate = config.WA_RECEPTION_TEMPLATE;
+    const previousLang = config.WA_RECEPTION_TEMPLATE_LANG;
+    config.WA_RECEPTION_TEMPLATE = "awa_notification";
+    config.WA_RECEPTION_TEMPLATE_LANG = "en";
+    try {
+      await seedKitchenContact();
+      await createOrder();
+      await waitFor(
+        async () =>
+          mock.waCalls().some(
+            (c) =>
+              c.body?.to === RECEPTION &&
+              c.body?.type === "template" &&
+              c.body?.template?.name === "awa_notification",
+          ),
+        "reception delivery template",
+      );
+      expect(
+        mock.waTextsTo(RECEPTION).some((text) => text.includes("Nouvelle commande livraison")),
+      ).toBe(false);
+      const row = (
+        await pool.query(
+          `select status, wa_message_id from notification_log
+            where source='reception' and body like '%Nouvelle commande livraison%'
+            order by created_at desc limit 1`,
+        )
+      ).rows[0];
+      expect(row.status).toBe("sent_template");
+      expect(row.wa_message_id).toMatch(/^wamid\.test\./);
+    } finally {
+      config.WA_RECEPTION_TEMPLATE = previousTemplate;
+      config.WA_RECEPTION_TEMPLATE_LANG = previousLang;
+    }
+  });
+});
+
+describe("test delivery mode", () => {
+  it("runs the alert flow but is excluded from business stats and recent clients", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({ is_test: "1" });
+    await waitFor(
+      async () => mock.waTextsTo("221770009988").some((t) => t.includes("TEST")),
+      "test client alert",
+    );
+
+    const order = (await pool.query(`select is_test from delivery_orders where id=$1`, [id])).rows[0];
+    expect(order.is_test).toBe(true);
+    expect((await deliveryStats()).openCount).toBe(0);
+    expect(await recentDeliveryClients()).toHaveLength(0);
+    expect(mock.waTextsTo("221770000099").some((t) => t.includes("COMMANDE DE TEST"))).toBe(true);
+    await waitFor(
+      async () => mock.waTextsTo(RECEPTION).some((t) => t.includes("COMMANDE DE TEST")),
+      "test reception alert",
+    );
+  });
 });
 
 describe("out for delivery (admin board)", () => {
@@ -423,5 +544,49 @@ describe("async delivery-failure correction (statuses webhook)", () => {
 
     // Unknown wamid → no-op.
     expect(await markLogFailedByWamid("wamid.UNKNOWN", "x")).toBe(0);
+  });
+
+  it("puts the matching current client ping back in failed so the sweep can retry it", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+    await waitFor(
+      async () => {
+        const row = (
+          await pool.query(
+            `select created_notify_status, created_notify_wamid from delivery_orders where id=$1`,
+            [id],
+          )
+        ).rows[0];
+        return row?.created_notify_status === "sent" && !!row?.created_notify_wamid;
+      },
+      "client ping wamid stored",
+    );
+    const before = (
+      await pool.query(
+        `select created_notify_wamid, created_notify_attempts from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+
+    expect(await markClientPingFailedByWamid(before.created_notify_wamid)).toBe(1);
+    const failed = (
+      await pool.query(
+        `select created_notify_status, created_notify_wamid from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(failed).toEqual({ created_notify_status: "failed", created_notify_wamid: null });
+
+    await sweepDeliveries(noopLog);
+    const retried = (
+      await pool.query(
+        `select created_notify_status, created_notify_attempts, created_notify_wamid
+           from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(retried.created_notify_status).toBe("sent");
+    expect(retried.created_notify_attempts).toBe(before.created_notify_attempts + 1);
+    expect(retried.created_notify_wamid).toMatch(/^wamid\.test\./);
   });
 });

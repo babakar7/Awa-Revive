@@ -126,6 +126,12 @@ export function toTemplateParam(text: string, maxLength = 550): string {
 /** Which delivery path a WhatsApp notification took (for the admin log). */
 export type WhatsAppSendPath = "sent" | "sent_template";
 
+/** Path + Meta message id, used by durable/audited notification callers. */
+export interface WhatsAppSendResult {
+  path: WhatsAppSendPath;
+  waMessageId: string | null;
+}
+
 /**
  * Drop the staff free-text footer before injecting a body into the Utility
  * template: the template's FIXED text already ends with its own « message
@@ -145,12 +151,12 @@ export function stripStaffFooter(body: string): string {
  * still lands (billed per message). Any other error propagates. Returns which
  * path won so the caller can log "sent" vs "sent_template".
  */
-export async function sendWhatsAppNotification(
+export async function sendWhatsAppNotificationDetailed(
   toPhone: string,
   subject: string,
   body: string,
   opts: { preferTemplate?: boolean } = {},
-): Promise<WhatsAppSendPath> {
+): Promise<WhatsAppSendResult> {
   // The Cloud API expects a wa_id-style number (digits only, no "+").
   const to = toPhone.replace(/\D/g, "");
   const templateParams = () =>
@@ -164,23 +170,33 @@ export async function sendWhatsAppNotification(
   // only if it fails do we try free-text (window might actually be open).
   if (opts.preferTemplate && config.WA_RECEPTION_TEMPLATE) {
     try {
-      await templateParams();
-      return "sent_template";
+      const waMessageId = await templateParams();
+      return { path: "sent_template", waMessageId };
     } catch (err) {
       console.warn(`[notify] template-first failed for ${to}, trying free-text:`, err);
     }
   }
   try {
-    await sendText(to, `🔔 *[Awa] ${subject}*\n\n${body}`);
-    return "sent";
+    const waMessageId = await sendText(to, `🔔 *[Awa] ${subject}*\n\n${body}`);
+    return { path: "sent", waMessageId };
   } catch (err) {
     if (!config.WA_RECEPTION_TEMPLATE || !String(err).includes("131047")) throw err;
     console.warn(
       `[notify] 24h window closed for ${to} — falling back to template "${config.WA_RECEPTION_TEMPLATE}"`,
     );
-    await templateParams();
-    return "sent_template";
+    const waMessageId = await templateParams();
+    return { path: "sent_template", waMessageId };
   }
+}
+
+/** Backwards-compatible path-only wrapper used by existing staff callers. */
+export async function sendWhatsAppNotification(
+  toPhone: string,
+  subject: string,
+  body: string,
+  opts: { preferTemplate?: boolean } = {},
+): Promise<WhatsAppSendPath> {
+  return (await sendWhatsAppNotificationDetailed(toPhone, subject, body, opts)).path;
 }
 
 /**
@@ -190,8 +206,17 @@ export async function sendWhatsAppNotification(
 export async function sendReceptionWhatsApp(
   subject: string,
   body: string,
+  opts: { preferTemplate?: boolean } = {},
 ): Promise<WhatsAppSendPath> {
-  return sendWhatsAppNotification(config.RECEPTION_PHONE, subject, body);
+  return sendWhatsAppNotification(config.RECEPTION_PHONE, subject, body, opts);
+}
+
+async function sendReceptionWhatsAppDetailed(
+  subject: string,
+  body: string,
+  opts: { preferTemplate?: boolean } = {},
+): Promise<WhatsAppSendResult> {
+  return sendWhatsAppNotificationDetailed(config.RECEPTION_PHONE, subject, body, opts);
 }
 
 /**
@@ -252,6 +277,11 @@ export interface NotifyReceptionOpts {
    * the reliable channel there while the reception template is pending.
    */
   whatsappFirst?: boolean;
+  /**
+   * Internal/staff alerts are usually outside the 24h window. Template-first
+   * avoids Meta accepting a free-text message with 200 and dropping it later.
+   */
+  preferTemplate?: boolean;
 }
 
 /**
@@ -269,10 +299,10 @@ export function notifyReception(
 
   if (opts.whatsappFirst) {
     // WhatsApp primary; email only as a safety net if WhatsApp fails.
-    sendReceptionWhatsApp(subject, body)
-      .then((path) => {
+    sendReceptionWhatsAppDetailed(subject, body, { preferTemplate: opts.preferTemplate })
+      .then(({ path, waMessageId }) => {
         console.log(`[notify] Reception notified on WhatsApp (${path}): ${subject}`);
-        void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null);
+        void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null, waMessageId);
       })
       .catch((err) => {
         console.error(`[notify] Café WhatsApp to reception failed (${subject}):`, err);
@@ -297,10 +327,10 @@ export function notifyReception(
       .catch((err) => console.error(`[notify] Failed to email reception (${subject}):`, err));
   }
 
-  sendReceptionWhatsApp(subject, body)
-    .then((path) => {
+  sendReceptionWhatsAppDetailed(subject, body, { preferTemplate: opts.preferTemplate })
+    .then(({ path, waMessageId }) => {
       console.log(`[notify] Reception notified on WhatsApp (${path}): ${subject}`);
-      void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null);
+      void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null, waMessageId);
     })
     .catch((err) => {
       console.error(

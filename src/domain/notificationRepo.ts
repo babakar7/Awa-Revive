@@ -290,12 +290,13 @@ export async function recordReceptionLog(
   body: string,
   status: LogStatus,
   error: string | null,
+  waMessageId: string | null = null,
 ): Promise<void> {
   try {
     await pool.query(
-      `insert into notification_log (source, recipient_phone, body, status, error)
-       values ('reception', $1, $2, $3, $4)`,
-      [recipientPhone, body, status, error],
+      `insert into notification_log (source, recipient_phone, body, status, error, wa_message_id)
+       values ('reception', $1, $2, $3, $4, $5)`,
+      [recipientPhone, body, status, error, waMessageId],
     );
   } catch {
     /* logging must never break a notification */

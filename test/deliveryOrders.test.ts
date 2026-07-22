@@ -144,6 +144,14 @@ describe("message bodies", () => {
     expect(createdClientMessage("en", ORDER)).toContain("Thanks Rama");
     expect(createdClientMessage("en", ORDER)).toContain("Almadies, villa 12");
   });
+  it("labels every test-order message and template update explicitly", () => {
+    const testOrder = { ...ORDER, is_test: true };
+    expect(kitchenMessage(testOrder, "https://x.test/livraison/token").subject).toContain("TEST");
+    expect(kitchenMessage(testOrder, "https://x.test/livraison/token").body).toContain("COMMANDE DE TEST");
+    expect(createdClientMessage("fr", testOrder)).toContain("TEST");
+    expect(routeClientMessage("fr", testOrder)).toContain("TEST");
+    expect(deliveryUpdateTemplateParams("created", testOrder)[1]).toContain("TEST");
+  });
   it("routeClientMessage localizes fr/en and says the order is on its way", () => {
     expect(routeClientMessage("fr", ORDER)).toContain("C'est parti Rama");
     expect(routeClientMessage("fr", ORDER)).toContain("en route");

@@ -129,7 +129,7 @@ function openRow(o: DeliveryOrder): string {
   const items = orderItems(o);
   return `<tr>
 <td data-label="Délai">${slaBadge(o)}</td>
-<td data-label="Client"><b>${esc(o.client_name)}</b><br><a href="https://wa.me/${esc(o.client_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
+<td data-label="Client">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}<b>${esc(o.client_name)}</b><br><a href="https://wa.me/${esc(o.client_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(items))}<details><summary class="muted">Voir le détail</summary><div style="white-space:pre-wrap">${esc(formatExtrasMultiline(items))}</div></details></td>
 <td data-label="Adresse" class="hide-sm">${esc(o.address)}</td>
 <td data-label="Montant" class="nowrap"><b>${esc(o.amount_xof)} F</b><br><span class="muted">à encaisser</span></td>
@@ -144,7 +144,7 @@ function closedRow(o: DeliveryOrder): string {
     : "—";
   const state = o.status === "DELIVERED" ? "🛵 livrée" : "✖ annulée";
   return `<tr>
-<td data-label="État">${esc(state)}</td>
+<td data-label="État">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}${esc(state)}</td>
 <td data-label="Client">${esc(o.client_name)}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(orderItems(o)))}</td>
 <td data-label="Montant" class="hide-sm">${esc(o.amount_xof)} F</td>
@@ -208,6 +208,7 @@ export interface LivraisonPrefill {
   address?: string;
   note?: string;
   sla_minutes?: string;
+  is_test?: string;
   qty?: Record<string, number>;
   choice?: Record<string, string>;
 }
@@ -278,6 +279,10 @@ ${optionSelect}</div>`;
     <label>Adresse de livraison<input name="address" required value="${esc(prefill.address ?? "")}"></label>
     <label>Note <span class="muted">(optionnel)</span><input name="note" value="${esc(prefill.note ?? "")}"></label>
     <label>Alerte si pas partie après (min)<input name="sla_minutes" type="number" min="5" max="180" value="${esc(sla)}" style="width:6rem"></label>
+    <label class="card" style="display:flex;align-items:flex-start;gap:.75rem;margin:0;background:var(--brand-soft)">
+      <input name="is_test" type="checkbox" value="1"${prefill.is_test === "1" ? " checked" : ""} style="width:auto;margin-top:.2rem">
+      <span><b>🧪 Commande de test</b><br><span class="muted">Envoie les alertes normalement, mais reste exclue des statistiques, des clients récents et des factures.</span></span>
+    </label>
   </div>
   <h2 style="margin:.2rem 0">Articles</h2>
   ${menuUnavailable}

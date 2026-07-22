@@ -1,6 +1,9 @@
 import { config } from "../config.js";
 import { sendText, sendTemplate, sendTemplateWithUrlButton } from "../lib/whatsapp.js";
-import { notifyReception, sendWhatsAppNotification } from "../lib/notify.js";
+import {
+  notifyReception,
+  sendWhatsAppNotificationDetailed,
+} from "../lib/notify.js";
 import * as repo from "./repo.js";
 import { normalizeName } from "./notificationRules.js";
 import { listStaffContacts, phoneDigits, recordDeliveryLog } from "./notificationRepo.js";
@@ -14,7 +17,6 @@ import {
   kitchenTemplateParams,
   magicLinkUrl,
   routeClientMessage,
-  shouldFallbackDeliveryTemplate,
   type ClientPingKind,
   type DeliveryOrderView,
 } from "./deliveryRules.js";
@@ -59,6 +61,7 @@ function viewOf(o: DeliveryOrder): DeliveryOrderView {
     note: o.note,
     items: orderItems(o),
     amount_xof: o.amount_xof,
+    is_test: o.is_test,
   };
 }
 
@@ -66,9 +69,10 @@ function viewOf(o: DeliveryOrder): DeliveryOrderView {
  * Send the kitchen ticket to ONE recipient. Kitchen staff are ~always outside
  * the 24h window, so we send the `ticket_cuisine` TEMPLATE first (with its
  * dynamic URL button = the magic-link token); if that template isn't configured
- * or errors, we fall back to free-text (which itself falls back to the generic
- * reception template on 131047). The template wamid is logged so the statuses
- * webhook can catch an async failure.
+ * or errors, we fall back TEMPLATE-FIRST to the generic reception template.
+ * This is intentional: Meta can accept out-of-window free text with HTTP 200
+ * and reject it asynchronously, so a free-text-first fallback is not reliable.
+ * The wamid is logged so the statuses webhook can catch an async failure.
  */
 async function sendKitchenTo(
   phone: string,
@@ -91,12 +95,14 @@ async function sendKitchenTo(
       await recordDeliveryLog(phone, `${tag} (ticket) ${body}`, "sent_template", null, wamid);
       return "sent_template";
     } catch (err) {
-      log.error({ err, phone }, "Kitchen ticket template failed — falling back to free-text");
+      log.error({ err, phone }, "Kitchen ticket template failed — falling back to generic template");
     }
   }
   try {
-    const path = await sendWhatsAppNotification(phone, subject, body);
-    await recordDeliveryLog(phone, `${tag} ${body}`, path, null);
+    const { path, waMessageId } = await sendWhatsAppNotificationDetailed(phone, subject, body, {
+      preferTemplate: true,
+    });
+    await recordDeliveryLog(phone, `${tag} ${body}`, path, null, waMessageId);
     return path;
   } catch (err) {
     await recordDeliveryLog(phone, `${tag} ${body}`, "failed", String(err).slice(0, 300));
@@ -117,7 +123,7 @@ export async function notifyKitchenForOrder(
   token: string,
   log: Log,
 ): Promise<void> {
-  const tag = `[livraison ${order.id.slice(0, 8)}]`;
+  const tag = `[${order.is_test ? "TEST " : ""}livraison ${order.id.slice(0, 8)}]`;
   const view = viewOf(order);
   const magicLink = magicLinkUrl(config.BASE_URL, token);
 
@@ -149,7 +155,7 @@ export async function notifyKitchenForOrder(
         : `Aucun contact « bar » joignable dans le répertoire (/admin/notifications)`;
     const warnBody = `⚠️ ${reason} — commande envoyée à la réception :\n\n${body}`;
     const recipients = [
-      { phone: config.RECEPTION_PHONE, preferTemplate: false },
+      { phone: config.RECEPTION_PHONE, preferTemplate: true },
       { phone: config.OWNER_PHONE, preferTemplate: true }, // owner's 24h window is ~always closed
     ].filter(
       // Skip the owner leg if unset or same number as reception.
@@ -157,10 +163,10 @@ export async function notifyKitchenForOrder(
     );
     for (const r of recipients) {
       try {
-        const path = await sendWhatsAppNotification(r.phone, subject, warnBody, {
+        const { path, waMessageId } = await sendWhatsAppNotificationDetailed(r.phone, subject, warnBody, {
           preferTemplate: r.preferTemplate,
         });
-        await recordDeliveryLog(r.phone, `${tag} ${warnBody}`, path, null);
+        await recordDeliveryLog(r.phone, `${tag} ${warnBody}`, path, null, waMessageId);
       } catch (err) {
         await recordDeliveryLog(r.phone, `${tag} ${warnBody}`, "failed", String(err).slice(0, 300));
         log.error({ err, order: order.id, phone: r.phone }, "Delivery kitchen fallback send failed");
@@ -182,9 +188,10 @@ export async function notifyKitchenForOrder(
     // Every kitchen contact failed — escalate so someone acts.
     const { body } = kitchenMessage(view, magicLink);
     notifyReception(
-      "⚠️ Cuisine NON notifiée — commande livraison",
-      `L'envoi à la cuisine a échoué pour la commande de ${order.client_name} (+${order.client_phone}).\n\n${body}`,
-      { whatsappFirst: true },
+      `${order.is_test ? "🧪 TEST — " : ""}⚠️ Cuisine NON notifiée — commande livraison`,
+      `${order.is_test ? "Commande de test — exclue des statistiques.\n" : ""}` +
+        `L'envoi à la cuisine a échoué pour la commande de ${order.client_name} (+${order.client_phone}).\n\n${body}`,
+      { whatsappFirst: true, preferTemplate: true },
     );
   }
 }
@@ -196,25 +203,29 @@ const CLIENT_PING: Record<
   ClientPingKind,
   {
     message: (lang: string | null, o: DeliveryOrderView) => string;
-    template: string;
-    templateLang: string;
+    template: () => string;
+    templateLang: () => string;
     templateParams: (o: DeliveryOrderView) => string[];
-    setOutcome: (id: string, status: "sent" | "sent_template" | "failed") => Promise<void>;
+    setOutcome: (
+      id: string,
+      status: "sent" | "sent_template" | "failed",
+      waMessageId?: string | null,
+    ) => Promise<void>;
     label: string;
   }
 > = {
   created: {
     message: createdClientMessage,
-    template: config.WA_DELIVERY_UPDATE_TEMPLATE,
-    templateLang: config.WA_DELIVERY_UPDATE_TEMPLATE_LANG,
+    template: () => config.WA_DELIVERY_UPDATE_TEMPLATE,
+    templateLang: () => config.WA_DELIVERY_UPDATE_TEMPLATE_LANG,
     templateParams: (o) => deliveryUpdateTemplateParams("created", o),
     setOutcome: setCreatedNotifyOutcome,
     label: "created-confirmation",
   },
   route: {
     message: routeClientMessage,
-    template: config.WA_DELIVERY_UPDATE_TEMPLATE,
-    templateLang: config.WA_DELIVERY_UPDATE_TEMPLATE_LANG,
+    template: () => config.WA_DELIVERY_UPDATE_TEMPLATE,
+    templateLang: () => config.WA_DELIVERY_UPDATE_TEMPLATE_LANG,
     templateParams: (o) => deliveryUpdateTemplateParams("route", o),
     setOutcome: setRouteNotifyOutcome,
     label: "route-ping",
@@ -222,10 +233,11 @@ const CLIENT_PING: Record<
 };
 
 /**
- * Send one client-facing delivery ping (created / route): free-text inside the
- * 24h window, the Utility template on 131047. Never throws — a `failed` status
- * is what surfaces "📞 appeler le client" (or a softer flag) on the board.
- * Caller has already claimed the attempt.
+ * Send one client-facing delivery ping (created / route). These orders are
+ * entered by phone, so the client usually has NO open 24h Awa window: use the
+ * approved Utility template first, with free text only as a degraded fallback.
+ * Never throws — a `failed` status is what surfaces "📞 appeler le client" (or
+ * a softer flag) on the board. Caller has already claimed the attempt.
  */
 async function sendClientPing(
   order: DeliveryOrder,
@@ -233,38 +245,36 @@ async function sendClientPing(
   log: Log,
 ): Promise<void> {
   const cfg = CLIENT_PING[kind];
-  const tag = `[livraison ${order.id.slice(0, 8)}]`;
+  const tag = `[${order.is_test ? "TEST " : ""}livraison ${order.id.slice(0, 8)}]`;
   const view = viewOf(order);
   const client = await repo.findClientByPhone([order.client_phone]).catch(() => null);
   const lang = client?.language ?? "fr";
   const msg = cfg.message(lang, view);
+  const template = cfg.template();
+
+  if (template) {
+    try {
+      const wamid = await sendTemplate(
+        order.client_phone,
+        template,
+        cfg.templateLang(),
+        cfg.templateParams(view),
+      );
+      await recordDeliveryLog(order.client_phone, `${tag} (template) ${msg}`, "sent_template", null, wamid);
+      await cfg.setOutcome(order.id, "sent_template", wamid);
+      if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
+      return;
+    } catch (err) {
+      log.error({ err, order: order.id }, `Delivery ${cfg.label} template send failed — trying free-text`);
+    }
+  }
 
   try {
     const wamid = await sendText(order.client_phone, msg);
     await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "sent", null, wamid);
-    await cfg.setOutcome(order.id, "sent");
+    await cfg.setOutcome(order.id, "sent", wamid);
     if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
-    return;
   } catch (err) {
-    if (shouldFallbackDeliveryTemplate(err, cfg.template)) {
-      try {
-        const wamid = await sendTemplate(
-          order.client_phone,
-          cfg.template,
-          cfg.templateLang,
-          cfg.templateParams(view),
-        );
-        await recordDeliveryLog(order.client_phone, `${tag} (template) ${msg}`, "sent_template", null, wamid);
-        await cfg.setOutcome(order.id, "sent_template");
-        if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
-        return;
-      } catch (err2) {
-        await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "failed", String(err2).slice(0, 300));
-        await cfg.setOutcome(order.id, "failed");
-        log.error({ err: err2, order: order.id }, `Delivery ${cfg.label} template send failed`);
-        return;
-      }
-    }
     await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "failed", String(err).slice(0, 300));
     await cfg.setOutcome(order.id, "failed");
     log.error({ err, order: order.id }, `Delivery ${cfg.label} send failed`);
@@ -324,12 +334,13 @@ export async function sweepDeliveries(log: Log): Promise<number> {
   for (const order of late) {
     const elapsed = Math.round((Date.now() - new Date(order.created_at).getTime()) / 60000);
     notifyReception(
-      `⏰ Commande livraison en retard (+${elapsed} min)`,
-      `Pas partie en livraison après ${order.sla_minutes} min.\n` +
+      `${order.is_test ? "🧪 TEST — " : ""}⏰ Commande livraison en retard (+${elapsed} min)`,
+      `${order.is_test ? "Commande de test — exclue des statistiques.\n" : ""}` +
+        `Pas partie en livraison après ${order.sla_minutes} min.\n` +
         `Client : ${order.client_name} (+${order.client_phone})\n` +
         `Adresse : ${order.address}\n` +
         `Voir /admin/livraisons.`,
-      { whatsappFirst: true },
+      { whatsappFirst: true, preferTemplate: true },
     );
   }
   return late.length;
