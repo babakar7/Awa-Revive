@@ -2803,6 +2803,35 @@ vérité des horaires (le publié « Planning V1 » encode déjà ces contrainte
   Commande créée hors service (soir/dimanche après-midi) → repli
   réception+owner, attendu.
 
+### 6.23 Passe UX du formulaire « Nouvelle livraison » (22/07/2026)
+
+Retour Babakar : saisie pénible (ex. taper un chiffre pour la quantité).
+Refonte de `renderLivraisonForm` ([src/admin/livraisonsPage.ts](src/admin/livraisonsPage.ts)),
+saisie de commandes téléphoniques par réception/owner souvent au téléphone
+(cible 390px) :
+
+- **Steppers tactiles** `[−] n [+]` par article (boutons `.act--ghost .act--sm`,
+  ≥44px mobile, `aria-label`) à la place de l'`<input type="number">`. Le champ
+  `qty_<ID>` devient un `<input type="hidden">` : `parseDeliveryQtyFields` et
+  `computeExtras` (qty 1-10, prix serveur, choix requis) restent **inchangés**.
+  Ligne surlignée quand qty>0, select d'option masqué tant que qty=0.
+- **Recherche instantanée** d'article (haystack normalisé serveur en
+  `data-search`, filtre JS, ouvre les catégories qui matchent) — 44 articles
+  dans 10 accordéons sinon.
+- **Récap panier** dans l'actionbar : « N article(s) — Total estimé : X F ».
+- **Conservation en cas d'erreur** : le POST `/livraisons` re-rend le
+  formulaire (200) pré-rempli (client + quantités + choix) avec le message, au
+  lieu de rediriger vers un formulaire vierge (`?err=`). `renderLivraisonForm`
+  gagne un param `prefill`.
+- **Clients récents** : select en tête, dernières ~30 livraisons dédupliquées
+  par téléphone (`recentDeliveryClients()` dans
+  [src/domain/deliveryRepo.ts](src/domain/deliveryRepo.ts)), remplit
+  nom+tél+adresse d'un tap. Téléphone en `type="tel" inputmode="tel"`.
+- Détail : `var(--border-subtle)` (jamais défini, no-op silencieux depuis
+  l'origine) remplacé par `var(--border-soft)`. Zéro changement au bundle JS
+  partagé (script inline de la page uniquement). Build + 567 tests (6 nouveaux,
+  [test/livraisonForm.test.ts](test/livraisonForm.test.ts)).
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

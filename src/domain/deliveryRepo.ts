@@ -356,6 +356,25 @@ export async function recentClosedDeliveryOrders(limit = 20): Promise<DeliveryOr
   return res.rows as DeliveryOrder[];
 }
 
+export interface RecentDeliveryClient {
+  client_name: string;
+  client_phone: string;
+  address: string;
+}
+
+/** Distinct past clients (latest name/address per phone) for the new-order form's
+ *  "client récent" quick-fill — phone orders are usually repeat customers. */
+export async function recentDeliveryClients(limit = 30): Promise<RecentDeliveryClient[]> {
+  const res = await pool.query(
+    `select client_name, client_phone, address from (
+       select distinct on (client_phone) client_name, client_phone, address, created_at
+         from delivery_orders order by client_phone, created_at desc
+     ) t order by t.created_at desc limit $1`,
+    [limit],
+  );
+  return res.rows as RecentDeliveryClient[];
+}
+
 export interface DeliveryStats {
   openCount: number;
   lateToday: number;

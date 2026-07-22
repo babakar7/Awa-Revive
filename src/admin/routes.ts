@@ -642,7 +642,8 @@ ${
 
       admin.get("/livraisons/new", async (req, reply) => {
         const err = (req.query as any)?.err as string | undefined;
-        const body = renderLivraisonForm(getCafeMenu().items, livraisonsBanner(undefined, err));
+        const recents = await delivery.recentDeliveryClients();
+        const body = renderLivraisonForm(getCafeMenu().items, livraisonsBanner(undefined, err), recents);
         reply.type("text/html").send(await layout("Nouvelle livraison", "/admin/livraisons", body, { subtitle: "Commande téléphonique", contentWidth: "standard", breadcrumbs: [{ href: "/admin/livraisons", label: "Livraisons" }, { label: "Nouvelle" }] }));
       });
 
@@ -652,7 +653,34 @@ ${
         const address = String(b.address ?? "").trim();
         const note = String(b.note ?? "").trim() || null;
         const phone = normalizeDeliveryPhone(String(b.client_phone ?? ""));
-        const backErr = (msg: string) => reply.redirect(`/admin/livraisons/new?err=${encodeURIComponent(msg)}`, 303);
+        // On a validation error, re-render the form (200) with everything the
+        // user already typed + the message, instead of redirecting to a blank
+        // form and losing it all. Rebuild qty/choice maps from the submitted body.
+        const backErr = async (msg: string) => {
+          const qty: Record<string, number> = {};
+          const choice: Record<string, string> = {};
+          for (const [k, v] of Object.entries(b)) {
+            if (k.startsWith("qty_")) {
+              const n = parseInt(String(v), 10);
+              if (Number.isFinite(n) && n > 0) qty[k.slice(4)] = n;
+            } else if (k.startsWith("choice_")) {
+              if (String(v).trim()) choice[k.slice(7)] = String(v);
+            }
+          }
+          const recents = await delivery.recentDeliveryClients();
+          const form = renderLivraisonForm(getCafeMenu().items, livraisonsBanner(undefined, msg), recents, {
+            client_name: b.client_name,
+            client_phone: b.client_phone,
+            address: b.address,
+            note: b.note,
+            sla_minutes: b.sla_minutes,
+            qty,
+            choice,
+          });
+          return reply.type("text/html").send(
+            await layout("Nouvelle livraison", "/admin/livraisons", form, { subtitle: "Commande téléphonique", contentWidth: "standard", breadcrumbs: [{ href: "/admin/livraisons", label: "Livraisons" }, { label: "Nouvelle" }] }),
+          );
+        };
         if (!name) return backErr("le nom du client est obligatoire");
         if (!phone) return backErr("numéro de téléphone invalide");
         if (!address) return backErr("l'adresse de livraison est obligatoire");

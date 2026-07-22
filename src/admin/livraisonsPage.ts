@@ -1,6 +1,11 @@
 import { config } from "../config.js";
 import { type CafeMenuItem, formatExtrasMultiline, formatExtrasOneLine } from "../lib/cafeMenu.js";
-import { orderItems, type DeliveryOrder, type DeliveryStats } from "../domain/deliveryRepo.js";
+import {
+  orderItems,
+  type DeliveryOrder,
+  type DeliveryStats,
+  type RecentDeliveryClient,
+} from "../domain/deliveryRepo.js";
 
 /**
  * Body HTML for /admin/livraisons — server-rendered, self-contained escaping so
@@ -188,49 +193,161 @@ function menuByCategory(items: Map<string, CafeMenuItem>): Map<string, CafeMenuI
   return groups;
 }
 
-export function renderLivraisonForm(items: Map<string, CafeMenuItem>, banner: string): string {
+/** Lowercase + strip accents, for the live article search haystack. */
+function normalizeSearch(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+/** Values to repopulate the form with after a validation error (or empty on GET). */
+export interface LivraisonPrefill {
+  client_name?: string;
+  client_phone?: string;
+  address?: string;
+  note?: string;
+  sla_minutes?: string;
+  qty?: Record<string, number>;
+  choice?: Record<string, string>;
+}
+
+export function renderLivraisonForm(
+  items: Map<string, CafeMenuItem>,
+  banner: string,
+  recents: RecentDeliveryClient[] = [],
+  prefill: LivraisonPrefill = {},
+): string {
+  const qty = prefill.qty ?? {};
+  const choicePick = prefill.choice ?? {};
   const groups = menuByCategory(items);
   const sections = [...groups.entries()]
     .map(([cat, list]) => {
+      let catHasQty = false;
       const rows = list
         .map((it) => {
+          const n = Math.max(0, Math.min(10, qty[it.id] ?? 0));
+          if (n > 0) catHasQty = true;
           const choices = it.optionChoices ?? [];
+          const picked = choicePick[it.id] ?? "";
           const optionSelect = choices.length
-            ? `<select name="choice_${esc(it.id)}" style="margin-top:.3rem;width:100%"><option value="">— ${esc(it.optionLabel || "Choix")} (à préciser) —</option>${choices
-                .map((c) => `<option value="${esc(c)}">${esc(c)}</option>`)
+            ? `<select name="choice_${esc(it.id)}" class="liv-choice" style="margin-top:.4rem;width:100%${n > 0 ? "" : ";display:none"}"><option value="">— ${esc(it.optionLabel || "Choix")} (à préciser) —</option>${choices
+                .map(
+                  (c) =>
+                    `<option value="${esc(c)}"${c === picked ? " selected" : ""}>${esc(c)}</option>`,
+                )
                 .join("")}</select>`
             : "";
-          return `<div class="row" style="flex-wrap:wrap;padding:.3rem 0;border-top:1px solid var(--border-subtle)">
-<span style="flex:1">${esc(it.name)} <span class="muted">— ${esc(it.priceXof)} F</span></span>
-<input type="number" name="qty_${esc(it.id)}" min="0" max="10" value="0" data-price="${esc(it.priceXof)}" style="width:4.5rem" oninput="livTotal()">
+          const haystack = esc(normalizeSearch(`${it.name} ${cat} ${it.id}`));
+          return `<div class="liv-item${n > 0 ? " on" : ""}" data-search="${haystack}" style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;padding:.55rem .2rem;border-top:1px solid var(--border-soft)">
+<span style="flex:1;min-width:9rem">${esc(it.name)} <span class="muted">— ${esc(it.priceXof)} F</span></span>
+<span class="liv-stepper" style="display:inline-flex;align-items:center;gap:.5rem">
+<button type="button" class="act act--ghost act--sm liv-dec" data-id="${esc(it.id)}" aria-label="Retirer ${esc(it.name)}" style="min-width:2.6rem">−</button>
+<output class="liv-out" style="min-width:1.4rem;text-align:center;font-weight:650;font-variant-numeric:tabular-nums">${n}</output>
+<button type="button" class="act act--ghost act--sm liv-inc" data-id="${esc(it.id)}" aria-label="Ajouter ${esc(it.name)}" style="min-width:2.6rem">+</button>
+</span>
+<input type="hidden" name="qty_${esc(it.id)}" value="${n}" data-price="${esc(it.priceXof)}">
 ${optionSelect}</div>`;
         })
         .join("");
-      return `<details class="card"><summary style="font-weight:600;cursor:pointer">${esc(cat || "Autres")} <span class="muted">(${list.length})</span></summary>${rows}</details>`;
+      return `<details class="card liv-cat"${catHasQty ? " open" : ""}><summary style="font-weight:600;cursor:pointer">${esc(cat || "Autres")} <span class="muted">(${list.length})</span></summary>${rows}</details>`;
     })
     .join("");
-  const menuUnavailable = items.size === 0 ? `<div class="card warn">⚠️ cafe-menu.md introuvable — aucun article disponible.</div>` : "";
+  const menuUnavailable = items.size === 0 ? `<div class="card warn">⚠️ aucun article disponible dans le menu actif.</div>` : "";
+  const recentSelect = recents.length
+    ? `<label>Client récent <span class="muted">(remplir en un tap)</span>
+    <select id="liv-recent"><option value="">— choisir un client déjà livré —</option>${recents
+      .map(
+        (r) =>
+          `<option value="${esc(r.client_phone)}" data-name="${esc(r.client_name)}" data-phone="${esc(r.client_phone)}" data-address="${esc(r.address)}">${esc(r.client_name)} — ${esc(r.client_phone)}</option>`,
+      )
+      .join("")}</select></label>`
+    : "";
+  const searchBox = items.size
+    ? `<input id="liv-search" type="search" placeholder="🔍 Rechercher un article…" autocomplete="off" style="width:100%">`
+    : "";
+  const sla = prefill.sla_minutes ?? String(config.DELIVERY_SLA_MINUTES);
   return `${banner}
+<style>.liv-item.on{background:var(--brand-soft);border-radius:8px}.liv-item.on>span:first-child{font-weight:650}</style>
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Livraisons</span><h2>Nouvelle commande</h2><p>Paiement à la livraison. Le montant est calculé automatiquement depuis le menu actif.</p></div></header>
 <form method="post" action="/admin/livraisons" class="col">
   <div class="card col">
-    <label>Nom du client<input name="client_name" required></label>
-    <label>Téléphone (WhatsApp)<input name="client_phone" required placeholder="77 123 45 67 ou +221…"></label>
-    <label>Adresse de livraison<input name="address" required></label>
-    <label>Note <span class="muted">(optionnel)</span><input name="note"></label>
-    <label>Alerte si pas partie après (min)<input name="sla_minutes" type="number" min="5" max="180" value="${esc(config.DELIVERY_SLA_MINUTES)}" style="width:6rem"></label>
+    ${recentSelect}
+    <label>Nom du client<input name="client_name" required value="${esc(prefill.client_name ?? "")}"></label>
+    <label>Téléphone (WhatsApp)<input name="client_phone" type="tel" inputmode="tel" required placeholder="77 123 45 67 ou +221…" value="${esc(prefill.client_phone ?? "")}"></label>
+    <label>Adresse de livraison<input name="address" required value="${esc(prefill.address ?? "")}"></label>
+    <label>Note <span class="muted">(optionnel)</span><input name="note" value="${esc(prefill.note ?? "")}"></label>
+    <label>Alerte si pas partie après (min)<input name="sla_minutes" type="number" min="5" max="180" value="${esc(sla)}" style="width:6rem"></label>
   </div>
   <h2 style="margin:.2rem 0">Articles</h2>
   ${menuUnavailable}
+  ${searchBox}
+  <p id="liv-noresult" class="muted" style="display:none">Aucun article ne correspond.</p>
   ${sections}
   <div class="actionbar">
-    <b>Total estimé : <span id="livtotal">0</span> F</b>
+    <b><span id="livcount">0</span> article(s) — Total estimé : <span id="livtotal">0</span> F</b>
     <button class="act" type="submit">Créer la commande</button>
     <a href="/admin/livraisons">Annuler</a>
   </div>
 </form>
 <script>
-function livTotal(){var t=0;document.querySelectorAll('input[name^="qty_"]').forEach(function(i){var q=parseInt(i.value,10);if(q>0)t+=q*parseInt(i.dataset.price,10);});document.getElementById('livtotal').textContent=t.toLocaleString('fr-FR');}
-livTotal();
+(function(){
+  function recompute(){
+    var t=0,c=0;
+    document.querySelectorAll('input[name^="qty_"]').forEach(function(i){
+      var q=parseInt(i.value,10)||0;
+      if(q>0){t+=q*(parseInt(i.dataset.price,10)||0);c+=q;}
+      var row=i.closest('.liv-item');
+      if(row){
+        row.classList.toggle('on',q>0);
+        var sel=row.querySelector('.liv-choice');
+        if(sel)sel.style.display=q>0?'':'none';
+      }
+    });
+    document.getElementById('livtotal').textContent=t.toLocaleString('fr-FR');
+    document.getElementById('livcount').textContent=c;
+  }
+  function bump(id,d){
+    var inp=document.querySelector('input[name="qty_'+id+'"]');
+    if(!inp)return;
+    var v=(parseInt(inp.value,10)||0)+d;
+    if(v<0)v=0;if(v>10)v=10;
+    inp.value=v;
+    var out=inp.closest('.liv-item').querySelector('.liv-out');
+    if(out)out.textContent=v;
+    recompute();
+  }
+  document.addEventListener('click',function(e){
+    var inc=e.target.closest('.liv-inc'),dec=e.target.closest('.liv-dec');
+    if(inc)bump(inc.dataset.id,1);
+    else if(dec)bump(dec.dataset.id,-1);
+  });
+  var search=document.getElementById('liv-search');
+  if(search)search.addEventListener('input',function(){
+    var q=this.value.trim().toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'');
+    var any=false;
+    document.querySelectorAll('.liv-cat').forEach(function(cat){
+      var shown=0;
+      cat.querySelectorAll('.liv-item').forEach(function(row){
+        var m=!q||row.dataset.search.indexOf(q)>=0;
+        row.style.display=m?'':'none';
+        if(m)shown++;
+      });
+      cat.style.display=shown?'':'none';
+      if(q)cat.open=shown>0;
+      if(shown)any=true;
+    });
+    document.getElementById('liv-noresult').style.display=(q&&!any)?'':'none';
+  });
+  var recent=document.getElementById('liv-recent');
+  if(recent)recent.addEventListener('change',function(){
+    var o=this.options[this.selectedIndex];if(!o||!o.value)return;
+    var f=this.closest('form');
+    f.client_name.value=o.dataset.name||'';
+    f.client_phone.value=o.dataset.phone||'';
+    f.address.value=o.dataset.address||'';
+  });
+  recompute();
+})();
 </script>`;
 }
