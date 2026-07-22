@@ -12,10 +12,10 @@ import { makeFetchMock, type FetchMock, truncateAll, waitFor, settle } from "./h
 /**
  * Delivery-orders end-to-end against a real Postgres, all HTTP mocked. Exercises
  * the exact SQL/flow that makes the ops path safe: server-priced order, kitchen
- * WhatsApp with a magic link, GET-does-not-mutate (WhatsApp prefetch), atomic
- * mark-ready + single client ping, token rotation, and the one-shot SLA alert —
- * plus the v2 flow: creation confirmation, OUT_FOR_DELIVERY (magic link + admin)
- * with a single en-route ping, and the one-shot pickup-SLA alert.
+ * WhatsApp (role `bar`) with a magic link, GET-does-not-mutate (WhatsApp
+ * prefetch), atomic single-step departure (IN_KITCHEN → OUT_FOR_DELIVERY) with
+ * one en-route ping, creation confirmation + reception ping, token rotation,
+ * and the one-shot SLA alert.
  */
 
 const noopLog = { info: () => {}, warn: () => {}, error: () => {} };
@@ -47,7 +47,7 @@ beforeEach(async () => {
 
 async function seedKitchenContact(phone = "221770000099"): Promise<void> {
   await pool.query(
-    `insert into staff_contacts (name, phone, role, muted) values ('Chef', $1, 'cuisine', false)`,
+    `insert into staff_contacts (name, phone, role, muted) values ('Chef', $1, 'bar', false)`,
     [phone],
   );
 }
@@ -98,7 +98,11 @@ describe("delivery order creation → kitchen notify", () => {
     void id;
   });
 
-  it("with no cuisine contact, routes the ticket to reception with a warning", async () => {
+  it("with no reachable bar contact (none, or empty phone), falls back to reception", async () => {
+    // A bar contact WITHOUT a phone must not count as reachable.
+    await pool.query(
+      `insert into staff_contacts (name, phone, role, muted) values ('SansTel', '', 'bar', false)`,
+    );
     const id = await createOrder();
     await settle();
     const toReception = mock.waTextsTo(RECEPTION).join("\n");
@@ -106,10 +110,19 @@ describe("delivery order creation → kitchen notify", () => {
     const order = (await pool.query(`select kitchen_notify_status from delivery_orders where id=$1`, [id])).rows[0];
     expect(order.kitchen_notify_status).toBe("fallback_reception");
   });
+
+  it("pings reception on every new order (owner may be the one entering it)", async () => {
+    await seedKitchenContact();
+    await createOrder();
+    await waitFor(
+      async () => mock.waTextsTo(RECEPTION).some((t) => t.includes("Nouvelle commande livraison")),
+      "reception new-order ping",
+    );
+  });
 });
 
 describe("magic link", () => {
-  it("GET is read-only (prefetch-safe) and POST marks ready + pings the client once", async () => {
+  it("GET is read-only (prefetch-safe) and POST marks departure + pings the client once", async () => {
     await seedKitchenContact();
     const id = await createOrder();
     const link = magicLinkFrom(mock.waTextsTo("221770000099"));
@@ -117,28 +130,29 @@ describe("magic link", () => {
     // GET must NOT mutate (WhatsApp prefetches links for previews).
     const get = await app.inject({ method: "GET", url: link });
     expect(get.statusCode).toBe(200);
+    expect(get.body).toContain("Partie en livraison");
     expect((await pool.query(`select status from delivery_orders where id=$1`, [id])).rows[0].status).toBe("IN_KITCHEN");
 
-    // POST marks ready.
+    // POST marks the single departure step.
     const post = await app.inject({ method: "POST", url: link });
     expect(post.statusCode).toBe(303);
     const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
-    expect(order.status).toBe("READY");
-    expect(order.ready_by).toBe("kitchen-link");
+    expect(order.status).toBe("OUT_FOR_DELIVERY");
+    expect(order.out_for_delivery_by).toBe("kitchen-link");
 
-    // The client gets exactly one "ready" ping (fire-and-forget → wait for it).
+    // The client gets exactly one "en route" ping (fire-and-forget → wait for it).
     // (A separate creation-confirmation ping already arrived at creation, so we
-    // match the ready ping by content, not by total count.)
-    const readyCount = () =>
-      mock.waTextsTo("221770009988").filter((t) => t.includes("Bonne nouvelle")).length;
-    await waitFor(async () => readyCount() > 0, "client ready ping");
-    expect(readyCount()).toBe(1);
+    // match the route ping by content, not by total count.)
+    const routeCount = () =>
+      mock.waTextsTo("221770009988").filter((t) => t.includes("en route")).length;
+    await waitFor(async () => routeCount() > 0, "client en-route ping");
+    expect(routeCount()).toBe(1);
 
-    // Second POST is idempotent — no second ready ping.
+    // Second POST is idempotent — no second en-route ping.
     const post2 = await app.inject({ method: "POST", url: link });
     expect(post2.statusCode).toBe(303);
     await settle();
-    expect(readyCount()).toBe(1);
+    expect(routeCount()).toBe(1);
   });
 
   it("rejects a wrong token with 404 and does not mutate", async () => {
@@ -268,62 +282,10 @@ describe("creation confirmation ping", () => {
   });
 });
 
-describe("out for delivery (magic link)", () => {
-  it("shows the depart button once READY, marks OUT_FOR_DELIVERY, pings the client once", async () => {
-    await seedKitchenContact();
-    await createOrder();
-    const link = magicLinkFrom(mock.waTextsTo("221770000099"));
-
-    await app.inject({ method: "POST", url: link }); // → READY
-    const readyGet = await app.inject({ method: "GET", url: link });
-    expect(readyGet.body).toContain("Partie en livraison");
-
-    const depart = await app.inject({ method: "POST", url: `${link}/depart` });
-    expect(depart.statusCode).toBe(303);
-    const order = (await pool.query(`select * from delivery_orders where id=(select id from delivery_orders order by created_at desc limit 1)`)).rows[0];
-    expect(order.status).toBe("OUT_FOR_DELIVERY");
-    expect(order.out_for_delivery_by).toBe("kitchen-link");
-
-    const routeCount = () =>
-      mock.waTextsTo("221770009988").filter((t) => t.includes("en route")).length;
-    await waitFor(async () => routeCount() > 0, "client en-route ping");
-    expect(routeCount()).toBe(1);
-
-    // Double-POST depart is idempotent — no second en-route ping.
-    const depart2 = await app.inject({ method: "POST", url: `${link}/depart` });
-    expect(depart2.statusCode).toBe(303);
-    await settle();
-    expect(routeCount()).toBe(1);
-  });
-
-  it("POST /depart on an IN_KITCHEN order does not skip a step or ping", async () => {
-    await seedKitchenContact();
-    const id = await createOrder();
-    const link = magicLinkFrom(mock.waTextsTo("221770000099"));
-
-    const depart = await app.inject({ method: "POST", url: `${link}/depart` });
-    expect(depart.statusCode).toBe(303); // 303 back to GET, but…
-    const order = (await pool.query(`select status from delivery_orders where id=$1`, [id])).rows[0];
-    expect(order.status).toBe("IN_KITCHEN"); // …unchanged (no skip)
-    await settle();
-    expect(mock.waTextsTo("221770009988").some((t) => t.includes("en route"))).toBe(false);
-  });
-
-  it("rejects /depart on a wrong token with 404 and does not mutate", async () => {
-    await seedKitchenContact();
-    const id = await createOrder();
-    await app.inject({ method: "POST", url: magicLinkFrom(mock.waTextsTo("221770000099")) }); // → READY
-    const bad = `/livraison/${"0".repeat(32)}/depart`;
-    expect((await app.inject({ method: "POST", url: bad })).statusCode).toBe(404);
-    expect((await pool.query(`select status from delivery_orders where id=$1`, [id])).rows[0].status).toBe("READY");
-  });
-});
-
 describe("out for delivery (admin board)", () => {
   it("POST /admin/livraisons/:id/depart marks OUT_FOR_DELIVERY and pings the client", async () => {
     await seedKitchenContact();
     const id = await createOrder();
-    await app.inject({ method: "POST", url: magicLinkFrom(mock.waTextsTo("221770000099")) }); // → READY
 
     const res = await app.inject({
       method: "POST",
@@ -338,10 +300,9 @@ describe("out for delivery (admin board)", () => {
     expect(["sent", "sent_template"]).toContain(order.route_notify_status);
   });
 
-  it("marking delivered directly from READY never sends the en-route ping", async () => {
+  it("marking delivered directly from IN_KITCHEN (departure never tapped) sends no en-route ping", async () => {
     await seedKitchenContact();
     const id = await createOrder();
-    await app.inject({ method: "POST", url: magicLinkFrom(mock.waTextsTo("221770000099")) }); // → READY
     await settle();
 
     const res = await app.inject({
@@ -358,7 +319,6 @@ describe("out for delivery (admin board)", () => {
   it("cancelling from OUT_FOR_DELIVERY is allowed and sends no client message", async () => {
     await seedKitchenContact();
     const id = await createOrder();
-    await app.inject({ method: "POST", url: magicLinkFrom(mock.waTextsTo("221770000099")) }); // → READY
     await app.inject({ method: "POST", url: `/admin/livraisons/${id}/depart`, headers: { authorization: AUTH } });
     await settle();
     const before = mock.waTextsTo("221770009988").length;
@@ -372,33 +332,6 @@ describe("out for delivery (admin board)", () => {
     expect((await pool.query(`select status from delivery_orders where id=$1`, [id])).rows[0].status).toBe("CANCELLED");
     await settle();
     expect(mock.waTextsTo("221770009988").length).toBe(before); // no cancellation message
-  });
-});
-
-describe("pickup SLA sweep", () => {
-  it("alerts reception once for an order READY too long without departing", async () => {
-    const token = newReadyToken();
-    const ins = await pool.query(
-      `insert into delivery_orders
-         (client_name, client_phone, address, items_json, amount_xof, sla_minutes,
-          ready_token_hash, status, kitchen_notify_status, client_notify_status,
-          created_notify_status, ready_at, created_at)
-       values ('Stuck','221770002222','Ouakam','[]'::jsonb, 3000, 20, $1, 'READY',
-               'sent', 'sent', 'sent', now() - interval '20 minutes', now() - interval '25 minutes')
-       returning id`,
-      [hashReadyToken(token)],
-    );
-    const id = ins.rows[0].id;
-
-    await sweepDeliveries(noopLog);
-    expect((await pool.query(`select pickup_alerted_at from delivery_orders where id=$1`, [id])).rows[0].pickup_alerted_at).not.toBeNull();
-    await waitFor(async () => mock.waTextsTo(RECEPTION).some((t) => t.includes("non partie")), "reception pickup alert");
-
-    // One-shot: a second sweep does not re-alert this order.
-    const alertsBefore = mock.waTextsTo(RECEPTION).filter((t) => t.includes("non partie")).length;
-    await sweepDeliveries(noopLog);
-    await settle();
-    expect(mock.waTextsTo(RECEPTION).filter((t) => t.includes("non partie")).length).toBe(alertsBefore);
   });
 });
 

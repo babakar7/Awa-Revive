@@ -4,7 +4,6 @@ import {
   aggregateKitchenOutcome,
   canTransition,
   createdClientMessage,
-  deliveryTemplateParams,
   deliveryUpdateTemplateParams,
   hashReadyToken,
   kitchenMessage,
@@ -13,7 +12,6 @@ import {
   newReadyToken,
   normalizeDeliveryPhone,
   parseDeliveryQtyFields,
-  readyClientMessage,
   routeClientMessage,
   shouldFallbackDeliveryTemplate,
   verifyReadyToken,
@@ -38,25 +36,19 @@ const ORDER: DeliveryOrderView = {
 describe("canTransition", () => {
   const all: DeliveryStatus[] = [
     "IN_KITCHEN",
-    "READY",
     "OUT_FOR_DELIVERY",
     "DELIVERED",
     "CANCELLED",
   ];
   it("allows exactly the forward + cancel edges", () => {
-    expect(canTransition("IN_KITCHEN", "READY")).toBe(true);
+    expect(canTransition("IN_KITCHEN", "OUT_FOR_DELIVERY")).toBe(true);
+    expect(canTransition("IN_KITCHEN", "DELIVERED")).toBe(true); // reception may close a never-departed order
     expect(canTransition("IN_KITCHEN", "CANCELLED")).toBe(true);
-    expect(canTransition("READY", "OUT_FOR_DELIVERY")).toBe(true);
-    expect(canTransition("READY", "DELIVERED")).toBe(true); // reception may skip departure
-    expect(canTransition("READY", "CANCELLED")).toBe(true);
     expect(canTransition("OUT_FOR_DELIVERY", "DELIVERED")).toBe(true);
     expect(canTransition("OUT_FOR_DELIVERY", "CANCELLED")).toBe(true);
   });
-  it("forbids skipping, going backwards, and leaving terminal states", () => {
-    expect(canTransition("IN_KITCHEN", "OUT_FOR_DELIVERY")).toBe(false); // no skip
-    expect(canTransition("IN_KITCHEN", "DELIVERED")).toBe(false); // no double skip
-    expect(canTransition("READY", "IN_KITCHEN")).toBe(false); // no backwards
-    expect(canTransition("OUT_FOR_DELIVERY", "READY")).toBe(false); // no backwards
+  it("forbids going backwards and leaving terminal states", () => {
+    expect(canTransition("OUT_FOR_DELIVERY", "IN_KITCHEN")).toBe(false); // no backwards
     for (const to of all) {
       expect(canTransition("DELIVERED", to)).toBe(false);
       expect(canTransition("CANCELLED", to)).toBe(false);
@@ -152,26 +144,12 @@ describe("message bodies", () => {
     expect(createdClientMessage("en", ORDER)).toContain("Thanks Rama");
     expect(createdClientMessage("en", ORDER)).toContain("Almadies, villa 12");
   });
-  it("readyClientMessage localizes fr/en, names the client, no longer says « va partir »", () => {
-    expect(readyClientMessage("fr", ORDER)).toContain("Bonne nouvelle Rama");
-    expect(readyClientMessage("fr", ORDER)).toContain("à régler à la livraison");
-    expect(readyClientMessage("fr", ORDER)).not.toContain("va partir");
-    expect(readyClientMessage("en", ORDER)).toContain("Good news Rama");
-    expect(readyClientMessage("en", ORDER)).not.toContain("on its way");
-  });
   it("routeClientMessage localizes fr/en and says the order is on its way", () => {
     expect(routeClientMessage("fr", ORDER)).toContain("C'est parti Rama");
     expect(routeClientMessage("fr", ORDER)).toContain("en route");
     expect(routeClientMessage("fr", ORDER)).toContain("à régler à la livraison");
     expect(routeClientMessage("en", ORDER)).toContain("On its way Rama");
     expect(routeClientMessage("en", ORDER)).toContain("out for delivery");
-  });
-  it("deliveryTemplateParams are sanitized (no newlines) and 2 params", () => {
-    const params = deliveryTemplateParams(ORDER);
-    expect(params).toHaveLength(2);
-    expect(params[0]).toBe("Rama");
-    expect(params[1]).not.toMatch(/\n/);
-    expect(params[1]).toContain("9500 FCFA");
   });
   it("deliveryUpdateTemplateParams: 2 sanitized params, created ≠ route text", () => {
     const created = deliveryUpdateTemplateParams("created", ORDER);

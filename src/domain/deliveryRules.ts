@@ -17,21 +17,19 @@ import { toTemplateParam } from "../lib/notify.js";
 
 export type DeliveryStatus =
   | "IN_KITCHEN"
-  | "READY"
   | "OUT_FOR_DELIVERY"
   | "DELIVERED"
   | "CANCELLED";
 
 const TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
-  IN_KITCHEN: ["READY", "CANCELLED"], // no skipping straight to departure
-  READY: ["OUT_FOR_DELIVERY", "DELIVERED", "CANCELLED"], // DELIVERED kept: reception may skip the departure step
+  IN_KITCHEN: ["OUT_FOR_DELIVERY", "DELIVERED", "CANCELLED"], // DELIVERED kept: reception may close an order whose departure was never tapped (no route ping then)
   OUT_FOR_DELIVERY: ["DELIVERED", "CANCELLED"], // cancel-en-route allowed (order aborted)
   DELIVERED: [],
   CANCELLED: [],
 };
 
-/** Which of the three client pings a given kind is. */
-export type ClientPingKind = "created" | "ready" | "route";
+/** Which of the two client pings a given kind is. */
+export type ClientPingKind = "created" | "route";
 
 export function canTransition(from: DeliveryStatus, to: DeliveryStatus): boolean {
   return TRANSITIONS[from]?.includes(to) ?? false;
@@ -120,7 +118,7 @@ function firstName(name: string): string {
   return String(name ?? "").trim().split(/\s+/)[0] ?? "";
 }
 
-/** Kitchen ticket: contents, address, amount, and the one-tap "mark ready" link. */
+/** Kitchen ticket: contents, address, amount, and the one-tap departure link. */
 export function kitchenMessage(
   o: DeliveryOrderView,
   magicLink: string,
@@ -135,7 +133,7 @@ export function kitchenMessage(
   if (o.note) lines.push(`Note : ${o.note}`);
   lines.push(
     "",
-    `✅ Quand c'est prêt, touchez ici (puis « 🛵 Partie en livraison » au départ) : ${magicLink}`,
+    `🛵 Quand le livreur part avec la commande, touchez ici : ${magicLink}`,
   );
   return { subject: "🛵 Nouvelle commande livraison", body: lines.join("\n") };
 }
@@ -147,30 +145,12 @@ export function createdClientMessage(lang: string | null, o: DeliveryOrderView):
   if (lang === "en") {
     return (
       `📝 Thanks${first ? ` ${first}` : ""}! Your Revive order is confirmed: ${summary} — ` +
-      `${o.amount_xof} FCFA to pay on delivery, to ${o.address}. We'll let you know as soon as it's ready!`
+      `${o.amount_xof} FCFA to pay on delivery, to ${o.address}. We'll let you know as soon as it's on its way!`
     );
   }
   return (
     `📝 Merci${first ? ` ${first}` : ""} ! Votre commande Revive est bien reçue : ${summary} — ` +
-    `${o.amount_xof} FCFA à régler à la livraison, à ${o.address}. On vous prévient dès qu'elle est prête !`
-  );
-}
-
-/** Client "your order is ready" free-text (localized; template fallback is FR-only).
- *  Departure now has its own ping (routeClientMessage), so this no longer says
- *  "va partir en livraison". */
-export function readyClientMessage(lang: string | null, o: DeliveryOrderView): string {
-  const first = firstName(o.client_name);
-  const summary = formatExtrasOneLine(o.items);
-  if (lang === "en") {
-    return (
-      `✅ Good news${first ? ` ${first}` : ""}! Your Revive order is ready: ${summary} — ` +
-      `${o.amount_xof} FCFA to pay on delivery. It's leaving very soon!`
-    );
-  }
-  return (
-    `✅ Bonne nouvelle${first ? ` ${first}` : ""} ! Votre commande Revive est prête : ${summary} — ` +
-    `${o.amount_xof} FCFA à régler à la livraison. Elle part très vite !`
+    `${o.amount_xof} FCFA à régler à la livraison, à ${o.address}. On vous prévient dès qu'elle part en livraison !`
   );
 }
 
@@ -194,18 +174,10 @@ export function shouldFallbackDeliveryTemplate(err: unknown, templateName: strin
   return !!templateName && String(err).includes("131047");
 }
 
-/** Client template body params: {{1}} first name, {{2}} order summary + amount. */
-export function deliveryTemplateParams(o: DeliveryOrderView): [string, string] {
-  return [
-    toTemplateParam(firstName(o.client_name) || o.client_name || "client", 60),
-    toTemplateParam(`${formatExtrasOneLine(o.items)} — ${o.amount_xof} FCFA`, 200),
-  ];
-}
-
 /**
  * Body params for the generic `livraison_update` template (131047 fallback for
  * the creation-confirmation and out-for-delivery pings): {{1}} first name,
- * {{2}} the update text (FR, no newlines). Kept FR-only like `livraison_prete`.
+ * {{2}} the update text (FR, no newlines).
  */
 export function deliveryUpdateTemplateParams(
   kind: "created" | "route",

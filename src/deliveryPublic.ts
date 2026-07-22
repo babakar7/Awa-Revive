@@ -1,24 +1,21 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { formatExtrasMultiline } from "./lib/cafeMenu.js";
-import { attemptClientNotify, attemptRouteNotify } from "./domain/deliveryNotify.js";
+import { attemptRouteNotify } from "./domain/deliveryNotify.js";
 import {
   findDeliveryOrderByToken,
   markOutForDelivery,
-  markReady,
   orderItems,
   type DeliveryOrder,
 } from "./domain/deliveryRepo.js";
 
 /**
- * Public, no-auth page the kitchen opens from its WhatsApp ticket. Two one-tap
- * actions on the same token: "✅ Marquer prête" (IN_KITCHEN → READY) and then
- * "🛵 Partie en livraison" (READY → OUT_FOR_DELIVERY), each notifying the client.
+ * Public, no-auth page the kitchen opens from its WhatsApp ticket. ONE one-tap
+ * action: "🛵 Partie en livraison" (IN_KITCHEN → OUT_FOR_DELIVERY), which
+ * notifies the client that the order is on its way.
  *
  * SECURITY / OPS invariants:
  *  - GET is READ-ONLY. WhatsApp and other clients PREFETCH links for previews;
- *    a mutating GET would mark orders ready on preview. Only the POSTs mutate.
- *  - Each action is its own POST subpath (/ = ready, /depart = out-for-delivery)
- *    so an action is idempotent by URL and needs no body parsing on this no-JS page.
+ *    a mutating GET would mark orders departed on preview. Only the POST mutates.
  *  - The URL carries ONLY the token (no order id — nothing enumerable). The
  *    order is found by the token's stored HASH; the cleartext is never queried
  *    or logged. Any unknown/expired token → a uniform 404.
@@ -72,8 +69,8 @@ function shell(title: string, inner: string): string {
 const notFound = () =>
   shell("Lien invalide", `<h1>Lien invalide ou expiré</h1><p class="muted">Ce lien ne correspond à aucune commande active.</p>`);
 
-/** Read-only order card. IN_KITCHEN → "prête" button; READY → "partie en
- *  livraison" button; other states show a terminal message (no address). */
+/** Read-only order card. IN_KITCHEN → "partie en livraison" button; other
+ *  states show a terminal message (no address). */
 function orderCard(order: DeliveryOrder, token: string): string {
   const items = formatExtrasMultiline(orderItems(order));
   if (order.status === "IN_KITCHEN") {
@@ -83,17 +80,8 @@ function orderCard(order: DeliveryOrder, token: string): string {
 <p class="muted">${esc(order.client_name)} — ${esc(order.address)}</p>
 <div class="items">${esc(items)}</div>
 <p class="total">Total : ${esc(order.amount_xof)} FCFA <span class="muted">(à encaisser à la livraison)</span></p>
-<form method="post" action="/livraison/${esc(token)}"><button type="submit">✅ Marquer prête</button></form>`,
-    );
-  }
-  if (order.status === "READY") {
-    // Second action on the same token: mark the order as gone for delivery.
-    return shell(
-      "Commande prête",
-      `<h1>🛵 Commande livraison</h1>
-<p class="done">✅ Prête — le client est prévenu.</p>
-<p class="muted">Touchez ci-dessous quand le livreur part avec la commande.</p>
-<form method="post" action="/livraison/${esc(token)}/depart"><button class="route" type="submit">🛵 Partie en livraison</button></form>`,
+<p class="muted">Touchez ci-dessous quand le livreur part avec la commande — le client est prévenu automatiquement.</p>
+<form method="post" action="/livraison/${esc(token)}"><button class="route" type="submit">🛵 Partie en livraison</button></form>`,
     );
   }
   // Terminal / en-route: no address repeated.
@@ -123,29 +111,10 @@ export function registerDeliveryPublic(app: FastifyInstance): void {
     return reply.code(order ? 200 : 404).send(order ? orderCard(order, token) : notFound());
   });
 
-  // The mutation: mark ready + trigger the client ping, then 303 → GET.
+  // The mutation: mark the order gone for delivery + ping the client, then
+  // 303 → GET. Double-POST is idempotent (markOutForDelivery returns null once
+  // the order is no longer IN_KITCHEN).
   app.post("/livraison/:token", async (req, reply) => {
-    harden(reply);
-    const { token } = req.params as { token: string };
-    const order = await load(token);
-    if (!order) {
-      reply.type("text/html");
-      return reply.code(404).send(notFound());
-    }
-    const updated = await markReady(order.id, "kitchen-link");
-    if (updated) {
-      // Fire-and-forget: the sweep reconciles if this attempt fails/crashes.
-      void attemptClientNotify(order.id, req.log);
-      req.log.info({ order: order.id }, "Delivery order marked ready via kitchen magic link");
-    }
-    // Redirect to the read-only view (idempotent; no form re-submit on refresh).
-    return reply.redirect(`/livraison/${token}`, 303);
-  });
-
-  // Second action on the same token: mark the order gone for delivery + ping
-  // the client, then 303 → GET. Double-POST is idempotent (markOutForDelivery
-  // returns null once the order is no longer READY).
-  app.post("/livraison/:token/depart", async (req, reply) => {
     harden(reply);
     const { token } = req.params as { token: string };
     const order = await load(token);
@@ -155,9 +124,11 @@ export function registerDeliveryPublic(app: FastifyInstance): void {
     }
     const updated = await markOutForDelivery(order.id, "kitchen-link");
     if (updated) {
+      // Fire-and-forget: the sweep reconciles if this attempt fails/crashes.
       void attemptRouteNotify(order.id, req.log);
       req.log.info({ order: order.id }, "Delivery order marked out-for-delivery via kitchen magic link");
     }
+    // Redirect to the read-only view (idempotent; no form re-submit on refresh).
     return reply.redirect(`/livraison/${token}`, 303);
   });
 }

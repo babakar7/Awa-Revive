@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import { pool } from "../db/index.js";
 import { transition } from "../domain/stateMachine.js";
 import * as repo from "../domain/repo.js";
-import { extrasFromJson, getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
+import { extrasFromJson, getCafeMenu, computeExtras, formatExtrasOneLine } from "../lib/cafeMenu.js";
 import {
   adminAuthHook,
   clearSessionCookieHeader,
@@ -15,7 +15,6 @@ import {
 import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
 import {
-  attemptClientNotify,
   attemptCreatedNotify,
   attemptRouteNotify,
   notifyKitchenForOrder,
@@ -97,7 +96,7 @@ import { renderNotificationsPage } from "./notificationsPage.js";
 import * as nrepo from "../domain/notificationRepo.js";
 import { cachedCoachNames } from "../domain/notificationSweep.js";
 import { renderMessage, STAFF_FOOTER } from "../domain/notificationRules.js";
-import { sendWhatsAppNotification } from "../lib/notify.js";
+import { notifyReception, sendWhatsAppNotification } from "../lib/notify.js";
 import { ago, badge, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
 import { layout } from "./layout.js";
 import { loadNavBadges } from "./navBadges.js";
@@ -282,7 +281,7 @@ export function registerAdmin(app: FastifyInstance): void {
             const slaMs = (o.sla_minutes ?? 20) * 60_000;
             if (o.alerted_at || now - new Date(o.created_at).getTime() >= slaMs) late++;
           }
-          if (o.status === "READY" && o.client_notify_status === "failed") clientFailed++;
+          if (o.status === "OUT_FOR_DELIVERY" && o.route_notify_status === "failed") clientFailed++;
         }
         const inbox = renderInbox({
           refunds: actions.refunds,
@@ -679,6 +678,19 @@ ${
         req.log.info({ order: order.id, by: req.adminUser }, "Delivery order created");
         // Confirm receipt to the client (fire-and-forget; the sweep reconciles).
         void attemptCreatedNotify(order.id, req.log);
+        // Ping reception on EVERY new order — the owner also enters orders, and
+        // reception must see them to manage the delivery. Harmless self-echo
+        // when reception entered the order herself.
+        notifyReception(
+          "🛵 Nouvelle commande livraison",
+          `Client : ${name} (+${phone})\n` +
+            `Commande : ${formatExtrasOneLine(priced.lines)}\n` +
+            `Total : ${priced.totalXof} FCFA (à encaisser à la livraison)\n` +
+            `Adresse : ${address}\n` +
+            (note ? `Note : ${note}\n` : "") +
+            `Suivi : /admin/livraisons`,
+          { whatsappFirst: true },
+        );
         // Notify the kitchen now (await so the banner is truthful). Claim first
         // so a concurrent sweep can't double-send.
         let kitchenOk = false;
@@ -693,17 +705,6 @@ ${
           }
         }
         return reply.redirect(`/admin/livraisons?done=${kitchenOk ? "created" : "created-kitchen-failed"}`, 303);
-      });
-
-      admin.post("/livraisons/:id/ready", async (req, reply) => {
-        const { id } = req.params as { id: string };
-        const updated = await delivery.markReady(id, `admin-${req.adminUser ?? "?"}`);
-        if (updated) {
-          req.log.info({ order: id, by: req.adminUser }, "Delivery order marked ready from dashboard");
-          await attemptClientNotify(id, req.log); // await so the board shows the ping outcome
-          return reply.redirect("/admin/livraisons?done=ready", 303);
-        }
-        return reply.redirect("/admin/livraisons?err=commande déjà traitée — recharge la page", 303);
       });
 
       admin.post("/livraisons/:id/depart", async (req, reply) => {
@@ -736,7 +737,7 @@ ${
         const order = await delivery.findDeliveryOrder(id);
         if (!order) return reply.redirect("/admin/livraisons?err=commande introuvable", 303);
         const ok = await renotifyKitchen(order, req.log);
-        return reply.redirect(ok ? "/admin/livraisons?done=renotified" : "/admin/livraisons?err=commande déjà prête/close", 303);
+        return reply.redirect(ok ? "/admin/livraisons?done=renotified" : "/admin/livraisons?err=commande déjà partie/close", 303);
       });
 
       // ---------- Factures (demande client → la réception la crée ici) ----------

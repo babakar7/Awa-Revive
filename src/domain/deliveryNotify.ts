@@ -7,32 +7,26 @@ import { listStaffContacts, phoneDigits, recordDeliveryLog } from "./notificatio
 import {
   aggregateKitchenOutcome,
   createdClientMessage,
-  deliveryTemplateParams,
   deliveryUpdateTemplateParams,
   kitchenMessage,
   kitchenTemplateParams,
   magicLinkUrl,
-  readyClientMessage,
   routeClientMessage,
   shouldFallbackDeliveryTemplate,
   type ClientPingKind,
   type DeliveryOrderView,
 } from "./deliveryRules.js";
 import {
-  claimClientNotify,
   claimCreatedNotify,
-  claimDeliveryPickupAlerts,
   claimDeliverySlaAlerts,
   claimKitchenNotify,
   claimRouteNotify,
   findDeliveryOrder,
   orderItems,
-  pendingClientNotifies,
   pendingCreatedNotifies,
   pendingKitchenNotifies,
   pendingRouteNotifies,
   rotateReadyToken,
-  setClientNotifyOutcome,
   setCreatedNotifyOutcome,
   setRouteNotifyOutcome,
   setKitchenNotifyOutcome,
@@ -41,17 +35,18 @@ import {
 
 /**
  * WhatsApp effects for delivery orders + the 60-second reconciliation sweep.
- * Kitchen contacts are staff_contacts with the EXACT role `cuisine` (no fuzzy
- * match — a typo/bilingual role shouldn't silently opt a person in or out); if
- * none is configured the ticket falls back to reception with a warning. Every
- * send is journaled (source='delivery'). Notifications never throw to their
- * caller — a failed send flips a status the dashboard/sweep act on, it never
- * breaks the order.
+ * Kitchen contacts are staff_contacts with the EXACT role `bar` (the bar team IS
+ * the kitchen at Revive; no fuzzy match — a typo/bilingual role shouldn't
+ * silently opt a person in or out) that have a usable phone; if none is
+ * configured the ticket falls back to reception with a warning. Every send is
+ * journaled (source='delivery'). Notifications never throw to their caller — a
+ * failed send flips a status the dashboard/sweep act on, it never breaks the
+ * order.
  */
 
 type Log = { info: (o: unknown, m?: string) => void; error: (o: unknown, m?: string) => void };
 
-const KITCHEN_ROLE = "cuisine";
+const KITCHEN_ROLE = "bar";
 
 function viewOf(o: DeliveryOrder): DeliveryOrderView {
   return {
@@ -109,9 +104,10 @@ async function sendKitchenTo(
 
 /**
  * Notify the kitchen for one order (already claimed by the caller). Sends to
- * every `cuisine` contact — or to reception with a warning if none exists — and
- * records the aggregate outcome. `token` is the current magic-link token
- * (created fresh, or rotated by the sweep, since the cleartext is never stored).
+ * every `bar` contact with a phone — or to reception with a warning if none
+ * exists — and records the aggregate outcome. `token` is the current magic-link
+ * token (created fresh, or rotated by the sweep, since the cleartext is never
+ * stored).
  */
 export async function notifyKitchenForOrder(
   order: DeliveryOrder,
@@ -123,7 +119,7 @@ export async function notifyKitchenForOrder(
   const magicLink = magicLinkUrl(config.BASE_URL, token);
 
   const contacts = (await listStaffContacts()).filter(
-    (c) => normalizeName(c.role) === KITCHEN_ROLE && !c.muted,
+    (c) => normalizeName(c.role) === KITCHEN_ROLE && !c.muted && phoneDigits(c.phone).length >= 8,
   );
   // Dedup by phone (two contacts, same number).
   const seen = new Set<string>();
@@ -138,7 +134,7 @@ export async function notifyKitchenForOrder(
     // No kitchen contact: route the ticket to reception so it's never lost.
     const { subject, body } = kitchenMessage(view, magicLink);
     const warnBody =
-      `⚠️ Aucun contact « cuisine » dans le répertoire (/admin/notifications) — ` +
+      `⚠️ Aucun contact « bar » joignable dans le répertoire (/admin/notifications) — ` +
       `commande envoyée à la réception :\n\n${body}`;
     try {
       const path = await sendWhatsAppNotification(config.RECEPTION_PHONE, subject, warnBody);
@@ -171,8 +167,8 @@ export async function notifyKitchenForOrder(
 }
 
 // Per-ping wiring: message body, the 131047 template fallback, and the outcome
-// setter. `ready` keeps the dedicated livraison_prete template; created/route
-// share the generic livraison_update template (one Meta approval for both).
+// setter. Both pings share the generic livraison_update template (one Meta
+// approval for both).
 const CLIENT_PING: Record<
   ClientPingKind,
   {
@@ -192,14 +188,6 @@ const CLIENT_PING: Record<
     setOutcome: setCreatedNotifyOutcome,
     label: "created-confirmation",
   },
-  ready: {
-    message: readyClientMessage,
-    template: config.WA_DELIVERY_READY_TEMPLATE,
-    templateLang: config.WA_DELIVERY_READY_TEMPLATE_LANG,
-    templateParams: deliveryTemplateParams,
-    setOutcome: setClientNotifyOutcome,
-    label: "ready-ping",
-  },
   route: {
     message: routeClientMessage,
     template: config.WA_DELIVERY_UPDATE_TEMPLATE,
@@ -211,10 +199,10 @@ const CLIENT_PING: Record<
 };
 
 /**
- * Send one client-facing delivery ping (created / ready / route): free-text
- * inside the 24h window, the Utility template on 131047. Never throws — a
- * `failed` status is what surfaces "📞 appeler le client" (or a softer flag) on
- * the board. Caller has already claimed the attempt.
+ * Send one client-facing delivery ping (created / route): free-text inside the
+ * 24h window, the Utility template on 131047. Never throws — a `failed` status
+ * is what surfaces "📞 appeler le client" (or a softer flag) on the board.
+ * Caller has already claimed the attempt.
  */
 async function sendClientPing(
   order: DeliveryOrder,
@@ -260,17 +248,10 @@ async function sendClientPing(
   }
 }
 
-/** Claim + attempt the client ready-ping for one order id (route + sweep entry). */
-export async function attemptClientNotify(id: string, log: Log): Promise<void> {
-  const order = await claimClientNotify(id);
-  if (!order) return; // not claimable (already sent, capped, or in-flight)
-  await sendClientPing(order, "ready", log);
-}
-
 /** Claim + attempt the creation-confirmation ping (create route + sweep entry). */
 export async function attemptCreatedNotify(id: string, log: Log): Promise<void> {
   const order = await claimCreatedNotify(id);
-  if (!order) return;
+  if (!order) return; // not claimable (already sent, capped, or in-flight)
   await sendClientPing(order, "created", log);
 }
 
@@ -292,9 +273,9 @@ async function attemptKitchenNotify(id: string, log: Log): Promise<void> {
 }
 
 /**
- * 60s sweep: reconcile the three durable deliveries (a crash between commit and
- * send doesn't lose them), then fire one-shot SLA alerts to reception. Returns
- * how many SLA alerts were sent (for the log line).
+ * 60s sweep: reconcile the durable deliveries (a crash between commit and send
+ * doesn't lose them), then fire one-shot SLA alerts to reception. Returns how
+ * many SLA alerts were sent (for the log line).
  */
 export async function sweepDeliveries(log: Log): Promise<number> {
   // 1. Kitchen notifications still pending/failed (e.g. crash right after create).
@@ -309,47 +290,26 @@ export async function sweepDeliveries(log: Log): Promise<number> {
       log.error({ err, order: id }, "Delivery created-confirmation retry failed"),
     );
   }
-  // 3. Client "ready" pings still pending/failed.
-  for (const id of await pendingClientNotifies()) {
-    await attemptClientNotify(id, log).catch((err) =>
-      log.error({ err, order: id }, "Delivery client retry failed"),
-    );
-  }
-  // 4. "Out for delivery" pings still pending/failed.
+  // 3. "Out for delivery" pings still pending/failed.
   for (const id of await pendingRouteNotifies()) {
     await attemptRouteNotify(id, log).catch((err) =>
       log.error({ err, order: id }, "Delivery route retry failed"),
     );
   }
-  // 5. Prep SLA alerts (one-shot per order): never marked ready in time.
+  // 4. SLA alerts (one-shot per order): never departed in time.
   const late = await claimDeliverySlaAlerts();
   for (const order of late) {
     const elapsed = Math.round((Date.now() - new Date(order.created_at).getTime()) / 60000);
     notifyReception(
       `⏰ Commande livraison en retard (+${elapsed} min)`,
-      `Pas marquée « prête » après ${order.sla_minutes} min.\n` +
+      `Pas partie en livraison après ${order.sla_minutes} min.\n` +
         `Client : ${order.client_name} (+${order.client_phone})\n` +
         `Adresse : ${order.address}\n` +
         `Voir /admin/livraisons.`,
       { whatsappFirst: true },
     );
   }
-  // 6. Pickup SLA alerts (one-shot): ready but not departed within the window.
-  const stuck = await claimDeliveryPickupAlerts(config.DELIVERY_PICKUP_SLA_MINUTES);
-  for (const order of stuck) {
-    const waiting = order.ready_at
-      ? Math.round((Date.now() - new Date(order.ready_at).getTime()) / 60000)
-      : config.DELIVERY_PICKUP_SLA_MINUTES;
-    notifyReception(
-      `⏱️ Commande prête non partie (+${waiting} min)`,
-      `Prête depuis ${waiting} min et toujours pas partie en livraison.\n` +
-        `Client : ${order.client_name} (+${order.client_phone})\n` +
-        `Adresse : ${order.address}\n` +
-        `Voir /admin/livraisons.`,
-      { whatsappFirst: true },
-    );
-  }
-  return late.length + stuck.length;
+  return late.length;
 }
 
 /** Manual "🔁 Renvoyer à la cuisine": rotate the token and resend now. */

@@ -21,7 +21,6 @@ function esc(s: unknown): string {
 const BANNERS: Record<string, string> = {
   created: "Commande créée — cuisine notifiée, confirmation envoyée au client.",
   "created-kitchen-failed": "Commande créée, mais l'envoi à la cuisine a échoué — utilisez « 🔁 Renvoyer ».",
-  ready: "Commande marquée prête — le client est prévenu.",
   departed: "Commande partie en livraison — le client est prévenu.",
   delivered: "Commande marquée livrée.",
   cancelled: "Commande annulée.",
@@ -39,17 +38,11 @@ function minutesSince(d: Date | string): number {
   return Math.floor((Date.now() - new Date(d).getTime()) / 60000);
 }
 
-/** Colored SLA badge: green <10 min, amber <SLA, red ≥SLA; distinct once READY. */
+/** Colored SLA badge: green <10 min, amber <SLA, red ≥SLA; distinct once departed. */
 function slaBadge(o: DeliveryOrder): string {
   if (o.status === "OUT_FOR_DELIVERY") {
     const since = o.out_for_delivery_at ? minutesSince(o.out_for_delivery_at) : 0;
     return `<span class="badge badge--green">en route (${since} min)</span>`;
-  }
-  if (o.status === "READY") {
-    const since = o.ready_at ? minutesSince(o.ready_at) : 0;
-    // Colour against the pickup SLA: red once it's been ready too long without departing.
-    const cls = since < config.DELIVERY_PICKUP_SLA_MINUTES ? "badge--green" : "badge--red";
-    return `<span class="badge ${cls}">prête (${since} min)</span>`;
   }
   const elapsed = minutesSince(o.created_at);
   const remaining = o.sla_minutes - elapsed;
@@ -89,15 +82,11 @@ function actionsCell(o: DeliveryOrder): string {
   const parts: string[] = [];
   const kitchenBad = ["failed", "partial", "fallback_reception"].includes(o.kitchen_notify_status);
   if (o.status === "IN_KITCHEN") {
-    parts.push(inlineForm(`${base}/ready`, "✅ Prête", undefined, "ok"));
-    if (kitchenBad) parts.push(inlineForm(`${base}/renotify-kitchen`, "🔁 Renvoyer", undefined, "ghost"));
-    parts.push(inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande ?", "danger"));
-  } else if (o.status === "READY") {
     parts.push(inlineForm(`${base}/depart`, "🛵 Partie", undefined, "ok"));
+    if (kitchenBad) parts.push(inlineForm(`${base}/renotify-kitchen`, "🔁 Renvoyer", undefined, "ghost"));
+    // Direct close for an order whose departure was never tapped (no route ping).
     parts.push(inlineForm(`${base}/delivered`, "✓ Livrée", undefined, "ghost"));
-    parts.push(
-      inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande prête ?", "danger"),
-    );
+    parts.push(inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande ?", "danger"));
   } else if (o.status === "OUT_FOR_DELIVERY") {
     parts.push(inlineForm(`${base}/delivered`, "✓ Livrée", undefined, "ok"));
     parts.push(
@@ -108,10 +97,10 @@ function actionsCell(o: DeliveryOrder): string {
 }
 
 /**
- * Client-ping flag for the status-relevant ping: the confirmation (IN_KITCHEN),
- * the ready-ping (READY), or the en-route ping (OUT_FOR_DELIVERY). A failed
- * confirmation is a soft warning (nothing is blocked yet); a failed ready/route
- * ping is the red "call the client" the runner must act on.
+ * Client-ping flag for the status-relevant ping: the confirmation (IN_KITCHEN)
+ * or the en-route ping (OUT_FOR_DELIVERY). A failed confirmation is a soft
+ * warning (nothing is blocked yet); a failed route ping is the red "call the
+ * client" the runner must act on.
  */
 function clientFlag(o: DeliveryOrder): string {
   const ok = (label: string) => `<div class="ok">✓ ${label}</div>`;
@@ -122,11 +111,6 @@ function clientFlag(o: DeliveryOrder): string {
     if (sent(o.created_notify_status)) return ok("confirmation envoyée");
     if (inFlight(o.created_notify_status)) return pending;
     return `<div class="warn-text">Confirmation non envoyée</div>`;
-  }
-  if (o.status === "READY") {
-    if (sent(o.client_notify_status)) return ok("client prévenu");
-    if (inFlight(o.client_notify_status)) return pending;
-    return `<div class="danger-text">Appeler le client : +${esc(o.client_phone)}</div>`;
   }
   if (o.status === "OUT_FOR_DELIVERY") {
     if (sent(o.route_notify_status)) return ok("client prévenu (en route)");
@@ -150,14 +134,16 @@ function openRow(o: DeliveryOrder): string {
 }
 
 function closedRow(o: DeliveryOrder): string {
-  const prep = o.ready_at ? `${minutesSince(o.created_at) - minutesSince(o.ready_at)} min` : "—";
+  const prep = o.out_for_delivery_at
+    ? `${minutesSince(o.created_at) - minutesSince(o.out_for_delivery_at)} min`
+    : "—";
   const state = o.status === "DELIVERED" ? "🛵 livrée" : "✖ annulée";
   return `<tr>
 <td data-label="État">${esc(state)}</td>
 <td data-label="Client">${esc(o.client_name)}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(orderItems(o)))}</td>
 <td data-label="Montant" class="hide-sm">${esc(o.amount_xof)} F</td>
-<td data-label="Préparation" class="hide-sm">${o.status === "DELIVERED" ? esc(prep) : "—"}</td>
+<td data-label="Départ" class="hide-sm">${o.status === "DELIVERED" ? esc(prep) : "—"}</td>
 </tr>`;
 }
 
@@ -175,13 +161,13 @@ export function renderLivraisonsBoard(data: BoardData): string {
     ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Délai</th><th>Client</th><th>Commande</th><th class="hide-sm">Adresse</th><th>Montant</th><th class="hide-sm">Cuisine</th><th>Actions</th></tr></thead><tbody>${open.map(openRow).join("")}</tbody></table></div>`
     : `<div class="empty"><b>Aucune commande en cours</b><p>Les nouvelles livraisons apparaîtront ici avec leur délai.</p></div>`;
   const recentTable = recent.length
-    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Montant</th><th class="hide-sm">Prépa</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Montant</th><th class="hide-sm">Départ</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table></div>`
     : `<div class="empty"><b>Aucun historique récent</b></div>`;
   return `${data.banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Livraisons</h2><p>Suivez le délai cuisine, la notification client et l’encaissement à la livraison.</p></div><div class="page-header-actions"><a href="/admin/livraisons/new" class="act">Nouvelle commande</a></div></header>
 <div class="stat-grid">
   <div class="stat"><span class="muted">En cours</span><b>${stats.openCount}</b></div>
-  <div class="stat"><span class="muted">Prépa moyenne (30 j)</span><b>${avg}</b></div>
+  <div class="stat"><span class="muted">Départ moyen (30 j)</span><b>${avg}</b></div>
   <div class="stat"><span class="muted">En retard aujourd'hui</span><b>${stats.lateToday}</b></div>
 </div>
 <div class="section-header"><h2>En cours</h2><span class="badge ${open.length ? "badge--amber" : "badge--green"}">${open.length}</span></div>
@@ -232,7 +218,7 @@ ${optionSelect}</div>`;
     <label>Téléphone (WhatsApp)<input name="client_phone" required placeholder="77 123 45 67 ou +221…"></label>
     <label>Adresse de livraison<input name="address" required></label>
     <label>Note <span class="muted">(optionnel)</span><input name="note"></label>
-    <label>Alerte cuisine après (min)<input name="sla_minutes" type="number" min="5" max="180" value="${esc(config.DELIVERY_SLA_MINUTES)}" style="width:6rem"></label>
+    <label>Alerte si pas partie après (min)<input name="sla_minutes" type="number" min="5" max="180" value="${esc(config.DELIVERY_SLA_MINUTES)}" style="width:6rem"></label>
   </div>
   <h2 style="margin:.2rem 0">Articles</h2>
   ${menuUnavailable}

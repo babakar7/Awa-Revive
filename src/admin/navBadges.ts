@@ -71,7 +71,7 @@ export async function loadNavBadges(): Promise<NavBadges> {
             const slaMs = (o.sla_minutes ?? 20) * 60_000;
             if (now - new Date(o.created_at).getTime() >= slaMs) return true;
           }
-          if (o.status === "READY" && o.client_notify_status === "failed") return true;
+          if (o.status === "OUT_FOR_DELIVERY" && o.route_notify_status === "failed") return true;
           return false;
         }).length;
       }),

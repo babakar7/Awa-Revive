@@ -2706,6 +2706,46 @@ sans auth, ZÉRO JavaScript client) :
   Railway + CNAME chez le registrar de revive.sn (action Babakar). `/menu`
   fonctionne en attendant.
 
+### 6.21 Livraisons v3 — étape unique « partie en livraison », cuisine = rôle `bar`, ping réception à la création (22/07/2026)
+
+Trois demandes de Babakar, facilitées par un fait clé : **`delivery_orders`
+était VIDE en prod** (feature jamais utilisée) → zéro migration de données.
+
+- **READY fusionné dans OUT_FOR_DELIVERY** (décision Babakar : « prête » et
+  « partie » = le même geste en pratique). Cycle : `IN_KITCHEN →
+  OUT_FOR_DELIVERY → DELIVERED` (+`CANCELLED` depuis les 2 états ouverts ;
+  IN_KITCHEN→DELIVERED permis pour clore une commande dont le départ n'a jamais
+  été tapé — pas de ping route alors). Conséquences en cascade :
+  - **2 pings client** au lieu de 3 : confirmation (création) + « en route »
+    (départ). `readyClientMessage`/`deliveryTemplateParams` supprimés ; le
+    template Meta **`livraison_prete` devient inutilisé** (approuvé, laissé en
+    l'état ; `WA_DELIVERY_READY_TEMPLATE` retiré de config.ts, la var Railway
+    reste posée sans effet). `livraison_update` couvre les deux pings.
+  - **Lien magique = UN bouton** « 🛵 Partie en livraison » (POST racine ; la
+    sous-route `/depart` supprimée — aucun ticket dans la nature). Board admin :
+    boutons 🛵 Partie / ✓ Livrée / ✖ Annuler dès IN_KITCHEN.
+  - **1 seule alerte SLA** : « pas partie après X min » (l'ancienne alerte prépa
+    reformulée) ; l'**alerte enlèvement supprimée** (`claimDeliveryPickupAlerts`,
+    `DELIVERY_PICKUP_SLA_MINUTES` retirés — elle mesurait l'écart READY→départ
+    qui n'existe plus). Stat board « Départ moyen » = création→départ.
+  - **Colonnes DB conservées** (`ready_at/ready_by`, `client_notify_*`,
+    `pickup_alerted_at`) : inutilisées, retirées de l'interface TS seulement.
+    CHECK statut re-posé sans READY (table vide → sûr).
+- **Cuisine = rôle exact `bar`** (plus `cuisine`) : le répertoire réel a Fatma
+  et Jacqueline en `bar` et le rôle `bar` est AUSSI utilisé par le planning
+  staff (`PLANNING_ROLES`) — renommer les contacts les aurait fait disparaître
+  du planning ; on adapte donc le code au vocabulaire. Ama supprimée du
+  répertoire (départ prochain). **Contacts sans téléphone ignorés** (< 8
+  chiffres) au lieu de générer un envoi `failed`/`partial`.
+- **Ping réception à CHAQUE création de commande** (`notifyReception`
+  whatsappFirst, → +221 78 464 43 29) : Babakar saisit aussi des commandes, la
+  réception doit les voir pour les gérer. Écho assumé quand c'est elle qui
+  saisit. (Avant, elle n'était prévenue que par accident, via le repli « aucun
+  contact cuisine ».)
+- Tests mis à jour : 555 unitaires + 109 intégration verts (dont nouveaux cas :
+  contact `bar` sans téléphone → repli réception ; ping réception à la
+  création ; livrée-direct depuis IN_KITCHEN sans ping route).
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :

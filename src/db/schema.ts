@@ -581,12 +581,15 @@ create index if not exists idx_notification_log_rule_event
 -- la cuisine est notifiée (WhatsApp + lien magique « ✅ prête »), un SLA déclenche
 -- une alerte réception, et le client est prévenu quand c'est prêt. Paiement HORS
 -- système (encaissé à la livraison) — on ne mémorise que le montant dû.
--- Statuts : IN_KITCHEN → READY → OUT_FOR_DELIVERY → DELIVERED ; les 3 états
--- ouverts → CANCELLED (READY→DELIVERED reste permis si la réception saute
--- l'étape départ). items_json = snapshot figé (shape ExtraLine) : prix résolus
--- côté serveur depuis cafe-menu.md à la création, jamais rejoués après. Le token
+-- Statuts : IN_KITCHEN → OUT_FOR_DELIVERY → DELIVERED ; les 2 états ouverts →
+-- CANCELLED (IN_KITCHEN→DELIVERED reste permis si la réception clôt une commande
+-- dont le départ n'a jamais été tapé — pas de ping route alors). L'étape READY a
+-- été fusionnée dans le départ (07/2026) : prête = partie, un seul geste cuisine.
+-- Les colonnes ready_*/client_notify_*/pickup_alerted_at subsistent en prod
+-- (inutilisées). items_json = snapshot figé (shape ExtraLine) : prix résolus
+-- côté serveur depuis le menu à la création, jamais rejoués après. Le token
 -- du lien magique n'est JAMAIS stocké : seul son sha256 (ready_token_hash) l'est.
--- Le client reçoit 3 pings : confirmation (création), prête, en route (départ) —
+-- Le client reçoit 2 pings : confirmation (création) et en route (départ) —
 -- chacun suivi en « pending → sent|sent_template|... » et réconcilié par le
 -- sweep 60 s (un crash entre commit et envoi ne perd pas la notification).
 create table if not exists delivery_orders (
@@ -637,7 +640,7 @@ alter table delivery_orders add column if not exists out_for_delivery_by text;  
 alter table delivery_orders add column if not exists pickup_alerted_at timestamptz; -- alerte enlèvement one-shot
 alter table delivery_orders drop constraint if exists delivery_orders_status_check;
 alter table delivery_orders add constraint delivery_orders_status_check
-  check (status in ('IN_KITCHEN','READY','OUT_FOR_DELIVERY','DELIVERED','CANCELLED'));
+  check (status in ('IN_KITCHEN','OUT_FOR_DELIVERY','DELIVERED','CANCELLED'));
 
 -- Factures réception : un client demande une facture (aujourd'hui → handoff, la
 -- réception n'avait aucun outil). Elle la crée ici, l'imprime (PDF navigateur) et
