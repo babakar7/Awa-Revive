@@ -177,7 +177,7 @@ export const SERVICE_MANIFEST = JSON.stringify({
 });
 
 // ── Service worker (shell/assets only) ───────────────────────────────────────
-export const SERVICE_SW = `const CACHE='service-v1';
+export const SERVICE_SW = `const CACHE='service-v2';
 const SHELL=['${BASE}/app.js','${BASE}/manifest.webmanifest','${BASE}/icon-192.png','${BASE}/icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
@@ -268,7 +268,16 @@ export const SERVICE_APP_JS = String.raw`(function(){
 
   function render(){
     board.textContent='';
-    if(!SPOTS.length){ board.appendChild(el('p','empty','Aucun espace configuré.')); return; }
+    if(!SPOTS.length){
+      // Spots come from the initial boot (not SSE); a tab opened before they were
+      // available stays empty — offer a one-tap reload rather than a dead end.
+      var e=el('p','empty','Aucun espace chargé.');
+      e.appendChild(document.createElement('br'));
+      var b=el('button','sec','↻ Recharger'); b.style.marginTop='1rem'; b.style.maxWidth='12rem';
+      b.onclick=function(){ location.reload(); };
+      e.appendChild(b);
+      board.appendChild(e); return;
+    }
     SPOTS.forEach(function(sp){ board.appendChild(spotTile(sp)); });
     var occ=0; SPOTS.forEach(function(sp){ if(sessionForSpot(sp.id)) occ++; });
     countEl.textContent=occ? occ+'/'+SPOTS.length+' occupé'+(occ>1?'s':'') : '';
