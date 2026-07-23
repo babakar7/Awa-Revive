@@ -52,6 +52,7 @@ import {
   livraisonsBanner,
   renderLivraisonForm,
   renderLivraisonsBoard,
+  renderLivraisonsBoardFragment,
 } from "./livraisonsPage.js";
 import * as q from "./queries.js";
 import {
@@ -680,19 +681,36 @@ ${
       admin.get("/livraisons", async (req, reply) => {
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
-        const [open, recent, stats] = await Promise.all([
+        const [open, recent] = await Promise.all([
           delivery.listOpenDeliveryOrders(),
           delivery.recentClosedDeliveryOrders(20),
-          delivery.deliveryStats(),
         ]);
         const body = renderLivraisonsBoard({
           open,
           recent,
-          stats,
           banner: livraisonsBanner(done, err),
         });
-        // Auto-refresh only on the board (never on the create form).
-        reply.type("text/html").send(await layout("Livraisons", "/admin/livraisons", body, { refreshSeconds: 60, subtitle: "Suivi cuisine et client", contentWidth: "full" }));
+        reply
+          .type("text/html")
+          .send(
+            await layout("Livraisons", "/admin/livraisons", body, {
+              subtitle: "Suivi cuisine et client",
+              contentWidth: "full",
+            }),
+          );
+      });
+
+      // Authenticated HTML fragment used by the board's progressive 30-second
+      // refresh. No-JS users keep the complete SSR page and every POST route.
+      admin.get("/livraisons/fragment", async (_req, reply) => {
+        const [open, recent] = await Promise.all([
+          delivery.listOpenDeliveryOrders(),
+          delivery.recentClosedDeliveryOrders(20),
+        ]);
+        return reply
+          .header("Cache-Control", "no-store")
+          .type("text/html")
+          .send(renderLivraisonsBoardFragment({ open, recent }));
       });
 
       admin.get("/livraisons/new", async (req, reply) => {
@@ -725,7 +743,7 @@ ${
         // On a validation error, re-render the form (200) with everything the
         // user already typed + the message, instead of redirecting to a blank
         // form and losing it all. Rebuild qty/choice maps from the submitted body.
-        const backErr = async (msg: string) => {
+        const backErr = async (msg: string, field = "form") => {
           const qty: Record<string, number> = {};
           const choice: Record<string, string> = {};
           for (const [k, v] of Object.entries(b)) {
@@ -752,16 +770,22 @@ ${
             is_test: b.is_test,
             qty,
             choice,
+            errors: { [field]: msg },
           });
           return reply.type("text/html").send(
             await layout("Nouvelle livraison", "/admin/livraisons", form, { subtitle: "Commande téléphonique", contentWidth: "standard", breadcrumbs: [{ href: "/admin/livraisons", label: "Livraisons" }, { label: "Nouvelle" }] }),
           );
         };
-        if (!name) return backErr("le nom du client est obligatoire");
-        if (!phone) return backErr("numéro de téléphone invalide");
-        if (!address) return backErr("l'adresse de livraison est obligatoire");
+        if (!name) return backErr("Le nom du client est obligatoire.", "client_name");
+        if (!phone) return backErr("Le numéro de téléphone est invalide.", "client_phone");
+        if (!address) return backErr("L’adresse de livraison est obligatoire.", "address");
         const recipient = parseDeliveryRecipientFields(b);
-        if ("error" in recipient) return backErr(recipient.error);
+        if ("error" in recipient) {
+          return backErr(
+            recipient.error,
+            String(b.recipient_name ?? "").trim() ? "recipient_phone" : "recipient_name",
+          );
+        }
         const deliveryMode = b.delivery_mode === "scheduled" ? "scheduled" : "now";
         const leadRaw = parseInt(String(b.kitchen_lead_minutes ?? "60"), 10);
         const kitchenLead = [30, 60, 90].includes(leadRaw) ? leadRaw : 60;
@@ -769,18 +793,20 @@ ${
         let kitchenNotifyAt: Date | null = null;
         if (deliveryMode === "scheduled") {
           scheduledFor = parseDakarDateTime(String(b.scheduled_for ?? ""));
-          if (!scheduledFor) return backErr("date et heure d'arrivée invalides");
+          if (!scheduledFor) {
+            return backErr("La date et l’heure d’arrivée sont invalides.", "scheduled_for");
+          }
           if (scheduledFor.getTime() <= Date.now()) {
-            return backErr("l'heure d'arrivée doit être dans le futur");
+            return backErr("L’heure d’arrivée doit être dans le futur.", "scheduled_for");
           }
           kitchenNotifyAt = new Date(scheduledFor.getTime() - kitchenLead * 60_000);
         }
         const parsed = parseDeliveryQtyFields(b);
-        if ("error" in parsed) return backErr(parsed.error);
+        if ("error" in parsed) return backErr(parsed.error, "articles");
         // Prices/total resolved server-side from the menu (never trusted from the
         // form); choices for option-items are required and validated here too.
         const priced = computeExtras(getCafeMenu().items, parsed.entries, { requireChoices: true });
-        if (!priced.ok) return backErr(priced.message);
+        if (!priced.ok) return backErr(priced.message, "articles");
         const slaRaw = parseInt(String(b.sla_minutes ?? "").trim(), 10);
         const sla = Number.isFinite(slaRaw) && slaRaw >= 5 && slaRaw <= 180 ? slaRaw : config.DELIVERY_SLA_MINUTES;
 

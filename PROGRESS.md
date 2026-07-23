@@ -3068,6 +3068,46 @@ remet à la destinataire finale.
   attente. La variante de cette branche conserve en plus la synchronisation de
   la projection iPad pour son futur déploiement séparé.
 
+### 6.30 Refonte UX du parcours Livraison (23/07/2026)
+
+Le parcours Livraison est désormais organisé autour de la prochaine action,
+sans changer les statuts, transitions SQL, paiements ni notifications :
+
+- Le board actif abandonne la table dense au profit de cartes adaptatives,
+  réparties dans l’ordre **Intervention requise**, **En préparation**,
+  **Prêtes à partir**, **En route**, puis **Programmées**. Une fonction pure
+  dérive le groupe, l’urgence, le motif de blocage et l’unique action principale
+  de chaque commande ; les retards et échéances proches remontent en premier.
+  Le départ n’est proposé dans le board que lorsque la cuisine est `READY`, le
+  paiement autorisé et la commande activée. L’historique reste replié.
+- La lecture des commandes ouvertes joint la projection `kitchen_tickets`
+  (`kitchen_ticket_status`, `kitchen_ready_at`) sans migration. Les incidents
+  de paiement, remboursement, notification et ticket cuisine sont explicités
+  directement sur la carte ; contact, adresse, échéance et total restent
+  visibles, tandis que le détail du panier et les actions rares sont repliés.
+- Le rechargement complet à 60 s est remplacé par un fragment HTML authentifié
+  (`GET /admin/livraisons/fragment`) actualisé toutes les 30 s. L’actualisation
+  se suspend dès qu’un détail ou formulaire est ouvert, affiche sa dernière
+  heure de succès et peut être relancée manuellement. Le SSR et tous les POST
+  restent pleinement utilisables sans JavaScript.
+- La création est une page guidée en trois panneaux : **Client et destination**,
+  **Articles**, **Livraison et confirmation**. Clients récents et recherche Wix
+  partagent le même sélecteur, avec fiche choisie et saisie manuelle de secours.
+  Un récapitulatif sticky expose quantité, options manquantes, total, moment et
+  destinataire. Les erreurs serveur sont rendues au champ concerné, le premier
+  champ invalide reçoit le focus et toutes les valeurs soumises sont restaurées.
+  SLA et mode test sont rangés dans les réglages avancés.
+- La page publique cuisine/livreur présente successivement contact, paiement et
+  commande, donne le motif exact d’un départ bloqué et offre un rafraîchissement
+  explicite. Le départ passe par la confirmation « Confirmer le départ » avec
+  rappel de la notification client. Le GET reste sans effet, le POST idempotent,
+  les liens expirent toujours à 48 h et les états terminaux n’exposent aucune
+  donnée personnelle.
+- Validation : rendu Chrome à **390 px** et ordinateur (aucun débordement
+  horizontal à 390 px, contrôles Livraison ≥ 44 px, focus visible), build
+  TypeScript, **618 tests unitaires** verts et **41 scénarios d’intégration
+  livraison** verts.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
