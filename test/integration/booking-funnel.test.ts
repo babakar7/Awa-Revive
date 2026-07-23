@@ -6,6 +6,7 @@ import {
   recordBookingFunnelEvent,
 } from "../../src/domain/bookingFunnel.js";
 import { executeTool } from "../../src/agent/tools.js";
+import { slotChoiceKey } from "../../src/domain/repo.js";
 import { makeFetchMock, seedBooking, seedClient, truncateAll, type FetchMock } from "./helpers.js";
 
 let mock: FetchMock;
@@ -144,7 +145,7 @@ describe("booking funnel persistence", () => {
     );
 
     expect(result.alternative_period).toBeTruthy();
-    expect(result.slots.find((slot: any) => slot.event_id === "ev_next_week")).toMatchObject({
+    expect(result.slots.find((slot: any) => slot.choice_id === slotChoiceKey("ev_next_week"))).toMatchObject({
       open_spots: 4,
       alternative: true,
     });
@@ -186,7 +187,7 @@ describe("booking funnel persistence", () => {
 
     expect(result.error).toBe("not_enough_spots");
     expect(result.alternatives).toEqual([
-      expect.objectContaining({ event_id: "ev_fresh", open_spots: 3, alternative: true }),
+      expect.objectContaining({ choice_id: slotChoiceKey("ev_fresh"), open_spots: 3, alternative: true }),
     ]);
     expect((await pool.query(`select count(*)::int as n from pending_bookings`)).rows[0].n).toBe(0);
     const failure = await pool.query(

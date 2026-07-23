@@ -99,13 +99,22 @@ describe("add_spots_to_booking", () => {
     expect(after).toMatchObject({ status: "BOOKED", wix_booking_id: "wb_orig", participants: 3 });
   });
 
-  it("requires a payment method when OM is enabled", async () => {
+  it("reuses the client's previous payment method when none is passed (multi-booking)", async () => {
+    // The source booking is already paid (payment_method defaults to 'wave'), so
+    // adding spots must NOT re-ask the Wave/OM/Max It choice — it reuses that rail.
     const client = await seedClient();
-    const orig = await seedBooking(client.id, { status: "BOOKED", wix_booking_id: "wb_1", participants: 1 });
+    const orig = await seedBooking(client.id, {
+      status: "BOOKED",
+      wix_booking_id: "wb_1",
+      participants: 1,
+      payment_method: "wave",
+    });
     const out = JSON.parse(
       await executeTool(fullClient(client), "add_spots_to_booking", { booking_id: orig.id, extra_participants: 2 }),
     );
-    expect(out.error).toBe("payment_method_required");
+    expect(out.error).toBeUndefined();
+    expect(out.payment_method).toBe("wave");
+    expect(out.payment_link).toBeTruthy();
   });
 
   it("rejects a booking that isn't the client's own", async () => {

@@ -41,10 +41,18 @@ export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 export function resolvePaymentMethod(
   raw: unknown,
   omEnabled: boolean,
+  preferred?: string | null,
 ): { ok: true; method: ClientPaymentMethod } | { ok: false; error: string; message: string } {
   const m = String(raw ?? "").trim().toLowerCase();
   if (!m) {
     if (!omEnabled) return { ok: true, method: "wave" };
+    // Multi-booking convenience: if the client already paid a previous booking,
+    // reuse that method instead of forcing the 3-button choice again (Fix Zoé
+    // 23/07). Only falls through to asking when there is no known preference.
+    if (preferred) {
+      const fromPreferred = resolvePaymentMethod(preferred, omEnabled);
+      if (fromPreferred.ok) return fromPreferred;
+    }
     return {
       ok: false,
       error: "payment_method_required",
@@ -185,10 +193,11 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "check_availability",
     description:
-      "Get time slots for a class between two dates, including full ones. Open slots carry an event_id " +
-      "needed to create a payment link; slots marked full:true exist but cannot be booked — mention they " +
-      "are full and propose open alternatives instead. Each slot includes the coach's name — the ONLY valid " +
-      "source to answer who teaches a class. Call this whenever the client asks about times/days for a class.",
+      "Get time slots for a class between two dates, including full ones. Each slot carries a short choice_id " +
+      "(a slot_… value) — that is what you pass to create_payment_link / book_with_membership / join_waitlist; " +
+      "slots marked full:true exist but cannot be booked — mention they are full and propose open alternatives " +
+      "instead. Each slot includes the coach's name — the ONLY valid source to answer who teaches a class. " +
+      "Call this whenever the client asks about times/days for a class.",
     input_schema: {
       type: "object",
       properties: {
@@ -215,8 +224,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         event_id: {
           type: "string",
           description:
-            "The chosen slot's choice_id from check_availability (PREFERRED — short and copy-safe). The long " +
-            "event_id is also accepted but must be reproduced EXACTLY in full: any truncation fails as unknown_slot.",
+            "The chosen slot's choice_id from check_availability (a short slot_… value). Copy it exactly as " +
+            "returned — that short id is the only slot identifier you are given.",
         },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
         client_name: {
@@ -338,8 +347,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         event_id: {
           type: "string",
           description:
-            "The chosen slot's choice_id from check_availability (PREFERRED — short and copy-safe). The long " +
-            "event_id is also accepted but must be reproduced EXACTLY in full: any truncation fails as unknown_slot.",
+            "The chosen slot's choice_id from check_availability (a short slot_… value). Copy it exactly as " +
+            "returned — that short id is the only slot identifier you are given.",
         },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
         client_name: { type: "string", description: "Client's first name" },
@@ -470,7 +479,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         service_id: { type: "string", description: "Class id from list_classes" },
-        event_id: { type: "string", description: "event_id of the FULL slot, from check_availability" },
+        event_id: { type: "string", description: "choice_id of the FULL slot, from check_availability" },
         slot_start: { type: "string", description: "ISO start of that slot (the `start` field from check_availability)" },
       },
       required: ["service_id", "event_id", "slot_start"],
@@ -754,8 +763,12 @@ async function trackFunnel(
 
 function slotResult(slot: wix.WixSlot, alternative = false): Record<string, unknown> {
   return {
-    event_id: slot.eventId,
-    choice_id: slot.openSpots > 0 ? repo.slotChoiceKey(slot.eventId) : undefined,
+    // Only the short choice_id is exposed to the model — the long Wix event_id
+    // (~450 chars) is deliberately withheld: replayed tool history is truncated
+    // (TOOL_REPLAY_MAXLEN), so a copied event_id used to come back mangled and
+    // fail as unknown_slot (Zoé, 23/07 — two failed create_payment_link calls).
+    // The server maps the choice_id back to the real event_id via slot_cache.
+    choice_id: repo.slotChoiceKey(slot.eventId),
     start: slot.startDate,
     start_dakar: fmtDakar(slot.startDate),
     duration_minutes: slot.endDate
@@ -794,10 +807,20 @@ async function freshSlotAlternatives(
 }
 
 function paymentChoicePayload(preferred: string | null): Record<string, unknown> {
+  const omEnabled = om.isOmEnabled();
   return {
     preferred_payment_method: preferred,
-    payment_options: orderedPaymentMethodOptions(preferred, om.isOmEnabled()),
-    payment_choice_required: om.isOmEnabled(),
+    payment_options: orderedPaymentMethodOptions(preferred, omEnabled),
+    // Once the client has paid a previous booking, don't re-ask the 3-button
+    // choice on every subsequent link of the same flow (Zoé, 23/07 — the Wave /
+    // OM / Max It buttons were shown 4 times in a row). Reuse that method by
+    // default; the client can still switch by saying so.
+    payment_choice_required: omEnabled && !preferred,
+    payment_note:
+      omEnabled && preferred
+        ? `The client last paid with ${preferred}. Create the link directly with that method — do NOT show the ` +
+          `payment buttons again. If they'd rather use another way, they can just say so.`
+        : undefined,
   };
 }
 
@@ -925,13 +948,16 @@ export async function executeTool(
       const slots = [...requestedSlots, ...alternativeSlots];
       const openSlots = slots.filter((s) => s.openSpots > 0);
 
-      // Server-side slot cache: only event_ids recorded here are accepted by
-      // create_payment_link — full slots are deliberately NOT cached, so they
-      // can never be turned into a payment link.
+      // Server-side slot cache: only slots recorded here can be turned into a
+      // choice_id the model may act on (prompt-injection stance). ALL served
+      // slots are cached — including full ones — so join_waitlist can resolve a
+      // full slot's choice_id back to its event_id. Full slots are still never
+      // bookable: create_payment_link re-verifies openness live (isSlotStillOpen)
+      // before taking any money, so a cached full slot is rejected there.
       await repo.cacheSlots(
         client.id,
         serviceId,
-        openSlots.map((s) => ({ eventId: s.eventId, slot: s.raw })),
+        slots.map((s) => ({ eventId: s.eventId, slot: s.raw })),
       );
 
       if (openSlots.length > 0) {
@@ -967,7 +993,7 @@ export async function executeTool(
             : slots.some((s) => s.openSpots <= 0)
             ? "Slots marked full:true exist but cannot be booked — if the client asked for one of them, say it's " +
               "full and suggest open alternatives; if they still want THAT slot, offer the waitlist (join_waitlist " +
-              "with its event_id)."
+              "with its choice_id)."
             : undefined,
       });
     }
@@ -1085,9 +1111,9 @@ export async function executeTool(
         });
       }
 
-      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
+      const preferred = await repo.lastSuccessfulBookingPaymentMethod(client.id);
+      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled(), preferred);
       if (!pay.ok) {
-        const preferred = await repo.lastSuccessfulBookingPaymentMethod(client.id);
         return JSON.stringify({
           error: pay.error,
           message: pay.message,
@@ -1279,9 +1305,9 @@ export async function executeTool(
       }
 
       // 4. One active link per client: expire any DRAFT/AWAITING (never the source BOOKED row).
-      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
+      const preferred = await repo.lastSuccessfulBookingPaymentMethod(client.id);
+      const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled(), preferred);
       if (!pay.ok) {
-        const preferred = await repo.lastSuccessfulBookingPaymentMethod(client.id);
         return JSON.stringify({
           error: pay.error,
           message: pay.message,
@@ -2337,11 +2363,16 @@ export async function executeTool(
 
     case "join_waitlist": {
       const serviceId = String(input.service_id ?? "");
-      const eventId = String(input.event_id ?? "");
+      const rawId = String(input.event_id ?? "");
       const slotStart = String(input.slot_start ?? "");
-      if (!serviceId || !eventId || Number.isNaN(Date.parse(slotStart))) {
+      if (!serviceId || !rawId || Number.isNaN(Date.parse(slotStart))) {
         return JSON.stringify({ error: "invalid_arguments" });
       }
+      // The model only sees choice_ids now; resolve it back to the real Wix
+      // event_id via the slot cache (falls back to rawId if it was already the
+      // full id, e.g. a legacy interactive payload).
+      const cachedFull = await repo.getCachedSlot(client.id, rawId);
+      const eventId = cachedFull?.event_id ?? rawId;
       const service = await wix.getService(serviceId);
       if (!service) return JSON.stringify({ error: "unknown_service_id" });
 

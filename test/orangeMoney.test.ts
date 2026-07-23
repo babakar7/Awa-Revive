@@ -85,4 +85,28 @@ describe("resolvePaymentMethod", () => {
     expect(resolvePaymentMethod("orange_money", false).ok).toBe(false);
     expect(resolvePaymentMethod("maxit", false).ok).toBe(false);
   });
+
+  it("falls back to the preferred method when OM enabled and method omitted (multi-booking)", () => {
+    expect(resolvePaymentMethod(undefined, true, "wave")).toEqual({ ok: true, method: "wave" });
+    expect(resolvePaymentMethod(undefined, true, "orange_money")).toEqual({
+      ok: true,
+      method: "orange_money",
+    });
+  });
+
+  it("still requires a choice when there is no preferred method", () => {
+    const r = resolvePaymentMethod(undefined, true, null);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("payment_method_required");
+  });
+
+  it("prefers an explicit method over the preferred fallback", () => {
+    expect(resolvePaymentMethod("maxit", true, "wave")).toEqual({ ok: true, method: "maxit" });
+  });
+
+  it("ignores an unusable preferred method (e.g. OM later disabled)", () => {
+    const r = resolvePaymentMethod(undefined, false, "orange_money");
+    // OM off → omit still yields wave (the no-OM default), never a broken OM link.
+    expect(r).toEqual({ ok: true, method: "wave" });
+  });
 });
