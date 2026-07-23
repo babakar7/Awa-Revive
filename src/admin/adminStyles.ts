@@ -319,6 +319,10 @@ details>summary{cursor:pointer}
 .row{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
 .row.between{justify-content:space-between}
 .col{display:flex;flex-direction:column;gap:.72rem}
+/* L'attribut [hidden] doit toujours l'emporter, même sur un élément à display
+   explicite (ex. .col{display:flex}) — sinon un bloc masqué en JS reste visible
+   (cas du bloc « Programmer » du formulaire livraison quand « Maintenant » est coché). */
+[hidden]{display:none!important}
 .actionbar{position:sticky;bottom:.7rem;z-index:8;margin-top:.5rem;padding:.7rem .8rem;display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;background:rgba(251,247,242,.97);border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow-2);backdrop-filter:blur(10px)}
 .savebar{display:none;position:sticky;top:calc(var(--topbar-h) + .5rem);z-index:9;align-items:center;justify-content:space-between;gap:.8rem;margin-bottom:.7rem;padding:.7rem .85rem;background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:11px;box-shadow:var(--shadow-1);font-size:.9rem;font-weight:650}
 .planning-dialog{display:none;position:fixed;inset:0;z-index:50;align-items:center;justify-content:center;padding:1rem;background:rgba(31,20,33,.48);backdrop-filter:blur(2px)}
