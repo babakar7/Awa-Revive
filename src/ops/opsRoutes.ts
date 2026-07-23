@@ -30,6 +30,9 @@ import {
   closeEmptyOpenSessions,
 } from "../domain/serviceSessionRepo.js";
 import { getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
+import { savePushSubscription } from "../domain/pushRepo.js";
+import { pushToRole } from "./pushSender.js";
+import { ticketItemsSummary } from "../domain/kitchenTicketRules.js";
 import { renderOpsIcon } from "./opsIcon.js";
 import {
   OPS_COOKIE,
@@ -206,6 +209,16 @@ export function registerOps(app: FastifyInstance): void {
     const device = await requireCuisine(req, reply);
     if (!device) return reply;
     const t = await advanceTicketByCuisine((req.params as any).id, "READY", device.label);
+    // A room order going ready → push the reception phones' lock screens.
+    if (t && t.source === "TABLE") {
+      const view = kitchenTicketView(t);
+      void pushToRole("accueil", {
+        title: "🔔 Commande prête",
+        body: `${view.heading} · ${ticketItemsSummary(view)}`,
+        url: "/ops/service/",
+        tag: `ready-${t.id}`,
+      }).catch(() => {});
+    }
     return reply.type("application/json").send({ ok: !!t });
   });
 
@@ -334,6 +347,8 @@ async function serviceBootData(): Promise<unknown> {
     sessions,
     tickets: tickets.filter((t) => t.source === "TABLE").map(kitchenTicketView),
     menu: buildServiceMenu(),
+    // Public VAPID key so the PWA can subscribe to push; "" = push disabled.
+    vapidKey: config.VAPID_PUBLIC_KEY,
   };
 }
 
@@ -501,6 +516,21 @@ function registerServiceRoutes(app: FastifyInstance): void {
     const t = await cancelTableTicket((req.params as any).id, reason);
     if (t) await autoCloseIfEmpty(t.session_id, device.label);
     return reply.type("application/json").send({ ok: !!t });
+  });
+
+  // Register a device's Web Push subscription (lock-screen alerts).
+  app.post(`${SERVICE_BASE}/push/subscribe`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const b = (req.body as any) ?? {};
+    const endpoint = String(b.endpoint ?? "");
+    const p256dh = String(b.keys?.p256dh ?? "");
+    const auth = String(b.keys?.auth ?? "");
+    if (!endpoint || !p256dh || !auth) {
+      return reply.code(400).type("application/json").send({ ok: false });
+    }
+    await savePushSubscription(device.id, { endpoint, p256dh, auth });
+    return reply.type("application/json").send({ ok: true });
   });
 
   // Fresh board state (JSON) — the client re-fetches this on load so a stale

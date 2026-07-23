@@ -1451,6 +1451,9 @@ create unique index if not exists idx_push_subscriptions_endpoint on push_subscr
 alter table kitchen_tickets add column if not exists session_id uuid references service_sessions(id) on delete set null;
 alter table kitchen_tickets add column if not exists serve_by text;
 alter table kitchen_tickets add column if not exists serve_claimed_at timestamptz;
+-- Escalade propriétaire : posé une fois quand un ticket salle PRÊT reste non pris
+-- trop longtemps (claim atomique anti double-envoi).
+alter table kitchen_tickets add column if not exists serve_escalated_at timestamptz;
 create index if not exists idx_kitchen_tickets_session
   on kitchen_tickets (session_id) where session_id is not null;
 `;

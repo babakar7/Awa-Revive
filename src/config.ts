@@ -85,6 +85,16 @@ export const config = {
   // visite, sans code — pour tester le kiosque sans iPad. NE JAMAIS activer en
   // prod (rendrait le kiosque accessible sans appairage). Vide/0 = désactivé.
   OPS_DEV_AUTOPAIR: optional("OPS_DEV_AUTOPAIR", "") === "1" || optional("OPS_DEV_AUTOPAIR", "") === "true",
+  // Web Push (VAPID) pour l'alerte « commande prête » écran verrouillé des
+  // téléphones accueil. Les trois vides = push désactivé (la PWA marche quand même,
+  // sans notification en arrière-plan). La clé publique est exposée au client ;
+  // la privée signe les envois. Générer une paire : `web-push.generateVAPIDKeys()`.
+  VAPID_PUBLIC_KEY: optional("VAPID_PUBLIC_KEY", ""),
+  VAPID_PRIVATE_KEY: optional("VAPID_PRIVATE_KEY", ""),
+  VAPID_SUBJECT: optional("VAPID_SUBJECT", "mailto:support@revive.sn"),
+  // Secondes qu'un ticket salle PRÊT peut rester non pris avant d'escalader vers
+  // le propriétaire (WhatsApp). L'accueil est prévenu par push/écran d'abord.
+  OPS_SERVE_ESCALATE_SECONDS: parseInt(optional("OPS_SERVE_ESCALATE_SECONDS", "90"), 10),
 
   // Wix
   WIX_API_KEY: required("WIX_API_KEY"),

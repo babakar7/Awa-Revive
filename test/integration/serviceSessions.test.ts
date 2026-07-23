@@ -24,7 +24,13 @@ import {
   cancelTableTicket,
   ticketsForSession,
   listOpenKitchenTickets,
+  claimStaleServeEscalations,
 } from "../../src/domain/kitchenTicketRepo.js";
+import {
+  savePushSubscription,
+  listPushSubscriptionsForRole,
+  deletePushSubscription,
+} from "../../src/domain/pushRepo.js";
 import { opsEventsSince, latestOpsEventId } from "../../src/domain/opsEvents.js";
 
 /**
@@ -225,6 +231,56 @@ describe("closeEmptyOpenSessions (self-heal orphans)", () => {
     await seat(canapeSpot);
     expect(await closeEmptyOpenSessions(30)).toBe(0);
     expect(await getOpenSessionBySpot(canapeSpot)).not.toBeNull();
+  });
+});
+
+describe("push subscriptions", () => {
+  it("saves per device, lists by role, upserts on endpoint, deletes", async () => {
+    const acc = await createPairingDevice("Accueil 1", "accueil", hashOpsToken(newPairCode()), new Date(Date.now() + 60_000));
+    const cui = await createPairingDevice("iPad", "cuisine", hashOpsToken(newPairCode()), new Date(Date.now() + 60_000));
+    await savePushSubscription(acc.id, { endpoint: "https://push/acc", p256dh: "k1", auth: "a1" });
+    await savePushSubscription(cui.id, { endpoint: "https://push/cui", p256dh: "k2", auth: "a2" });
+
+    const accSubs = await listPushSubscriptionsForRole("accueil");
+    expect(accSubs).toHaveLength(1);
+    expect(accSubs[0].endpoint).toBe("https://push/acc");
+
+    // Re-subscribe same endpoint → upsert (still one), keys updated.
+    await savePushSubscription(acc.id, { endpoint: "https://push/acc", p256dh: "k1b", auth: "a1b" });
+    const again = await listPushSubscriptionsForRole("accueil");
+    expect(again).toHaveLength(1);
+    expect(again[0].p256dh).toBe("k1b");
+
+    await deletePushSubscription("https://push/acc");
+    expect(await listPushSubscriptionsForRole("accueil")).toHaveLength(0);
+  });
+});
+
+describe("owner escalation (claimStaleServeEscalations)", () => {
+  it("claims a stale un-taken READY table ticket exactly once", async () => {
+    const s = await seat(canapeSpot);
+    const t = await makeTableTicket(s.id, s.short_code);
+    await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
+
+    // Fresh READY → not yet due.
+    expect(await claimStaleServeEscalations(60)).toHaveLength(0);
+
+    // Age it past the threshold.
+    await pool.query("update kitchen_tickets set ready_at = now() - interval '5 minutes' where id = $1", [t.id]);
+    const claimed = await claimStaleServeEscalations(60);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0].id).toBe(t.id);
+    // Escalates exactly once.
+    expect(await claimStaleServeEscalations(60)).toHaveLength(0);
+  });
+
+  it("never escalates a ticket already taken by a server", async () => {
+    const s = await seat(terrasseSpot);
+    const t = await makeTableTicket(s.id, s.short_code);
+    await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
+    await claimTableServe(t.id, "Fatou"); // taken
+    await pool.query("update kitchen_tickets set ready_at = now() - interval '5 minutes' where id = $1", [t.id]);
+    expect(await claimStaleServeEscalations(60)).toHaveLength(0);
   });
 });
 

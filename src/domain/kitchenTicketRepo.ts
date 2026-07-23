@@ -49,6 +49,7 @@ export interface KitchenTicket {
   session_id: string | null;
   serve_by: string | null;
   serve_claimed_at: Date | null;
+  serve_escalated_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -267,6 +268,25 @@ export async function cancelTableTicket(id: string, reason: string | null): Prom
   const ticket = (res.rows[0] as KitchenTicket) ?? null;
   if (ticket) await emitRemoved(ticket);
   return ticket;
+}
+
+/**
+ * Atomically claim TABLE tickets that have been READY but UN-TAKEN (no serve_by)
+ * for longer than the threshold, for owner escalation. The `serve_escalated_at IS
+ * NULL` guard means each ticket escalates exactly once even if the sweep overlaps.
+ * Returns the freshly claimed tickets to notify about.
+ */
+export async function claimStaleServeEscalations(thresholdSeconds: number): Promise<KitchenTicket[]> {
+  const res = await pool.query(
+    `update kitchen_tickets
+        set serve_escalated_at = now(), updated_at = now()
+      where source = 'TABLE' and status = 'READY'
+        and serve_by is null and serve_escalated_at is null
+        and ready_at is not null and ready_at < now() - make_interval(secs => $1)
+      returning *`,
+    [Math.max(0, thresholdSeconds)],
+  );
+  return res.rows as KitchenTicket[];
 }
 
 /** Open kitchen tickets (NEW/PREPARING/READY) of one session, oldest first. */

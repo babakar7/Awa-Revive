@@ -17,7 +17,7 @@ import type { FastifyReply } from "fastify";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v5";
+const ASSET_VERSION = "v6";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -86,6 +86,8 @@ padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
 header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:.6rem;
 padding:.7rem 1rem;background:#211921;border-bottom:1px solid #3a2f3a}
 header h1{font-size:1.05rem;margin:0;font-weight:700}
+#bell{background:#3a2c10;color:#f0c579;border:1px solid #5a4520;border-radius:999px;padding:.4rem .7rem;font-size:.85rem;font-weight:700;margin-right:.5rem}
+#bell[hidden]{display:none}
 .dot{width:.7rem;height:.7rem;border-radius:50%;background:#e5484d;box-shadow:0 0 0 3px rgba(229,72,77,.18)}
 .dot.on{background:#30a46c;box-shadow:0 0 0 3px rgba(48,164,108,.18)}
 .spacer{flex:1}.count{font-size:.85rem;color:#c9bcc9}
@@ -173,7 +175,7 @@ export function serviceBoardPage(bootJson: string): string {
   return `<!doctype html><html lang="fr"><head>${HEAD}<title>Salle Revive</title>
 <style>${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
-<header><span id="dot" class="dot"></span><h1>Salle</h1><span class="spacer"></span><span class="count" id="count"></span></header>
+<header><span id="dot" class="dot"></span><h1>Salle</h1><span class="spacer"></span><button id="bell" hidden>🔔 Alertes</button><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
 <script>window.__BOOT__=${bootJson}</script>
@@ -208,6 +210,24 @@ self.addEventListener('fetch',e=>{
   if(e.request.method==='GET' && SHELL.includes(url.pathname)){
     e.respondWith(fetch(e.request).then(r=>{const c=r.clone();caches.open(CACHE).then(cc=>cc.put(e.request,c));return r;}).catch(()=>caches.match(e.request)));
   }
+});
+// Web Push: show the "commande prête" alert on the lock screen.
+self.addEventListener('push',e=>{
+  let d={}; try{ d=e.data?e.data.json():{}; }catch(_){}
+  const title=d.title||'Revive';
+  e.waitUntil(self.registration.showNotification(title,{
+    body:d.body||'', tag:d.tag, renotify:true, requireInteraction:true,
+    icon:'${BASE}/icon-192.png', badge:'${BASE}/icon-192.png',
+    data:{url:d.url||'${BASE}/'}
+  }));
+});
+self.addEventListener('notificationclick',e=>{
+  e.notification.close();
+  const url=(e.notification.data&&e.notification.data.url)||'${BASE}/';
+  e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(cl=>{
+    for(const c of cl){ if(c.url.indexOf('${BASE}')>=0 && 'focus' in c) return c.focus(); }
+    if(self.clients.openWindow) return self.clients.openWindow(url);
+  }));
 });`;
 
 // ── Client app ───────────────────────────────────────────────────────────────
@@ -223,6 +243,8 @@ export const SERVICE_APP_JS = String.raw`(function(){
   var countEl=document.getElementById('count');
   var dot=document.getElementById('dot');
   var offline=document.getElementById('offline');
+  var bell=document.getElementById('bell');
+  var VAPID=boot.vapidKey||'';
 
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
   function uuid(){ try{ return crypto.randomUUID(); }catch(e){ return 'r-'+Date.now()+'-'+Math.round(Math.random()*1e9); } }
@@ -443,11 +465,38 @@ export const SERVICE_APP_JS = String.raw`(function(){
       if(!d)return;
       SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
       if(d.menu&&d.menu.length) MENU=d.menu;
+      if(d.vapidKey){ VAPID=d.vapidKey; }
       sessions=new Map(); (d.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
       tickets=new Map(); (d.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
-      render();
+      render(); initPush();
     }).catch(function(){});
   }
+
+  // ---- Web Push (lock-screen "commande prête") ----
+  function urlB64(b64){ var pad='='.repeat((4-b64.length%4)%4); var s=(b64+pad).replace(/-/g,'+').replace(/_/g,'/');
+    var raw=atob(s); var a=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++)a[i]=raw.charCodeAt(i); return a; }
+  function pushSupported(){ return VAPID && ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
+  function postSub(sub){ post('/push/subscribe',sub.toJSON()).catch(function(){}); }
+  function initPush(){
+    if(!pushSupported()){ bell.hidden=true; return; }
+    navigator.serviceWorker.ready.then(function(reg){
+      return reg.pushManager.getSubscription().then(function(sub){
+        if(sub && Notification.permission==='granted'){ bell.hidden=true; postSub(sub); }
+        else { bell.hidden=false; }
+      });
+    }).catch(function(){});
+  }
+  bell.onclick=function(){
+    if(!pushSupported())return; unlock();
+    Notification.requestPermission().then(function(p){
+      if(p!=='granted'){ alert('Notifications refusées. Activez-les dans les réglages du téléphone pour être alerté des commandes prêtes.'); return; }
+      navigator.serviceWorker.ready.then(function(reg){
+        reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64(VAPID)}).then(function(sub){
+          postSub(sub); bell.hidden=true;
+        }).catch(function(){ alert('Impossible d\'activer les alertes sur cet appareil.'); });
+      });
+    });
+  };
 
   render();
   refreshState();

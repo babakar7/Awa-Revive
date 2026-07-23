@@ -10,6 +10,7 @@ import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { sweepStaffNotifications } from "./domain/notificationSweep.js";
 import { sweepDeliveries } from "./domain/deliveryNotify.js";
+import { sweepServeEscalations } from "./domain/opsEscalation.js";
 import { expireStaleDeliveryPaymentAttempts } from "./domain/deliveryRepo.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import {
@@ -113,6 +114,14 @@ async function main() {
       if (alerted > 0) app.log.info({ alerted }, "Delivery SLA alerts sent");
     } catch (err) {
       app.log.error({ err }, "Delivery sweep failed");
+    }
+    // Room service: escalate a READY table order nobody took to the owner. Own
+    // try/catch; the ~90s threshold is fine at 60s granularity.
+    try {
+      const escalated = await sweepServeEscalations(app.log);
+      if (escalated > 0) app.log.info({ escalated }, "Room serve escalations sent to owner");
+    } catch (err) {
+      app.log.error({ err }, "Serve-escalation sweep failed");
     }
   }, 60 * 1000);
   sweeper.unref();
