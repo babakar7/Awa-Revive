@@ -437,16 +437,19 @@ function registerServiceRoutes(app: FastifyInstance): void {
     if (!device) return reply;
     const spotId = (req.params as any).id;
     const b = (req.body as any) ?? {};
+    // Validate the ORDER first — a rejected order must never open a table (else the
+    // spot shows "Occupé — aucune commande en cours" with nothing in it).
+    const result = computeExtras(getCafeMenu().items, b.items, { requireChoices: true });
+    if (!result.ok) {
+      return reply.code(400).type("application/json").send({ ok: false, message: result.message });
+    }
+    // Now open the spot's session (or reuse the open one).
     let session = await getOpenSessionBySpot(spotId);
     if (!session) {
       session = await openSessionAtSpot({ spotId, firstName: b.first_name, openedBy: device.label });
     }
     if (!session) {
       return reply.code(400).type("application/json").send({ ok: false, message: "Emplacement inconnu." });
-    }
-    const result = computeExtras(getCafeMenu().items, b.items, { requireChoices: true });
-    if (!result.ok) {
-      return reply.code(400).type("application/json").send({ ok: false, message: result.message });
     }
     const note = typeof b.note === "string" ? b.note.trim().slice(0, 280) || null : null;
     const clientRequestId = String(b.client_request_id ?? "").slice(0, 80) || newOpsToken();
