@@ -14,6 +14,8 @@ import {
   normalizeDeliveryPhone,
   parseDakarDateTime,
   parseDeliveryQtyFields,
+  recipientRouteMessage,
+  recipientRouteTemplateParams,
   rescheduledClientMessage,
   routeClientMessage,
   shouldFallbackDeliveryTemplate,
@@ -226,6 +228,53 @@ describe("message bodies", () => {
       "9500",
     ]);
     for (const p of params) expect(p).not.toMatch(/\n/);
+  });
+
+  it("puts an alternate handoff contact on kitchen/client updates without replacing the client", () => {
+    const withRecipient: DeliveryOrderView = {
+      ...ORDER,
+      recipient_name: "Fatou Assistante",
+      recipient_phone: "221780001122",
+      payment_status: "PAID",
+    };
+    const kitchen = kitchenMessage(withRecipient, "https://x.test/livraison/token").body;
+    expect(kitchen).toContain("Client : Rama Thiam Ndiaye (+221771234567)");
+    expect(kitchen).toContain("Contact remise : Fatou Assistante (+221780001122)");
+    expect(createdClientMessage("fr", withRecipient)).toContain(
+      "remise est prévue avec Fatou Assistante",
+    );
+    expect(routeClientMessage("fr", withRecipient)).toContain(
+      "livreur appellera Fatou Assistante",
+    );
+    expect(kitchenTemplateParams(withRecipient)).toEqual([
+      "Rama Thiam Ndiaye — remise à Fatou Assistante",
+      "+221780001122",
+      "Almadies, villa 12",
+      "2× Jant Bi + 1× Iced Matcha Vanille",
+      "9500",
+    ]);
+  });
+
+  it("builds the recipient-only route alert with the correct payment instruction", () => {
+    const recipient = {
+      ...ORDER,
+      recipient_name: "Fatou Assistante",
+      recipient_phone: "221780001122",
+    };
+    expect(recipientRouteMessage({ ...recipient, payment_status: "PAID" })).toContain(
+      "rien à régler",
+    );
+    expect(
+      recipientRouteMessage({ ...recipient, payment_status: "CASH_DUE" }),
+    ).toContain("9500 FCFA en espèces");
+    const params = recipientRouteTemplateParams({
+      ...recipient,
+      payment_status: "CASH_DUE",
+    });
+    expect(params[0]).toBe("Fatou");
+    expect(params[1]).toContain("commande de Rama Thiam Ndiaye");
+    expect(params[1]).toContain("9500 FCFA en espèces");
+    expect(params[1]).not.toMatch(/\n/);
   });
 });
 

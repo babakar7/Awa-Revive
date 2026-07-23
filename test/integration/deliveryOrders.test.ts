@@ -132,6 +132,98 @@ describe("delivery order creation → kitchen notify", () => {
     void id;
   });
 
+  it("stores and normalizes an optional handoff contact on the order and kitchen alert", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({
+      recipient_name: "Fatou Assistante",
+      recipient_phone: "78 000 11 22",
+    });
+
+    const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+    expect(order.recipient_name).toBe("Fatou Assistante");
+    expect(order.recipient_phone).toBe("221780001122");
+    expect(order.recipient_route_notify_status).toBe("pending");
+    expect(mock.waTextsTo("221770000099").join("\n")).toContain(
+      "Contact remise : Fatou Assistante (+221780001122)",
+    );
+    const board = await app.inject({
+      method: "GET",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH },
+    });
+    expect(board.body).toContain("Remise à Fatou Assistante");
+    expect(board.body).toContain(`/admin/livraisons/${id}/recipient`);
+
+    const publicCard = await app.inject({
+      method: "GET",
+      url: magicLinkFrom(mock.waTextsTo("221770000099")),
+    });
+    expect(publicCard.statusCode).toBe(200);
+    expect(publicCard.body).toContain("Contact de remise");
+    expect(publicCard.body).toContain("tel:+221780001122");
+  });
+
+  it("rejects a partial or invalid handoff contact and preserves the form values", async () => {
+    const form = new URLSearchParams({
+      client_name: "Rama",
+      client_phone: "770009988",
+      address: "Almadies",
+      recipient_name: "Fatou Assistante",
+      qty_SMOOTHIE_JANT_BI: "2",
+    }).toString();
+    const res = await app.inject({
+      method: "POST",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: form,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("doivent être renseignés ensemble");
+    expect(res.body).toContain('value="Fatou Assistante"');
+    expect((await pool.query(`select count(*)::int as n from delivery_orders`)).rows[0].n).toBe(0);
+
+    const invalid = new URLSearchParams({
+      client_name: "Rama",
+      client_phone: "770009988",
+      address: "Almadies",
+      recipient_name: "Fatou Assistante",
+      recipient_phone: "pas-un-numéro",
+      qty_SMOOTHIE_JANT_BI: "2",
+    }).toString();
+    const invalidRes = await app.inject({
+      method: "POST",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: invalid,
+    });
+    expect(invalidRes.statusCode).toBe(200);
+    expect(invalidRes.body).toContain("numéro du contact de remise invalide");
+    expect((await pool.query(`select count(*)::int as n from delivery_orders`)).rows[0].n).toBe(0);
+  });
+
+  it("removes a handoff contact from an open order and refreshes the kitchen alert", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({
+      recipient_name: "Fatou Assistante",
+      recipient_phone: "780001122",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/recipient`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: "recipient_name=&recipient_phone=",
+    });
+    expect(res.statusCode).toBe(303);
+    expect(res.headers.location).toContain("done=recipient-removed");
+    const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+    expect(order.recipient_name).toBeNull();
+    expect(order.recipient_phone).toBeNull();
+    expect(order.recipient_route_notify_status).toBe("sent");
+    const latestKitchenAlert = mock.waTextsTo("221770000099").at(-1) ?? "";
+    expect(latestKitchenAlert).toContain("Client : Rama (+221770009988)");
+    expect(latestKitchenAlert).not.toContain("Contact remise");
+  });
+
   it("with no reachable bar contact (none, or empty phone), falls back to reception", async () => {
     // A bar contact WITHOUT a phone must not count as reachable.
     await pool.query(
@@ -1037,6 +1129,58 @@ describe("out for delivery (admin board)", () => {
     expect(["sent", "sent_template"]).toContain(order.route_notify_status);
   });
 
+  it("alerts the handoff contact independently at departure with the cash instruction", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({
+      recipient_name: "Fatou Assistante",
+      recipient_phone: "780001122",
+    });
+    await chooseCash(id);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/depart`,
+      headers: { authorization: AUTH },
+    });
+    expect(res.statusCode).toBe(303);
+    const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+    expect(["sent", "sent_template"]).toContain(order.route_notify_status);
+    expect(["sent", "sent_template"]).toContain(order.recipient_route_notify_status);
+    expect(mock.waTextsTo("221770009988").some((t) => t.includes("en route"))).toBe(true);
+    const recipientTexts = mock.waTextsTo("221780001122");
+    expect(recipientTexts).toHaveLength(1);
+    expect(recipientTexts[0]).toContain("commande Revive de Rama");
+    expect(recipientTexts[0]).toContain("6000 FCFA en espèces");
+    expect(recipientTexts[0]).not.toMatch(/\b(?:WAVE|OM|MAXIT)\b|choisir ton mode/i);
+  });
+
+  it("can add the handoff contact after departure without repeating the client alert", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+    await chooseCash(id);
+    await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/depart`,
+      headers: { authorization: AUTH },
+    });
+    const clientRouteCount = mock
+      .waTextsTo("221770009988")
+      .filter((t) => t.includes("en route")).length;
+
+    const edit = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/recipient`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: "recipient_name=Fatou&recipient_phone=780001122",
+    });
+    expect(edit.statusCode).toBe(303);
+    expect(edit.headers.location).toContain("done=recipient");
+    expect(mock.waTextsTo("221780001122").some((t) => t.includes("en route"))).toBe(true);
+    expect(
+      mock.waTextsTo("221770009988").filter((t) => t.includes("en route")).length,
+    ).toBe(clientRouteCount);
+  });
+
   it("marking delivered directly from IN_KITCHEN (departure never tapped) sends no en-route ping", async () => {
     await seedKitchenContact();
     const id = await createOrder();
@@ -1052,6 +1196,19 @@ describe("out for delivery (admin board)", () => {
     expect((await pool.query(`select status from delivery_orders where id=$1`, [id])).rows[0].status).toBe("DELIVERED");
     await settle();
     expect(mock.waTextsTo("221770009988").some((t) => t.includes("en route"))).toBe(false);
+
+    const editClosed = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/recipient`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: "recipient_name=Fatou&recipient_phone=780001122",
+    });
+    expect(editClosed.statusCode).toBe(303);
+    expect(editClosed.headers.location).toContain("contact%20non%20modifiable");
+    const closed = (
+      await pool.query(`select recipient_name, recipient_phone from delivery_orders where id=$1`, [id])
+    ).rows[0];
+    expect(closed).toEqual({ recipient_name: null, recipient_phone: null });
   });
 
   it("cancelling from OUT_FOR_DELIVERY is allowed and sends no client message", async () => {
@@ -1134,5 +1291,48 @@ describe("async delivery-failure correction (statuses webhook)", () => {
     expect(retried.created_notify_status).toBe("sent");
     expect(retried.created_notify_attempts).toBe(before.created_notify_attempts + 1);
     expect(retried.created_notify_wamid).toMatch(/^wamid\.test\./);
+  });
+
+  it("retries a failed handoff-contact alert without repeating the client route ping", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({
+      recipient_name: "Fatou",
+      recipient_phone: "780001122",
+    });
+    await chooseCash(id);
+    await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/depart`,
+      headers: { authorization: AUTH },
+    });
+    const before = (
+      await pool.query(
+        `select route_notify_status, route_notify_attempts,
+                recipient_route_notify_status, recipient_route_notify_attempts,
+                recipient_route_notify_wamid
+           from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    const clientMessagesBefore = mock.waTextsTo("221770009988").length;
+    expect(await markClientPingFailedByWamid(before.recipient_route_notify_wamid)).toBe(1);
+
+    await sweepDeliveries(noopLog);
+    const retried = (
+      await pool.query(
+        `select route_notify_status, route_notify_attempts,
+                recipient_route_notify_status, recipient_route_notify_attempts
+           from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(retried.route_notify_status).toBe(before.route_notify_status);
+    expect(retried.route_notify_attempts).toBe(before.route_notify_attempts);
+    expect(retried.recipient_route_notify_status).toBe("sent");
+    expect(retried.recipient_route_notify_attempts).toBe(
+      before.recipient_route_notify_attempts + 1,
+    );
+    expect(mock.waTextsTo("221770009988")).toHaveLength(clientMessagesBefore);
+    expect(mock.waTextsTo("221780001122")).toHaveLength(2);
   });
 });

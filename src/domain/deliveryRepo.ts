@@ -40,6 +40,8 @@ export interface DeliveryOrder {
   client_name: string;
   client_phone: string;
   wix_contact_id: string | null;
+  recipient_name: string | null;
+  recipient_phone: string | null;
   address: string;
   note: string | null;
   items_json: unknown;
@@ -77,6 +79,10 @@ export interface DeliveryOrder {
   route_notified_at: Date | null;
   route_notify_attempts: number;
   route_notify_wamid: string | null;
+  recipient_route_notify_status: NotifyStatus;
+  recipient_route_notified_at: Date | null;
+  recipient_route_notify_attempts: number;
+  recipient_route_notify_wamid: string | null;
   alerted_at: Date | null; // SLA (not departed in time) alert, one-shot
   out_for_delivery_at: Date | null;
   out_for_delivery_by: string | null;
@@ -99,6 +105,8 @@ export interface CreateDeliveryInput {
   client_name: string;
   client_phone: string; // already normalized (wa_id digits)
   wix_contact_id: string | null;
+  recipient_name: string | null;
+  recipient_phone: string | null; // already normalized (wa_id digits)
   address: string;
   note: string | null;
   items: ExtraLine[];
@@ -119,19 +127,24 @@ export async function createDeliveryOrder(
   const token = newReadyToken();
   const res = await pool.query(
     `insert into delivery_orders
-       (client_name, client_phone, wix_contact_id, address, note, items_json, amount_xof,
+       (client_name, client_phone, wix_contact_id, recipient_name, recipient_phone,
+        address, note, items_json, amount_xof,
         sla_minutes, ready_token_hash, created_by, is_test, scheduled_for,
-        kitchen_notify_at, activated_at, activation_notify_status)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-       case when $12::timestamptz is null then now()
-            when $13::timestamptz <= now() then $13::timestamptz
+        kitchen_notify_at, activated_at, activation_notify_status,
+        recipient_route_notify_status)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+       case when $14::timestamptz is null then now()
+            when $15::timestamptz <= now() then $15::timestamptz
             else null end,
-       case when $12::timestamptz is null then 'sent' else 'pending' end)
+       case when $14::timestamptz is null then 'sent' else 'pending' end,
+       case when $5::text is null then 'sent' else 'pending' end)
      returning *`,
     [
       input.client_name,
       input.client_phone,
       input.wix_contact_id,
+      input.recipient_name,
+      input.recipient_phone,
       input.address,
       input.note,
       JSON.stringify(input.items),
@@ -151,6 +164,43 @@ export async function findDeliveryOrder(id: string): Promise<DeliveryOrder | nul
   if (!UUID_RE.test(String(id))) return null; // never 500 on a junk public URL
   const res = await pool.query(`select * from delivery_orders where id = $1`, [id]);
   return (res.rows[0] as DeliveryOrder) ?? null;
+}
+
+export interface UpdateDeliveryRecipientInput {
+  recipientName: string | null;
+  recipientPhone: string | null;
+}
+
+/**
+ * Change (or clear) the operational handoff contact while the order is open.
+ * A real change resets only that contact's departure ping; the client's own
+ * notification state remains untouched.
+ */
+export async function updateDeliveryRecipient(
+  id: string,
+  input: UpdateDeliveryRecipientInput,
+): Promise<{ order: DeliveryOrder; changed: boolean } | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const changed = await pool.query(
+    `update delivery_orders
+        set recipient_name=$2,
+            recipient_phone=$3,
+            recipient_route_notify_status=case when $3::text is null then 'sent' else 'pending' end,
+            recipient_route_notified_at=null,
+            recipient_route_notify_attempts=0,
+            recipient_route_notify_wamid=null,
+            updated_at=now()
+      where id=$1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+        and (recipient_name is distinct from $2 or recipient_phone is distinct from $3)
+      returning *`,
+    [id, input.recipientName, input.recipientPhone],
+  );
+  const updated = changed.rows[0] as DeliveryOrder | undefined;
+  if (updated) return { order: updated, changed: true };
+
+  const current = await findDeliveryOrder(id);
+  if (!current || !["IN_KITCHEN", "OUT_FOR_DELIVERY"].includes(current.status)) return null;
+  return { order: current, changed: false };
 }
 
 /**
@@ -723,10 +773,18 @@ export async function setKitchenNotifyOutcome(
  *    confirmation); dropped if cancelled/delivered before it ever landed.
  *  - route: once OUT_FOR_DELIVERY (covers a depart→delivered within seconds).
  */
-type ClientPing = "created" | "route" | "rescheduled";
+type ClientPing = "created" | "route" | "rescheduled" | "recipientRoute";
 const CLIENT_PING_COLS: Record<
   ClientPing,
-  { status: string; at: string; attempts: string; wamid: string; claimIn: string; pendingIn: string }
+  {
+    status: string;
+    at: string;
+    attempts: string;
+    wamid: string;
+    claimIn: string;
+    pendingIn: string;
+    guard?: string;
+  }
 > = {
   created: {
     status: "created_notify_status",
@@ -752,6 +810,15 @@ const CLIENT_PING_COLS: Record<
     claimIn: "('IN_KITCHEN','OUT_FOR_DELIVERY')",
     pendingIn: "('IN_KITCHEN','OUT_FOR_DELIVERY')",
   },
+  recipientRoute: {
+    status: "recipient_route_notify_status",
+    at: "recipient_route_notified_at",
+    attempts: "recipient_route_notify_attempts",
+    wamid: "recipient_route_notify_wamid",
+    claimIn: "('OUT_FOR_DELIVERY','DELIVERED')",
+    pendingIn: "('OUT_FOR_DELIVERY')",
+    guard: "recipient_phone is not null",
+  },
 };
 
 async function claimClientPing(id: string, kind: ClientPing): Promise<DeliveryOrder | null> {
@@ -763,6 +830,7 @@ async function claimClientPing(id: string, kind: ClientPing): Promise<DeliveryOr
             ${c.wamid} = null,
             updated_at = now()
       where id = $1 and status in ${c.claimIn}
+        ${c.guard ? `and ${c.guard}` : ""}
         and ${c.attempts} < $2
         and ( ${c.status} in ('pending','failed')
               or (${c.status} = 'claimed' and updated_at < now() - interval '2 minutes') )
@@ -795,6 +863,7 @@ async function pendingClientPings(kind: ClientPing): Promise<string[]> {
   const res = await pool.query(
     `select id from delivery_orders
       where status in ${c.pendingIn} and ${c.attempts} < $1
+        ${c.guard ? `and ${c.guard}` : ""}
         and ( ${c.status} in ('pending','failed')
               or (${c.status} = 'claimed' and updated_at < now() - interval '2 minutes') )`,
     [MAX_NOTIFY_ATTEMPTS],
@@ -806,6 +875,8 @@ async function pendingClientPings(kind: ClientPing): Promise<string[]> {
 export const claimCreatedNotify = (id: string) => claimClientPing(id, "created");
 export const claimRouteNotify = (id: string) => claimClientPing(id, "route");
 export const claimRescheduleNotify = (id: string) => claimClientPing(id, "rescheduled");
+export const claimRecipientRouteNotify = (id: string) =>
+  claimClientPing(id, "recipientRoute");
 export const setCreatedNotifyOutcome = (
   id: string,
   status: NotifyStatus,
@@ -821,6 +892,11 @@ export const setRescheduleNotifyOutcome = (
   status: NotifyStatus,
   waMessageId: string | null = null,
 ) => setClientPingOutcome(id, "rescheduled", status, waMessageId);
+export const setRecipientRouteNotifyOutcome = (
+  id: string,
+  status: NotifyStatus,
+  waMessageId: string | null = null,
+) => setClientPingOutcome(id, "recipientRoute", status, waMessageId);
 
 /**
  * Meta may accept free text with HTTP 200 and reject it asynchronously because
@@ -860,6 +936,9 @@ export const pendingCreatedNotifies = () => pendingClientPings("created");
 export const pendingRouteNotifies = () => pendingClientPings("route");
 /** Orders whose reprogramming update still needs a (re)attempt. */
 export const pendingRescheduleNotifies = () => pendingClientPings("rescheduled");
+/** Orders whose handoff contact still needs the "out for delivery" ping. */
+export const pendingRecipientRouteNotifies = () =>
+  pendingClientPings("recipientRoute");
 
 /** Atomically activate all scheduled orders whose kitchen deadline is due.
  * `activated_at` is the planned kitchen deadline (not sweep wall time), which

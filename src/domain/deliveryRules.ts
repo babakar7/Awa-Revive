@@ -39,6 +39,8 @@ export function canTransition(from: DeliveryStatus, to: DeliveryStatus): boolean
 export interface DeliveryOrderView {
   client_name: string;
   client_phone: string;
+  recipient_name?: string | null;
+  recipient_phone?: string | null;
   address: string;
   note: string | null;
   items: ExtraLine[];
@@ -47,6 +49,33 @@ export interface DeliveryOrderView {
   scheduled_for?: Date | string | null;
   payment_status?: "PENDING_CHOICE" | "AWAITING_PAYMENT" | "CASH_DUE" | "PAID" | "REFUND_NEEDED";
   payment_method?: "wave" | "orange_money" | "maxit" | "cash" | null;
+}
+
+type DeliveryContactView = Pick<
+  DeliveryOrderView,
+  "client_name" | "client_phone" | "recipient_name" | "recipient_phone"
+>;
+
+export function deliveryCallContact(
+  o: DeliveryContactView,
+): { name: string; phone: string; isRecipient: boolean } {
+  if (o.recipient_name && o.recipient_phone) {
+    return { name: o.recipient_name, phone: o.recipient_phone, isRecipient: true };
+  }
+  return { name: o.client_name, phone: o.client_phone, isRecipient: false };
+}
+
+export function deliveryRecipientStaffLine(o: DeliveryContactView): string | null {
+  if (!o.recipient_name || !o.recipient_phone) return null;
+  return `Contact remise : ${o.recipient_name} (+${o.recipient_phone}) — à appeler par le livreur`;
+}
+
+export function deliveryTicketSubheading(
+  o: DeliveryContactView & Pick<DeliveryOrderView, "address">,
+): string {
+  const contact = deliveryCallContact(o);
+  const action = contact.isRecipient ? "Remise à" : "Appeler";
+  return `${o.address} · ${action} ${contact.name} (+${contact.phone})`;
 }
 
 export function deliveryPaymentStaffText(o: DeliveryOrderView): string {
@@ -184,6 +213,7 @@ export function kitchenMessage(
 ): { subject: string; body: string } {
   const lines = [
     `Client : ${o.client_name} (+${o.client_phone})`,
+    ...(deliveryRecipientStaffLine(o) ? [deliveryRecipientStaffLine(o)!] : []),
     `Adresse : ${o.address}`,
     ...(o.scheduled_for
       ? [`Arrivée promise : ${formatDakarDateTime(o.scheduled_for, "fr")} (heure de Dakar)`]
@@ -212,17 +242,23 @@ export function createdClientMessage(lang: string | null, o: DeliveryOrderView):
   const scheduled = o.scheduled_for
     ? formatDakarDateTime(o.scheduled_for, lang)
     : null;
+  const recipient =
+    o.recipient_name && o.recipient_phone
+      ? lang === "en"
+        ? ` Handoff is planned with ${o.recipient_name} (+${o.recipient_phone}).`
+        : ` La remise est prévue avec ${o.recipient_name} (+${o.recipient_phone}).`
+      : "";
   if (lang === "en") {
     return (
       `${testPrefix}📝 Thanks${first ? ` ${first}` : ""}! Your Revive order is confirmed: ${summary} — ` +
-      `total ${o.amount_xof} FCFA, delivery to ${o.address}${scheduled ? `, expected ${scheduled} (Dakar time)` : ""}. ` +
+      `total ${o.amount_xof} FCFA, delivery to ${o.address}${scheduled ? `, expected ${scheduled} (Dakar time)` : ""}.${recipient} ` +
       `Reply WAVE, OM, MAXIT or CASH to choose how to pay. ` +
       `We'll let you know as soon as it's on its way!`
     );
   }
   return (
     `${testPrefix}📝 Merci${first ? ` ${first}` : ""} ! Votre commande Revive est bien reçue : ${summary} — ` +
-    `total ${o.amount_xof} FCFA, livraison à ${o.address}${scheduled ? `, arrivée prévue ${scheduled} (heure de Dakar)` : ""}. ` +
+    `total ${o.amount_xof} FCFA, livraison à ${o.address}${scheduled ? `, arrivée prévue ${scheduled} (heure de Dakar)` : ""}.${recipient} ` +
     `Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton mode de paiement. ` +
     `On te prévient dès qu'elle part en livraison !`
   );
@@ -247,9 +283,31 @@ export function routeClientMessage(lang: string | null, o: DeliveryOrderView): s
   const first = firstName(o.client_name);
   const testPrefix = o.is_test ? "🧪 TEST — " : "";
   if (lang === "en") {
-    return `${testPrefix}🛵 On its way${first ? ` ${first}` : ""}! Your Revive order is out for delivery. See you soon!`;
+    const recipient =
+      o.recipient_name && o.recipient_phone
+        ? ` The delivery person will call ${o.recipient_name} at +${o.recipient_phone} for handoff.`
+        : "";
+    return `${testPrefix}🛵 On its way${first ? ` ${first}` : ""}! Your Revive order is out for delivery.${recipient} See you soon!`;
   }
-  return `${testPrefix}🛵 C'est parti${first ? ` ${first}` : ""} ! Votre commande Revive est en route. À tout de suite !`;
+  const recipient =
+    o.recipient_name && o.recipient_phone
+      ? ` Le livreur appellera ${o.recipient_name} au +${o.recipient_phone} pour la remise.`
+      : "";
+  return `${testPrefix}🛵 C'est parti${first ? ` ${first}` : ""} ! Votre commande Revive est en route.${recipient} À tout de suite !`;
+}
+
+/** Dedicated departure alert sent only to the optional handoff contact. */
+export function recipientRouteMessage(o: DeliveryOrderView): string {
+  if (!o.recipient_name || !o.recipient_phone) return "";
+  const payment =
+    o.payment_status === "CASH_DUE"
+      ? `Prévoir ${o.amount_xof} FCFA en espèces à remettre au livreur.`
+      : "La commande est déjà payée : rien à régler au livreur.";
+  return (
+    `${o.is_test ? "🧪 TEST — " : ""}Bonjour ${firstName(o.recipient_name)} 🙏🏾 ` +
+    `La commande Revive de ${o.client_name} est en route vers ${o.address}. ` +
+    `Le livreur vous appellera pour la remise. ${payment}`
+  );
 }
 
 /** Should we try the Utility template after a free-text 131047 (window closed)? Pure. */
@@ -271,10 +329,27 @@ export function deliveryUpdateTemplateParams(
       ? `bien reçue — total ${o.amount_xof} FCFA${o.scheduled_for ? `, arrivée prévue ${formatDakarDateTime(o.scheduled_for, "fr")} (Dakar)` : ""}. Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton paiement. Commande : ${formatExtrasOneLine(o.items)}`
       : kind === "rescheduled"
         ? `livraison reprogrammée au ${o.scheduled_for ? formatDakarDateTime(o.scheduled_for, "fr") : "nouvel horaire"} (heure de Dakar)`
-        : `en route ! À tout de suite`;
+        : `en route !${o.recipient_name && o.recipient_phone ? ` Le livreur appellera ${o.recipient_name} au +${o.recipient_phone} pour la remise.` : " À tout de suite"}`;
   return [
     toTemplateParam(firstName(o.client_name) || o.client_name || "client", 60),
     toTemplateParam(`${o.is_test ? "TEST — " : ""}${text}`, 200),
+  ];
+}
+
+/** Reuses livraison_update: {{1}} recipient first name, {{2}} operational update. */
+export function recipientRouteTemplateParams(
+  o: DeliveryOrderView,
+): [string, string] {
+  const payment =
+    o.payment_status === "CASH_DUE"
+      ? `${o.amount_xof} FCFA en espèces à remettre au livreur`
+      : "commande déjà payée, rien à régler";
+  return [
+    toTemplateParam(firstName(o.recipient_name ?? "") || o.recipient_name || "contact", 60),
+    toTemplateParam(
+      `${o.is_test ? "TEST — " : ""}commande de ${o.client_name} en route vers ${o.address}. Le livreur vous appellera pour la remise. ${payment}.`,
+      200,
+    ),
   ];
 }
 
@@ -289,9 +364,13 @@ export function kitchenTemplateParams(
   const itemText = `${formatExtrasOneLine(o.items)}${
     o.scheduled_for ? ` · arrivée ${formatDakarDateTime(o.scheduled_for, "fr")}` : ""
   }`;
+  const contact = deliveryCallContact(o);
+  const templateName = contact.isRecipient
+    ? `${o.client_name} — remise à ${contact.name}`
+    : o.client_name;
   return [
-    toTemplateParam(o.client_name, 60),
-    toTemplateParam(`+${o.client_phone}`, 20),
+    toTemplateParam(templateName, 60),
+    toTemplateParam(`+${contact.phone}`, 20),
     toTemplateParam(o.address, 90),
     toTemplateParam(itemText, 200),
     toTemplateParam(String(o.amount_xof), 12),

@@ -1,8 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **23 juillet 2026** — livraisons programmées
-> avec activation durable (§6.27). Avant : fiabilisation des alertes
+> Dernière mise à jour : **23 juillet 2026** — contact de remise des
+> livraisons et alertes dédiées (§6.28). Avant : livraisons programmées
+> avec activation durable (§6.27), fiabilisation des alertes
 > livraison + mode commande de test (§6.26), refonte premium et UX de
 > tout l’admin (§4.41), notifications staff, livraisons bar, handoffs `wa.me`.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
@@ -2967,6 +2968,33 @@ l'arrivée promise au client en heure de Dakar et l'alerte cuisine est réglable
   paiement Awa avant activation, le redémarrage, les sweeps concurrents, la
   reprogrammation, les gardes SQL, l'annulation payée/remboursement et la
   régression complète des livraisons immédiates.
+
+### 6.28 Contact de remise d’une livraison + alertes dédiées (23/07/2026)
+
+Une livraison peut maintenant préciser un contact différent de la cliente
+(assistante, gardien, proche…) qui récupère la commande auprès du livreur et la
+remet à la destinataire finale.
+
+- `recipient_name` et `recipient_phone` sont facultatifs mais indissociables,
+  normalisés et validés côté serveur. À la création, une case facultative masque
+  les deux champs dans le parcours courant et ne les révèle que si une autre
+  personne récupère la commande. Le contact reste modifiable tant que la
+  livraison est ouverte.
+- Le contact de remise apparaît dans le board admin, le ticket WhatsApp cuisine
+  et la page publique du livreur. Avant le départ, une modification renotifie
+  la cuisine ; après le départ, elle déclenche directement la nouvelle alerte
+  au contact.
+- À l’étape **Partie en livraison**, le contact reçoit sa propre alerte
+  WhatsApp avec l’adresse, le montant à encaisser si le paiement est en espèces,
+  ou la mention « déjà réglée ». La cliente conserve séparément toutes les
+  alertes habituelles et reste l’unique interlocutrice d’Awa pour le paiement.
+- L’outbox du contact est durable (`recipient_notify_*`, `wamid`, tentatives,
+  motif d’échec) : un rejet asynchrone Meta redevient retentable par le sweep.
+  Les échecs remontent dans le board livraison, la file admin et les badges de
+  navigation au lieu de rester silencieux.
+- Validation avant déploiement : build TypeScript, **592 tests unitaires** et
+  **40 scénarios d’intégration livraison** verts, dont cash/déjà payé,
+  modification avant/après départ, retry asynchrone et garde de statut.
 
 ## 7. Runbook ops
 
