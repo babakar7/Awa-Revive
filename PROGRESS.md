@@ -2974,9 +2974,8 @@ l'arrivée promise au client en heure de Dakar et l'alerte cuisine est réglable
 Début du chantier « écrans temps réel » (cf. plan validé) : une PWA cuisine
 (`cuisine.revive.sn`) affiche les tickets en direct et laisse la cuisine
 avancer **Nouveau → En préparation → Prête**, avec WhatsApp interne conservé en
-**filet de sécurité**. Le code de la branche `feat/ops-cuisine-pwa` est inclus
-dans le déploiement production du 23/07 ; la mise en service matérielle/DNS
-reste à faire (voir « Pour mettre en service » plus bas). Trois commits cohérents :
+**filet de sécurité**. Branche `feat/ops-cuisine-pwa` — **PAS encore en prod**
+(voir « Pour mettre en service » plus bas). Trois commits cohérents :
 
 - **Couche projection (`kitchen_tickets`)** : nouvelle table cuisine-facing
   alimentée par `delivery_orders`. Un ticket **naît à l'activation** de la
@@ -3046,8 +3045,10 @@ Une livraison peut maintenant préciser un contact différent de la cliente
 remet à la destinataire finale.
 
 - `recipient_name` et `recipient_phone` sont facultatifs mais indissociables,
-  normalisés et validés côté serveur. Le formulaire admin les propose à la
-  création puis permet de les modifier tant que la livraison reste ouverte.
+  normalisés et validés côté serveur. À la création, une case facultative masque
+  les deux champs dans le parcours courant et ne les révèle que si une autre
+  personne récupère la commande. Le contact reste modifiable tant que la
+  livraison est ouverte.
 - Le contact de remise apparaît dans le board admin, le ticket cuisine et la
   page publique du livreur. Avant le départ, une modification rafraîchit aussi
   la projection iPad et renotifie la cuisine ; après le départ, elle déclenche
@@ -3063,6 +3064,9 @@ remet à la destinataire finale.
 - Validation avant déploiement : build TypeScript, **612 tests unitaires** et
   **40 scénarios d’intégration livraison** verts, dont cash/déjà payé,
   modification avant/après départ, retry asynchrone et garde de statut.
+- Déployé sur `main` via `38f6c86`, sans embarquer la PWA cuisine encore en
+  attente. La variante de cette branche conserve en plus la synchronisation de
+  la projection iPad pour son futur déploiement séparé.
 
 ## 7. Runbook ops
 

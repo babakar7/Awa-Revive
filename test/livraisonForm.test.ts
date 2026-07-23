@@ -48,6 +48,9 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(html).toContain(`name="recipient_name"`);
     expect(html).toContain(`name="recipient_phone" type="tel" inputmode="tel"`);
     expect(html).toContain("recevra uniquement l’alerte");
+    expect(html).toContain(`id="liv-recipient-toggle" type="checkbox"`);
+    expect(html).toContain(`id="liv-recipient-fields" class="col liv-optional-fields" hidden`);
+    expect(html).toContain(`.liv-optional-fields[hidden]{display:none}`);
   });
 
   it("searches Wix clients while keeping manual entry available", () => {
@@ -106,6 +109,10 @@ describe("renderLivraisonForm — stepper & UX", () => {
       `value="Fatou&quot;&gt;&lt;script&gt;bad&lt;/script&gt;"`,
     );
     expect(html).toContain(`value="+221781112233"`);
+    expect(html).toContain(`id="liv-recipient-toggle" type="checkbox" checked`);
+    expect(html).toContain(`aria-expanded="true"`);
+    expect(html).toContain(`name="recipient_name" maxlength="120"`);
+    expect(html).not.toContain(`id="liv-recipient-fields" class="col liv-optional-fields" hidden`);
     expect(html).toContain(`name="wix_contact_id" type="hidden" value="wix&quot;&gt;&lt;script&gt;x&lt;/script&gt;"`);
     expect(html).not.toContain("<script>x</script>");
   });

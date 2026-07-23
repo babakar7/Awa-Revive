@@ -423,12 +423,14 @@ ${optionSelect}</div>`;
     : 60;
   const scheduleMin = dakarInputValue(new Date(Date.now() + 60_000));
   const hasWixClient = !!prefill.wix_contact_id;
+  const hasRecipient = !!(prefill.recipient_name || prefill.recipient_phone);
   return `${banner}
 <style>
 .liv-item.on{background:var(--brand-soft);border-radius:8px}.liv-item.on>span:first-child{font-weight:650}
 .liv-wix-results{display:grid;gap:.35rem;max-height:18rem;overflow:auto;margin-top:.45rem;padding:.45rem}
 .liv-wix-result{display:block;width:100%;text-align:left;white-space:normal}
 .liv-wix-result small{display:block;margin-top:.15rem;font-weight:400}
+.liv-optional-fields[hidden]{display:none}
 </style>
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Livraisons</span><h2>Nouvelle commande</h2><p>Le client choisira Wave, Orange Money, Max It ou espèces avec Awa. Le montant est calculé automatiquement depuis le menu actif.</p></div></header>
 <form method="post" action="/admin/livraisons" class="col">
@@ -448,11 +450,16 @@ ${optionSelect}</div>`;
     <label>Téléphone (WhatsApp)<input name="client_phone" type="tel" inputmode="tel" required placeholder="77 123 45 67 ou +221…" value="${esc(prefill.client_phone ?? "")}"></label>
     <label>Adresse de livraison<input name="address" required value="${esc(prefill.address ?? "")}"></label>
     <fieldset class="card col" style="margin:0">
-      <legend><b>Contact à appeler pour la remise</b> <span class="muted">(optionnel)</span></legend>
-      <span class="muted">À remplir si une autre personne réceptionne la commande pour la cliente.</span>
-      <label>Nom du contact<input name="recipient_name" maxlength="120" placeholder="Ex. Fatou, assistante" value="${esc(prefill.recipient_name ?? "")}"></label>
-      <label>Téléphone du contact<input name="recipient_phone" type="tel" inputmode="tel" placeholder="77 123 45 67 ou +221…" value="${esc(prefill.recipient_phone ?? "")}"></label>
-      <span class="muted">Cette personne recevra uniquement l’alerte quand la commande partira.</span>
+      <legend><b>Remise de la livraison</b></legend>
+      <label style="display:flex;align-items:flex-start;gap:.75rem">
+        <input id="liv-recipient-toggle" type="checkbox"${hasRecipient ? " checked" : ""} aria-controls="liv-recipient-fields" aria-expanded="${hasRecipient ? "true" : "false"}" style="width:auto;margin-top:.2rem">
+        <span><b>Une autre personne récupère la livraison</b><br><span class="muted">Le livreur devra appeler ce contact à la place de la cliente.</span></span>
+      </label>
+      <div id="liv-recipient-fields" class="col liv-optional-fields"${hasRecipient ? "" : " hidden"}>
+        <label>Nom du contact<input name="recipient_name" maxlength="120" placeholder="Ex. Fatou, assistante" value="${esc(prefill.recipient_name ?? "")}"${hasRecipient ? " required" : ""}></label>
+        <label>Téléphone du contact<input name="recipient_phone" type="tel" inputmode="tel" placeholder="77 123 45 67 ou +221…" value="${esc(prefill.recipient_phone ?? "")}"${hasRecipient ? " required" : ""}></label>
+        <span class="muted">Cette personne recevra uniquement l’alerte quand la commande partira.</span>
+      </div>
     </fieldset>
     <label>Note <span class="muted">(optionnel)</span><input name="note" value="${esc(prefill.note ?? "")}"></label>
     <fieldset class="card col" style="margin:0">
@@ -499,6 +506,10 @@ ${optionSelect}</div>`;
   var clientName=form&&form.querySelector('[name="client_name"]');
   var clientPhone=form&&form.querySelector('[name="client_phone"]');
   var clientAddress=form&&form.querySelector('[name="address"]');
+  var recipientToggle=document.getElementById('liv-recipient-toggle');
+  var recipientFields=document.getElementById('liv-recipient-fields');
+  var recipientName=form&&form.querySelector('[name="recipient_name"]');
+  var recipientPhone=form&&form.querySelector('[name="recipient_phone"]');
   var scheduleFields=document.getElementById('liv-schedule-fields');
   var scheduleInput=form&&form.querySelector('[name="scheduled_for"]');
   var wixTimer=null,wixRequest=null;
@@ -556,6 +567,18 @@ ${optionSelect}</div>`;
   if(form)form.querySelectorAll('[name="delivery_mode"]').forEach(function(input){
     input.addEventListener('change',syncDeliveryMode);
   });
+  function syncRecipient(shouldFocus){
+    var enabled=!!recipientToggle&&recipientToggle.checked;
+    if(recipientFields)recipientFields.hidden=!enabled;
+    if(recipientToggle)recipientToggle.setAttribute('aria-expanded',enabled?'true':'false');
+    [recipientName,recipientPhone].forEach(function(input){
+      if(!input)return;
+      input.required=enabled;
+      if(!enabled)input.value='';
+    });
+    if(enabled&&shouldFocus&&recipientName)recipientName.focus();
+  }
+  if(recipientToggle)recipientToggle.addEventListener('change',function(){syncRecipient(true);});
   function recompute(){
     var t=0,c=0;
     document.querySelectorAll('input[name^="qty_"]').forEach(function(i){
@@ -613,6 +636,7 @@ ${optionSelect}</div>`;
     wixId.value='';wixSearch.value='';wixClear.hidden=true;hideWixResults();
     wixStatus.textContent='Client récent sélectionné — aucune fiche Wix liée.';
   });
+  syncRecipient(false);
   syncDeliveryMode();
   recompute();
 })();
