@@ -1332,6 +1332,41 @@ create unique index if not exists idx_service_sessions_open_code
 create index if not exists idx_service_sessions_open
   on service_sessions (opened_at) where status = 'OPEN';
 
+-- Emplacements FIXES de la salle (config physique existante) : chaque espace a
+-- des places stables (« Canapé 1 », « T3 »…) posées une fois sur la carte de
+-- l'espace (pos_x/pos_y proportionnels ∈ [0,1]). L'accueil touche l'emplacement
+-- réel pour prendre la commande — pas de « créer une table ». Le label de
+-- l'emplacement EST le code du ticket cuisine.
+create table if not exists service_spots (
+  id uuid primary key default gen_random_uuid(),
+  area_id uuid not null references service_areas(id),
+  label text not null,                -- 'Canapé', 'Terrasse' (aujourd'hui 1 place/espace)
+  capacity integer,                   -- couverts habituels (affichage)
+  capacity_max integer,               -- couverts max en ajoutant des chaises (nullable)
+  pos_x real not null default 0.5,    -- position sur la carte de l'espace ∈ [0,1]
+  pos_y real not null default 0.5,
+  sort_order integer not null default 0,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_service_spots_area on service_spots (area_id, sort_order) where active;
+-- Seed idempotent : UNE place par espace (config actuelle — un canapé, une table
+-- terrasse extensible, la pergola). Ne ré-insère jamais si l'espace a déjà une place.
+insert into service_spots (area_id, label, capacity, capacity_max, sort_order)
+select a.id, a.name,
+       case a.code when 'C' then 4 when 'T' then 6 when 'P' then 10 else 4 end,
+       case a.code when 'T' then 8 else null end,
+       a.sort_order
+  from service_areas a
+ where not exists (select 1 from service_spots s where s.area_id = a.id);
+
+-- Une session occupe un emplacement fixe (spot_id). short_code = label de
+-- l'emplacement (figé à l'ouverture) ; pos_x/pos_y recopiés du spot. Au plus UNE
+-- session ouverte par emplacement (index partiel ci-dessous — garde anti-course).
+alter table service_sessions add column if not exists spot_id uuid references service_spots(id);
+create unique index if not exists idx_service_sessions_open_spot
+  on service_sessions (spot_id) where status = 'OPEN' and spot_id is not null;
+
 -- Abonnements Web Push par appareil accueil (alerte « commande prête » écran
 -- verrouillé). Invalidés sur 410 Gone au moment de l'envoi.
 create table if not exists push_subscriptions (

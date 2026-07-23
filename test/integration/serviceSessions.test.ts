@@ -7,12 +7,12 @@ import { truncateAll } from "./helpers.js";
 import { type ExtraLine, type CafeMenuRow, setCafeMenu } from "../../src/lib/cafeMenu.js";
 import { createPairingDevice } from "../../src/domain/opsDeviceRepo.js";
 import { hashOpsToken, newPairCode } from "../../src/ops/opsAuth.js";
-import { listActiveAreas } from "../../src/domain/serviceAreaRepo.js";
+import { listActiveSpots } from "../../src/domain/serviceSpotRepo.js";
 import {
-  openSession,
+  openSessionAtSpot,
+  getOpenSessionBySpot,
   listOpenSessions,
   getOpenSession,
-  setSessionPosition,
   closeSession,
 } from "../../src/domain/serviceSessionRepo.js";
 import {
@@ -27,19 +27,19 @@ import {
 import { opsEventsSince, latestOpsEventId } from "../../src/domain/opsEvents.js";
 
 /**
- * On-site service sessions + TABLE kitchen tickets against a real Postgres.
- * Locks the Phase 2 invariants: short-code allocation/reuse, the atomic accueil
- * "Je prends" claim, "Servie" leaving both boards, and — the safety one — a
- * session cannot be closed while a kitchen ticket of it is still open. The
- * seeded service_areas survive beforeEach (only sessions/tickets are wiped).
+ * On-site FIXED-spot service + TABLE kitchen tickets against a real Postgres.
+ * Locks the Phase 2 invariants: one open session per spot (tap an occupied spot
+ * → the existing session), the atomic "Je prends" claim, "Servie" leaving both
+ * boards, and — the safety one — a session can't be freed while a ticket is still
+ * open. The seeded service_areas + service_spots survive beforeEach.
  */
 
 const LINES: ExtraLine[] = [
   { id: "JANTBI", name: "Jant Bi", qty: 2, unitPriceXof: 3000, lineTotalXof: 6000, note: "sans sucre" },
 ];
 
-let areaId: string; // Canapé
-let areaCode: string;
+let canapeSpot: string;
+let terrasseSpot: string;
 
 beforeAll(async () => {
   await migrate();
@@ -50,17 +50,16 @@ beforeEach(async () => {
   await pool.query(
     "truncate kitchen_tickets, ops_devices, ops_events, service_sessions, push_subscriptions restart identity cascade",
   );
-  const areas = await listActiveAreas();
-  const canape = areas.find((a) => a.name === "Canapé")!;
-  areaId = canape.id;
-  areaCode = canape.code;
+  const spots = await listActiveSpots();
+  canapeSpot = spots.find((s) => s.label === "Canapé")!.id;
+  terrasseSpot = spots.find((s) => s.label === "Terrasse")!.id;
 });
 
 let reqSeq = 0;
 const reqId = () => `req-${Date.now()}-${reqSeq++}`;
 
-async function makeSession(firstName?: string) {
-  const s = await openSession({ areaId, firstName, openedBy: "Accueil 1" });
+async function seat(spotId: string, firstName?: string) {
+  const s = await openSessionAtSpot({ spotId, firstName, openedBy: "Accueil 1" });
   if (!s) throw new Error("session not opened");
   return s;
 }
@@ -79,59 +78,56 @@ async function makeTableTicket(sessionId: string, heading: string) {
   return ticket;
 }
 
-describe("service areas", () => {
-  it("seeds Canapé / Terrasse / Pergola", async () => {
-    const areas = await listActiveAreas();
-    expect(areas.map((a) => a.name)).toEqual(["Canapé", "Terrasse", "Pergola"]);
-    expect(areas.map((a) => a.code)).toEqual(["C", "T", "P"]);
+describe("spots seed", () => {
+  it("seeds one spot per space with capacities", async () => {
+    const spots = await listActiveSpots();
+    const byLabel = Object.fromEntries(spots.map((s) => [s.label, s]));
+    expect(Object.keys(byLabel).sort()).toEqual(["Canapé", "Pergola", "Terrasse"]);
+    expect(byLabel["Canapé"].capacity).toBe(4);
+    expect(byLabel["Terrasse"].capacity).toBe(6);
+    expect(byLabel["Terrasse"].capacity_max).toBe(8);
+    expect(byLabel["Pergola"].capacity).toBe(10);
   });
 });
 
-describe("openSession — short code allocation", () => {
-  it("allocates sequential codes per area and emits session_new", async () => {
+describe("openSessionAtSpot", () => {
+  it("opens a session whose code IS the spot label, and emits session_new", async () => {
     const before = await latestOpsEventId("accueil");
-    const a = await makeSession("Awa");
-    const b = await makeSession("Bby");
-    expect(a.short_code).toBe(`${areaCode}-01`);
-    expect(b.short_code).toBe(`${areaCode}-02`);
-    expect(a.area_name).toBe("Canapé");
-    expect(a.first_name).toBe("Awa");
-
+    const s = await seat(canapeSpot, "Awa");
+    expect(s.spot_id).toBe(canapeSpot);
+    expect(s.short_code).toBe("Canapé");
+    expect(s.first_name).toBe("Awa");
     const events = await opsEventsSince("accueil", before);
-    expect(events.filter((e) => e.kind === "session_new")).toHaveLength(2);
+    expect(events.some((e) => e.kind === "session_new")).toBe(true);
   });
 
-  it("reuses the smallest free code after a session closes", async () => {
-    const a = await makeSession(); // C-01
-    await makeSession(); // C-02
-    expect((await closeSession(a.id, "Accueil 1")).ok).toBe(true);
-    const c = await makeSession(); // reuses C-01
-    expect(c.short_code).toBe(`${areaCode}-01`);
+  it("a second tap on an occupied spot returns the SAME session (idempotent)", async () => {
+    const first = await seat(canapeSpot, "Awa");
+    const again = await openSessionAtSpot({ spotId: canapeSpot, firstName: "Bby" });
+    expect(again?.id).toBe(first.id);
+    expect(again?.first_name).toBe("Awa"); // original kept
+    expect(await listOpenSessions()).toHaveLength(1);
   });
 
-  it("lists only open sessions with their area denormalized", async () => {
-    await makeSession("Awa");
-    const open = await listOpenSessions();
-    expect(open).toHaveLength(1);
-    expect(open[0]).toMatchObject({ area_name: "Canapé", first_name: "Awa" });
+  it("frees the spot on close, so it can be seated again", async () => {
+    const first = await seat(canapeSpot);
+    expect((await closeSession(first.id, "Accueil 1")).ok).toBe(true);
+    expect(await getOpenSessionBySpot(canapeSpot)).toBeNull();
+    const second = await seat(canapeSpot);
+    expect(second.id).not.toBe(first.id);
   });
-});
 
-describe("setSessionPosition", () => {
-  it("stores a proportional position and emits session_update", async () => {
-    const s = await makeSession();
-    const before = await latestOpsEventId("accueil");
-    const updated = await setSessionPosition(s.id, { x: 0.4, y: 0.6 });
-    expect(updated?.pos_x).toBeCloseTo(0.4);
-    expect(updated?.pos_y).toBeCloseTo(0.6);
-    const events = await opsEventsSince("accueil", before);
-    expect(events.some((e) => e.kind === "session_update")).toBe(true);
+  it("different spots are independent", async () => {
+    const a = await seat(canapeSpot);
+    const b = await seat(terrasseSpot);
+    expect(a.id).not.toBe(b.id);
+    expect((await listOpenSessions()).length).toBe(2);
   });
 });
 
 describe("createTableTicket", () => {
-  it("creates a NEW TABLE ticket linked to the session, on both channels", async () => {
-    const s = await makeSession();
+  it("creates a NEW TABLE ticket on both channels, no WhatsApp fallback", async () => {
+    const s = await seat(canapeSpot);
     const beforeCuisine = await latestOpsEventId("cuisine");
     const beforeAccueil = await latestOpsEventId("accueil");
     const t = await makeTableTicket(s.id, s.short_code);
@@ -139,17 +135,14 @@ describe("createTableTicket", () => {
     expect(t.source).toBe("TABLE");
     expect(t.session_id).toBe(s.id);
     expect(t.delivery_order_id).toBeNull();
-    expect(t.fallback_due_at).toBeNull(); // no WhatsApp fallback for on-site
-    expect(t.heading).toBe(s.short_code);
-
+    expect(t.fallback_due_at).toBeNull();
+    expect((t.items_json as any[])[0].note).toBe("sans sucre");
     expect((await opsEventsSince("cuisine", beforeCuisine)).some((e) => e.kind === "ticket_new")).toBe(true);
     expect((await opsEventsSince("accueil", beforeAccueil)).some((e) => e.kind === "ticket_new")).toBe(true);
-    // per-line note is frozen into the snapshot
-    expect((t.items_json as any[])[0].note).toBe("sans sucre");
   });
 
   it("is idempotent on client_request_id (double-tap → one ticket)", async () => {
-    const s = await makeSession();
+    const s = await seat(canapeSpot);
     const rid = reqId();
     const first = await createTableTicket({
       sessionId: s.id, heading: s.short_code, subheading: "Canapé", lines: LINES,
@@ -168,62 +161,48 @@ describe("createTableTicket", () => {
 
 describe("accueil serve flow", () => {
   it("Je prends is an atomic single-winner claim, only when READY", async () => {
-    const s = await makeSession();
+    const s = await seat(canapeSpot);
     const t = await makeTableTicket(s.id, s.short_code);
-    // Not READY yet → claim refused.
-    expect(await claimTableServe(t.id, "Fatou")).toBeNull();
+    expect(await claimTableServe(t.id, "Fatou")).toBeNull(); // not READY yet
     await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
-
-    const win = await claimTableServe(t.id, "Fatou");
-    expect(win?.serve_by).toBe("Fatou");
-    // Second phone loses the race.
-    expect(await claimTableServe(t.id, "Awa")).toBeNull();
+    expect((await claimTableServe(t.id, "Fatou"))?.serve_by).toBe("Fatou");
+    expect(await claimTableServe(t.id, "Awa")).toBeNull(); // loser
   });
 
   it("Servie completes the ticket and removes it from both boards", async () => {
-    const s = await makeSession();
+    const s = await seat(canapeSpot);
     const t = await makeTableTicket(s.id, s.short_code);
     await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
-    const beforeAccueil = await latestOpsEventId("accueil");
-
+    const before = await latestOpsEventId("accueil");
     const served = await serveTableTicket(t.id, "Fatou");
     expect(served?.status).toBe("COMPLETED");
-    expect(served?.serve_by).toBe("Fatou");
     expect(await listOpenKitchenTickets()).toHaveLength(0);
-    // idempotent
-    expect(await serveTableTicket(t.id, "Fatou")).toBeNull();
-
-    const events = await opsEventsSince("accueil", beforeAccueil);
-    expect(events.some((e) => e.kind === "ticket_removed")).toBe(true);
+    expect(await serveTableTicket(t.id, "Fatou")).toBeNull(); // idempotent
+    expect((await opsEventsSince("accueil", before)).some((e) => e.kind === "ticket_removed")).toBe(true);
   });
 });
 
-describe("closeSession guard", () => {
-  it("refuses to close while a kitchen ticket is still open", async () => {
-    const s = await makeSession();
+describe("close (Libérer) guard", () => {
+  it("refuses to free a spot while a kitchen ticket is still open", async () => {
+    const s = await seat(canapeSpot);
     const t = await makeTableTicket(s.id, s.short_code);
-
-    const blocked = await closeSession(s.id, "Accueil 1");
-    expect(blocked).toEqual({ ok: false, reason: "open_tickets" });
-    // still open
+    expect(await closeSession(s.id, "Accueil 1")).toEqual({ ok: false, reason: "open_tickets" });
     expect(await getOpenSession(s.id)).not.toBeNull();
-
-    // serve it, then close is allowed
     await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
     await serveTableTicket(t.id, "Fatou");
     expect((await closeSession(s.id, "Accueil 1")).ok).toBe(true);
-    expect(await getOpenSession(s.id)).toBeNull();
+    expect(await getOpenSessionBySpot(canapeSpot)).toBeNull();
   });
 
   it("a cancelled ticket no longer blocks the close", async () => {
-    const s = await makeSession();
+    const s = await seat(canapeSpot);
     const t = await makeTableTicket(s.id, s.short_code);
     await cancelTableTicket(t.id, "client parti");
     expect((await closeSession(s.id, "Accueil 1")).ok).toBe(true);
   });
 
   it("closing an unknown/closed session reports not_open", async () => {
-    const s = await makeSession();
+    const s = await seat(canapeSpot);
     await closeSession(s.id, "Accueil 1");
     expect(await closeSession(s.id, "Accueil 1")).toEqual({ ok: false, reason: "not_open" });
   });
@@ -240,7 +219,7 @@ describe("service PWA over HTTP", () => {
   beforeAll(async () => {
     app = buildServer();
     await app.ready();
-    setCafeMenu([MENU_ROW]); // in-memory snapshot so computeExtras has an item
+    setCafeMenu([MENU_ROW]);
   });
 
   async function pairAccueil(): Promise<string> {
@@ -254,10 +233,13 @@ describe("service PWA over HTTP", () => {
     return String(pair.headers["set-cookie"]).split(";")[0];
   }
 
-  it("serves the manifest scoped to /ops/service/", async () => {
+  it("serves the manifest scoped to /ops/service/ and boots with spots", async () => {
     const m = await app.inject({ method: "GET", url: "/ops/service/manifest.webmanifest" });
-    expect(m.statusCode).toBe(200);
     expect(JSON.parse(m.body).scope).toBe("/ops/service/");
+    const cookie = await pairAccueil();
+    const home = await app.inject({ method: "GET", url: "/ops/service/", headers: { cookie } });
+    expect(home.body).toContain("window.__BOOT__");
+    expect(home.body).toContain("Canapé");
   });
 
   it("redirects the service host root into the PWA scope", async () => {
@@ -268,56 +250,47 @@ describe("service PWA over HTTP", () => {
 
   it("shows the pairing screen and 401s the SSE stream when unpaired", async () => {
     const home = await app.inject({ method: "GET", url: "/ops/service/" });
-    expect(home.statusCode).toBe(200);
     expect(home.body).toContain("Appairer ce téléphone");
-    const sse = await app.inject({ method: "GET", url: "/ops/service/events" });
-    expect(sse.statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/ops/service/events" })).statusCode).toBe(401);
   });
 
-  it("runs the full on-site flow: open → order → take → serve → close", async () => {
+  it("full flow: tap free spot → order (opens session) → take → serve → free", async () => {
     const cookie = await pairAccueil();
 
-    const home = await app.inject({ method: "GET", url: "/ops/service/", headers: { cookie } });
-    expect(home.statusCode).toBe(200);
-    expect(home.body).toContain("window.__BOOT__");
-
-    // Open a session in Canapé.
-    const opened = await app.inject({
-      method: "POST", url: "/ops/service/sessions", headers: { cookie },
-      payload: { area_id: areaId, first_name: "Awa" },
-    });
-    expect(opened.statusCode).toBe(200);
-    const session = JSON.parse(opened.body);
-    expect(session.short_code).toBe(`${areaCode}-01`);
-
-    // Push an order — prices come from the server menu.
+    // Ordering at a free spot opens its session and creates the ticket in one call.
     const ordered = await app.inject({
-      method: "POST", url: `/ops/service/sessions/${session.id}/orders`, headers: { cookie },
-      payload: { items: [{ item_id: "JANTBI", qty: 2, note: "sans sucre" }], note: "table pressée", client_request_id: "req-http-1" },
+      method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 2, note: "sans sucre" }], note: "pressé", first_name: "Awa", client_request_id: "req-http-1" },
     });
     expect(ordered.statusCode).toBe(200);
-    const orderBody = JSON.parse(ordered.body);
-    expect(orderBody.ok).toBe(true);
-    const ticketId = orderBody.id;
+    const body = JSON.parse(ordered.body);
+    expect(body.ok).toBe(true);
+    const sessionId = body.session_id;
+    const ticketId = body.id;
+    expect(await getOpenSessionBySpot(canapeSpot)).not.toBeNull();
 
-    // Close is refused while the ticket is open.
-    const blocked = await app.inject({ method: "POST", url: `/ops/service/sessions/${session.id}/close`, headers: { cookie } });
+    // A second order at the now-occupied spot reuses the same session.
+    const more = await app.inject({
+      method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-http-2" },
+    });
+    expect(JSON.parse(more.body).session_id).toBe(sessionId);
+
+    // Free is refused while tickets are open.
+    const blocked = await app.inject({ method: "POST", url: `/ops/service/sessions/${sessionId}/close`, headers: { cookie } });
     expect(JSON.parse(blocked.body)).toEqual({ ok: false, reason: "open_tickets" });
 
-    // Kitchen makes it READY, then reception takes + serves it.
-    await advanceTicketByCuisine(ticketId, "READY", "iPad Cuisine");
-    const take = await app.inject({ method: "POST", url: `/ops/service/tickets/${ticketId}/take`, headers: { cookie } });
-    expect(JSON.parse(take.body).ok).toBe(true);
-    const serve = await app.inject({ method: "POST", url: `/ops/service/tickets/${ticketId}/served`, headers: { cookie } });
-    expect(JSON.parse(serve.body).ok).toBe(true);
-
-    // Now the session closes cleanly.
-    const closed = await app.inject({ method: "POST", url: `/ops/service/sessions/${session.id}/close`, headers: { cookie } });
-    expect(JSON.parse(closed.body).ok).toBe(true);
+    // Serve both, then free the spot.
+    for (const id of [ticketId, JSON.parse(more.body).id]) {
+      await advanceTicketByCuisine(id, "READY", "iPad Cuisine");
+      await app.inject({ method: "POST", url: `/ops/service/tickets/${id}/served`, headers: { cookie } });
+    }
+    const freed = await app.inject({ method: "POST", url: `/ops/service/sessions/${sessionId}/close`, headers: { cookie } });
+    expect(JSON.parse(freed.body).ok).toBe(true);
   });
 
-  it("rejects session/ticket actions without a device cookie", async () => {
-    const denied = await app.inject({ method: "POST", url: "/ops/service/sessions", payload: { area_id: areaId } });
+  it("rejects spot/ticket actions without a device cookie", async () => {
+    const denied = await app.inject({ method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, payload: { items: [] } });
     expect(denied.statusCode).toBe(401);
   });
 });

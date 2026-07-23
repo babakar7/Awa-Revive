@@ -7,9 +7,11 @@ import type { FastifyReply } from "fastify";
  * (order/first-name data is never interpolated into HTML — no XSS), the SW caches
  * ONLY the shell/assets (never a mutation, the SSE stream, or the sessions API).
  *
- * The reception phones own the on-site (TABLE) flow: open a session in an area,
- * push an order to the kitchen, then "Je prends" / "Servie" when it's READY, and
- * close the session (refused server-side while a ticket is still open).
+ * The reception phones own the on-site (TABLE) flow. The room is a small fixed
+ * layout — one place per space (Canapé / Terrasse / Pergola) — so the board is a
+ * tile per spot: tap a FREE spot to take an order there, tap an OCCUPIED one to
+ * add more, serve ("Je prends" / "Servie"), or free it. No "create a table" step,
+ * no codes: the spot label is the kitchen-ticket heading.
  */
 
 const BASE = "/ops/service";
@@ -77,26 +79,31 @@ ${error ? `<p class="err">${esc(error)}</p>` : ""}
 const APP_STYLE = `*{box-sizing:border-box}
 html,body{margin:0;min-height:100%}
 body{background:#161016;color:#fbf6f0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
-padding-top:env(safe-area-inset-top);padding-bottom:6rem}
+padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
 header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:.6rem;
 padding:.7rem 1rem;background:#211921;border-bottom:1px solid #3a2f3a}
 header h1{font-size:1.05rem;margin:0;font-weight:700}
 .dot{width:.7rem;height:.7rem;border-radius:50%;background:#e5484d;box-shadow:0 0 0 3px rgba(229,72,77,.18)}
 .dot.on{background:#30a46c;box-shadow:0 0 0 3px rgba(48,164,108,.18)}
 .spacer{flex:1}.count{font-size:.85rem;color:#c9bcc9}
-main{padding:.8rem;display:flex;flex-direction:column;gap:.8rem}
-.sess{background:#211921;border:1px solid #3a2f3a;border-left:6px solid #e2a63a;border-radius:14px;padding:.85rem .95rem}
-.sess.flash{animation:flash 1.1s ease-out}
+main{padding:.8rem;display:grid;gap:.8rem;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));align-content:start}
+/* Spot tile */
+.spot{background:#211921;border:1px solid #3a2f3a;border-radius:16px;padding:.9rem;display:flex;flex-direction:column;gap:.5rem;min-height:8rem}
+.spot.free{border-style:dashed;border-color:#4a5a4a;cursor:pointer}
+.spot.free:active{filter:brightness(1.15)}
+.spot.occupied{border-left:6px solid #e2a63a}
+.spot.ready{border-color:#30a46c;box-shadow:0 0 0 1px rgba(48,164,108,.5)}
+.spot.flash{animation:flash 1.1s ease-out}
 @keyframes flash{0%{background:#3a2f3a}100%{background:#211921}}
-.shead{display:flex;align-items:baseline;gap:.5rem}
-.code{font-size:1.35rem;font-weight:800;letter-spacing:.02em}
-.area{font-size:.9rem;color:#c9bcc9}.who{font-size:.9rem;color:#f0c579;margin-left:auto}
-.warn{font-size:.8rem;color:#f0b74a;margin-top:.2rem}
-.tk{margin-top:.55rem;padding:.55rem .6rem;border:1px solid #3a2f3a;border-radius:10px;background:#1a141a}
+.sh{display:flex;align-items:baseline;gap:.5rem}
+.nm{font-size:1.3rem;font-weight:800}
+.cap{font-size:.82rem;color:#8a7d8a;margin-left:auto}
+.who{font-size:.92rem;color:#f0c579}
+.freehint{margin-top:auto;font-size:.95rem;color:#7fbf8f;font-weight:600}
+.tk{padding:.55rem .6rem;border:1px solid #3a2f3a;border-radius:10px;background:#1a141a}
 .tk .line{display:flex;align-items:center;gap:.4rem}
 .tk .q{font-weight:800;color:#f0c579}
-.tk .st{margin-left:auto;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
-padding:.16rem .5rem;border-radius:999px}
+.tk .st{margin-left:auto;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:.16rem .5rem;border-radius:999px}
 .st.new{background:#3a2f3a;color:#c9bcc9}.st.preparing{background:#3a2c10;color:#f0c579}
 .st.ready{background:#123524;color:#6ee7a8}
 .tk .tnote{font-size:.82rem;color:#ffd7a8;margin-top:.2rem}
@@ -104,16 +111,13 @@ padding:.16rem .5rem;border-radius:999px}
 .tacts{display:flex;gap:.45rem;margin-top:.5rem}
 button{font-family:inherit}
 button.act{flex:1;padding:.7rem;font-size:.98rem;font-weight:800;border:none;border-radius:10px;color:#fff}
-button.take{background:#2864b5}button.serve{background:#1a7f37}button.cancel{background:#5a2530}
+button.take{background:#2864b5}button.serve{background:#1a7f37}button.cancel{background:#5a2530;flex:0 0 auto;padding:.7rem .8rem}
 button.act:active{filter:brightness(.9)}button.act:disabled{opacity:.5}
-.sacts{display:flex;gap:.45rem;margin-top:.7rem}
+.sacts{display:flex;gap:.45rem;margin-top:auto;padding-top:.4rem}
 button.sec{flex:1;padding:.7rem;font-size:.95rem;font-weight:700;border-radius:10px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0}
 button.add{background:#7c547d;border-color:#7c547d}
-.empty{text-align:center;color:#7a6d7a;margin-top:18vh;font-size:1.05rem}
-.fab{position:fixed;left:0;right:0;bottom:0;padding:.8rem;padding-bottom:calc(.8rem + env(safe-area-inset-bottom));
-background:linear-gradient(to top,#161016 60%,transparent);display:flex;justify-content:center}
-.fab button{width:100%;max-width:32rem;padding:1rem;font-size:1.1rem;font-weight:800;border:none;border-radius:14px;background:#e2a63a;color:#211921}
-/* Overlay (session composer + order composer) */
+.empty{grid-column:1/-1;text-align:center;color:#7a6d7a;margin-top:18vh;font-size:1.05rem}
+/* Overlay (order composer) */
 .ov{position:fixed;inset:0;z-index:20;background:rgba(10,7,10,.6);display:flex;align-items:flex-end;justify-content:center}
 .sheet{background:#1c151c;width:100%;max-width:34rem;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;
 padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom))}
@@ -149,7 +153,6 @@ export function serviceBoardPage(bootJson: string): string {
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><h1>Salle</h1><span class="spacer"></span><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
-<div class="fab"><button id="newSession">＋ Nouvelle table</button></div>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
 <script>window.__BOOT__=${bootJson}</script>
 <script src="${BASE}/app.js"></script>
@@ -188,9 +191,9 @@ self.addEventListener('fetch',e=>{
 // ── Client app ───────────────────────────────────────────────────────────────
 export const SERVICE_APP_JS = String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
-  var boot=window.__BOOT__||{cursor:0,sessions:[],tickets:[],areas:[],menu:[]};
+  var boot=window.__BOOT__||{cursor:0,spots:[],sessions:[],tickets:[],menu:[]};
   var cursor=boot.cursor||0;
-  var AREAS=boot.areas||[];
+  var SPOTS=(boot.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
   var MENU=boot.menu||[];
   var sessions=new Map(); (boot.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
   var tickets=new Map(); (boot.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
@@ -201,6 +204,10 @@ export const SERVICE_APP_JS = String.raw`(function(){
 
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
   function uuid(){ try{ return crypto.randomUUID(); }catch(e){ return 'r-'+Date.now()+'-'+Math.round(Math.random()*1e9); } }
+  function findItem(id){ for(var i=0;i<MENU.length;i++){ for(var j=0;j<MENU[i].items.length;j++){ if(MENU[i].items[j].id===id) return MENU[i].items[j]; } } return null; }
+  function sessionForSpot(spotId){ var found=null; sessions.forEach(function(s){ if(s.spot_id===spotId) found=s; }); return found; }
+  function ticketsOf(sid){ var out=[]; tickets.forEach(function(t){ if(t.session_id===sid) out.push(t); }); return out.sort(function(a,b){return new Date(a.created_at)-new Date(b.created_at);}); }
+  function capLabel(sp){ if(sp.capacity==null) return ''; return sp.capacity_max? sp.capacity+'–'+sp.capacity_max+' pers.' : sp.capacity+' pers.'; }
 
   // ---- audio (unlocked on first gesture) ----
   var actx=null;
@@ -213,14 +220,12 @@ export const SERVICE_APP_JS = String.raw`(function(){
 
   function post(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
 
-  function ticketsOf(sid){ var out=[]; tickets.forEach(function(t){ if(t.session_id===sid) out.push(t); }); return out.sort(function(a,b){return new Date(a.created_at)-new Date(b.created_at);}); }
-
   function ticketCard(t){
     var d=el('div','tk'); d.dataset.id=t.id;
-    (t.items||[]).forEach(function(l){ var ln=el('div','line');
+    (t.items||[]).forEach(function(l,i){ var ln=el('div','line');
       ln.appendChild(el('span','q',l.qty+'×'));
       ln.appendChild(document.createTextNode(' '+l.name+(l.choice?' ('+l.choice+')':'')));
-      if(l===t.items[0]){ var st=el('span','st '+t.status.toLowerCase(), t.status==='READY'?'Prête':t.status==='PREPARING'?'En prépa':'Envoyée'); ln.appendChild(st); }
+      if(i===0){ var st=el('span','st '+t.status.toLowerCase(), t.status==='READY'?'Prête':t.status==='PREPARING'?'En prépa':'Envoyée'); ln.appendChild(st); }
       d.appendChild(ln);
       if(l.note) d.appendChild(el('div','tnote','• '+l.note));
     });
@@ -231,75 +236,63 @@ export const SERVICE_APP_JS = String.raw`(function(){
       if(!t.serve_by){ var tk=el('button','act take','Je prends'); tk.onclick=function(){ tk.disabled=true; post('/tickets/'+t.id+'/take',{}).then(function(r){if(!r.ok)tk.disabled=false;}).catch(function(){tk.disabled=false;}); }; acts.appendChild(tk); }
       var sv=el('button','act serve','Servie'); sv.onclick=function(){ sv.disabled=true; post('/tickets/'+t.id+'/served',{}).then(function(r){if(!r.ok)sv.disabled=false;}).catch(function(){sv.disabled=false;}); }; acts.appendChild(sv);
       d.appendChild(acts);
+    } else {
+      var acts2=el('div','tacts');
+      var cx=el('button','act cancel','✕'); cx.title='Annuler cette commande';
+      cx.onclick=function(){ if(!confirm('Annuler cette commande ?'))return; cx.disabled=true; post('/tickets/'+t.id+'/cancel',{reason:'annulée en salle'}).then(function(r){if(!r.ok)cx.disabled=false;}).catch(function(){cx.disabled=false;}); };
+      acts2.appendChild(cx); d.appendChild(acts2);
     }
     return d;
   }
 
-  function sessionCard(s){
-    var c=el('div','sess'); c.dataset.id=s.id;
-    var h=el('div','shead');
-    h.appendChild(el('span','code',s.short_code));
-    h.appendChild(el('span','area',s.area_name));
-    if(s.first_name) h.appendChild(el('span','who',s.first_name));
-    c.appendChild(h);
-    var tks=ticketsOf(s.id);
+  function spotTile(sp){
+    var s=sessionForSpot(sp.id);
+    var tks=s? ticketsOf(s.id) : [];
     var anyReady=tks.some(function(t){return t.status==='READY';});
-    if(anyReady && s.pos_x==null) c.appendChild(el('div','warn','⚠️ emplacement non renseigné — repère : '+s.short_code+' · '+s.area_name+(s.first_name?' · '+s.first_name:'')));
+    var c=el('div','spot '+(s?'occupied':'free')+(anyReady?' ready':'')); c.dataset.spot=sp.id; if(s)c.dataset.session=s.id;
+    var h=el('div','sh'); h.appendChild(el('span','nm',sp.label)); var cap=capLabel(sp); if(cap)h.appendChild(el('span','cap',cap)); c.appendChild(h);
+    if(!s){
+      c.appendChild(el('div','freehint','＋ Libre — prendre la commande'));
+      c.onclick=function(){ openOrder(sp,null); };
+      return c;
+    }
+    if(s.first_name) c.appendChild(el('div','who','👤 '+s.first_name));
     tks.forEach(function(t){ c.appendChild(ticketCard(t)); });
+    if(!tks.length) c.appendChild(el('div','who','Occupé — aucune commande en cours'));
     var sa=el('div','sacts');
-    var add=el('button','sec add','＋ Commande'); add.onclick=function(){ openOrder(s); }; sa.appendChild(add);
-    var close=el('button','sec','Fermer'); close.onclick=function(){ closeSession(s,close); }; sa.appendChild(close);
+    var add=el('button','sec add','＋ Commande'); add.onclick=function(){ openOrder(sp,s); }; sa.appendChild(add);
+    var close=el('button','sec','Libérer'); close.onclick=function(){ freeSpot(s,close); }; sa.appendChild(close);
     c.appendChild(sa);
     return c;
   }
 
   function render(){
-    var list=Array.from(sessions.values()).sort(function(a,b){return new Date(a.opened_at)-new Date(b.opened_at);});
     board.textContent='';
-    if(!list.length){ board.appendChild(el('p','empty','Aucune table ouverte. Touchez « Nouvelle table ».')); }
-    else list.forEach(function(s){ board.appendChild(sessionCard(s)); });
-    var n=list.length; countEl.textContent=n? n+(n>1?' tables':' table') : '';
+    if(!SPOTS.length){ board.appendChild(el('p','empty','Aucun espace configuré.')); return; }
+    SPOTS.forEach(function(sp){ board.appendChild(spotTile(sp)); });
+    var occ=0; SPOTS.forEach(function(sp){ if(sessionForSpot(sp.id)) occ++; });
+    countEl.textContent=occ? occ+'/'+SPOTS.length+' occupé'+(occ>1?'s':'') : '';
   }
 
-  function closeSession(s,btn){
+  function freeSpot(s,btn){
     btn.disabled=true;
     post('/sessions/'+s.id+'/close',{}).then(function(r){return r.json().catch(function(){return {};});}).then(function(j){
       if(j&&j.ok){ /* removed via SSE */ }
-      else { btn.disabled=false; alert(j&&j.reason==='open_tickets'?'Servez ou annulez d\'abord les commandes en cours.':'Fermeture impossible.'); }
+      else { btn.disabled=false; alert(j&&j.reason==='open_tickets'?'Servez ou annulez d\'abord les commandes en cours.':'Impossible de libérer.'); }
     }).catch(function(){ btn.disabled=false; });
   }
 
-  // ---- overlays ----
+  // ---- order composer ----
   function overlay(){ var ov=el('div','ov'); ov.onclick=function(e){ if(e.target===ov) document.body.removeChild(ov); }; return ov; }
 
-  function openNewSession(){
+  function openOrder(sp,session){
     unlock();
     var ov=overlay(); var sh=el('div','sheet');
     var x=el('button','close-x','×'); x.onclick=function(){document.body.removeChild(ov);}; sh.appendChild(x);
-    sh.appendChild(el('h2','Nouvelle table'));
-    var sel={id:null};
-    var ar=el('div','areas');
-    AREAS.forEach(function(a){ var b=el('button',null,a.name); b.onclick=function(){ sel.id=a.id; Array.from(ar.children).forEach(function(c){c.classList.remove('sel');}); b.classList.add('sel'); }; ar.appendChild(b); });
-    sh.appendChild(ar);
-    var fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; sh.appendChild(fn);
-    var msg=el('div','msg'); msg.style.display='none'; sh.appendChild(msg);
-    var go=el('button','go','Ouvrir la table'); go.style.width='100%'; go.style.padding='.9rem'; go.style.border='none'; go.style.borderRadius='12px'; go.style.background='#e2a63a'; go.style.color='#211921'; go.style.fontWeight='800'; go.style.fontSize='1.05rem';
-    go.onclick=function(){ if(!sel.id){ msg.textContent='Choisissez un espace.'; msg.style.display='block'; return; } go.disabled=true;
-      post('/sessions',{area_id:sel.id,first_name:fn.value}).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.id){ document.body.removeChild(ov); } else { go.disabled=false; msg.textContent='Impossible d\'ouvrir la table.'; msg.style.display='block'; }
-      }).catch(function(){ go.disabled=false; });
-    };
-    sh.appendChild(go);
-    ov.appendChild(sh); document.body.appendChild(ov);
-  }
-
-  function openOrder(s){
-    unlock();
-    var ov=overlay(); var sh=el('div','sheet');
-    var x=el('button','close-x','×'); x.onclick=function(){document.body.removeChild(ov);}; sh.appendChild(x);
-    sh.appendChild(el('h2','Commande — '+s.short_code));
-    var draft={}; // id -> {qty, choice, note}
-    var totalEl;
+    sh.appendChild(el('h2','Commande — '+sp.label));
+    var fn=null;
+    if(!session){ fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; sh.appendChild(fn); }
+    var draft={}; var totalEl;
     function recompute(){ var tot=0; Object.keys(draft).forEach(function(id){ var it=findItem(id); if(it&&draft[id].qty>0) tot+=it.price*draft[id].qty; });
       totalEl.textContent=''; totalEl.appendChild(document.createTextNode(tot+' F ')); totalEl.appendChild(el('small','','(indicatif)')); }
     MENU.forEach(function(cat){
@@ -314,7 +307,6 @@ export const SERVICE_APP_JS = String.raw`(function(){
         minus.onclick=function(){ var d=draft[it.id]||{qty:0,choice:'',note:''}; d.qty=Math.max(0,d.qty-1); draft[it.id]=d; sync(); };
         plus.onclick=function(){ var d=draft[it.id]||{qty:0,choice:'',note:''}; d.qty=Math.min(10,d.qty+1); draft[it.id]=d; sync(); };
         stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
-        // choice + note appear once qty>0
         if(it.choices && it.choices.length){ var selc=document.createElement('select');
           var op0=document.createElement('option'); op0.value=''; op0.textContent=(it.optionLabel||'Choix')+'…'; selc.appendChild(op0);
           it.choices.forEach(function(ch){ var o=document.createElement('option'); o.value=ch; o.textContent=ch; selc.appendChild(o); });
@@ -332,7 +324,8 @@ export const SERVICE_APP_JS = String.raw`(function(){
       var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
       if(!items.length){ msg.textContent='Ajoutez au moins un article.'; msg.style.display='block'; return; }
       go.disabled=true; msg.style.display='none';
-      post('/sessions/'+s.id+'/orders',{items:items,note:gnote.value,client_request_id:uuid()}).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
+      var body={items:items,note:gnote.value,client_request_id:uuid()}; if(fn&&fn.value) body.first_name=fn.value;
+      post('/spots/'+sp.id+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
         if(j&&j.ok){ document.body.removeChild(ov); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
       }).catch(function(){ go.disabled=false; msg.textContent='Erreur réseau.'; msg.style.display='block'; });
     };
@@ -341,18 +334,16 @@ export const SERVICE_APP_JS = String.raw`(function(){
     recompute();
   }
 
-  function findItem(id){ for(var i=0;i<MENU.length;i++){ for(var j=0;j<MENU[i].items.length;j++){ if(MENU[i].items[j].id===id) return MENU[i].items[j]; } } return null; }
-
   function setOnline(on){ dot.classList.toggle('on',on); offline.classList.toggle('show',!on); }
 
-  document.getElementById('newSession').onclick=openNewSession;
   render();
 
   var es=new EventSource(BASE+'/events?since='+cursor);
   es.onopen=function(){setOnline(true);};
   es.onerror=function(){setOnline(false);};
   function bump(e){ if(e.lastEventId)cursor=+e.lastEventId; }
-  es.addEventListener('session_new',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); var c=board.querySelector('[data-id="'+s.id+'"]'); if(c)c.classList.add('flash'); });
+  function flashSpot(spotId){ var c=board.querySelector('[data-spot="'+spotId+'"]'); if(c)c.classList.add('flash'); }
+  es.addEventListener('session_new',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); flashSpot(s.spot_id); });
   es.addEventListener('session_update',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); });
   es.addEventListener('session_closed',function(e){ var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
   es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; tickets.set(t.id,t); render(); });

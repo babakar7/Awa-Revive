@@ -1,25 +1,20 @@
 import { pool } from "../db/index.js";
 import { recordOpsEvent } from "./opsEvents.js";
 import { ACCUEIL_CHANNEL } from "./kitchenTicketRules.js";
-import {
-  cleanFirstName,
-  formatShortCode,
-  nextFreeSeq,
-  type Position,
-} from "./serviceSessionRules.js";
+import { cleanFirstName } from "./serviceSessionRules.js";
 import { getArea } from "./serviceAreaRepo.js";
+import { getSpot } from "./serviceSpotRepo.js";
 
 /**
- * SQL for on-site service sessions. A session is a group seated in an area; it
- * carries the short code (unique among OPEN sessions), an optional diagram
- * position, and a first name. INVARIANTS enforced here in SQL:
- *  - the short code is allocated as the smallest free number among open sessions
- *    of that area (reused after a close) — the partial unique index is the race
- *    guard, so open() retries on a 23505;
+ * SQL for on-site service sessions. A session is a group seated at a FIXED spot
+ * (one place per space). INVARIANTS enforced here in SQL:
+ *  - at most one OPEN session per spot — the partial unique index is the race
+ *    guard, so openSessionAtSpot() returns the existing session on a 23505;
  *  - close() is atomic and REFUSED while any kitchen ticket of the session is
  *    still open (NEW/PREPARING/READY) — never a silent swallow of a live order.
- * No amount is stored: the POS is the only ledger. Every mutation records an
- * ops_event on the accueil channel so reception phones update live.
+ * The short code IS the spot label; the position IS the spot's. No amount is
+ * stored: the POS is the only ledger. Every mutation records an ops_event on the
+ * accueil channel so reception phones update live.
  */
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -30,6 +25,7 @@ export interface OpenSession {
   area_id: string;
   area_code: string;
   area_name: string;
+  spot_id: string | null;
   short_code: string;
   seq: number;
   diagram_version: number | null;
@@ -41,7 +37,7 @@ export interface OpenSession {
 }
 
 const SELECT_OPEN = `
-  select s.id, s.area_id, a.code as area_code, a.name as area_name, s.short_code,
+  select s.id, s.area_id, a.code as area_code, a.name as area_name, s.spot_id, s.short_code,
          s.seq, s.diagram_version, s.pos_x, s.pos_y, s.first_name, s.opened_by, s.opened_at
     from service_sessions s
     join service_areas a on a.id = s.area_id`;
@@ -61,72 +57,51 @@ export async function getOpenSession(id: string): Promise<OpenSession | null> {
   return (res.rows[0] as OpenSession) ?? null;
 }
 
-/** Seqs currently taken by open sessions of an area (input to nextFreeSeq). */
-async function usedSeqs(areaId: string): Promise<number[]> {
+export async function getOpenSessionBySpot(spotId: string): Promise<OpenSession | null> {
+  if (!UUID_RE.test(String(spotId))) return null;
   const res = await pool.query(
-    `select seq from service_sessions where area_id = $1 and status = 'OPEN'`,
-    [areaId],
+    `${SELECT_OPEN} where s.spot_id = $1 and s.status = 'OPEN'`,
+    [spotId],
   );
-  return res.rows.map((r: any) => Number(r.seq));
-}
-
-export interface OpenSessionInput {
-  areaId: string;
-  firstName?: string | null;
-  position?: Position | null;
-  openedBy?: string | null;
+  return (res.rows[0] as OpenSession) ?? null;
 }
 
 /**
- * Open a session in an area. Allocates the smallest free short code among that
- * area's open sessions, freezing the area's current diagram_version. Retries on a
- * unique-code race (two phones opening the same area at once). Returns the joined
- * OpenSession or null if the area is unknown/inactive.
+ * Open a session at a FIXED spot (the primary flow): tap the real seat → an order
+ * can be taken there. The session's short code IS the spot label, its position is
+ * the spot's. At most one open session per spot — the partial unique index guards
+ * the race; a tap on an already-occupied spot returns the EXISTING session
+ * (idempotent, so the UI just opens that spot's order composer). Null if the spot
+ * is unknown/inactive.
  */
-export async function openSession(input: OpenSessionInput): Promise<OpenSession | null> {
-  const area = await getArea(input.areaId);
-  if (!area || !area.active) return null;
+export async function openSessionAtSpot(input: {
+  spotId: string;
+  firstName?: string | null;
+  openedBy?: string | null;
+}): Promise<OpenSession | null> {
+  const spot = await getSpot(input.spotId);
+  if (!spot || !spot.active) return null;
+  const area = await getArea(spot.area_id);
+  if (!area) return null;
   const firstName = cleanFirstName(input.firstName);
-  const pos = input.position ?? null;
   const openedBy = input.openedBy ? String(input.openedBy).slice(0, 60) : null;
-
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const seq = nextFreeSeq(await usedSeqs(area.id));
-    const shortCode = formatShortCode(area.code, seq);
-    try {
-      const inserted = await pool.query(
-        `insert into service_sessions
-           (area_id, short_code, seq, diagram_version, pos_x, pos_y, first_name, opened_by)
-         values ($1, $2, $3, $4, $5, $6, $7, $8)
-         returning id`,
-        [area.id, shortCode, seq, area.diagram_version, pos?.x ?? null, pos?.y ?? null, firstName, openedBy],
-      );
-      const id = inserted.rows[0].id as string;
-      const session = await getOpenSession(id);
-      if (session) await emitSession("session_new", session);
-      return session;
-    } catch (err: any) {
-      // 23505 = unique_violation on idx_service_sessions_open_code → retry with a
-      // fresh seq (another phone grabbed this code between our read and insert).
-      if (err?.code === "23505") continue;
-      throw err;
-    }
+  try {
+    const inserted = await pool.query(
+      `insert into service_sessions
+         (area_id, spot_id, short_code, seq, diagram_version, pos_x, pos_y, first_name, opened_by)
+       values ($1, $2, $3, 0, $4, $5, $6, $7, $8)
+       returning id`,
+      [area.id, spot.id, spot.label, area.diagram_version, spot.pos_x, spot.pos_y, firstName, openedBy],
+    );
+    const session = await getOpenSession(inserted.rows[0].id as string);
+    if (session) await emitSession("session_new", session);
+    return session;
+  } catch (err: any) {
+    // 23505 = spot already occupied → return the existing open session (a second
+    // tap on an occupied seat should land on its order composer, not error).
+    if (err?.code === "23505") return getOpenSessionBySpot(spot.id);
+    throw err;
   }
-  return null;
-}
-
-/** Set/clear the diagram position of an open session. Emits session_update. */
-export async function setSessionPosition(id: string, pos: Position | null): Promise<OpenSession | null> {
-  if (!UUID_RE.test(String(id))) return null;
-  const res = await pool.query(
-    `update service_sessions set pos_x = $2, pos_y = $3
-      where id = $1 and status = 'OPEN' returning id`,
-    [id, pos?.x ?? null, pos?.y ?? null],
-  );
-  if (!res.rowCount) return null;
-  const session = await getOpenSession(id);
-  if (session) await emitSession("session_update", session);
-  return session;
 }
 
 export type CloseResult =

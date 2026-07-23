@@ -20,15 +20,13 @@ import {
 } from "../domain/kitchenTicketRepo.js";
 import { onOpsEvent, opsEventsSince, latestOpsEventId, type OpsEvent } from "../domain/opsEvents.js";
 import { ACCUEIL_CHANNEL, CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
-import { listActiveAreas } from "../domain/serviceAreaRepo.js";
+import { listActiveSpots } from "../domain/serviceSpotRepo.js";
 import {
-  openSession,
+  openSessionAtSpot,
+  getOpenSessionBySpot,
   listOpenSessions,
-  getOpenSession,
-  setSessionPosition,
   closeSession,
 } from "../domain/serviceSessionRepo.js";
-import { parsePosition } from "../domain/serviceSessionRules.js";
 import { getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
 import { renderOpsIcon } from "./opsIcon.js";
 import {
@@ -315,17 +313,18 @@ function buildServiceMenu(): Array<{ category: string; items: unknown[] }> {
   return cats;
 }
 
-/** Everything the reception board needs to render on first paint. */
+/** Everything the reception board needs to render on first paint: the fixed spot
+ *  tiles, which are occupied (open sessions), their open tickets, and the menu. */
 async function serviceBoot(): Promise<string> {
-  const [areas, sessions, tickets, cursor] = await Promise.all([
-    listActiveAreas(),
+  const [spots, sessions, tickets, cursor] = await Promise.all([
+    listActiveSpots(),
     listOpenSessions(),
     listOpenKitchenTickets(),
     latestOpsEventId(ACCUEIL_CHANNEL),
   ]);
   return JSON.stringify({
     cursor,
-    areas: areas.map((a) => ({ id: a.id, code: a.code, name: a.name })),
+    spots,
     sessions,
     tickets: tickets.filter((t) => t.source === "TABLE").map(kitchenTicketView),
     menu: buildServiceMenu(),
@@ -419,28 +418,7 @@ function registerServiceRoutes(app: FastifyInstance): void {
     return device;
   };
 
-  app.post(`${SERVICE_BASE}/sessions`, async (req, reply) => {
-    const device = await requireAccueil(req, reply);
-    if (!device) return reply;
-    const b = (req.body as any) ?? {};
-    const session = await openSession({
-      areaId: String(b.area_id ?? ""),
-      firstName: b.first_name,
-      position: parsePosition(b.pos_x, b.pos_y),
-      openedBy: device.label,
-    });
-    if (!session) return reply.code(400).type("application/json").send({ ok: false });
-    return reply.type("application/json").send(session);
-  });
-
-  app.post(`${SERVICE_BASE}/sessions/:id/position`, async (req, reply) => {
-    const device = await requireAccueil(req, reply);
-    if (!device) return reply;
-    const b = (req.body as any) ?? {};
-    const s = await setSessionPosition((req.params as any).id, parsePosition(b.x, b.y));
-    return reply.type("application/json").send({ ok: !!s });
-  });
-
+  // "Libérer" a spot: close its session (refused server-side while a ticket is open).
   app.post(`${SERVICE_BASE}/sessions/:id/close`, async (req, reply) => {
     const device = await requireAccueil(req, reply);
     if (!device) return reply;
@@ -448,15 +426,22 @@ function registerServiceRoutes(app: FastifyInstance): void {
     return reply.type("application/json").send(result);
   });
 
-  app.post(`${SERVICE_BASE}/sessions/:id/orders`, async (req, reply) => {
+  // Take an order at a FIXED spot: opens the spot's session if free (or reuses the
+  // open one), then creates the kitchen ticket. Prices ALWAYS from the server menu
+  // (a required choice is enforced); the heading/subheading come from the spot's
+  // session, never the client.
+  app.post(`${SERVICE_BASE}/spots/:id/orders`, async (req, reply) => {
     const device = await requireAccueil(req, reply);
     if (!device) return reply;
-    const session = await getOpenSession((req.params as any).id);
-    if (!session) {
-      return reply.code(409).type("application/json").send({ ok: false, message: "Table fermée." });
-    }
+    const spotId = (req.params as any).id;
     const b = (req.body as any) ?? {};
-    // Prices ALWAYS from the server menu; a required choice is enforced here.
+    let session = await getOpenSessionBySpot(spotId);
+    if (!session) {
+      session = await openSessionAtSpot({ spotId, firstName: b.first_name, openedBy: device.label });
+    }
+    if (!session) {
+      return reply.code(400).type("application/json").send({ ok: false, message: "Emplacement inconnu." });
+    }
     const result = computeExtras(getCafeMenu().items, b.items, { requireChoices: true });
     if (!result.ok) {
       return reply.code(400).type("application/json").send({ ok: false, message: result.message });
@@ -473,7 +458,7 @@ function registerServiceRoutes(app: FastifyInstance): void {
       clientRequestId,
       isTest: false,
     });
-    return reply.type("application/json").send({ ok: true, id: ticket.id });
+    return reply.type("application/json").send({ ok: true, session_id: session.id, id: ticket.id });
   });
 
   app.post(`${SERVICE_BASE}/tickets/:id/take`, async (req, reply) => {
