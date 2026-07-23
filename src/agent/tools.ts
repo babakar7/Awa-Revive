@@ -30,6 +30,7 @@ import * as links from "../domain/linkRequests.js";
 import type { LinkRequest } from "../domain/linkRequests.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
+import * as commitments from "../domain/commitments.js";
 import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
 import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
 import { createClientPaymentSession } from "../domain/paymentSession.js";
@@ -256,10 +257,64 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             "is pending, the server refuses the link so the client can type the code first (their abonnement may " +
             "cover this class).",
         },
+        commitment_item_id: {
+          type: "string",
+          description:
+            "ONLY for a multi-session commitment (see start_multi_session_commitment). The id of the session " +
+            "this link pays for, from the commitment's items. REQUIRED whenever an active commitment exists for " +
+            "the SAME class — the server rejects an ungrouped link otherwise. For a NEEDS_RESELECTION session, " +
+            "pass the item id together with a NEW event_id and the server re-points that session to the new slot.",
+        },
       },
       required: ["service_id", "event_id", "slot_start", "client_name"],
       additionalProperties: false,
     },
+  },
+  {
+    name: "start_multi_session_commitment",
+    description:
+      "Persist a multi-session plan when a client agrees to pay for SEVERAL sessions of the SAME class à la carte " +
+      "(one payment link each) — e.g. \"je veux réserver 5 séances de Bébé Nageur\". Call this ONCE, after you and " +
+      "the client have agreed the full list of dates and you've recapped them. The server then remembers the plan " +
+      "across payments and, after each paid session, asks the client whether to continue — so the plan can never be " +
+      "silently abandoned. Do NOT use for abonnement/membership bookings (book_with_membership handles those). After " +
+      "this returns ok, create the FIRST session's link with create_payment_link, passing its commitment_item_id.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service_id: { type: "string", description: "Class id from list_classes (all sessions are this same class)." },
+        client_name: { type: "string", description: "Client's first name (the real name they gave)." },
+        slots: {
+          type: "array",
+          minItems: 2,
+          maxItems: 15,
+          description:
+            "The agreed sessions, IN ORDER. One entry per session, each the choice_id of a slot the client picked " +
+            "from check_availability (short slot_… value). The count is the number of sessions the client committed to.",
+          items: {
+            type: "object",
+            properties: {
+              event_id: {
+                type: "string",
+                description: "The slot's choice_id from check_availability (short slot_… value), copied exactly.",
+              },
+            },
+            required: ["event_id"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["service_id", "client_name", "slots"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "abandon_multi_session_commitment",
+    description:
+      "Cancel the client's active multi-session plan when they explicitly want to stop it (\"je préfère arrêter\", " +
+      "\"laisse tomber les autres séances\"). Sessions already booked and paid are kept; only the remaining unpaid " +
+      "sessions are cancelled. Call this before starting a DIFFERENT plan if one is already active.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "list_plans",
@@ -1014,6 +1069,61 @@ export async function executeTool(
         if (verificationBlocksPayment(pending, new Date())) return VERIFICATION_PENDING_RESULT;
       }
 
+      // 0b. Multi-session commitment gating. While a commitment is ACTIVE for
+      //     THIS class, every link must be tied to one of its sessions — an
+      //     ungrouped link for the same class would silently break the plan.
+      const activeCommitment = await commitments.activeCommitment(client.id);
+      let commitmentItemId: string | null =
+        input.commitment_item_id != null ? String(input.commitment_item_id) : null;
+      let commitmentItem: commitments.CommitmentItem | null = null;
+      if (activeCommitment && activeCommitment.service_id === serviceId && !commitmentItemId) {
+        const snap = await commitments.commitmentSnapshot(activeCommitment.id);
+        return JSON.stringify({
+          error: "commitment_item_required",
+          commitment_item_id: snap?.next_item?.id ?? null,
+          progress: snap ? `${snap.booked_count}/${snap.commitment.requested_count}` : undefined,
+          message:
+            "This client has an active multi-session plan for this class. Pass commitment_item_id for the next " +
+            "unpaid session (returned here as commitment_item_id) so the plan advances; do not create an ungrouped link. " +
+            "If they instead want to STOP the plan, call abandon_multi_session_commitment first.",
+        });
+      }
+      if (commitmentItemId) {
+        commitmentItem = await commitments.getItem(commitmentItemId);
+        if (
+          !commitmentItem ||
+          !activeCommitment ||
+          commitmentItem.commitment_id !== activeCommitment.id ||
+          activeCommitment.service_id !== serviceId
+        ) {
+          return JSON.stringify({
+            error: "invalid_commitment_item",
+            message:
+              "commitment_item_id doesn't match this client's active plan for this class. Omit it for a standalone " +
+              "booking, or re-check the active plan.",
+          });
+        }
+        if (commitmentItem.intent_status === "CANCELLED") {
+          return JSON.stringify({
+            error: "commitment_item_cancelled",
+            message: "That session was cancelled. Pick another session of the plan or start fresh.",
+          });
+        }
+        const block = await commitments.itemPaymentBlock(commitmentItemId);
+        if (block === "booked") {
+          return JSON.stringify({
+            error: "commitment_item_already_booked",
+            message: "That session is already booked. Move to the next unpaid session of the plan.",
+          });
+        }
+        if (block === "in_flight") {
+          return JSON.stringify({
+            error: "commitment_item_in_flight",
+            message: "That session already has a payment being processed. Wait for it to settle before retrying.",
+          });
+        }
+      }
+
       // 1. The event_id must be one we served this client (prompt-injection
       //    stance). Accepts the short choice_id alias too (interactive clicks).
       const cached = await repo.getCachedSlot(client.id, eventId);
@@ -1128,6 +1238,13 @@ export async function executeTool(
       await repo.expireActiveBookings(client.id);
       await repo.updateClientName(client.id, clientName);
 
+      // 4b. Re-selection: a commitment session whose agreed slot the client just
+      //     changed (NEEDS_RESELECTION, or simply a different valid choice_id) —
+      //     re-point the session to the freshly validated slot before drafting.
+      if (commitmentItemId && commitmentItem && commitmentItem.event_id !== resolvedEventId) {
+        await commitments.reselectItemSlot(commitmentItemId, resolvedEventId, fresh.startDate);
+      }
+
       // 5. DRAFT booking → payment session → AWAITING_PAYMENT. Class only.
 
       const totalXof = service.priceXof * participants;
@@ -1144,6 +1261,7 @@ export async function executeTool(
         extrasJson: null,
         extrasAmountXof: 0,
         orderNote: null,
+        commitmentItemId,
       });
 
       let session;
@@ -1206,6 +1324,105 @@ export async function executeTool(
           `Your reply must contain ONLY the class, amount, expiry, and payment link. ` +
           `Do not add the bar, another class, an upsell, or any unrelated suggestion while payment is unresolved. ` +
           `The client chose ${appLabel}; confirmation arrives automatically after verified payment.`,
+      });
+    }
+
+    case "start_multi_session_commitment": {
+      const serviceId = String(input.service_id ?? "");
+      const clientName = String(input.client_name ?? "").slice(0, 80).trim();
+      const rawSlots = Array.isArray(input.slots) ? input.slots : [];
+      if (!serviceId || !clientName || rawSlots.length < 2) {
+        return JSON.stringify({ error: "invalid_arguments" });
+      }
+
+      const service = await wix.getService(serviceId);
+      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+
+      // Resolve every choice_id server-side (prompt-injection stance): each must
+      // be a slot we served this client, for THIS class, still in the future.
+      const resolved: { eventId: string; slotStart: string }[] = [];
+      for (const raw of rawSlots) {
+        const choiceId = String((raw as any)?.event_id ?? "");
+        const cached = await repo.getCachedSlot(client.id, choiceId);
+        if (!cached || cached.service_id !== serviceId) {
+          return JSON.stringify({
+            error: "unknown_slot",
+            message:
+              "One of the sessions wasn't a slot offered to this client for this class. Re-run check_availability " +
+              "and rebuild the list from its results.",
+          });
+        }
+        const slotStart = (cached.slot_json as any)?.startDate ?? "";
+        if (!slotStart || Date.parse(slotStart) <= Date.now()) {
+          return JSON.stringify({
+            error: "slot_already_started",
+            message: "One of the agreed sessions is in the past. Pick fresh slots and try again.",
+          });
+        }
+        resolved.push({ eventId: cached.event_id, slotStart });
+      }
+
+      await repo.updateClientName(client.id, clientName);
+      const result = await commitments.startCommitment({
+        clientId: client.id,
+        serviceId,
+        serviceName: service.name,
+        requestedCount: resolved.length,
+        slots: resolved,
+      });
+
+      if (result.outcome === "conflict") {
+        return JSON.stringify({
+          error: "active_commitment_exists",
+          existing: {
+            service: result.existing.commitment.service_name,
+            progress: `${result.existing.booked_count}/${result.existing.commitment.requested_count}`,
+          },
+          message:
+            "This client already has a different active multi-session plan. To start this new one, call " +
+            "abandon_multi_session_commitment first (their already-booked sessions are kept), then retry.",
+        });
+      }
+
+      const snap = result.snapshot;
+      return JSON.stringify({
+        ok: true,
+        commitment_id: snap.commitment.id,
+        service: snap.commitment.service_name,
+        requested_count: snap.commitment.requested_count,
+        booked_count: snap.booked_count,
+        next_commitment_item_id: snap.next_item?.id ?? null,
+        already_existed: result.outcome === "existing",
+        note:
+          `Plan saved: ${snap.commitment.requested_count} sessions of ${snap.commitment.service_name}. ` +
+          `Now create the FIRST session's payment link with create_payment_link, passing ` +
+          `commitment_item_id = next_commitment_item_id. After each paid session I'll ask the client whether ` +
+          `to continue — never promise to send the next link yourself.`,
+      });
+    }
+
+    case "abandon_multi_session_commitment": {
+      const active = await commitments.activeCommitment(client.id);
+      if (!active) {
+        return JSON.stringify({
+          error: "no_active_commitment",
+          message: "This client has no active multi-session plan to stop.",
+        });
+      }
+      const outcome = await commitments.abandonCommitment(client.id, active.id);
+      if (outcome === "deferred") {
+        return JSON.stringify({
+          error: "payment_settling",
+          message:
+            "A session of this plan was just paid and is still being confirmed. Tell the client you'll stop the " +
+            "rest once that one finishes, and try again in a moment.",
+        });
+      }
+      return JSON.stringify({
+        ok: true,
+        message:
+          "Plan stopped. Any sessions already booked and paid are kept; the remaining unpaid sessions are " +
+          "cancelled. Confirm this to the client.",
       });
     }
 

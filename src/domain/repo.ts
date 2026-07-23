@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type pg from "pg";
 import { pool } from "../db/index.js";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import { recordBookingFunnelEvent } from "./bookingFunnel.js";
@@ -48,6 +49,8 @@ export interface PendingBooking {
   wix_payment_recorded_at: Date | null;
   wix_order_sync_at: Date | null;
   wix_order_sync_error: string | null;
+  /** Multi-session commitment item this attempt pays for (null = standalone). */
+  commitment_item_id: string | null;
 }
 
 export interface Turn {
@@ -302,12 +305,17 @@ export async function createDraftBooking(args: {
   extrasJson?: unknown;
   extrasAmountXof?: number;
   orderNote?: string | null;
+  /** Links this attempt to a multi-session commitment item (reversed FK). */
+  commitmentItemId?: string | null;
+  /** Optional transaction client (e.g. inside the per-client commitment lock). */
+  tx?: pg.Pool | pg.PoolClient;
 }): Promise<PendingBooking> {
-  const res = await pool.query(
+  const db = args.tx ?? pool;
+  const res = await db.query(
     `insert into pending_bookings
        (client_id, service_id, service_name, event_id, slot_json, slot_start, slot_end, amount_xof, participants,
-        extras_json, extras_amount_xof, order_note, status)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'DRAFT')
+        extras_json, extras_amount_xof, order_note, commitment_item_id, status)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'DRAFT')
      returning *`,
     [
       args.clientId,
@@ -322,6 +330,7 @@ export async function createDraftBooking(args: {
       args.extrasJson ? JSON.stringify(args.extrasJson) : null,
       args.extrasAmountXof ?? 0,
       args.orderNote ?? null,
+      args.commitmentItemId ?? null,
     ],
   );
   return res.rows[0];
