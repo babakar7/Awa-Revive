@@ -81,6 +81,10 @@ export const config = {
   // Délai de grâce (s) avant l'envoi du WhatsApp de secours en mode fallback :
   // le compteur démarre à la création du ticket (= activation de la livraison).
   OPS_KITCHEN_FALLBACK_SECONDS: parseInt(optional("OPS_KITCHEN_FALLBACK_SECONDS", "15"), 10),
+  // DEV UNIQUEMENT : auto-appaire un écran cuisine « Aperçu (dev) » à la première
+  // visite, sans code — pour tester le kiosque sans iPad. NE JAMAIS activer en
+  // prod (rendrait le kiosque accessible sans appairage). Vide/0 = désactivé.
+  OPS_DEV_AUTOPAIR: optional("OPS_DEV_AUTOPAIR", "") === "1" || optional("OPS_DEV_AUTOPAIR", "") === "true",
 
   // Wix
   WIX_API_KEY: required("WIX_API_KEY"),

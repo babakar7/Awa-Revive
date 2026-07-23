@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { parseCookies } from "../admin/auth.js";
 import {
+  provisionDevCuisineDevice,
   redeemPairing,
   verifyDeviceSession,
   type OpsDevice,
@@ -76,7 +77,15 @@ async function deviceFromReq(
 /** Serve the cuisine home: kiosque if paired, pairing screen otherwise. */
 async function serveCuisineHome(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
   hardenCuisine(reply);
-  const device = await deviceFromReq(req, "cuisine");
+  let device = await deviceFromReq(req, "cuisine");
+  // DEV ONLY: auto-provision a cuisine device so the kiosque works without an
+  // iPad and without a pairing code. Gated by OPS_DEV_AUTOPAIR — never set in prod.
+  if (!device && config.OPS_DEV_AUTOPAIR) {
+    const token = newOpsToken();
+    await provisionDevCuisineDevice(hashOpsToken(token));
+    reply.header("Set-Cookie", opsCookieHeader(token));
+    device = await verifyDeviceSession(hashOpsToken(token), "cuisine");
+  }
   reply.type("text/html");
   if (!device) return reply.send(cuisinePairingPage());
   const tickets = await listOpenKitchenTickets();

@@ -336,6 +336,32 @@ describe("cuisine PWA over HTTP", () => {
     expect(sse.statusCode).toBe(401);
   });
 
+  it("OPS_DEV_AUTOPAIR auto-provisions a cuisine device (no code) when on, pairing screen when off", async () => {
+    const prev = config.OPS_DEV_AUTOPAIR;
+    try {
+      config.OPS_DEV_AUTOPAIR = false;
+      const off = await app.inject({ method: "GET", url: "/ops/cuisine/" });
+      expect(off.body).toContain("Appairer cet écran");
+      expect(off.headers["set-cookie"]).toBeUndefined();
+
+      config.OPS_DEV_AUTOPAIR = true;
+      const on = await app.inject({ method: "GET", url: "/ops/cuisine/" });
+      expect(on.statusCode).toBe(200);
+      expect(on.body).toContain("window.__BOOT__");
+      const cookie = String(on.headers["set-cookie"]);
+      expect(cookie).toContain("ops_device=");
+      // The auto-provisioned session actually works on a protected endpoint.
+      const evt = await app.inject({
+        method: "POST",
+        url: "/ops/cuisine/tickets/00000000-0000-0000-0000-000000000000/ack",
+        headers: { cookie: cookie.split(";")[0] },
+      });
+      expect(evt.statusCode).toBe(200); // authorized (ack of a nonexistent id is a no-op 200)
+    } finally {
+      config.OPS_DEV_AUTOPAIR = prev;
+    }
+  });
+
   it("pairs via HTTP, then serves the kiosque and accepts ticket actions", async () => {
     const code = newPairCode();
     await createPairingDevice("iPad Cuisine", "cuisine", hashOpsToken(code), new Date(Date.now() + 60_000));

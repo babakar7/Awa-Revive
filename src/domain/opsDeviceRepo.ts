@@ -101,6 +101,29 @@ export async function revokeOpsDevice(id: string): Promise<boolean> {
   return (res.rowCount ?? 0) > 0;
 }
 
+/**
+ * DEV ONLY (behind OPS_DEV_AUTOPAIR): bind a session token to a single reusable
+ * "Aperçu (dev)" cuisine device so the kiosque can be tried without an iPad and
+ * without entering a pairing code. Reuses one row (rotating its token) so it
+ * never litters the device list. Callers MUST gate this on the dev flag — it is
+ * an intentional auth bypass and must never run in production.
+ */
+export async function provisionDevCuisineDevice(sessionTokenHash: string): Promise<void> {
+  const updated = await pool.query(
+    `update ops_devices
+        set session_token_hash = $1, paired_at = coalesce(paired_at, now()),
+            last_seen_at = now(), revoked_at = null
+      where label = 'Aperçu (dev)' and role = 'cuisine'`,
+    [sessionTokenHash],
+  );
+  if ((updated.rowCount ?? 0) > 0) return;
+  await pool.query(
+    `insert into ops_devices (label, role, session_token_hash, paired_at, last_seen_at)
+     values ('Aperçu (dev)', 'cuisine', $1, now(), now())`,
+    [sessionTokenHash],
+  );
+}
+
 /** Delete a device row entirely (admin cleanup of a revoked/never-paired row). */
 export async function deleteOpsDevice(id: string): Promise<boolean> {
   if (!UUID_RE.test(String(id))) return false;
