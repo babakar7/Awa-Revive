@@ -123,25 +123,36 @@ button.add{background:#7c547d;border-color:#7c547d}
 padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom))}
 .sheet h2{margin:.1rem 0 .8rem;font-size:1.2rem}
 .areas{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem}
-.areas button{flex:1;min-width:5rem;padding:.9rem;border-radius:12px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-weight:700;font-size:1rem}
-.areas button.sel{background:#7c547d;border-color:#7c547d}
-.sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:12px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:1rem;margin-bottom:.7rem;font-family:inherit}
-.sheet textarea{min-height:3rem}
-.cat{font-size:.78rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#a98fa9;margin:.7rem 0 .3rem}
-.mi{display:flex;align-items:center;gap:.5rem;padding:.5rem 0;border-bottom:1px solid #2a212a}
-.mi .nm{flex:1}.mi .pr{color:#c9bcc9;font-size:.85rem}
-.stepper{display:flex;align-items:center;gap:.5rem}
-.stepper button{width:2.2rem;height:2.2rem;border-radius:50%;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:1.3rem;font-weight:800;line-height:1}
-.stepper .qv{min-width:1.3rem;text-align:center;font-weight:800}
-.mi .opt{width:100%;margin-top:.4rem}
-.mi select{width:100%;padding:.55rem;border-radius:10px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:.92rem;margin-top:.35rem}
-.mi .ln{margin-top:.35rem;font-size:.9rem;padding:.5rem;margin-bottom:0}
-.wrap{padding:.5rem 0}
-.foot{position:sticky;bottom:0;background:#1c151c;padding-top:.6rem;display:flex;gap:.5rem;align-items:center}
-.total{font-weight:800;font-size:1.05rem}.total small{color:#8a7d8a;font-weight:500}
-.foot button.go{flex:1;padding:.9rem;border:none;border-radius:12px;background:#1a7f37;color:#fff;font-weight:800;font-size:1.02rem}
-.foot button.go:disabled{opacity:.5}
-.close-x{position:sticky;top:0;float:right;background:none;border:none;color:#c9bcc9;font-size:1.6rem;line-height:1}
+.sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:12px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:1rem;font-family:inherit}
+.sheet textarea{min-height:3rem;margin-top:.6rem}
+/* sticky search + category chips */
+.toolbar{position:sticky;top:0;z-index:3;background:#1c151c;padding:.2rem 0 .5rem}
+.search{margin-bottom:.5rem}
+.chips{display:flex;gap:.4rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:.2rem;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;padding:.5rem .85rem;border-radius:999px;background:#2c222c;border:1px solid #4a3d4a;color:#e7dbe7;font-size:.92rem;font-weight:700;white-space:nowrap}
+.chip.sel{background:#7c547d;border-color:#7c547d;color:#fff}
+.chip.cart{background:#26361f;border-color:#3f5a34;color:#bfe6ab}
+.chip.cart.sel{background:#2f7650;border-color:#2f7650;color:#fff}
+.cat{font-size:.78rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#a98fa9;margin:.8rem 0 .3rem}
+.mi{display:flex;align-items:center;gap:.6rem;padding:.6rem 0;border-bottom:1px solid #2a212a;flex-wrap:wrap}
+.mi.on{background:#241b24;border-radius:10px;padding:.6rem;margin:.2rem 0;border-bottom:0}
+.mi .nm{flex:1;min-width:8rem;font-size:1.02rem}
+.mi .nm .pr{display:block;color:#9a8d9a;font-size:.82rem;font-weight:500}
+.mi .qbadge{background:#2f7650;color:#fff;border-radius:999px;font-size:.8rem;font-weight:800;padding:.1rem .5rem;margin-left:.4rem}
+.stepper{display:flex;align-items:center;gap:.55rem}
+.stepper button{width:2.4rem;height:2.4rem;border-radius:50%;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:1.4rem;font-weight:800;line-height:1}
+.stepper button.plus{background:#7c547d;border-color:#7c547d}
+.stepper .qv{min-width:1.3rem;text-align:center;font-weight:800;font-size:1.1rem}
+.mi select{width:100%;padding:.6rem;border-radius:10px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:.95rem;margin-top:.45rem}
+.mi .ln{margin-top:.4rem;font-size:.92rem;padding:.55rem}
+.wrap{width:100%}
+.nores{color:#8a7d8a;text-align:center;padding:2rem 0}
+.foot{position:sticky;bottom:0;background:#1c151c;padding:.6rem 0 .2rem;display:flex;gap:.6rem;align-items:center;border-top:1px solid #2a212a}
+.total{font-weight:800;font-size:1.05rem;white-space:nowrap}.total small{color:#8a7d8a;font-weight:500}
+.foot button.go{flex:1;padding:.9rem;border:none;border-radius:12px;background:#2f7650;color:#fff;font-weight:800;font-size:1.02rem}
+.foot button.go:disabled{opacity:.45}
+.close-x{position:sticky;top:0;float:right;background:none;border:none;color:#c9bcc9;font-size:1.7rem;line-height:1;z-index:4}
 .msg{color:#f6a5a5;font-size:.9rem;margin:.4rem 0}
 #offline{position:fixed;left:0;right:0;top:0;background:#7a2020;color:#fff;text-align:center;padding:.5rem;font-weight:700;transform:translateY(-100%);transition:transform .2s;z-index:30}
 #offline.show{transform:translateY(0)}
@@ -177,7 +188,7 @@ export const SERVICE_MANIFEST = JSON.stringify({
 });
 
 // ── Service worker (shell/assets only) ───────────────────────────────────────
-export const SERVICE_SW = `const CACHE='service-v2';
+export const SERVICE_SW = `const CACHE='service-v3';
 const SHELL=['${BASE}/app.js','${BASE}/manifest.webmanifest','${BASE}/icon-192.png','${BASE}/icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
@@ -294,38 +305,96 @@ export const SERVICE_APP_JS = String.raw`(function(){
   // ---- order composer ----
   function overlay(){ var ov=el('div','ov'); ov.onclick=function(e){ if(e.target===ov) document.body.removeChild(ov); }; return ov; }
 
+  function normalize(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+
   function openOrder(sp,session){
     unlock();
     var ov=overlay(); var sh=el('div','sheet');
     var x=el('button','close-x','×'); x.onclick=function(){document.body.removeChild(ov);}; sh.appendChild(x);
     sh.appendChild(el('h2','Commande — '+sp.label));
     var fn=null;
-    if(!session){ fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; sh.appendChild(fn); }
-    var draft={}; var totalEl;
-    function recompute(){ var tot=0; Object.keys(draft).forEach(function(id){ var it=findItem(id); if(it&&draft[id].qty>0) tot+=it.price*draft[id].qty; });
-      totalEl.textContent=''; totalEl.appendChild(document.createTextNode(tot+' F ')); totalEl.appendChild(el('small','','(indicatif)')); }
-    MENU.forEach(function(cat){
-      sh.appendChild(el('div','cat',cat.category));
-      cat.items.forEach(function(it){
-        var row=el('div','mi');
-        var nm=el('div','nm'); nm.appendChild(el('span',null,it.name)); nm.appendChild(document.createElement('br')); nm.appendChild(el('span','pr',it.price+' F')); row.appendChild(nm);
-        var stp=el('div','stepper');
-        var minus=el('button',null,'−'); var qv=el('span','qv','0'); var plus=el('button',null,'+');
-        var extra=el('div','wrap'); extra.style.display='none';
-        function sync(){ var d=draft[it.id]||{qty:0}; qv.textContent=d.qty; extra.style.display=d.qty>0?'block':'none'; recompute(); }
-        minus.onclick=function(){ var d=draft[it.id]||{qty:0,choice:'',note:''}; d.qty=Math.max(0,d.qty-1); draft[it.id]=d; sync(); };
-        plus.onclick=function(){ var d=draft[it.id]||{qty:0,choice:'',note:''}; d.qty=Math.min(10,d.qty+1); draft[it.id]=d; sync(); };
-        stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
-        if(it.choices && it.choices.length){ var selc=document.createElement('select');
-          var op0=document.createElement('option'); op0.value=''; op0.textContent=(it.optionLabel||'Choix')+'…'; selc.appendChild(op0);
-          it.choices.forEach(function(ch){ var o=document.createElement('option'); o.value=ch; o.textContent=ch; selc.appendChild(o); });
-          selc.onchange=function(){ var d=draft[it.id]||{qty:0}; d.choice=selc.value; draft[it.id]=d; }; extra.appendChild(selc); }
-        var ntn=el('input','ln'); ntn.placeholder='Note (ex: sans sucre)'; ntn.maxLength=140; ntn.oninput=function(){ var d=draft[it.id]||{qty:0}; d.note=ntn.value; draft[it.id]=d; }; extra.appendChild(ntn);
-        row.appendChild(extra);
-        sh.appendChild(row);
+    if(!session){ fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; fn.style.marginBottom='.6rem'; sh.appendChild(fn); }
+
+    var draft={};       // id -> {qty, choice, note}
+    var state={cat:'__ALL__', q:'', cartOnly:false};
+    var totalEl, cartChip, listEl;
+
+    function cartCount(){ var n=0; Object.keys(draft).forEach(function(id){ if(draft[id].qty>0) n+=draft[id].qty; }); return n; }
+    function recompute(){
+      var tot=0; Object.keys(draft).forEach(function(id){ var it=findItem(id); if(it&&draft[id].qty>0) tot+=it.price*draft[id].qty; });
+      totalEl.textContent=''; totalEl.appendChild(document.createTextNode(tot+' F ')); totalEl.appendChild(el('small','','(indicatif)'));
+      var n=cartCount(); cartChip.textContent='🛒 Panier'+(n?' ('+n+')':''); cartChip.classList.toggle('sel',state.cartOnly);
+    }
+
+    // ── sticky toolbar: search + category chips + cart ──
+    var toolbar=el('div','toolbar');
+    var search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search');
+    search.oninput=function(){ state.q=search.value; if(state.q) state.cartOnly=false; renderList(); };
+    toolbar.appendChild(search);
+    var chips=el('div','chips');
+    function setCat(c){ state.cat=c; state.cartOnly=false; renderList(); }
+    var chipAll=el('button','chip','Tout'); chipAll.onclick=function(){ setCat('__ALL__'); }; chips.appendChild(chipAll);
+    var catChips={};
+    MENU.forEach(function(cat){ var ch=el('button','chip',cat.category); ch.onclick=(function(name){return function(){ setCat(name); };})(cat.category); catChips[cat.category]=ch; chips.appendChild(ch); });
+    cartChip=el('button','chip cart','🛒 Panier'); cartChip.onclick=function(){ state.cartOnly=!state.cartOnly; if(state.cartOnly){state.q='';search.value='';} renderList(); };
+    chips.appendChild(cartChip);
+    toolbar.appendChild(chips);
+    sh.appendChild(toolbar);
+
+    listEl=el('div'); sh.appendChild(listEl);
+
+    function itemRow(it){
+      var d=draft[it.id]||{qty:0,choice:'',note:''};
+      var row=el('div','mi'+(d.qty>0?' on':''));
+      var nm=el('div','nm'); var t=el('span',null,it.name); nm.appendChild(t);
+      if(d.qty>0){ nm.appendChild(el('span','qbadge','×'+d.qty)); }
+      nm.appendChild(el('span','pr',it.price+' F')); row.appendChild(nm);
+      var stp=el('div','stepper');
+      var minus=el('button',null,'−'); var qv=el('span','qv',String(d.qty)); var plus=el('button','plus','+');
+      var extra=el('div','wrap'); extra.style.display=d.qty>0?'block':'none';
+      function sync(){ var dd=draft[it.id]||{qty:0}; qv.textContent=dd.qty;
+        extra.style.display=dd.qty>0?'block':'none'; row.classList.toggle('on',dd.qty>0);
+        // refresh the qty badge
+        var old=nm.querySelector('.qbadge'); if(old) nm.removeChild(old);
+        if(dd.qty>0){ var b=el('span','qbadge','×'+dd.qty); nm.insertBefore(b,nm.querySelector('.pr')); }
+        recompute();
+      }
+      minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0) renderList(); };
+      plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync(); };
+      stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
+      if(it.choices && it.choices.length){ var selc=document.createElement('select');
+        var op0=document.createElement('option'); op0.value=''; op0.textContent=(it.optionLabel||'Choix')+'…'; selc.appendChild(op0);
+        it.choices.forEach(function(ch){ var o=document.createElement('option'); o.value=ch; o.textContent=ch; if(d.choice===ch)o.selected=true; selc.appendChild(o); });
+        selc.onchange=function(){ var dd=draft[it.id]||{qty:0}; dd.choice=selc.value; draft[it.id]=dd; }; extra.appendChild(selc); }
+      var ntn=el('input','ln'); ntn.placeholder='Note (ex: sans sucre)'; ntn.maxLength=140; ntn.value=d.note||'';
+      ntn.oninput=function(){ var dd=draft[it.id]||{qty:0}; dd.note=ntn.value; draft[it.id]=dd; }; extra.appendChild(ntn);
+      row.appendChild(extra);
+      return row;
+    }
+
+    function renderList(){
+      // sync chip highlight
+      chipAll.classList.toggle('sel',state.cat==='__ALL__'&&!state.q&&!state.cartOnly);
+      Object.keys(catChips).forEach(function(k){ catChips[k].classList.toggle('sel',state.cat===k&&!state.q&&!state.cartOnly); });
+      cartChip.classList.toggle('sel',state.cartOnly);
+      listEl.textContent='';
+      var q=normalize(state.q);
+      var any=false;
+      MENU.forEach(function(cat){
+        var items=cat.items.filter(function(it){
+          if(state.cartOnly) return (draft[it.id]&&draft[it.id].qty>0);
+          if(q) return normalize(it.name).indexOf(q)>=0;
+          if(state.cat!=='__ALL__') return cat.category===state.cat;
+          return true;
+        });
+        if(!items.length) return;
+        listEl.appendChild(el('div','cat',cat.category));
+        items.forEach(function(it){ listEl.appendChild(itemRow(it)); any=true; });
       });
-    });
-    var gnote=el('textarea'); gnote.placeholder='Note générale (optionnel)'; gnote.maxLength=280; gnote.style.marginTop='.8rem'; sh.appendChild(gnote);
+      if(!any){ listEl.appendChild(el('div','nores', state.cartOnly?'Panier vide — ajoutez des articles.':'Aucun article trouvé.')); }
+    }
+
+    var gnote=el('textarea'); gnote.placeholder='Note générale pour la table (optionnel)'; gnote.maxLength=280; sh.appendChild(gnote);
     var msg=el('div','msg'); msg.style.display='none'; sh.appendChild(msg);
     var foot=el('div','foot'); totalEl=el('div','total'); foot.appendChild(totalEl);
     var go=el('button','go','Envoyer en cuisine');
@@ -340,7 +409,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
     };
     foot.appendChild(go); sh.appendChild(foot);
     ov.appendChild(sh); document.body.appendChild(ov);
-    recompute();
+    renderList(); recompute();
   }
 
   function setOnline(on){ dot.classList.toggle('on',on); offline.classList.toggle('show',!on); }
