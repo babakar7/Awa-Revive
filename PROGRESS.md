@@ -1656,6 +1656,22 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
 
 ## 5. Chronologie condensée
 
+- **23/07 — Pack Découverte : friction minimale (annuler après coup > bloquer).**
+  Déclencheur : cas Barbara (23/07). Elle demande le pack puis un cours Sculpt ;
+  Awa lui répond que Sculpt exige « 3 cours **chez nous** » (invention — la règle
+  ne dit que « après 3 cours »), Barbara réplique « Si j'ai déjà fait », Awa en
+  déduit *Pilates à Revive* et lui refuse le pack → à-la-carte 12 000 F. Or du
+  Pilates fait **ailleurs** ne disqualifie NI du pack NI de Sculpt. Décision de
+  Babakar : côté conversation, Awa ne refuse le pack QUE si (1) le client dit
+  **explicitement** avoir fait du Pilates **à Revive**, ou (2) le serveur renvoie
+  `discovery_not_eligible` ; toute phrase ambiguë (« j'ai déjà fait du Pilates »)
+  = on vend sans questionner, la réception annulera après coup si besoin. Sculpt
+  accepte l'expérience faite ailleurs (sur simple déclaration) — un client
+  expérimenté peut prendre le Pack Découverte ET réserver Sculpt directement.
+  **Changement prompt uniquement** ([business-info.md](business-info.md) §
+  niveaux + § découverte) : le garde-fou serveur `discovery_not_eligible`
+  ([tools.ts:1637](src/agent/tools.ts#L1637)) reste **inchangé** — il ne lit que
+  les bookings Pilates Revive, donc le Pilates ailleurs y est déjà invisible.
 - **19/07 — Factures : Awa émet de vraies factures, et tout part en PDF
   (`764fbb1` + ce commit).** (a) `send_receipt` → **`send_invoice`** : demande
   client reçu/justificatif/facture = facture RÉELLE du registre
