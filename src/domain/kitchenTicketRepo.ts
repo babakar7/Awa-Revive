@@ -90,7 +90,7 @@ export async function createDeliveryTicket(
        (source, delivery_order_id, items_json, note, amount_xof, heading, subheading,
         is_test, fallback_due_at)
      values ('DELIVERY', $1, $2, $3, $4, $5, $6, $7, now() + make_interval(secs => $8))
-     on conflict (delivery_order_id) do nothing
+     on conflict (delivery_order_id) where delivery_order_id is not null do nothing
      returning *`,
     [
       order.id,
@@ -256,7 +256,7 @@ export async function reconcileDeliveryTickets(
        from delivery_orders d
        left join kitchen_tickets k on k.delivery_order_id = d.id
       where d.status = 'IN_KITCHEN' and d.activated_at is not null and k.id is null
-     on conflict (delivery_order_id) do nothing
+     on conflict (delivery_order_id) where delivery_order_id is not null do nothing
      returning *`,
     [Math.max(0, graceSeconds)],
   );

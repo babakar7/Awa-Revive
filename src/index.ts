@@ -24,6 +24,7 @@ import { notifyReception } from "./lib/notify.js";
 import { drainQueues } from "./lib/serialize.js";
 import { listenOnAvailablePort } from "./lib/listen.js";
 import { buildServer } from "./server.js";
+import { closeOpsSseConnections } from "./ops/opsRoutes.js";
 import { closeInactiveBookingJourneys } from "./domain/bookingFunnel.js";
 
 async function main() {
@@ -175,6 +176,9 @@ async function main() {
     app.log.info({ signal }, "Shutting down");
     clearInterval(sweeper);
     clearInterval(cancellationSweeper);
+    // End open SSE streams first — they never complete on their own, so
+    // app.close() would otherwise hang waiting on them past the SIGKILL window.
+    closeOpsSseConnections();
     // Stop accepting new webhooks and finish in-flight HTTP requests.
     await app.close();
     // Then drain the DETACHED per-client tasks (model + tools + sendText) that

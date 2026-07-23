@@ -14,6 +14,7 @@ import {
 } from "./auth.js";
 import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
+import { createDeliveryTicket } from "../domain/kitchenTicketRepo.js";
 import {
   attemptActivationNotify,
   attemptCreatedNotify,
@@ -779,6 +780,11 @@ ${
         // and silent until the 60-second sweep crosses kitchen_notify_at.
         let kitchenOk = false;
         if (order.activated_at) {
+          // Project the active order onto a kitchen ticket right away so the
+          // cuisine iPad shows it instantly (the sweep reconcile is the backstop).
+          await createDeliveryTicket(order, config.OPS_KITCHEN_FALLBACK_SECONDS).catch((e) =>
+            req.log.error({ err: e, order: order.id }, "Kitchen ticket create failed"),
+          );
           const claimed = await delivery.claimKitchenNotify(order.id);
           if (claimed) {
             try {
