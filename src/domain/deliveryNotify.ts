@@ -12,11 +12,14 @@ import { onShiftStaffIds } from "./staffPlanningRepo.js";
 import {
   aggregateKitchenOutcome,
   createdClientMessage,
+  deliveryRecipientStaffLine,
   deliveryUpdateTemplateParams,
   formatDakarDateTime,
   kitchenMessage,
   kitchenTemplateParams,
   magicLinkUrl,
+  recipientRouteMessage,
+  recipientRouteTemplateParams,
   rescheduledClientMessage,
   routeClientMessage,
   type ClientPingKind,
@@ -35,6 +38,7 @@ import {
   claimCreatedNotify,
   claimDeliverySlaAlerts,
   claimKitchenNotifyWithFreshToken,
+  claimRecipientRouteNotify,
   claimRescheduleNotify,
   claimRouteNotify,
   findDeliveryOrder,
@@ -42,6 +46,7 @@ import {
   pendingActivationNotifies,
   pendingCreatedNotifies,
   pendingKitchenNotifies,
+  pendingRecipientRouteNotifies,
   pendingRescheduleNotifies,
   pendingRouteNotifies,
   rotateReadyToken,
@@ -50,6 +55,7 @@ import {
   setRescheduleNotifyOutcome,
   setRouteNotifyOutcome,
   setKitchenNotifyOutcome,
+  setRecipientRouteNotifyOutcome,
   type DeliveryOrder,
 } from "./deliveryRepo.js";
 
@@ -73,6 +79,8 @@ function viewOf(o: DeliveryOrder): DeliveryOrderView {
   return {
     client_name: o.client_name,
     client_phone: o.client_phone,
+    recipient_name: o.recipient_name,
+    recipient_phone: o.recipient_phone,
     address: o.address,
     note: o.note,
     items: orderItems(o),
@@ -310,6 +318,51 @@ async function sendClientPing(
   }
 }
 
+async function sendRecipientRoutePing(order: DeliveryOrder, log: Log): Promise<void> {
+  if (!order.recipient_name || !order.recipient_phone) return;
+  const view = viewOf(order);
+  const msg = recipientRouteMessage(view);
+  const tag = `[${order.is_test ? "TEST " : ""}livraison ${order.id.slice(0, 8)} contact-remise]`;
+  if (config.WA_DELIVERY_UPDATE_TEMPLATE) {
+    try {
+      const wamid = await sendTemplate(
+        order.recipient_phone,
+        config.WA_DELIVERY_UPDATE_TEMPLATE,
+        config.WA_DELIVERY_UPDATE_TEMPLATE_LANG,
+        recipientRouteTemplateParams(view),
+      );
+      await recordDeliveryLog(
+        order.recipient_phone,
+        `${tag} (template) ${msg}`,
+        "sent_template",
+        null,
+        wamid,
+      );
+      await setRecipientRouteNotifyOutcome(order.id, "sent_template", wamid);
+      return;
+    } catch (err) {
+      log.error(
+        { err, order: order.id },
+        "Delivery recipient route template failed — trying free-text",
+      );
+    }
+  }
+  try {
+    const wamid = await sendText(order.recipient_phone, msg);
+    await recordDeliveryLog(order.recipient_phone, `${tag} ${msg}`, "sent", null, wamid);
+    await setRecipientRouteNotifyOutcome(order.id, "sent", wamid);
+  } catch (err) {
+    await recordDeliveryLog(
+      order.recipient_phone,
+      `${tag} ${msg}`,
+      "failed",
+      String(err).slice(0, 300),
+    );
+    await setRecipientRouteNotifyOutcome(order.id, "failed");
+    log.error({ err, order: order.id }, "Delivery recipient route send failed");
+  }
+}
+
 /** Claim + attempt the creation-confirmation ping (create route + sweep entry). */
 export async function attemptCreatedNotify(id: string, log: Log): Promise<void> {
   const order = await claimCreatedNotify(id);
@@ -320,8 +373,15 @@ export async function attemptCreatedNotify(id: string, log: Log): Promise<void> 
 /** Claim + attempt the "out for delivery" ping (depart routes + sweep entry). */
 export async function attemptRouteNotify(id: string, log: Log): Promise<void> {
   const order = await claimRouteNotify(id);
+  if (order) await sendClientPing(order, "route", log);
+  await attemptRecipientRouteNotify(id, log);
+}
+
+/** Claim + attempt only the optional handoff contact's departure alert. */
+export async function attemptRecipientRouteNotify(id: string, log: Log): Promise<void> {
+  const order = await claimRecipientRouteNotify(id);
   if (!order) return;
-  await sendClientPing(order, "route", log);
+  await sendRecipientRoutePing(order, log);
 }
 
 /** Claim + attempt the client update after a promised-arrival change. */
@@ -342,6 +402,7 @@ export async function attemptActivationNotify(id: string, log: Log): Promise<voi
   const body =
     `${order.is_test ? "Commande de test — exclue des statistiques.\n" : ""}` +
     `La cuisine doit préparer la commande de ${order.client_name} (+${order.client_phone}).\n` +
+    (deliveryRecipientStaffLine(order) ? `${deliveryRecipientStaffLine(order)}\n` : "") +
     `Arrivée promise : ${arrival} (heure de Dakar)\n` +
     `Adresse : ${order.address}\n` +
     `Commande : ${orderItems(order).map((line) => `${line.qty}× ${line.name}`).join(" + ")}\n` +
@@ -482,6 +543,13 @@ export async function sweepDeliveries(log: Log): Promise<number> {
       log.error({ err, order: id }, "Delivery route retry failed"),
     );
   }
+  // 5b. The handoff contact has an independent durable ping. Keeping the loops
+  // separate means retrying this alert never repeats the client's message.
+  for (const id of await pendingRecipientRouteNotifies()) {
+    await attemptRecipientRouteNotify(id, log).catch((err) =>
+      log.error({ err, order: id }, "Delivery recipient route retry failed"),
+    );
+  }
   // 6. SLA alerts (one-shot per order): never departed in time.
   const late = await claimDeliverySlaAlerts();
   for (const order of late) {
@@ -492,6 +560,7 @@ export async function sweepDeliveries(log: Log): Promise<number> {
       `${order.is_test ? "Commande de test — exclue des statistiques.\n" : ""}` +
         `Pas partie en livraison après ${order.sla_minutes} min.\n` +
         `Client : ${order.client_name} (+${order.client_phone})\n` +
+        (deliveryRecipientStaffLine(order) ? `${deliveryRecipientStaffLine(order)}\n` : "") +
         `Adresse : ${order.address}\n` +
         `Voir /admin/livraisons.`,
       { whatsappFirst: true, preferTemplate: true },

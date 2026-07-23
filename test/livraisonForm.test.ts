@@ -45,6 +45,9 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(html).toContain(`name="client_phone" type="tel" inputmode="tel"`);
     expect(html).toContain(`id="liv-search"`);
     expect(html).toContain(`data-search="iced matcha matcha matcha"`);
+    expect(html).toContain(`name="recipient_name"`);
+    expect(html).toContain(`name="recipient_phone" type="tel" inputmode="tel"`);
+    expect(html).toContain("recevra uniquement l’alerte");
   });
 
   it("searches Wix clients while keeping manual entry available", () => {
@@ -93,10 +96,16 @@ describe("renderLivraisonForm — stepper & UX", () => {
       client_phone: "+221771112233",
       wix_contact_id: `wix"><script>x</script>`,
       address: "Almadies",
+      recipient_name: `Fatou"><script>bad</script>`,
+      recipient_phone: "+221781112233",
     });
     expect(html).toContain(`value="A&lt;script&gt;x&lt;/script&gt;"`);
     expect(html).toContain(`value="+221771112233"`);
     expect(html).toContain(`value="Almadies"`);
+    expect(html).toContain(
+      `value="Fatou&quot;&gt;&lt;script&gt;bad&lt;/script&gt;"`,
+    );
+    expect(html).toContain(`value="+221781112233"`);
     expect(html).toContain(`name="wix_contact_id" type="hidden" value="wix&quot;&gt;&lt;script&gt;x&lt;/script&gt;"`);
     expect(html).not.toContain("<script>x</script>");
   });

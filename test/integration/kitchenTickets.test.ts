@@ -52,6 +52,8 @@ async function makeImmediateOrder(overrides: Partial<{ is_test: boolean }> = {})
     client_name: "Awa Diop",
     client_phone: "221771112233",
     wix_contact_id: null,
+    recipient_name: null,
+    recipient_phone: null,
     address: "Almadies, villa 12",
     note: "sans sucre",
     items: ITEMS,
@@ -83,7 +85,9 @@ describe("createDeliveryTicket", () => {
     expect(ticket.status).toBe("NEW");
     expect(ticket.source).toBe("DELIVERY");
     expect(ticket.heading).toBe("Awa Diop");
-    expect(ticket.subheading).toBe("Almadies, villa 12");
+    expect(ticket.subheading).toBe(
+      "Almadies, villa 12 · Appeler Awa Diop (+221771112233)",
+    );
     expect(ticket.note).toBe("sans sucre");
     expect(ticket.fallback_due_at).not.toBeNull();
 
@@ -187,6 +191,8 @@ describe("reconcile (delivery → ticket projection)", () => {
       client_name: "Later Client",
       client_phone: "221770000009",
       wix_contact_id: null,
+      recipient_name: null,
+      recipient_phone: null,
       address: "Ngor",
       note: null,
       items: ITEMS,

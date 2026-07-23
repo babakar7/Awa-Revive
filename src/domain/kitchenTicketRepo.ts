@@ -9,6 +9,7 @@ import {
   type KitchenTicketView,
 } from "./kitchenTicketRules.js";
 import type { DeliveryOrder } from "./deliveryRepo.js";
+import { deliveryTicketSubheading } from "./deliveryRules.js";
 
 /**
  * SQL for kitchen tickets. Same house style as deliveryRepo: every state change
@@ -98,7 +99,7 @@ export async function createDeliveryTicket(
       order.note,
       order.amount_xof,
       order.client_name,
-      order.address,
+      deliveryTicketSubheading(order),
       order.is_test,
       Math.max(0, graceSeconds),
     ],
@@ -110,6 +111,23 @@ export async function createDeliveryTicket(
   }
   const existing = await ticketByDeliveryOrder(order.id);
   return { ticket: existing as KitchenTicket, created: false };
+}
+
+/** Refresh the live iPad projection after an operational contact edit. */
+export async function refreshDeliveryTicketContact(
+  order: DeliveryOrder,
+): Promise<KitchenTicket | null> {
+  if (!UUID_RE.test(String(order.id))) return null;
+  const res = await pool.query(
+    `update kitchen_tickets
+        set heading=$2, subheading=$3, updated_at=now()
+      where delivery_order_id=$1 and status in ('NEW','PREPARING','READY')
+      returning *`,
+    [order.id, order.client_name, deliveryTicketSubheading(order)],
+  );
+  const ticket = (res.rows[0] as KitchenTicket) ?? null;
+  if (ticket) await emitTicket("ticket_update", ticket);
+  return ticket;
 }
 
 // ---------- cuisine transitions (iPad) ----------
@@ -296,7 +314,12 @@ export async function reconcileDeliveryTickets(
     `insert into kitchen_tickets
        (source, delivery_order_id, items_json, note, amount_xof, heading, subheading,
         is_test, fallback_due_at)
-     select 'DELIVERY', d.id, d.items_json, d.note, d.amount_xof, d.client_name, d.address,
+     select 'DELIVERY', d.id, d.items_json, d.note, d.amount_xof, d.client_name,
+            d.address || case
+              when d.recipient_name is not null and d.recipient_phone is not null
+                then ' · Remise à ' || d.recipient_name || ' (+' || d.recipient_phone || ')'
+              else ' · Appeler ' || d.client_name || ' (+' || d.client_phone || ')'
+            end,
             d.is_test, now() + make_interval(secs => $1)
        from delivery_orders d
        left join kitchen_tickets k on k.delivery_order_id = d.id
@@ -306,6 +329,32 @@ export async function reconcileDeliveryTickets(
     [Math.max(0, graceSeconds)],
   );
   for (const row of created.rows as KitchenTicket[]) await emitTicket("ticket_new", row);
+
+  const refreshed = await pool.query(
+    `update kitchen_tickets k
+        set heading=d.client_name,
+            subheading=d.address || case
+              when d.recipient_name is not null and d.recipient_phone is not null
+                then ' · Remise à ' || d.recipient_name || ' (+' || d.recipient_phone || ')'
+              else ' · Appeler ' || d.client_name || ' (+' || d.client_phone || ')'
+            end,
+            updated_at=now()
+       from delivery_orders d
+      where k.delivery_order_id=d.id
+        and k.status in ('NEW','PREPARING','READY')
+        and (
+          k.heading is distinct from d.client_name
+          or k.subheading is distinct from (
+            d.address || case
+              when d.recipient_name is not null and d.recipient_phone is not null
+                then ' · Remise à ' || d.recipient_name || ' (+' || d.recipient_phone || ')'
+              else ' · Appeler ' || d.client_name || ' (+' || d.client_phone || ')'
+            end
+          )
+        )
+     returning k.*`,
+  );
+  for (const row of refreshed.rows as KitchenTicket[]) await emitTicket("ticket_update", row);
 
   const completed = await pool.query(
     `update kitchen_tickets k

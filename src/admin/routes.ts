@@ -14,7 +14,10 @@ import {
 } from "./auth.js";
 import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
-import { createDeliveryTicket } from "../domain/kitchenTicketRepo.js";
+import {
+  createDeliveryTicket,
+  refreshDeliveryTicketContact,
+} from "../domain/kitchenTicketRepo.js";
 import {
   createPairingDevice,
   deleteOpsDevice,
@@ -29,6 +32,7 @@ import { renderDevicesPage } from "./devicesPage.js";
 import {
   attemptActivationNotify,
   attemptCreatedNotify,
+  attemptRecipientRouteNotify,
   attemptRescheduleNotify,
   attemptRouteNotify,
   internalNotifyMode,
@@ -138,6 +142,25 @@ import { bookingConversionDashboard } from "../domain/bookingFunnel.js";
 import { renderConversionPage } from "./conversionPage.js";
 
 export { escapeHtml } from "./helpers.js";
+
+function parseDeliveryRecipientFields(
+  body: Record<string, string>,
+):
+  | { recipientName: string | null; recipientPhone: string | null }
+  | { error: string } {
+  const recipientName = String(body.recipient_name ?? "").trim();
+  const recipientPhoneRaw = String(body.recipient_phone ?? "").trim();
+  if (!!recipientName !== !!recipientPhoneRaw) {
+    return { error: "le nom et le téléphone du contact de remise doivent être renseignés ensemble" };
+  }
+  if (!recipientName) return { recipientName: null, recipientPhone: null };
+  if (recipientName.length > 120) {
+    return { error: "le nom du contact de remise est trop long" };
+  }
+  const recipientPhone = normalizeDeliveryPhone(recipientPhoneRaw);
+  if (!recipientPhone) return { error: "numéro du contact de remise invalide" };
+  return { recipientName, recipientPhone };
+}
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
 async function activePlansByContact(): Promise<Map<string, string[]>> {
@@ -305,7 +328,13 @@ export function registerAdmin(app: FastifyInstance): void {
             const slaMs = (o.sla_minutes ?? 20) * 60_000;
             if (o.alerted_at || now - new Date(o.created_at).getTime() >= slaMs) late++;
           }
-          if (o.status === "OUT_FOR_DELIVERY" && o.route_notify_status === "failed") clientFailed++;
+          if (
+            o.status === "OUT_FOR_DELIVERY" &&
+            (o.route_notify_status === "failed" ||
+              o.recipient_route_notify_status === "failed")
+          ) {
+            clientFailed++;
+          }
         }
         const inbox = renderInbox({
           refunds: actions.refunds,
@@ -709,6 +738,8 @@ ${
           const form = renderLivraisonForm(getCafeMenu().items, livraisonsBanner(undefined, msg), recents, {
             client_name: b.client_name,
             client_phone: b.client_phone,
+            recipient_name: b.recipient_name,
+            recipient_phone: b.recipient_phone,
             wix_contact_id: b.wix_contact_id,
             address: b.address,
             note: b.note,
@@ -727,6 +758,8 @@ ${
         if (!name) return backErr("le nom du client est obligatoire");
         if (!phone) return backErr("numéro de téléphone invalide");
         if (!address) return backErr("l'adresse de livraison est obligatoire");
+        const recipient = parseDeliveryRecipientFields(b);
+        if ("error" in recipient) return backErr(recipient.error);
         const deliveryMode = b.delivery_mode === "scheduled" ? "scheduled" : "now";
         const leadRaw = parseInt(String(b.kitchen_lead_minutes ?? "60"), 10);
         const kitchenLead = [30, 60, 90].includes(leadRaw) ? leadRaw : 60;
@@ -753,6 +786,8 @@ ${
           client_name: name,
           client_phone: phone,
           wix_contact_id: wixContactId,
+          recipient_name: recipient.recipientName,
+          recipient_phone: recipient.recipientPhone,
           address,
           note,
           items: priced.lines,
@@ -777,6 +812,9 @@ ${
               : "🛵 Nouvelle commande livraison",
           `${isTest ? "🧪 COMMANDE DE TEST — exclue des statistiques.\n" : ""}` +
             `Client : ${name} (+${phone})\n` +
+            (recipient.recipientName && recipient.recipientPhone
+              ? `Contact remise : ${recipient.recipientName} (+${recipient.recipientPhone}) — à appeler par le livreur\n`
+              : "") +
             `Commande : ${formatExtrasOneLine(priced.lines)}\n` +
             `Total : ${priced.totalXof} FCFA\n` +
             `Paiement : choix client en attente via Awa — départ bloqué\n` +
@@ -826,6 +864,55 @@ ${
             ? "created"
             : "created-kitchen-failed";
         return reply.redirect(`/admin/livraisons?done=${done}`, 303);
+      });
+
+      admin.post("/livraisons/:id/recipient", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const b = (req.body ?? {}) as Record<string, string>;
+        const recipient = parseDeliveryRecipientFields(b);
+        if ("error" in recipient) {
+          return reply.redirect(
+            `/admin/livraisons?err=${encodeURIComponent(recipient.error)}`,
+            303,
+          );
+        }
+        const result = await delivery.updateDeliveryRecipient(id, recipient);
+        if (!result) {
+          return reply.redirect(
+            `/admin/livraisons?err=${encodeURIComponent("contact non modifiable sur une commande clôturée")}`,
+            303,
+          );
+        }
+        if (result.changed) {
+          await refreshDeliveryTicketContact(result.order).catch((error) =>
+            req.log.error(
+              { err: error, order: id },
+              "Delivery recipient saved but kitchen ticket refresh failed",
+            ),
+          );
+          if (result.order.status === "IN_KITCHEN" && result.order.activated_at) {
+            await renotifyKitchen(result.order, req.log);
+          } else if (
+            result.order.status === "OUT_FOR_DELIVERY" &&
+            result.order.recipient_phone
+          ) {
+            await attemptRecipientRouteNotify(id, req.log);
+          }
+          req.log.info(
+            {
+              order: id,
+              by: req.adminUser,
+              recipientPhone: result.order.recipient_phone,
+            },
+            "Delivery recipient updated",
+          );
+        }
+        return reply.redirect(
+          result.order.recipient_phone
+            ? "/admin/livraisons?done=recipient"
+            : "/admin/livraisons?done=recipient-removed",
+          303,
+        );
       });
 
       admin.post("/livraisons/:id/reschedule", async (req, reply) => {
@@ -905,6 +992,9 @@ ${
           notifyReception(
             `${updated.is_test ? "🧪 TEST — " : ""}💵 Espèces choisies — livraison`,
               `Client : ${updated.client_name} (+${updated.client_phone})\n` +
+              (updated.recipient_name && updated.recipient_phone
+                ? `Contact remise : ${updated.recipient_name} (+${updated.recipient_phone})\n`
+                : "") +
               `Montant à encaisser : ${updated.amount_xof} FCFA\n` +
               (updated.activated_at
                 ? `Le départ est autorisé.`

@@ -34,6 +34,8 @@ const BANNERS: Record<string, string> = {
   renotified: "Cuisine renotifiée.",
   reprogrammed: "Livraison reprogrammée — le nouvel horaire est enregistré.",
   cash: "Paiement en espèces enregistré — le départ est autorisé.",
+  recipient: "Contact de remise mis à jour.",
+  "recipient-removed": "Contact de remise supprimé — la cliente redevient le contact à appeler.",
 };
 
 export function livraisonsBanner(done?: string, err?: string): string {
@@ -208,11 +210,44 @@ function clientFlag(o: DeliveryOrder): string {
   return "";
 }
 
+function recipientBlock(o: DeliveryOrder): string {
+  if (!o.recipient_name || !o.recipient_phone) {
+    return `<div class="muted" style="margin-top:.35rem">Remise à la cliente</div>`;
+  }
+  let notify = "";
+  if (o.status === "OUT_FOR_DELIVERY") {
+    const s = o.recipient_route_notify_status;
+    notify =
+      s === "sent" || s === "sent_template"
+        ? `<div class="ok">✓ contact prévenu</div>`
+        : s === "pending" || s === "claimed"
+          ? `<div class="muted">alerte contact en cours…</div>`
+          : `<div class="danger-text">Alerte contact échouée</div>`;
+  }
+  return `<div style="margin-top:.35rem"><b>Remise à ${esc(o.recipient_name)}</b><br><a href="https://wa.me/${esc(o.recipient_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.recipient_phone)}</a>${notify}</div>`;
+}
+
+function recipientEditor(o: DeliveryOrder): string {
+  return `<details style="margin-top:.4rem">
+<summary class="muted" style="cursor:pointer">Modifier le contact de remise</summary>
+<form method="post" action="/admin/livraisons/${esc(o.id)}/recipient" class="card col" style="margin-top:.45rem;min-width:16rem">
+  <label>Nom<input name="recipient_name" maxlength="120" value="${esc(o.recipient_name ?? "")}" placeholder="Ex. Fatou, assistante"></label>
+  <label>Téléphone<input name="recipient_phone" type="tel" inputmode="tel" value="${esc(o.recipient_phone ?? "")}" placeholder="77 123 45 67 ou +221…"></label>
+  <span class="muted">Videz les deux champs pour supprimer ce contact.</span>
+  <button class="act act--sm" type="submit">Enregistrer</button>
+</form>
+</details>`;
+}
+
+function clientCell(o: DeliveryOrder): string {
+  return `${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}<b>${esc(o.client_name)}</b><br><a href="https://wa.me/${esc(o.client_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}${recipientBlock(o)}${recipientEditor(o)}`;
+}
+
 function openRow(o: DeliveryOrder): string {
   const items = orderItems(o);
   return `<tr>
 <td data-label="Délai">${slaBadge(o)}</td>
-<td data-label="Client">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}<b>${esc(o.client_name)}</b><br><a href="https://wa.me/${esc(o.client_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
+<td data-label="Client">${clientCell(o)}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(items))}<details><summary class="muted">Voir le détail</summary><div style="white-space:pre-wrap">${esc(formatExtrasMultiline(items))}</div></details></td>
 <td data-label="Adresse" class="hide-sm">${esc(o.address)}</td>
 <td data-label="Paiement" class="nowrap">${paymentCell(o)}</td>
@@ -230,7 +265,7 @@ function scheduledRow(o: DeliveryOrder): string {
     : "—";
   return `<tr>
 <td data-label="Arrivée"><b>${esc(arrival)}</b><br><span class="badge badge--violet">${esc(o.scheduled_for ? arrivalCountdown(o.scheduled_for) : "")}</span></td>
-<td data-label="Client">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}<b>${esc(o.client_name)}</b><br><a href="https://wa.me/${esc(o.client_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
+<td data-label="Client">${clientCell(o)}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(orderItems(o)))}</td>
 <td data-label="Paiement" class="nowrap">${paymentCell(o)}</td>
 <td data-label="Cuisine" class="hide-sm"><span class="muted">${esc(kitchenAt)}</span></td>
@@ -246,7 +281,7 @@ function closedRow(o: DeliveryOrder): string {
   const state = o.status === "DELIVERED" ? "🛵 livrée" : "✖ annulée";
   return `<tr>
 <td data-label="État">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}${esc(state)}</td>
-<td data-label="Client">${esc(o.client_name)}</td>
+<td data-label="Client">${esc(o.client_name)}${o.recipient_name && o.recipient_phone ? `<br><span class="muted">Remise à ${esc(o.recipient_name)} (+${esc(o.recipient_phone)})</span>` : ""}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(orderItems(o)))}</td>
 <td data-label="Paiement" class="hide-sm">${paymentCell(o)}</td>
 <td data-label="Départ" class="hide-sm">${o.status === "DELIVERED" ? esc(prep) : "—"}</td>
@@ -313,6 +348,8 @@ function normalizeSearch(value: string): string {
 export interface LivraisonPrefill {
   client_name?: string;
   client_phone?: string;
+  recipient_name?: string;
+  recipient_phone?: string;
   wix_contact_id?: string;
   address?: string;
   note?: string;
@@ -410,6 +447,13 @@ ${optionSelect}</div>`;
     <label>Nom du client<input name="client_name" required value="${esc(prefill.client_name ?? "")}"></label>
     <label>Téléphone (WhatsApp)<input name="client_phone" type="tel" inputmode="tel" required placeholder="77 123 45 67 ou +221…" value="${esc(prefill.client_phone ?? "")}"></label>
     <label>Adresse de livraison<input name="address" required value="${esc(prefill.address ?? "")}"></label>
+    <fieldset class="card col" style="margin:0">
+      <legend><b>Contact à appeler pour la remise</b> <span class="muted">(optionnel)</span></legend>
+      <span class="muted">À remplir si une autre personne réceptionne la commande pour la cliente.</span>
+      <label>Nom du contact<input name="recipient_name" maxlength="120" placeholder="Ex. Fatou, assistante" value="${esc(prefill.recipient_name ?? "")}"></label>
+      <label>Téléphone du contact<input name="recipient_phone" type="tel" inputmode="tel" placeholder="77 123 45 67 ou +221…" value="${esc(prefill.recipient_phone ?? "")}"></label>
+      <span class="muted">Cette personne recevra uniquement l’alerte quand la commande partira.</span>
+    </fieldset>
     <label>Note <span class="muted">(optionnel)</span><input name="note" value="${esc(prefill.note ?? "")}"></label>
     <fieldset class="card col" style="margin:0">
       <legend><b>Moment de la livraison</b></legend>

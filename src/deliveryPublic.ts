@@ -8,6 +8,7 @@ import {
   orderItems,
   type DeliveryOrder,
 } from "./domain/deliveryRepo.js";
+import { deliveryCallContact } from "./domain/deliveryRules.js";
 
 /**
  * Public, no-auth page the kitchen opens from its WhatsApp ticket. ONE one-tap
@@ -55,6 +56,7 @@ h1{font-size:1.2rem;margin:0 0 .2rem}
 .muted{color:#6e7781;font-size:.9rem}
 .items{white-space:pre-wrap;background:#faf8f4;border:1px solid #eee;border-radius:10px;padding:.7rem;margin:.8rem 0;font-size:.95rem}
 .total{font-weight:600;margin:.3rem 0 1rem}
+a{color:#0969da;font-weight:650}
 button{width:100%;padding:1rem;font-size:1.15rem;font-weight:700;color:#fff;background:#1a7f37;border:none;border-radius:12px;cursor:pointer}
 button:active{background:#166f30}
 button.route{background:#1f6feb}
@@ -75,12 +77,13 @@ const notFound = () =>
 function orderCard(order: DeliveryOrder, token: string): string {
   const items = formatExtrasMultiline(orderItems(order));
   if (order.status === "IN_KITCHEN") {
+    const contact = deliveryCallContact(order);
     const mayDepart = deliveryMayDepart(order);
     const payment =
       order.payment_status === "PAID"
         ? `✅ Payé via ${esc(order.payment_method ?? "mobile money")} — ne rien encaisser.`
         : order.payment_status === "CASH_DUE"
-          ? `💵 ${esc(order.amount_xof)} FCFA en espèces à encaisser auprès du client.`
+          ? `💵 ${esc(order.amount_xof)} FCFA en espèces à encaisser auprès de ${esc(contact.name)}.`
           : order.payment_status === "REFUND_NEEDED"
             ? `⚠️ Incident de paiement — contacter la réception.`
             : order.payment_status === "AWAITING_PAYMENT"
@@ -90,11 +93,13 @@ function orderCard(order: DeliveryOrder, token: string): string {
       "Commande à préparer",
       `<h1>🛵 Commande livraison</h1>
 <p class="muted">${esc(order.client_name)} — ${esc(order.address)}</p>
+<p><b>${contact.isRecipient ? "Contact de remise" : "Contact à appeler"} : ${esc(contact.name)}</b><br>
+<a href="tel:+${esc(contact.phone)}">+${esc(contact.phone)}</a></p>
 <div class="items">${esc(items)}</div>
 <p class="total">Total : ${esc(order.amount_xof)} FCFA</p>
 <p class="${mayDepart ? "done" : "muted"}">${payment}</p>
 ${mayDepart
-  ? `<p class="muted">Touchez ci-dessous quand le livreur part — le client sera prévenu automatiquement.</p>
+  ? `<p class="muted">Touchez ci-dessous quand le livreur part — la cliente${contact.isRecipient ? " et le contact de remise seront prévenus" : " sera prévenue"} automatiquement.</p>
 <form method="post" action="/livraison/${esc(token)}"><button class="route" type="submit">🛵 Partie en livraison</button></form>`
   : `<p class="muted">Départ bloqué. Rechargez cette page après le choix espèces ou la confirmation du paiement.</p>`}`,
     );
@@ -104,7 +109,7 @@ ${mayDepart
     order.status === "CANCELLED"
       ? "Cette commande a été annulée."
       : order.status === "OUT_FOR_DELIVERY"
-        ? "🛵 Commande partie en livraison — le client est prévenu."
+        ? `🛵 Commande partie en livraison — la cliente${order.recipient_phone ? " et le contact de remise sont prévenus" : " est prévenue"}.`
         : "✅ Commande livrée.";
   return shell("Commande", `<h1>🛵 Commande livraison</h1><p class="done">${esc(msg)}</p>`);
 }

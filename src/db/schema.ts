@@ -728,6 +728,27 @@ alter table delivery_orders add column if not exists reschedule_notified_at time
 alter table delivery_orders add column if not exists reschedule_notify_attempts integer not null default 0;
 alter table delivery_orders add column if not exists reschedule_notify_wamid text;
 
+-- Contact opérationnel facultatif pour la remise. La cliente reste propriétaire
+-- de la commande et destinataire du parcours Awa/paiement ; ce contact reçoit
+-- uniquement l'alerte de départ et sert de numéro à appeler au livreur.
+alter table delivery_orders add column if not exists recipient_name text;
+alter table delivery_orders add column if not exists recipient_phone text;
+alter table delivery_orders add column if not exists recipient_route_notify_status text not null default 'sent';
+alter table delivery_orders add column if not exists recipient_route_notified_at timestamptz;
+alter table delivery_orders add column if not exists recipient_route_notify_attempts integer not null default 0;
+alter table delivery_orders add column if not exists recipient_route_notify_wamid text;
+alter table delivery_orders drop constraint if exists delivery_orders_recipient_pair_check;
+alter table delivery_orders add constraint delivery_orders_recipient_pair_check
+  check (
+    (recipient_name is null and recipient_phone is null)
+    or
+    (nullif(btrim(recipient_name), '') is not null
+      and nullif(btrim(recipient_phone), '') is not null)
+  );
+create index if not exists idx_delivery_orders_recipient_route_wamid
+  on delivery_orders (recipient_route_notify_wamid)
+  where recipient_route_notify_wamid is not null;
+
 alter table delivery_orders drop constraint if exists delivery_orders_schedule_pair_check;
 alter table delivery_orders add constraint delivery_orders_schedule_pair_check
   check (
