@@ -17,6 +17,7 @@ import {
   claimTableServe,
   serveTableTicket,
   cancelTableTicket,
+  ticketsForSession,
 } from "../domain/kitchenTicketRepo.js";
 import { onOpsEvent, opsEventsSince, latestOpsEventId, type OpsEvent } from "../domain/opsEvents.js";
 import { ACCUEIL_CHANNEL, CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
@@ -466,6 +467,15 @@ function registerServiceRoutes(app: FastifyInstance): void {
     return reply.type("application/json").send({ ok: true, session_id: session.id, id: ticket.id });
   });
 
+  // A table auto-clears once its LAST open ticket leaves (served or cancelled) —
+  // no manual "Libérer". Closing an already-empty session frees the spot back to
+  // "tap to order". Best-effort: a close hiccup never fails the serve/cancel.
+  const autoCloseIfEmpty = async (sessionId: string | null, by: string | null): Promise<void> => {
+    if (!sessionId) return;
+    const remaining = await ticketsForSession(sessionId);
+    if (remaining.length === 0) await closeSession(sessionId, by);
+  };
+
   app.post(`${SERVICE_BASE}/tickets/:id/take`, async (req, reply) => {
     const device = await requireAccueil(req, reply);
     if (!device) return reply;
@@ -477,6 +487,7 @@ function registerServiceRoutes(app: FastifyInstance): void {
     const device = await requireAccueil(req, reply);
     if (!device) return reply;
     const t = await serveTableTicket((req.params as any).id, device.label);
+    if (t) await autoCloseIfEmpty(t.session_id, device.label);
     return reply.type("application/json").send({ ok: !!t });
   });
 
@@ -485,6 +496,7 @@ function registerServiceRoutes(app: FastifyInstance): void {
     if (!device) return reply;
     const reason = typeof (req.body as any)?.reason === "string" ? (req.body as any).reason.slice(0, 200) : null;
     const t = await cancelTableTicket((req.params as any).id, reason);
+    if (t) await autoCloseIfEmpty(t.session_id, device.label);
     return reply.type("application/json").send({ ok: !!t });
   });
 

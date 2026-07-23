@@ -254,7 +254,7 @@ describe("service PWA over HTTP", () => {
     expect((await app.inject({ method: "GET", url: "/ops/service/events" })).statusCode).toBe(401);
   });
 
-  it("full flow: tap free spot → order (opens session) → take → serve → free", async () => {
+  it("full flow: tap free spot → order → serve → table auto-clears", async () => {
     const cookie = await pairAccueil();
 
     // Ordering at a free spot opens its session and creates the ticket in one call.
@@ -275,18 +275,39 @@ describe("service PWA over HTTP", () => {
       payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-http-2" },
     });
     expect(JSON.parse(more.body).session_id).toBe(sessionId);
+    const ticket2 = JSON.parse(more.body).id;
 
-    // Free is refused while tickets are open.
-    const blocked = await app.inject({ method: "POST", url: `/ops/service/sessions/${sessionId}/close`, headers: { cookie } });
-    expect(JSON.parse(blocked.body)).toEqual({ ok: false, reason: "open_tickets" });
+    // Serving the FIRST of two does NOT clear the table (one still open).
+    await advanceTicketByCuisine(ticketId, "READY", "iPad Cuisine");
+    await app.inject({ method: "POST", url: `/ops/service/tickets/${ticketId}/served`, headers: { cookie } });
+    expect(await getOpenSessionBySpot(canapeSpot)).not.toBeNull();
 
-    // Serve both, then free the spot.
-    for (const id of [ticketId, JSON.parse(more.body).id]) {
-      await advanceTicketByCuisine(id, "READY", "iPad Cuisine");
-      await app.inject({ method: "POST", url: `/ops/service/tickets/${id}/served`, headers: { cookie } });
-    }
-    const freed = await app.inject({ method: "POST", url: `/ops/service/sessions/${sessionId}/close`, headers: { cookie } });
-    expect(JSON.parse(freed.body).ok).toBe(true);
+    // Serving the LAST one auto-clears the table (no manual "Libérer").
+    await advanceTicketByCuisine(ticket2, "READY", "iPad Cuisine");
+    await app.inject({ method: "POST", url: `/ops/service/tickets/${ticket2}/served`, headers: { cookie } });
+    expect(await getOpenSessionBySpot(canapeSpot)).toBeNull();
+  });
+
+  it("cancelling the last open ticket also auto-clears the table", async () => {
+    const cookie = await pairAccueil();
+    const ordered = await app.inject({
+      method: "POST", url: `/ops/service/spots/${terrasseSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-cancel-1" },
+    });
+    const id = JSON.parse(ordered.body).id;
+    expect(await getOpenSessionBySpot(terrasseSpot)).not.toBeNull();
+    await app.inject({ method: "POST", url: `/ops/service/tickets/${id}/cancel`, headers: { cookie }, payload: { reason: "annulée" } });
+    expect(await getOpenSessionBySpot(terrasseSpot)).toBeNull();
+  });
+
+  it("a rejected order never opens a table (validate before seating)", async () => {
+    const cookie = await pairAccueil();
+    const bad = await app.inject({
+      method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "NOPE_UNKNOWN", qty: 1 }], client_request_id: "req-bad-1" },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(await getOpenSessionBySpot(canapeSpot)).toBeNull();
   });
 
   it("rejects spot/ticket actions without a device cookie", async () => {

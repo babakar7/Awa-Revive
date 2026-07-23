@@ -17,7 +17,7 @@ import type { FastifyReply } from "fastify";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v4";
+const ASSET_VERSION = "v5";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -274,16 +274,14 @@ export const SERVICE_APP_JS = String.raw`(function(){
     var c=el('div','spot '+(s?'occupied':'free')+(anyReady?' ready':'')); c.dataset.spot=sp.id; if(s)c.dataset.session=s.id;
     var h=el('div','sh'); h.appendChild(el('span','nm',sp.label)); var cap=capLabel(sp); if(cap)h.appendChild(el('span','cap',cap)); c.appendChild(h);
     if(!s){
-      c.appendChild(el('div','freehint','Libre · touchez pour prendre la commande'));
+      c.appendChild(el('div','freehint','Toucher pour prendre la commande'));
       c.onclick=function(){ openOrder(sp,null); };
       return c;
     }
     if(s.first_name) c.appendChild(el('div','who','👤 '+s.first_name));
     tks.forEach(function(t){ c.appendChild(ticketCard(t)); });
-    if(!tks.length) c.appendChild(el('div','who','Occupé — aucune commande en cours'));
     var sa=el('div','sacts');
-    var add=el('button','sec add','＋ Commande'); add.onclick=function(){ openOrder(sp,s); }; sa.appendChild(add);
-    var close=el('button','sec','Libérer'); close.onclick=function(){ freeSpot(s,close); }; sa.appendChild(close);
+    var add=el('button','sec add','＋ Ajouter une commande'); add.onclick=function(){ openOrder(sp,s); }; sa.appendChild(add);
     c.appendChild(sa);
     return c;
   }
@@ -303,14 +301,6 @@ export const SERVICE_APP_JS = String.raw`(function(){
     SPOTS.forEach(function(sp){ board.appendChild(spotTile(sp)); });
     var occ=0; SPOTS.forEach(function(sp){ if(sessionForSpot(sp.id)) occ++; });
     countEl.textContent=occ? occ+'/'+SPOTS.length+' occupé'+(occ>1?'s':'') : '';
-  }
-
-  function freeSpot(s,btn){
-    btn.disabled=true;
-    post('/sessions/'+s.id+'/close',{}).then(function(r){return r.json().catch(function(){return {};});}).then(function(j){
-      if(j&&j.ok){ /* removed via SSE */ }
-      else { btn.disabled=false; alert(j&&j.reason==='open_tickets'?'Servez ou annulez d\'abord les commandes en cours.':'Impossible de libérer.'); }
-    }).catch(function(){ btn.disabled=false; });
   }
 
   // ---- order composer ----
