@@ -26,6 +26,13 @@ import {
   type DeliveryOrderView,
 } from "./deliveryRules.js";
 import {
+  reconcileDeliveryTickets,
+  dueFallbackTicketIds,
+  claimTicketFallback,
+  unlockedPendingKitchenOrderIds,
+} from "./kitchenTicketRepo.js";
+import { parseInternalNotifyMode } from "./kitchenTicketRules.js";
+import {
   activateDueScheduledDeliveries,
   claimActivationNotify,
   claimCreatedNotify,
@@ -435,6 +442,41 @@ async function attemptKitchenNotify(id: string, log: Log): Promise<void> {
   await notifyKitchenForOrder(claimed.order, claimed.token, log);
 }
 
+/** The active internal-notify policy (parallel = pilot, fallback = post-pilot). */
+export function internalNotifyMode() {
+  return parseInternalNotifyMode(config.INTERNAL_NOTIFY_MODE);
+}
+
+/**
+ * In FALLBACK mode, the WhatsApp kitchen ticket is the SAFETY NET behind the
+ * iPad: arm a one-shot timer (grace = OPS_KITCHEN_FALLBACK_SECONDS) that, if the
+ * iPad never acked the ticket, claims the fallback and sends the legacy WhatsApp.
+ * unref()'d so it never holds the process open; the 60s sweep is the durable
+ * backstop if the timer is lost to a restart. No-op in parallel mode (the create
+ * route already sent the WhatsApp immediately).
+ */
+export function scheduleKitchenFallback(
+  orderId: string,
+  ticketId: string,
+  graceSeconds: number,
+  log: Log,
+): void {
+  const timer = setTimeout(
+    () => {
+      void (async () => {
+        try {
+          const claim = await claimTicketFallback(ticketId);
+          if (claim) await attemptKitchenNotify(orderId, log);
+        } catch (err) {
+          log.error({ err, order: orderId }, "Kitchen WhatsApp fallback timer failed");
+        }
+      })();
+    },
+    Math.max(0, graceSeconds) * 1000,
+  );
+  timer.unref();
+}
+
 /**
  * 60s sweep: reconcile the durable deliveries (a crash between commit and send
  * doesn't lose them), then fire one-shot SLA alerts to reception. Returns how
@@ -443,11 +485,39 @@ async function attemptKitchenNotify(id: string, log: Log): Promise<void> {
 export async function sweepDeliveries(log: Log): Promise<number> {
   // 0. Durable activation gate. Concurrent sweeps return disjoint rows.
   await activateDueScheduledDeliveries();
-  // 1. Kitchen notifications still pending/failed (including newly activated).
-  for (const id of await pendingKitchenNotifies()) {
-    await attemptKitchenNotify(id, log).catch((err) =>
-      log.error({ err, order: id }, "Delivery kitchen retry failed"),
-    );
+  // 0b. Project delivery_orders onto kitchen tickets (create at activation,
+  // complete/cancel when the source order leaves the kitchen). Idempotent
+  // backstop for the iPad board; also heals a crash between activation and
+  // ticket insert. Own try/catch so a ticket hiccup never blocks notifications.
+  try {
+    await reconcileDeliveryTickets(config.OPS_KITCHEN_FALLBACK_SECONDS);
+  } catch (err) {
+    log.error({ err }, "Kitchen-ticket reconcile failed");
+  }
+  // 1. Kitchen WhatsApp. Two policies:
+  //  - parallel (pilot): every pending/failed order gets the WhatsApp ticket,
+  //    immediately and on retry — the current behaviour, unchanged.
+  //  - fallback (post-pilot): the WhatsApp is the safety net behind the iPad.
+  //    First claim any ticket whose grace window lapsed with no iPad ack (the
+  //    durable backstop for a lost in-process timer), then send ONLY for those
+  //    now-unlocked orders. An acked ticket is never claimed → never WhatsApp'd.
+  if (internalNotifyMode() === "parallel") {
+    for (const id of await pendingKitchenNotifies()) {
+      await attemptKitchenNotify(id, log).catch((err) =>
+        log.error({ err, order: id }, "Delivery kitchen retry failed"),
+      );
+    }
+  } else {
+    for (const ticketId of await dueFallbackTicketIds()) {
+      await claimTicketFallback(ticketId).catch((err) =>
+        log.error({ err, ticket: ticketId }, "Kitchen fallback claim failed"),
+      );
+    }
+    for (const id of await unlockedPendingKitchenOrderIds()) {
+      await attemptKitchenNotify(id, log).catch((err) =>
+        log.error({ err, order: id }, "Delivery kitchen fallback send failed"),
+      );
+    }
   }
   // 2. Reception reminders for newly activated scheduled orders.
   for (const id of await pendingActivationNotifies()) {

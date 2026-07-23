@@ -1188,4 +1188,98 @@ select j.id, b.client_id, b.id, 'technical_failure', b.payment_method,
   join booking_funnel_journeys j on j.backfill_key = 'booking:' || b.id::text
  where b.status in ('REFUND_NEEDED','REFUNDED')
 on conflict (idempotency_key) do nothing;
+
+-- ═══ Opérations temps réel : tickets cuisine + appareils PWA (Phase 1 iPad) ═══
+-- Couche cuisine-facing UNIFIÉE (aujourd'hui alimentée par les livraisons ;
+-- les commandes salle « TABLE » viendront en Phase 2). Un ticket = ce que la
+-- cuisine voit et fait avancer NEW → PREPARING → READY → COMPLETED, sans jamais
+-- décider du cycle client/paiement (ça reste sur delivery_orders). Le ticket
+-- naît à l'ACTIVATION de la livraison (immédiate pour une commande « maintenant »,
+-- différée pour une programmée) : la cuisine ne voit jamais une commande future.
+create table if not exists kitchen_tickets (
+  id uuid primary key default gen_random_uuid(),
+  source text not null check (source in ('DELIVERY','TABLE')),
+  -- Lien vers la commande source. Pour une livraison : delivery_order_id (unique
+  -- → un seul ticket par commande, idempotence de la création/réconciliation).
+  delivery_order_id uuid references delivery_orders(id) on delete cascade,
+  -- Idempotence des créations issues d'un appareil (Phase 2 salle) : un rejeu de
+  -- requête (double-tap, reconnexion) retourne le ticket existant.
+  client_request_id text,
+  -- Snapshot figé des articles (shape ExtraLine[] + note par ligne éventuelle) et
+  -- note générale : le ticket reste lisible même si la commande change ensuite.
+  items_json jsonb not null,
+  note text,
+  amount_xof integer not null check (amount_xof >= 0),
+  -- Rendu figé pour la carte iPad, sans jointure : livraison → nom client / adresse ;
+  -- salle (Phase 2) → code table / espace + prénom.
+  heading text not null default '',
+  subheading text,
+  status text not null default 'NEW'
+    check (status in ('NEW','PREPARING','READY','COMPLETED','CANCELLED')),
+  -- Prise en charge côté cuisine (réassignable). Champs orthogonaux au statut.
+  claimed_by text,
+  claimed_at timestamptz,
+  cancel_reason text,
+  is_test boolean not null default false,
+  -- Accusé d'affichage iPad : posé au premier ACK de l'appareil (sous ~15 s en
+  -- régime normal). NULL passé fallback_due_at ⇒ « cuisine hors ligne ».
+  ipad_ack_at timestamptz,
+  -- Filet WhatsApp : échéance d'envoi du ticket cuisine legacy si pas d'ACK iPad.
+  -- fallback_claimed_at = claim atomique (un seul envoi entre timer et sweep).
+  fallback_due_at timestamptz,
+  fallback_claimed_at timestamptz,
+  ready_at timestamptz,
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists idx_kitchen_tickets_delivery
+  on kitchen_tickets (delivery_order_id) where delivery_order_id is not null;
+create unique index if not exists idx_kitchen_tickets_client_request
+  on kitchen_tickets (client_request_id) where client_request_id is not null;
+-- File cuisine : tickets ouverts triés par ancienneté (mélange TABLE/DELIVERY).
+create index if not exists idx_kitchen_tickets_open
+  on kitchen_tickets (created_at)
+  where status in ('NEW','PREPARING','READY');
+-- Sweep fallback : tickets non accusés dont l'échéance est due.
+create index if not exists idx_kitchen_tickets_fallback_due
+  on kitchen_tickets (fallback_due_at)
+  where ipad_ack_at is null and fallback_claimed_at is null and fallback_due_at is not null;
+
+-- Appareils appairés (iPad cuisine, téléphones accueil, propriétaire). Le token
+-- de session n'est JAMAIS stocké en clair : seul son sha256. Révocation = poser
+-- revoked_at (les sessions serveur sont donc réellement invalidables, contrairement
+-- au cookie admin HMAC stateless). Le pairing se fait via un code court éphémère
+-- (haché lui aussi) généré depuis l'admin.
+create table if not exists ops_devices (
+  id uuid primary key default gen_random_uuid(),
+  label text not null,
+  role text not null check (role in ('cuisine','accueil','owner')),
+  -- Code de pairing : sha256 du code court affiché à l'admin, à usage unique et
+  -- à durée limitée. Effacé (null) une fois l'appareil appairé.
+  pair_code_hash text,
+  pair_expires_at timestamptz,
+  -- Session de l'appareil appairé : sha256 du token porté par le cookie device.
+  session_token_hash text,
+  paired_at timestamptz,
+  revoked_at timestamptz,
+  last_seen_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_ops_devices_session
+  on ops_devices (session_token_hash) where session_token_hash is not null;
+create unique index if not exists idx_ops_devices_paircode
+  on ops_devices (pair_code_hash) where pair_code_hash is not null;
+
+-- Journal d'événements temps réel : source de vérité pour le fan-out SSE ET le
+-- rattrapage à la reconnexion (l'appareil renvoie le dernier id vu → on rejoue
+-- les événements manquants). bigserial = curseur monotone simple pour Last-Event-ID.
+create table if not exists ops_events (
+  id bigserial primary key,
+  channel text not null,            -- 'cuisine' (Phase 1) ; 'accueil' viendra
+  kind text not null,               -- 'ticket_new' | 'ticket_update' | 'ticket_removed' | 'ping'
+  payload_json jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_ops_events_channel on ops_events (channel, id);
 `;

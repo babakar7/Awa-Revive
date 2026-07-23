@@ -5,6 +5,8 @@ import { registerOrangeMoneyWebhook } from "./webhooks/orangeMoney.js";
 import { registerAdmin } from "./admin/routes.js";
 import { registerDeliveryPublic } from "./deliveryPublic.js";
 import { MENU_HOST, registerMenuPublic, serveMenuPage } from "./menuPublic.js";
+import { registerOps, serveCuisineRoot } from "./ops/opsRoutes.js";
+import { config } from "./config.js";
 import { pool } from "./db/index.js";
 
 const HEALTHCHECK_TIMEOUT_MS = 2_000;
@@ -68,10 +70,12 @@ export function buildServer() {
   // /admin/login if no session). Webhooks/payment/magic-link paths are
   // explicit, so this only affects a bare "/" hit. trustProxy is on, so
   // req.hostname honors X-Forwarded-Host from Railway's edge (port stripped).
-  app.get("/", async (req, reply) =>
-    req.hostname?.toLowerCase() === MENU_HOST
-      ? serveMenuPage(reply)
-      : reply.redirect("/admin", 302));
+  app.get("/", async (req, reply) => {
+    const host = req.hostname?.toLowerCase();
+    if (host === MENU_HOST) return serveMenuPage(reply);
+    if (host === config.CUISINE_HOST.toLowerCase()) return serveCuisineRoot(req, reply);
+    return reply.redirect("/admin", 302);
+  });
 
   registerWhatsAppWebhook(app);
   registerWaveWebhook(app);
@@ -81,6 +85,8 @@ export function buildServer() {
   registerDeliveryPublic(app);
   // Public café-menu page (menu.revive.sn, stable path /menu — outside /admin).
   registerMenuPublic(app);
+  // Realtime ops PWA (cuisine.revive.sn — the kitchen iPad, Phase 1).
+  registerOps(app);
 
   // Minimal "return to WhatsApp" pages for Wave success/error redirects (SPEC §4.3).
   // wa.me link is bare (no ?text= prefill): Awa never confirms a booking from

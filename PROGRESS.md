@@ -2,7 +2,7 @@
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
 > Dernière mise à jour : **23 juillet 2026** — contact de remise des
-> livraisons et alertes dédiées (§6.28). Avant : livraisons programmées
+> livraisons et alertes dédiées (§6.29). Avant : livraisons programmées
 > avec activation durable (§6.27), fiabilisation des alertes
 > livraison + mode commande de test (§6.26), refonte premium et UX de
 > tout l’admin (§4.41), notifications staff, livraisons bar, handoffs `wa.me`.
@@ -2969,7 +2969,76 @@ l'arrivée promise au client en heure de Dakar et l'alerte cuisine est réglable
   reprogrammation, les gardes SQL, l'annulation payée/remboursement et la
   régression complète des livraisons immédiates.
 
-### 6.28 Contact de remise d’une livraison + alertes dédiées (23/07/2026)
+### 6.28 Système temps réel salle + livraisons — Phase 1 : iPad cuisine (23/07/2026)
+
+Début du chantier « écrans temps réel » (cf. plan validé) : une PWA cuisine
+(`cuisine.revive.sn`) affiche les tickets en direct et laisse la cuisine
+avancer **Nouveau → En préparation → Prête**, avec WhatsApp interne conservé en
+**filet de sécurité**. Branche `feat/ops-cuisine-pwa` — **PAS encore en prod**
+(voir « Pour mettre en service » plus bas). Trois commits cohérents :
+
+- **Couche projection (`kitchen_tickets`)** : nouvelle table cuisine-facing
+  alimentée par `delivery_orders`. Un ticket **naît à l'activation** de la
+  livraison (immédiate ou programmée) — l'iPad ne voit jamais une commande
+  future. Machine pure `NEW → PREPARING → READY → COMPLETED/CANCELLED` :
+  la cuisine ne peut jamais atteindre COMPLETED/CANCELLED (pilotés par la
+  commande source). `COMPLETED` quand la livraison quitte la cuisine (départ /
+  livrée), `CANCELLED` si annulée. Transitions atomiques `UPDATE … WHERE status`
+  (double-tap idempotent). Réconciliation idempotente dans le sweep 60 s
+  (backstop qui répare un crash entre activation et insert). Journal durable
+  `ops_events` = source de vérité du fan-out SSE **et** du rattrapage.
+  ([kitchenTicketRules.ts](src/domain/kitchenTicketRules.ts),
+  [kitchenTicketRepo.ts](src/domain/kitchenTicketRepo.ts),
+  [opsEvents.ts](src/domain/opsEvents.ts))
+- **Interface PWA** : dispatch host `cuisine.revive.sn` (même service Railway,
+  comme `menu.revive.sn`), assets servis en dur (manifest, service worker qui ne
+  cache QUE le shell — jamais une mutation ni le flux SSE, icônes canvas),
+  **sessions d'appareils serveur RÉVOCABLES** (seuls les hachés sont stockés,
+  pairing par code court à usage unique, isolation de rôle cuisine/accueil/owner
+  — contrairement au cookie admin HMAC stateless). Kiosque construit côté client
+  depuis un modèle SSE (DOM via `textContent`, données jamais en `innerHTML`),
+  badges source 🛵 Livraison / 🪑 Salle, tri par ancienneté, son WebAudio, ACK
+  d'affichage, CSP dédiée. SSE avec rattrapage `Last-Event-ID`/`?since` et drain
+  propre au SIGTERM. ([src/ops/](src/ops/),
+  [opsDeviceRepo.ts](src/domain/opsDeviceRepo.ts))
+- **Filet WhatsApp `INTERNAL_NOTIFY_MODE`** :
+  - `parallel` (**défaut, pilote**) : le ticket WhatsApp part systématiquement,
+    en plus de l'iPad — comportement existant inchangé, pour comparer.
+  - `fallback` (post-pilote) : l'iPad est primaire ; un timer one-shot 15 s
+    (`OPS_KITCHEN_FALLBACK_SECONDS`) envoie le WhatsApp **seulement** si l'iPad
+    n'a pas accusé réception. Claim atomique (`fallback_claimed_at`) → un seul
+    envoi même si le timer et le sweep 60 s se croisent ; le sweep est le
+    backstop durable si le process redémarre. Un ACK iPad marque la commande
+    « cuisine notifiée » (jamais de WhatsApp, tableau de bord honnête).
+- **Supervision admin `/admin/appareils`** : génération de code d'appairage
+  (affiché une seule fois, stocké haché), état de connexion (appairé / en ligne
+  / révoqué), révocation durable, et un bouton **« test »** qui pousse un
+  événement SSE jusqu'à l'iPad de bout en bout.
+- **Décisions de conception** (à connaître avant de continuer) :
+  - Le ticket est une **projection** de `delivery_orders`, pas une seconde
+    vérité : `delivery_orders.status` reste la machine client/paiement,
+    `kitchen_tickets.status` l'état ops ; la réconciliation les aligne.
+  - Livraisons en **2 acteurs** (décision Babakar) : la cuisine s'arrête à
+    « Prête », l'accueil gère le départ. La PWA accueil (tables, « Je prends »,
+    départ, push) est la **Phase 2** ; en Phase 1 le départ passe encore par le
+    lien magique / le board admin existants (gate paiement inchangé).
+  - **Mono-instance** : fan-out SSE en mémoire → valide à 1 replica Railway
+    seulement (comme le reste). Scaler exigera un pub/sub Postgres.
+  - Note par ligne d'article et modèle « salle » (espaces Canapé/Terrasse/
+    Pergola, sessions, schémas) : **Phase 2**, non implémentés ici.
+- **Pour mettre en service** (checklist, rien de tout ça n'est fait) : pointer
+  le DNS `cuisine.revive.sn` sur le service Railway ; installer la PWA sur
+  l'écran d'accueil de l'iPad (iPadOS ≥ 16.4, notifications par geste) ;
+  générer un code dans `/admin/appareils` et appairer l'iPad ; garder
+  `INTERNAL_NOTIFY_MODE=parallel` pendant le pilote de 7 jours puis basculer en
+  `fallback`. Web Push (arrière-plan) et la PWA accueil arriveront en Phase 2.
+- Validation : `npm run build` + **610 tests unitaires** verts ; **145 tests
+  d'intégration** verts, dont 18 nouveaux (cycle de vie ticket, ACK/claim
+  fallback, réconciliation create/complete/cancel, pairing/révocation, et le
+  flux HTTP complet pairing → kiosque → autorisation des actions). Aucune
+  régression des 34 scénarios livraison.
+
+### 6.29 Contact de remise d’une livraison + alertes dédiées (23/07/2026)
 
 Une livraison peut maintenant préciser un contact différent de la cliente
 (assistante, gardien, proche…) qui récupère la commande auprès du livreur et la
@@ -2980,10 +3049,10 @@ remet à la destinataire finale.
   les deux champs dans le parcours courant et ne les révèle que si une autre
   personne récupère la commande. Le contact reste modifiable tant que la
   livraison est ouverte.
-- Le contact de remise apparaît dans le board admin, le ticket WhatsApp cuisine
-  et la page publique du livreur. Avant le départ, une modification renotifie
-  la cuisine ; après le départ, elle déclenche directement la nouvelle alerte
-  au contact.
+- Le contact de remise apparaît dans le board admin, le ticket cuisine et la
+  page publique du livreur. Avant le départ, une modification rafraîchit aussi
+  la projection iPad et renotifie la cuisine ; après le départ, elle déclenche
+  directement la nouvelle alerte au contact.
 - À l’étape **Partie en livraison**, le contact reçoit sa propre alerte
   WhatsApp avec l’adresse, le montant à encaisser si le paiement est en espèces,
   ou la mention « déjà réglée ». La cliente conserve séparément toutes les
@@ -2992,9 +3061,52 @@ remet à la destinataire finale.
   motif d’échec) : un rejet asynchrone Meta redevient retentable par le sweep.
   Les échecs remontent dans le board livraison, la file admin et les badges de
   navigation au lieu de rester silencieux.
-- Validation avant déploiement : build TypeScript, **592 tests unitaires** et
+- Validation avant déploiement : build TypeScript, **612 tests unitaires** et
   **40 scénarios d’intégration livraison** verts, dont cash/déjà payé,
   modification avant/après départ, retry asynchrone et garde de statut.
+- Déployé sur `main` via `38f6c86`, sans embarquer la PWA cuisine encore en
+  attente. La variante de cette branche conserve en plus la synchronisation de
+  la projection iPad pour son futur déploiement séparé.
+
+### 6.30 Refonte UX du parcours Livraison (23/07/2026)
+
+Le parcours Livraison est désormais organisé autour de la prochaine action,
+sans changer les statuts, transitions SQL, paiements ni notifications :
+
+- Le board actif abandonne la table dense au profit de cartes adaptatives,
+  réparties dans l’ordre **Intervention requise**, **En préparation**,
+  **Prêtes à partir**, **En route**, puis **Programmées**. Une fonction pure
+  dérive le groupe, l’urgence, le motif de blocage et l’unique action principale
+  de chaque commande ; les retards et échéances proches remontent en premier.
+  Le départ n’est proposé dans le board que lorsque la cuisine est `READY`, le
+  paiement autorisé et la commande activée. L’historique reste replié.
+- La lecture des commandes ouvertes joint la projection `kitchen_tickets`
+  (`kitchen_ticket_status`, `kitchen_ready_at`) sans migration. Les incidents
+  de paiement, remboursement, notification et ticket cuisine sont explicités
+  directement sur la carte ; contact, adresse, échéance et total restent
+  visibles, tandis que le détail du panier et les actions rares sont repliés.
+- Le rechargement complet à 60 s est remplacé par un fragment HTML authentifié
+  (`GET /admin/livraisons/fragment`) actualisé toutes les 30 s. L’actualisation
+  se suspend dès qu’un détail ou formulaire est ouvert, affiche sa dernière
+  heure de succès et peut être relancée manuellement. Le SSR et tous les POST
+  restent pleinement utilisables sans JavaScript.
+- La création est une page guidée en trois panneaux : **Client et destination**,
+  **Articles**, **Livraison et confirmation**. Clients récents et recherche Wix
+  partagent le même sélecteur, avec fiche choisie et saisie manuelle de secours.
+  Un récapitulatif sticky expose quantité, options manquantes, total, moment et
+  destinataire. Les erreurs serveur sont rendues au champ concerné, le premier
+  champ invalide reçoit le focus et toutes les valeurs soumises sont restaurées.
+  SLA et mode test sont rangés dans les réglages avancés.
+- La page publique cuisine/livreur présente successivement contact, paiement et
+  commande, donne le motif exact d’un départ bloqué et offre un rafraîchissement
+  explicite. Le départ passe par la confirmation « Confirmer le départ » avec
+  rappel de la notification client. Le GET reste sans effet, le POST idempotent,
+  les liens expirent toujours à 48 h et les états terminaux n’exposent aucune
+  donnée personnelle.
+- Validation : rendu Chrome à **390 px** et ordinateur (aucun débordement
+  horizontal à 390 px, contrôles Livraison ≥ 44 px, focus visible), build
+  TypeScript, **618 tests unitaires** verts et **41 scénarios d’intégration
+  livraison** verts.
 
 ## 7. Runbook ops
 

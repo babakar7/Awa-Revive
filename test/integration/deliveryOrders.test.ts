@@ -132,7 +132,7 @@ describe("delivery order creation → kitchen notify", () => {
     void id;
   });
 
-  it("stores and normalizes an optional handoff contact on the order and kitchen alert", async () => {
+  it("stores and normalizes an optional handoff contact on the order and kitchen ticket", async () => {
     await seedKitchenContact();
     const id = await createOrder({
       recipient_name: "Fatou Assistante",
@@ -146,6 +146,11 @@ describe("delivery order creation → kitchen notify", () => {
     expect(mock.waTextsTo("221770000099").join("\n")).toContain(
       "Contact remise : Fatou Assistante (+221780001122)",
     );
+    const ticket = (
+      await pool.query(`select subheading from kitchen_tickets where delivery_order_id=$1`, [id])
+    ).rows[0];
+    expect(ticket.subheading).toContain("Remise à Fatou Assistante (+221780001122)");
+
     const board = await app.inject({
       method: "GET",
       url: "/admin/livraisons",
@@ -201,7 +206,7 @@ describe("delivery order creation → kitchen notify", () => {
     expect((await pool.query(`select count(*)::int as n from delivery_orders`)).rows[0].n).toBe(0);
   });
 
-  it("removes a handoff contact from an open order and refreshes the kitchen alert", async () => {
+  it("removes a handoff contact from an open order and refreshes the iPad projection", async () => {
     await seedKitchenContact();
     const id = await createOrder({
       recipient_name: "Fatou Assistante",
@@ -219,9 +224,10 @@ describe("delivery order creation → kitchen notify", () => {
     expect(order.recipient_name).toBeNull();
     expect(order.recipient_phone).toBeNull();
     expect(order.recipient_route_notify_status).toBe("sent");
-    const latestKitchenAlert = mock.waTextsTo("221770000099").at(-1) ?? "";
-    expect(latestKitchenAlert).toContain("Client : Rama (+221770009988)");
-    expect(latestKitchenAlert).not.toContain("Contact remise");
+    const ticket = (
+      await pool.query(`select subheading from kitchen_tickets where delivery_order_id=$1`, [id])
+    ).rows[0];
+    expect(ticket.subheading).toContain("Appeler Rama (+221770009988)");
   });
 
   it("with no reachable bar contact (none, or empty phone), falls back to reception", async () => {
@@ -845,6 +851,42 @@ describe("delivery payment handover to Awa", () => {
   });
 });
 
+describe("delivery board progressive refresh", () => {
+  it("protects the fragment and keeps the complete board usable without full-page refresh", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+
+    const unauthorized = await app.inject({
+      method: "GET",
+      url: "/admin/livraisons/fragment",
+      headers: { accept: "text/html" },
+    });
+    expect(unauthorized.statusCode).not.toBe(200);
+
+    const fragment = await app.inject({
+      method: "GET",
+      url: "/admin/livraisons/fragment",
+      headers: { authorization: AUTH, accept: "text/html" },
+    });
+    expect(fragment.statusCode).toBe(200);
+    expect(fragment.headers["cache-control"]).toContain("no-store");
+    expect(fragment.body).toContain('id="delivery-board-fragment"');
+    expect(fragment.body).toContain(`data-order-id="${id}"`);
+    expect(fragment.body).not.toContain("<html");
+
+    const page = await app.inject({
+      method: "GET",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH },
+    });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain("var interval=30000");
+    expect(page.body).toContain("details[open]");
+    expect(page.body).toContain("Mise à jour suspendue");
+    expect(page.body).not.toContain('http-equiv="refresh"');
+  });
+});
+
 describe("magic link", () => {
   it("GET is read-only (prefetch-safe) and POST marks departure + pings the client once", async () => {
     await seedKitchenContact();
@@ -855,7 +897,8 @@ describe("magic link", () => {
     // GET must NOT mutate (WhatsApp prefetches links for previews).
     const get = await app.inject({ method: "GET", url: link });
     expect(get.statusCode).toBe(200);
-    expect(get.body).toContain("Partie en livraison");
+    expect(get.body).toContain("Confirmer le départ");
+    expect(get.body).toContain("sera prévenue immédiatement");
     expect((await pool.query(`select status from delivery_orders where id=$1`, [id])).rows[0].status).toBe("IN_KITCHEN");
 
     // POST marks the single departure step.

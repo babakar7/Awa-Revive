@@ -5,6 +5,7 @@ import {
   newReadyToken,
   type DeliveryStatus,
 } from "./deliveryRules.js";
+import type { KitchenTicketStatus } from "./kitchenTicketRules.js";
 
 /**
  * SQL + claim primitives for delivery orders. All state changes are atomic
@@ -93,6 +94,14 @@ export interface DeliveryOrder {
   created_at: Date;
   updated_at: Date;
 }
+
+/** Open-order read model used by the reception board. The kitchen ticket is a
+ * projection, so both fields may legitimately be null while reconciliation is
+ * catching up (the presentation layer surfaces that case as an intervention). */
+export type OpenDeliveryOrder = DeliveryOrder & {
+  kitchen_ticket_status: KitchenTicketStatus | null;
+  kitchen_ready_at: Date | null;
+};
 
 /** Convenience: the frozen items snapshot as ExtraLine[]. */
 export function orderItems(o: DeliveryOrder): ExtraLine[] {
@@ -1025,24 +1034,33 @@ export async function claimDeliverySlaAlerts(): Promise<DeliveryOrder[]> {
 
 // ---------- admin board reads ----------
 
-export async function listOpenDeliveryOrders(): Promise<DeliveryOrder[]> {
+export async function listOpenDeliveryOrders(): Promise<OpenDeliveryOrder[]> {
   const res = await pool.query(
-    `select * from delivery_orders
-      where status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+    `select d.*, kt.status as kitchen_ticket_status, kt.ready_at as kitchen_ready_at
+       from delivery_orders d
+       left join kitchen_tickets kt on kt.delivery_order_id = d.id
+      where d.status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
       order by
-        case when scheduled_for is not null and activated_at is null then 0 else 1 end,
-        coalesce(scheduled_for, activated_at, created_at) asc`,
+        case when d.scheduled_for is not null and d.activated_at is null then 0 else 1 end,
+        coalesce(d.scheduled_for, d.activated_at, d.created_at) asc`,
   );
-  return res.rows as DeliveryOrder[];
+  return res.rows as OpenDeliveryOrder[];
 }
 
-export async function recentClosedDeliveryOrders(limit = 20): Promise<DeliveryOrder[]> {
+/** A closed order plus its kitchen ticket's ready time, for the per-order
+ *  duration breakdown (prep / transit / total) on the reception board. */
+export type ClosedDeliveryOrder = DeliveryOrder & { kitchen_ready_at: Date | null };
+
+export async function recentClosedDeliveryOrders(limit = 20): Promise<ClosedDeliveryOrder[]> {
   const res = await pool.query(
-    `select * from delivery_orders where status in ('DELIVERED','CANCELLED')
-      order by coalesce(delivered_at, cancelled_at, updated_at) desc limit $1`,
+    `select d.*, kt.ready_at as kitchen_ready_at
+       from delivery_orders d
+       left join kitchen_tickets kt on kt.delivery_order_id = d.id
+      where d.status in ('DELIVERED','CANCELLED')
+      order by coalesce(d.delivered_at, d.cancelled_at, d.updated_at) desc limit $1`,
     [limit],
   );
-  return res.rows as DeliveryOrder[];
+  return res.rows as ClosedDeliveryOrder[];
 }
 
 export interface RecentDeliveryClient {

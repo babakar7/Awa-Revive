@@ -117,13 +117,43 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(html).not.toContain("<script>x</script>");
   });
 
-  it("renders a recent-clients quick-fill select with escaped data attributes", () => {
+  it("merges recent clients into the Wix/recent selector with escaped data", () => {
     const recents: RecentDeliveryClient[] = [
       { client_name: `Awa "B"`, client_phone: "221770000000", address: "Ngor" },
     ];
     const html = renderLivraisonForm(menu(), "", recents);
-    expect(html).toContain(`id="liv-recent"`);
+    expect(html).toContain(`Rechercher un client`);
+    expect(html).toContain(`id="liv-wix-results"`);
+    expect(html).toContain(`data-source="recent"`);
     expect(html).toContain(`data-name="Awa &quot;B&quot;"`);
     expect(html).toContain(`data-address="Ngor"`);
+  });
+
+  it("uses three numbered panels, a sticky complete summary and advanced settings", () => {
+    const html = renderLivraisonForm(menu(), "");
+    expect(html).toContain(`id="delivery-panel-client">Client et destination`);
+    expect(html).toContain(`id="delivery-panel-items">Articles`);
+    expect(html).toContain(`id="delivery-panel-confirm">Livraison et confirmation`);
+    expect(html.match(/class="delivery-panel-number"/g)).toHaveLength(3);
+    expect(html).toContain(`id="livmissing"`);
+    expect(html).toContain(`id="livmoment"`);
+    expect(html).toContain(`id="livrecipient"`);
+    expect(html).toContain("Réglages avancés · rarement utilisés");
+  });
+
+  it("renders field-level server errors and focuses the first one", () => {
+    const html = renderLivraisonForm(menu(), "", [], {
+      client_name: "",
+      client_phone: "abc",
+      address: "Ngor",
+      errors: {
+        client_name: "Le nom est obligatoire.",
+        client_phone: "Le numéro est invalide.",
+      },
+    });
+    expect(html).toContain(`name="client_name" required value="" aria-invalid="true"`);
+    expect(html).toContain(`aria-describedby="error-client_name" autofocus`);
+    expect(html).toContain(`id="error-client_name" role="alert"`);
+    expect(html).toContain(`id="error-client_phone" role="alert"`);
   });
 });

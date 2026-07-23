@@ -1,0 +1,401 @@
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildServer } from "../../src/server.js";
+import { config } from "../../src/config.js";
+import { pool, migrate } from "../../src/db/index.js";
+import { truncateAll } from "./helpers.js";
+import type { ExtraLine } from "../../src/lib/cafeMenu.js";
+import {
+  createDeliveryOrder,
+  selectDeliveryCash,
+  markOutForDelivery,
+  markCancelled,
+  activateDueScheduledDeliveries,
+} from "../../src/domain/deliveryRepo.js";
+import {
+  createDeliveryTicket,
+  advanceTicketByCuisine,
+  ackTicketDisplayed,
+  claimTicketFallback,
+  completeTicketForDelivery,
+  cancelTicketForDelivery,
+  reconcileDeliveryTickets,
+  listOpenKitchenTickets,
+  ticketByDeliveryOrder,
+  unlockedPendingKitchenOrderIds,
+  kitchenTicketView,
+} from "../../src/domain/kitchenTicketRepo.js";
+import { findDeliveryOrder } from "../../src/domain/deliveryRepo.js";
+import { opsEventsSince, latestOpsEventId } from "../../src/domain/opsEvents.js";
+import {
+  createPairingDevice,
+  redeemPairing,
+  verifyDeviceSession,
+  revokeOpsDevice,
+} from "../../src/domain/opsDeviceRepo.js";
+import { hashOpsToken, newOpsToken, newPairCode } from "../../src/ops/opsAuth.js";
+
+/**
+ * Kitchen-ticket projection + ops device pairing, end-to-end against a real
+ * Postgres. Locks the exact behaviours the cuisine iPad relies on: create at
+ * activation (idempotent), the NEW→PREPARING→READY machine, iPad ack cancels the
+ * fallback, the atomic single-send fallback claim, delivery→ticket reconcile
+ * (create/complete/cancel), the ops_events log powering SSE catch-up, and
+ * revocable device sessions.
+ */
+
+const ITEMS: ExtraLine[] = [
+  { id: "JANTBI", name: "Jant Bi", qty: 2, unitPriceXof: 3000, lineTotalXof: 6000 },
+];
+
+async function makeImmediateOrder(overrides: Partial<{ is_test: boolean }> = {}) {
+  const { order } = await createDeliveryOrder({
+    client_name: "Awa Diop",
+    client_phone: "221771112233",
+    wix_contact_id: null,
+    recipient_name: null,
+    recipient_phone: null,
+    address: "Almadies, villa 12",
+    note: "sans sucre",
+    items: ITEMS,
+    amount_xof: 6000,
+    sla_minutes: 20,
+    created_by: "test",
+    is_test: overrides.is_test ?? false,
+    scheduled_for: null,
+    kitchen_notify_at: null,
+  });
+  return order;
+}
+
+beforeAll(async () => {
+  await migrate();
+});
+
+beforeEach(async () => {
+  await truncateAll();
+  await pool.query("truncate kitchen_tickets, ops_devices, ops_events restart identity cascade");
+});
+
+describe("createDeliveryTicket", () => {
+  it("creates a NEW ticket that mirrors the order and emits ticket_new", async () => {
+    const order = await makeImmediateOrder();
+    const before = await latestOpsEventId("cuisine");
+    const { ticket, created } = await createDeliveryTicket(order, 15);
+    expect(created).toBe(true);
+    expect(ticket.status).toBe("NEW");
+    expect(ticket.source).toBe("DELIVERY");
+    expect(ticket.heading).toBe("Awa Diop");
+    expect(ticket.subheading).toBe(
+      "Almadies, villa 12 · Appeler Awa Diop (+221771112233)",
+    );
+    expect(ticket.note).toBe("sans sucre");
+    expect(ticket.fallback_due_at).not.toBeNull();
+
+    const events = await opsEventsSince("cuisine", before);
+    expect(events.some((e) => e.kind === "ticket_new")).toBe(true);
+  });
+
+  it("is idempotent on delivery_order_id (retry/sweep never double-creates)", async () => {
+    const order = await makeImmediateOrder();
+    const first = await createDeliveryTicket(order, 15);
+    const second = await createDeliveryTicket(order, 15);
+    expect(second.created).toBe(false);
+    expect(second.ticket.id).toBe(first.ticket.id);
+    const open = await listOpenKitchenTickets();
+    expect(open).toHaveLength(1);
+  });
+});
+
+describe("cuisine transitions", () => {
+  it("advances NEW → PREPARING → READY and rejects backward/stale taps", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+
+    const prep = await advanceTicketByCuisine(ticket.id, "PREPARING", "iPad Cuisine");
+    expect(prep?.status).toBe("PREPARING");
+    expect(prep?.claimed_by).toBe("iPad Cuisine");
+
+    const ready = await advanceTicketByCuisine(ticket.id, "READY", "iPad Cuisine");
+    expect(ready?.status).toBe("READY");
+    expect(ready?.ready_at).not.toBeNull();
+    // ready_at is exposed in the SSE payload so the iPad can freeze the prep timer.
+    expect(kitchenTicketView(ready!).ready_at).not.toBeNull();
+
+    // Already READY → a second READY tap (or a backward move) is a no-op.
+    expect(await advanceTicketByCuisine(ticket.id, "READY", "iPad Cuisine")).toBeNull();
+    expect(await advanceTicketByCuisine(ticket.id, "PREPARING", "iPad Cuisine")).toBeNull();
+  });
+
+  it("allows NEW → READY directly for quick items", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+    const ready = await advanceTicketByCuisine(ticket.id, "READY", null);
+    expect(ready?.status).toBe("READY");
+  });
+});
+
+describe("iPad ack + WhatsApp fallback", () => {
+  it("an ack cancels the fallback; without it the claim fires exactly once", async () => {
+    const acked = await makeImmediateOrder();
+    const ackedTicket = (await createDeliveryTicket(acked, 15)).ticket;
+    // Make both tickets already due.
+    await pool.query("update kitchen_tickets set fallback_due_at = now() - interval '1 second'");
+    expect(await ackTicketDisplayed(ackedTicket.id)).toBe(true);
+    expect(await claimTicketFallback(ackedTicket.id)).toBeNull(); // acked → never fires
+
+    const unacked = await makeImmediateOrder();
+    const unackedTicket = (await createDeliveryTicket(unacked, 15)).ticket;
+    await pool.query(
+      "update kitchen_tickets set fallback_due_at = now() - interval '1 second' where id = $1",
+      [unackedTicket.id],
+    );
+    const first = await claimTicketFallback(unackedTicket.id);
+    expect(first?.deliveryOrderId).toBe(unacked.id);
+    // Second claim (timer vs sweep race) returns nothing → single send.
+    expect(await claimTicketFallback(unackedTicket.id)).toBeNull();
+  });
+
+  it("the fallback is not due before its deadline", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 3600); // 1h grace
+    expect(await claimTicketFallback(ticket.id)).toBeNull();
+  });
+});
+
+describe("reconcile (delivery → ticket projection)", () => {
+  it("completes the ticket when the delivery departs", async () => {
+    const order = await makeImmediateOrder();
+    await createDeliveryTicket(order, 15);
+    await selectDeliveryCash(order.id); // CASH_DUE so departure is allowed
+    const departed = await markOutForDelivery(order.id, "test");
+    expect(departed?.status).toBe("OUT_FOR_DELIVERY");
+
+    const res = await reconcileDeliveryTickets(15);
+    expect(res.completed).toBe(1);
+    const ticket = await ticketByDeliveryOrder(order.id);
+    expect(ticket?.status).toBe("COMPLETED");
+    expect(await listOpenKitchenTickets()).toHaveLength(0);
+  });
+
+  it("cancels the ticket when the delivery is cancelled", async () => {
+    const order = await makeImmediateOrder();
+    await createDeliveryTicket(order, 15);
+    await markCancelled(order.id, "test");
+    const res = await reconcileDeliveryTickets(15);
+    expect(res.cancelled).toBe(1);
+    expect((await ticketByDeliveryOrder(order.id))?.status).toBe("CANCELLED");
+  });
+
+  it("creates no ticket before activation, then one at activation", async () => {
+    // Scheduled: arrival in the future, kitchen deadline still ahead → inactive.
+    const future = new Date(Date.now() + 60 * 60 * 1000);
+    const { order } = await createDeliveryOrder({
+      client_name: "Later Client",
+      client_phone: "221770000009",
+      wix_contact_id: null,
+      recipient_name: null,
+      recipient_phone: null,
+      address: "Ngor",
+      note: null,
+      items: ITEMS,
+      amount_xof: 6000,
+      sla_minutes: 20,
+      created_by: "test",
+      is_test: false,
+      scheduled_for: future,
+      kitchen_notify_at: future,
+    });
+    expect(order.activated_at).toBeNull();
+
+    let res = await reconcileDeliveryTickets(15);
+    expect(res.created).toBe(0);
+    expect(await ticketByDeliveryOrder(order.id)).toBeNull();
+
+    // Bring the kitchen deadline into the past and activate.
+    await pool.query(
+      "update delivery_orders set kitchen_notify_at = now() - interval '1 minute' where id = $1",
+      [order.id],
+    );
+    const activated = await activateDueScheduledDeliveries();
+    expect(activated).toHaveLength(1);
+
+    res = await reconcileDeliveryTickets(15);
+    expect(res.created).toBe(1);
+    expect((await ticketByDeliveryOrder(order.id))?.status).toBe("NEW");
+  });
+});
+
+describe("source-driven terminal helpers", () => {
+  it("completeTicketForDelivery / cancelTicketForDelivery emit ticket_removed", async () => {
+    const a = await makeImmediateOrder();
+    const b = await makeImmediateOrder();
+    await createDeliveryTicket(a, 15);
+    await createDeliveryTicket(b, 15);
+    const cursor = await latestOpsEventId("cuisine");
+
+    expect((await completeTicketForDelivery(a.id))?.status).toBe("COMPLETED");
+    expect((await cancelTicketForDelivery(b.id, "annulée"))?.status).toBe("CANCELLED");
+
+    const events = await opsEventsSince("cuisine", cursor);
+    expect(events.filter((e) => e.kind === "ticket_removed")).toHaveLength(2);
+  });
+});
+
+describe("fallback-mode WhatsApp gating", () => {
+  it("an acked ticket marks the order kitchen-notified and never unlocks the WhatsApp", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+    // Order starts 'pending' (no WhatsApp sent yet in fallback mode).
+    expect((await findDeliveryOrder(order.id))?.kitchen_notify_status).toBe("pending");
+
+    await ackTicketDisplayed(ticket.id);
+    // The iPad displayed it → the order reads 'sent', honestly.
+    expect((await findDeliveryOrder(order.id))?.kitchen_notify_status).toBe("sent");
+
+    // Even past the deadline, an acked ticket is never claimable → never WhatsApp'd.
+    await pool.query("update kitchen_tickets set fallback_due_at = now() - interval '1 second'");
+    expect(await claimTicketFallback(ticket.id)).toBeNull();
+    expect(await unlockedPendingKitchenOrderIds()).toHaveLength(0);
+  });
+
+  it("only unlocks the WhatsApp once the fallback is claimed (no ack, past grace)", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+
+    // Before the grace lapses, the order is not unlocked.
+    expect(await unlockedPendingKitchenOrderIds()).toHaveLength(0);
+
+    await pool.query("update kitchen_tickets set fallback_due_at = now() - interval '1 second'");
+    const claim = await claimTicketFallback(ticket.id);
+    expect(claim?.deliveryOrderId).toBe(order.id);
+
+    // Now the WhatsApp is unlocked for the sweep to send.
+    expect(await unlockedPendingKitchenOrderIds()).toContain(order.id);
+  });
+});
+
+describe("ops device pairing", () => {
+  it("redeems a code once, resolves the session, then revokes durably", async () => {
+    const code = newPairCode();
+    const device = await createPairingDevice(
+      "iPad Cuisine",
+      "cuisine",
+      hashOpsToken(code),
+      new Date(Date.now() + 10 * 60 * 1000),
+    );
+    expect(device.paired_at).toBeNull();
+
+    const token = newOpsToken();
+    const paired = await redeemPairing(hashOpsToken(code), hashOpsToken(token));
+    expect(paired?.id).toBe(device.id);
+    expect(paired?.paired_at).not.toBeNull();
+
+    // The code is single-use.
+    expect(await redeemPairing(hashOpsToken(code), hashOpsToken(newOpsToken()))).toBeNull();
+
+    // Session resolves, and role isolation is enforced.
+    expect((await verifyDeviceSession(hashOpsToken(token), "cuisine"))?.id).toBe(device.id);
+    expect(await verifyDeviceSession(hashOpsToken(token), "accueil")).toBeNull();
+
+    // Revocation is durable: the session stops resolving immediately.
+    expect(await revokeOpsDevice(device.id)).toBe(true);
+    expect(await verifyDeviceSession(hashOpsToken(token), "cuisine")).toBeNull();
+  });
+
+  it("rejects an expired pairing code", async () => {
+    const code = newPairCode();
+    await createPairingDevice(
+      "iPad Cuisine",
+      "cuisine",
+      hashOpsToken(code),
+      new Date(Date.now() - 1000), // already expired
+    );
+    expect(await redeemPairing(hashOpsToken(code), hashOpsToken(newOpsToken()))).toBeNull();
+  });
+});
+
+describe("cuisine PWA over HTTP", () => {
+  let app: FastifyInstance;
+  beforeAll(async () => {
+    app = buildServer();
+    await app.ready();
+  });
+
+  it("serves the manifest and app.js as static assets", async () => {
+    const manifest = await app.inject({ method: "GET", url: "/ops/cuisine/manifest.webmanifest" });
+    expect(manifest.statusCode).toBe(200);
+    expect(JSON.parse(manifest.body).scope).toBe("/ops/cuisine/");
+    const appjs = await app.inject({ method: "GET", url: "/ops/cuisine/app.js" });
+    expect(appjs.statusCode).toBe(200);
+    expect(appjs.headers["content-type"]).toContain("javascript");
+  });
+
+  it("redirects the cuisine host root into the PWA scope", async () => {
+    const res = await app.inject({ method: "GET", url: "/", headers: { host: config.CUISINE_HOST } });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/ops/cuisine/");
+  });
+
+  it("shows the pairing screen to an unpaired device and 401s the SSE stream", async () => {
+    const home = await app.inject({ method: "GET", url: "/ops/cuisine/" });
+    expect(home.statusCode).toBe(200);
+    expect(home.body).toContain("Appairer cet écran");
+    const sse = await app.inject({ method: "GET", url: "/ops/cuisine/events" });
+    expect(sse.statusCode).toBe(401);
+  });
+
+  it("OPS_DEV_AUTOPAIR auto-provisions a cuisine device (no code) when on, pairing screen when off", async () => {
+    const prev = config.OPS_DEV_AUTOPAIR;
+    try {
+      config.OPS_DEV_AUTOPAIR = false;
+      const off = await app.inject({ method: "GET", url: "/ops/cuisine/" });
+      expect(off.body).toContain("Appairer cet écran");
+      expect(off.headers["set-cookie"]).toBeUndefined();
+
+      config.OPS_DEV_AUTOPAIR = true;
+      const on = await app.inject({ method: "GET", url: "/ops/cuisine/" });
+      expect(on.statusCode).toBe(200);
+      expect(on.body).toContain("window.__BOOT__");
+      const cookie = String(on.headers["set-cookie"]);
+      expect(cookie).toContain("ops_device=");
+      // The auto-provisioned session actually works on a protected endpoint.
+      const evt = await app.inject({
+        method: "POST",
+        url: "/ops/cuisine/tickets/00000000-0000-0000-0000-000000000000/ack",
+        headers: { cookie: cookie.split(";")[0] },
+      });
+      expect(evt.statusCode).toBe(200); // authorized (ack of a nonexistent id is a no-op 200)
+    } finally {
+      config.OPS_DEV_AUTOPAIR = prev;
+    }
+  });
+
+  it("pairs via HTTP, then serves the kiosque and accepts ticket actions", async () => {
+    const code = newPairCode();
+    await createPairingDevice("iPad Cuisine", "cuisine", hashOpsToken(code), new Date(Date.now() + 60_000));
+    const pair = await app.inject({
+      method: "POST",
+      url: "/ops/cuisine/pair",
+      payload: `code=${code}`,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    expect(pair.statusCode).toBe(303);
+    const setCookie = String(pair.headers["set-cookie"]);
+    expect(setCookie).toContain("ops_device=");
+    const cookie = setCookie.split(";")[0];
+
+    const home = await app.inject({ method: "GET", url: "/ops/cuisine/", headers: { cookie } });
+    expect(home.statusCode).toBe(200);
+    expect(home.body).toContain("window.__BOOT__");
+
+    // A ticket action is accepted with the device cookie, rejected without it.
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+    const ok = await app.inject({ method: "POST", url: `/ops/cuisine/tickets/${ticket.id}/ready`, headers: { cookie } });
+    expect(ok.statusCode).toBe(200);
+    expect(JSON.parse(ok.body).ok).toBe(true);
+    const denied = await app.inject({ method: "POST", url: `/ops/cuisine/tickets/${ticket.id}/preparing` });
+    expect(denied.statusCode).toBe(401);
+  });
+});
