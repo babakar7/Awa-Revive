@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import { parseCookies } from "../admin/auth.js";
 import {
   provisionDevCuisineDevice,
+  provisionDevAccueilDevice,
   redeemPairing,
   verifyDeviceSession,
   type OpsDevice,
@@ -12,9 +13,23 @@ import {
   kitchenTicketView,
   advanceTicketByCuisine,
   ackTicketDisplayed,
+  createTableTicket,
+  claimTableServe,
+  serveTableTicket,
+  cancelTableTicket,
 } from "../domain/kitchenTicketRepo.js";
 import { onOpsEvent, opsEventsSince, latestOpsEventId, type OpsEvent } from "../domain/opsEvents.js";
-import { CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
+import { ACCUEIL_CHANNEL, CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
+import { listActiveAreas } from "../domain/serviceAreaRepo.js";
+import {
+  openSession,
+  listOpenSessions,
+  getOpenSession,
+  setSessionPosition,
+  closeSession,
+} from "../domain/serviceSessionRepo.js";
+import { parsePosition } from "../domain/serviceSessionRules.js";
+import { getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
 import { renderOpsIcon } from "./opsIcon.js";
 import {
   OPS_COOKIE,
@@ -33,6 +48,14 @@ import {
   cuisinePairingPage,
   hardenCuisine,
 } from "./opsCuisinePage.js";
+import {
+  SERVICE_APP_JS,
+  SERVICE_MANIFEST,
+  SERVICE_SW,
+  serviceBoardPage,
+  servicePairingPage,
+  hardenService,
+} from "./opsServicePage.js";
 
 /**
  * Realtime ops surface (Phase 1: the cuisine iPad at cuisine.revive.sn). All
@@ -186,67 +209,299 @@ export function registerOps(app: FastifyInstance): void {
     return reply.type("application/json").send({ ok: !!t });
   });
 
-  // ── SSE stream ──
+  // ── SSE stream (cuisine channel) ──
   app.get(`${BASE}/events`, async (req, reply) => {
     const device = await deviceFromReq(req, "cuisine");
     if (!device) return reply.code(401).send({ error: "unpaired" });
+    return pipeOpsEvents(req, reply, CUISINE_CHANNEL);
+  });
 
-    // Prefer the browser's automatic Last-Event-ID on reconnect; fall back to
-    // the ?since= cursor the page bootstraps with on the very first connect.
-    const lastEventId = Number(req.headers["last-event-id"]);
-    const sinceParam = Number((req.query as any)?.since);
-    const sinceId = Number.isFinite(lastEventId)
-      ? lastEventId
-      : Number.isFinite(sinceParam)
-        ? sinceParam
-        : 0;
+  registerServiceRoutes(app);
+}
 
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-store",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-    raw.write("retry: 3000\n\n");
+/**
+ * Attach a hijacked SSE response to one ops channel: replay everything since the
+ * device's last-seen id (Last-Event-ID header, else the ?since cursor), then
+ * fan out live events of that channel. Shared by the cuisine iPad and the
+ * reception phones (each on its own channel). The device is already authed.
+ */
+function pipeOpsEvents(req: FastifyRequest, reply: FastifyReply, channel: string): FastifyReply {
+  const lastEventId = Number(req.headers["last-event-id"]);
+  const sinceParam = Number((req.query as any)?.since);
+  const sinceId = Number.isFinite(lastEventId)
+    ? lastEventId
+    : Number.isFinite(sinceParam)
+      ? sinceParam
+      : 0;
 
-    const write = (e: OpsEvent) => {
-      raw.write(`id: ${e.id}\nevent: ${e.kind}\ndata: ${JSON.stringify(e.payload)}\n\n`);
-    };
+  reply.hijack();
+  const raw = reply.raw;
+  raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-store",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  raw.write("retry: 3000\n\n");
 
-    // Replay whatever this device missed since its last seen id.
-    try {
-      for (const e of await opsEventsSince(CUISINE_CHANNEL, sinceId)) write(e);
-    } catch {
+  const write = (e: OpsEvent) => {
+    raw.write(`id: ${e.id}\nevent: ${e.kind}\ndata: ${JSON.stringify(e.payload)}\n\n`);
+  };
+
+  void opsEventsSince(channel, sinceId)
+    .then((events) => {
+      for (const e of events) write(e);
+    })
+    .catch(() => {
       /* a replay hiccup shouldn't kill the live stream */
-    }
-
-    const unsubscribe = onOpsEvent((e) => {
-      if (e.channel === CUISINE_CHANNEL) {
-        try {
-          write(e);
-        } catch {
-          /* a broken pipe is cleaned up by the close handler below */
-        }
-      }
     });
-    const keepAlive = setInterval(() => {
-      try {
-        raw.write(": ping\n\n");
-      } catch {
-        /* ignore */
-      }
-    }, 25_000);
 
-    sseConnections.add(reply);
-    const cleanup = () => {
-      clearInterval(keepAlive);
-      unsubscribe();
-      sseConnections.delete(reply);
-    };
-    req.raw.on("close", cleanup);
-    req.raw.on("error", cleanup);
-    return reply;
+  const unsubscribe = onOpsEvent((e) => {
+    if (e.channel === channel) {
+      try {
+        write(e);
+      } catch {
+        /* a broken pipe is cleaned up by the close handler below */
+      }
+    }
+  });
+  const keepAlive = setInterval(() => {
+    try {
+      raw.write(": ping\n\n");
+    } catch {
+      /* ignore */
+    }
+  }, 25_000);
+
+  sseConnections.add(reply);
+  const cleanup = () => {
+    clearInterval(keepAlive);
+    unsubscribe();
+    sseConnections.delete(reply);
+  };
+  req.raw.on("close", cleanup);
+  req.raw.on("error", cleanup);
+  return reply;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 2: the reception PWA (service.revive.sn) — on-site table service.
+// Same device-auth/SSE plumbing as the cuisine kiosque, role "accueil".
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SERVICE_BASE = "/ops/service";
+
+/** The bar menu grouped by category (sort order preserved) for the order picker.
+ *  ids + prices only from the server snapshot — the client never sets a price. */
+function buildServiceMenu(): Array<{ category: string; items: unknown[] }> {
+  const { items } = getCafeMenu();
+  const cats: Array<{ category: string; items: unknown[] }> = [];
+  const byCat = new Map<string, unknown[]>();
+  for (const it of items.values()) {
+    let arr = byCat.get(it.category);
+    if (!arr) {
+      arr = [];
+      byCat.set(it.category, arr);
+      cats.push({ category: it.category, items: arr });
+    }
+    arr.push({
+      id: it.id,
+      name: it.name,
+      price: it.priceXof,
+      optionLabel: it.optionLabel,
+      choices: it.optionChoices ?? [],
+    });
+  }
+  return cats;
+}
+
+/** Everything the reception board needs to render on first paint. */
+async function serviceBoot(): Promise<string> {
+  const [areas, sessions, tickets, cursor] = await Promise.all([
+    listActiveAreas(),
+    listOpenSessions(),
+    listOpenKitchenTickets(),
+    latestOpsEventId(ACCUEIL_CHANNEL),
+  ]);
+  return JSON.stringify({
+    cursor,
+    areas: areas.map((a) => ({ id: a.id, code: a.code, name: a.name })),
+    sessions,
+    tickets: tickets.filter((t) => t.source === "TABLE").map(kitchenTicketView),
+    menu: buildServiceMenu(),
+  });
+}
+
+/** Serve the reception home: board if paired, pairing screen otherwise. */
+async function serveServiceHome(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+  hardenService(reply);
+  let device = await deviceFromReq(req, "accueil");
+  // DEV ONLY (OPS_DEV_AUTOPAIR): auto-provision an accueil device so the PWA works
+  // without pairing a phone. Never set in production.
+  if (!device && config.OPS_DEV_AUTOPAIR) {
+    const token = newOpsToken();
+    await provisionDevAccueilDevice(hashOpsToken(token));
+    reply.header("Set-Cookie", opsCookieHeader(token));
+    device = await verifyDeviceSession(hashOpsToken(token), "accueil");
+  }
+  reply.type("text/html");
+  if (!device) return reply.send(servicePairingPage());
+  return reply.send(serviceBoardPage(await serviceBoot()));
+}
+
+/** Host-aware redirect for service.revive.sn "/" → the PWA scope. */
+export async function serveServiceRoot(_req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+  return reply.redirect(`${SERVICE_BASE}/`, 302);
+}
+
+function registerServiceRoutes(app: FastifyInstance): void {
+  // ── Static PWA assets ──
+  app.get(`${SERVICE_BASE}/manifest.webmanifest`, async (_req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return reply.type("application/manifest+json").send(SERVICE_MANIFEST);
+  });
+  app.get(`${SERVICE_BASE}/sw.js`, async (_req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    reply.header("Service-Worker-Allowed", `${SERVICE_BASE}/`);
+    return reply.type("text/javascript").send(SERVICE_SW);
+  });
+  app.get(`${SERVICE_BASE}/app.js`, async (_req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return reply.type("text/javascript").send(SERVICE_APP_JS);
+  });
+  app.get(`${SERVICE_BASE}/icon-192.png`, async (_req, reply) => {
+    if (!icon192) icon192 = renderOpsIcon(192);
+    reply.header("Cache-Control", "public, max-age=86400");
+    return reply.type("image/png").send(icon192);
+  });
+  app.get(`${SERVICE_BASE}/icon-512.png`, async (_req, reply) => {
+    if (!icon512) icon512 = renderOpsIcon(512);
+    reply.header("Cache-Control", "public, max-age=86400");
+    return reply.type("image/png").send(icon512);
+  });
+
+  // ── Home + pairing ──
+  app.get(`${SERVICE_BASE}/`, serveServiceHome);
+  app.get(`${SERVICE_BASE}`, async (_req, reply) => reply.redirect(`${SERVICE_BASE}/`, 302));
+
+  app.post(`${SERVICE_BASE}/pair`, async (req, reply) => {
+    hardenService(reply);
+    const code = normalizePairCode((req.body as any)?.code ?? "");
+    if (!code) {
+      reply.type("text/html");
+      return reply.code(400).send(servicePairingPage("Code manquant."));
+    }
+    const token = newOpsToken();
+    const device = await redeemPairing(hashOpsToken(code), hashOpsToken(token));
+    if (!device) {
+      reply.type("text/html");
+      return reply.code(400).send(servicePairingPage("Code invalide ou expiré. Regénérez-en un dans l'administration."));
+    }
+    reply.header("Set-Cookie", opsCookieHeader(token));
+    return reply.redirect(`${SERVICE_BASE}/`, 303);
+  });
+
+  app.post(`${SERVICE_BASE}/unpair`, async (_req, reply) => {
+    reply.header("Set-Cookie", clearOpsCookieHeader());
+    return reply.redirect(`${SERVICE_BASE}/`, 303);
+  });
+
+  // ── Session + ticket actions (device-authed, role accueil) ──
+  const requireAccueil = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<OpsDevice | null> => {
+    const device = await deviceFromReq(req, "accueil");
+    if (!device) {
+      reply.code(401).type("application/json").send({ error: "unpaired" });
+      return null;
+    }
+    return device;
+  };
+
+  app.post(`${SERVICE_BASE}/sessions`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const b = (req.body as any) ?? {};
+    const session = await openSession({
+      areaId: String(b.area_id ?? ""),
+      firstName: b.first_name,
+      position: parsePosition(b.pos_x, b.pos_y),
+      openedBy: device.label,
+    });
+    if (!session) return reply.code(400).type("application/json").send({ ok: false });
+    return reply.type("application/json").send(session);
+  });
+
+  app.post(`${SERVICE_BASE}/sessions/:id/position`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const b = (req.body as any) ?? {};
+    const s = await setSessionPosition((req.params as any).id, parsePosition(b.x, b.y));
+    return reply.type("application/json").send({ ok: !!s });
+  });
+
+  app.post(`${SERVICE_BASE}/sessions/:id/close`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const result = await closeSession((req.params as any).id, device.label);
+    return reply.type("application/json").send(result);
+  });
+
+  app.post(`${SERVICE_BASE}/sessions/:id/orders`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const session = await getOpenSession((req.params as any).id);
+    if (!session) {
+      return reply.code(409).type("application/json").send({ ok: false, message: "Table fermée." });
+    }
+    const b = (req.body as any) ?? {};
+    // Prices ALWAYS from the server menu; a required choice is enforced here.
+    const result = computeExtras(getCafeMenu().items, b.items, { requireChoices: true });
+    if (!result.ok) {
+      return reply.code(400).type("application/json").send({ ok: false, message: result.message });
+    }
+    const note = typeof b.note === "string" ? b.note.trim().slice(0, 280) || null : null;
+    const clientRequestId = String(b.client_request_id ?? "").slice(0, 80) || newOpsToken();
+    const { ticket } = await createTableTicket({
+      sessionId: session.id,
+      heading: session.short_code,
+      subheading: session.area_name + (session.first_name ? ` · ${session.first_name}` : ""),
+      lines: result.lines,
+      amountXof: result.totalXof,
+      note,
+      clientRequestId,
+      isTest: false,
+    });
+    return reply.type("application/json").send({ ok: true, id: ticket.id });
+  });
+
+  app.post(`${SERVICE_BASE}/tickets/:id/take`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const t = await claimTableServe((req.params as any).id, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${SERVICE_BASE}/tickets/:id/served`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const t = await serveTableTicket((req.params as any).id, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${SERVICE_BASE}/tickets/:id/cancel`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const reason = typeof (req.body as any)?.reason === "string" ? (req.body as any).reason.slice(0, 200) : null;
+    const t = await cancelTableTicket((req.params as any).id, reason);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  // ── SSE stream (accueil channel) ──
+  app.get(`${SERVICE_BASE}/events`, async (req, reply) => {
+    const device = await deviceFromReq(req, "accueil");
+    if (!device) return reply.code(401).send({ error: "unpaired" });
+    return pipeOpsEvents(req, reply, ACCUEIL_CHANNEL);
   });
 }

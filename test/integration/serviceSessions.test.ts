@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildServer } from "../../src/server.js";
+import { config } from "../../src/config.js";
 import { pool, migrate } from "../../src/db/index.js";
 import { truncateAll } from "./helpers.js";
-import type { ExtraLine } from "../../src/lib/cafeMenu.js";
+import { type ExtraLine, type CafeMenuRow, setCafeMenu } from "../../src/lib/cafeMenu.js";
+import { createPairingDevice } from "../../src/domain/opsDeviceRepo.js";
+import { hashOpsToken, newPairCode } from "../../src/ops/opsAuth.js";
 import { listActiveAreas } from "../../src/domain/serviceAreaRepo.js";
 import {
   openSession,
@@ -221,5 +226,98 @@ describe("closeSession guard", () => {
     const s = await makeSession();
     await closeSession(s.id, "Accueil 1");
     expect(await closeSession(s.id, "Accueil 1")).toEqual({ ok: false, reason: "not_open" });
+  });
+});
+
+describe("service PWA over HTTP", () => {
+  let app: FastifyInstance;
+
+  const MENU_ROW: CafeMenuRow = {
+    id: "JANTBI", name: "Jant Bi", priceXof: 3000, category: "Smoothies",
+    favourite: true, enabled: true, sortOrder: 1,
+  };
+
+  beforeAll(async () => {
+    app = buildServer();
+    await app.ready();
+    setCafeMenu([MENU_ROW]); // in-memory snapshot so computeExtras has an item
+  });
+
+  async function pairAccueil(): Promise<string> {
+    const code = newPairCode();
+    await createPairingDevice("Accueil 1", "accueil", hashOpsToken(code), new Date(Date.now() + 60_000));
+    const pair = await app.inject({
+      method: "POST", url: "/ops/service/pair",
+      payload: `code=${code}`, headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    expect(pair.statusCode).toBe(303);
+    return String(pair.headers["set-cookie"]).split(";")[0];
+  }
+
+  it("serves the manifest scoped to /ops/service/", async () => {
+    const m = await app.inject({ method: "GET", url: "/ops/service/manifest.webmanifest" });
+    expect(m.statusCode).toBe(200);
+    expect(JSON.parse(m.body).scope).toBe("/ops/service/");
+  });
+
+  it("redirects the service host root into the PWA scope", async () => {
+    const res = await app.inject({ method: "GET", url: "/", headers: { host: config.SERVICE_HOST } });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/ops/service/");
+  });
+
+  it("shows the pairing screen and 401s the SSE stream when unpaired", async () => {
+    const home = await app.inject({ method: "GET", url: "/ops/service/" });
+    expect(home.statusCode).toBe(200);
+    expect(home.body).toContain("Appairer ce téléphone");
+    const sse = await app.inject({ method: "GET", url: "/ops/service/events" });
+    expect(sse.statusCode).toBe(401);
+  });
+
+  it("runs the full on-site flow: open → order → take → serve → close", async () => {
+    const cookie = await pairAccueil();
+
+    const home = await app.inject({ method: "GET", url: "/ops/service/", headers: { cookie } });
+    expect(home.statusCode).toBe(200);
+    expect(home.body).toContain("window.__BOOT__");
+
+    // Open a session in Canapé.
+    const opened = await app.inject({
+      method: "POST", url: "/ops/service/sessions", headers: { cookie },
+      payload: { area_id: areaId, first_name: "Awa" },
+    });
+    expect(opened.statusCode).toBe(200);
+    const session = JSON.parse(opened.body);
+    expect(session.short_code).toBe(`${areaCode}-01`);
+
+    // Push an order — prices come from the server menu.
+    const ordered = await app.inject({
+      method: "POST", url: `/ops/service/sessions/${session.id}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 2, note: "sans sucre" }], note: "table pressée", client_request_id: "req-http-1" },
+    });
+    expect(ordered.statusCode).toBe(200);
+    const orderBody = JSON.parse(ordered.body);
+    expect(orderBody.ok).toBe(true);
+    const ticketId = orderBody.id;
+
+    // Close is refused while the ticket is open.
+    const blocked = await app.inject({ method: "POST", url: `/ops/service/sessions/${session.id}/close`, headers: { cookie } });
+    expect(JSON.parse(blocked.body)).toEqual({ ok: false, reason: "open_tickets" });
+
+    // Kitchen makes it READY, then reception takes + serves it.
+    await advanceTicketByCuisine(ticketId, "READY", "iPad Cuisine");
+    const take = await app.inject({ method: "POST", url: `/ops/service/tickets/${ticketId}/take`, headers: { cookie } });
+    expect(JSON.parse(take.body).ok).toBe(true);
+    const serve = await app.inject({ method: "POST", url: `/ops/service/tickets/${ticketId}/served`, headers: { cookie } });
+    expect(JSON.parse(serve.body).ok).toBe(true);
+
+    // Now the session closes cleanly.
+    const closed = await app.inject({ method: "POST", url: `/ops/service/sessions/${session.id}/close`, headers: { cookie } });
+    expect(JSON.parse(closed.body).ok).toBe(true);
+  });
+
+  it("rejects session/ticket actions without a device cookie", async () => {
+    const denied = await app.inject({ method: "POST", url: "/ops/service/sessions", payload: { area_id: areaId } });
+    expect(denied.statusCode).toBe(401);
   });
 });

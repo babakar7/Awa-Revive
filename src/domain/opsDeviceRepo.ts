@@ -124,6 +124,27 @@ export async function provisionDevCuisineDevice(sessionTokenHash: string): Promi
   );
 }
 
+/**
+ * DEV ONLY (behind OPS_DEV_AUTOPAIR): same as provisionDevCuisineDevice but for a
+ * reusable "Aperçu accueil (dev)" reception device, so the service PWA can be
+ * tried without pairing a phone. MUST be gated on the dev flag — an auth bypass.
+ */
+export async function provisionDevAccueilDevice(sessionTokenHash: string): Promise<void> {
+  const updated = await pool.query(
+    `update ops_devices
+        set session_token_hash = $1, paired_at = coalesce(paired_at, now()),
+            last_seen_at = now(), revoked_at = null
+      where label = 'Aperçu accueil (dev)' and role = 'accueil'`,
+    [sessionTokenHash],
+  );
+  if ((updated.rowCount ?? 0) > 0) return;
+  await pool.query(
+    `insert into ops_devices (label, role, session_token_hash, paired_at, last_seen_at)
+     values ('Aperçu accueil (dev)', 'accueil', $1, now(), now())`,
+    [sessionTokenHash],
+  );
+}
+
 /** Delete a device row entirely (admin cleanup of a revoked/never-paired row). */
 export async function deleteOpsDevice(id: string): Promise<boolean> {
   if (!UUID_RE.test(String(id))) return false;

@@ -5,7 +5,7 @@ import { registerOrangeMoneyWebhook } from "./webhooks/orangeMoney.js";
 import { registerAdmin } from "./admin/routes.js";
 import { registerDeliveryPublic } from "./deliveryPublic.js";
 import { MENU_HOST, registerMenuPublic, serveMenuPage } from "./menuPublic.js";
-import { registerOps, serveCuisineRoot } from "./ops/opsRoutes.js";
+import { registerOps, serveCuisineRoot, serveServiceRoot } from "./ops/opsRoutes.js";
 import { config } from "./config.js";
 import { pool } from "./db/index.js";
 
@@ -74,6 +74,7 @@ export function buildServer() {
     const host = req.hostname?.toLowerCase();
     if (host === MENU_HOST) return serveMenuPage(reply);
     if (host === config.CUISINE_HOST.toLowerCase()) return serveCuisineRoot(req, reply);
+    if (host === config.SERVICE_HOST.toLowerCase()) return serveServiceRoot(req, reply);
     return reply.redirect("/admin", 302);
   });
 
