@@ -2968,6 +2968,75 @@ l'arrivée promise au client en heure de Dakar et l'alerte cuisine est réglable
   reprogrammation, les gardes SQL, l'annulation payée/remboursement et la
   régression complète des livraisons immédiates.
 
+### 6.28 Système temps réel salle + livraisons — Phase 1 : iPad cuisine (23/07/2026)
+
+Début du chantier « écrans temps réel » (cf. plan validé) : une PWA cuisine
+(`cuisine.revive.sn`) affiche les tickets en direct et laisse la cuisine
+avancer **Nouveau → En préparation → Prête**, avec WhatsApp interne conservé en
+**filet de sécurité**. Branche `feat/ops-cuisine-pwa` — **PAS encore en prod**
+(voir « Pour mettre en service » plus bas). Trois commits cohérents :
+
+- **Couche projection (`kitchen_tickets`)** : nouvelle table cuisine-facing
+  alimentée par `delivery_orders`. Un ticket **naît à l'activation** de la
+  livraison (immédiate ou programmée) — l'iPad ne voit jamais une commande
+  future. Machine pure `NEW → PREPARING → READY → COMPLETED/CANCELLED` :
+  la cuisine ne peut jamais atteindre COMPLETED/CANCELLED (pilotés par la
+  commande source). `COMPLETED` quand la livraison quitte la cuisine (départ /
+  livrée), `CANCELLED` si annulée. Transitions atomiques `UPDATE … WHERE status`
+  (double-tap idempotent). Réconciliation idempotente dans le sweep 60 s
+  (backstop qui répare un crash entre activation et insert). Journal durable
+  `ops_events` = source de vérité du fan-out SSE **et** du rattrapage.
+  ([kitchenTicketRules.ts](src/domain/kitchenTicketRules.ts),
+  [kitchenTicketRepo.ts](src/domain/kitchenTicketRepo.ts),
+  [opsEvents.ts](src/domain/opsEvents.ts))
+- **Interface PWA** : dispatch host `cuisine.revive.sn` (même service Railway,
+  comme `menu.revive.sn`), assets servis en dur (manifest, service worker qui ne
+  cache QUE le shell — jamais une mutation ni le flux SSE, icônes canvas),
+  **sessions d'appareils serveur RÉVOCABLES** (seuls les hachés sont stockés,
+  pairing par code court à usage unique, isolation de rôle cuisine/accueil/owner
+  — contrairement au cookie admin HMAC stateless). Kiosque construit côté client
+  depuis un modèle SSE (DOM via `textContent`, données jamais en `innerHTML`),
+  badges source 🛵 Livraison / 🪑 Salle, tri par ancienneté, son WebAudio, ACK
+  d'affichage, CSP dédiée. SSE avec rattrapage `Last-Event-ID`/`?since` et drain
+  propre au SIGTERM. ([src/ops/](src/ops/),
+  [opsDeviceRepo.ts](src/domain/opsDeviceRepo.ts))
+- **Filet WhatsApp `INTERNAL_NOTIFY_MODE`** :
+  - `parallel` (**défaut, pilote**) : le ticket WhatsApp part systématiquement,
+    en plus de l'iPad — comportement existant inchangé, pour comparer.
+  - `fallback` (post-pilote) : l'iPad est primaire ; un timer one-shot 15 s
+    (`OPS_KITCHEN_FALLBACK_SECONDS`) envoie le WhatsApp **seulement** si l'iPad
+    n'a pas accusé réception. Claim atomique (`fallback_claimed_at`) → un seul
+    envoi même si le timer et le sweep 60 s se croisent ; le sweep est le
+    backstop durable si le process redémarre. Un ACK iPad marque la commande
+    « cuisine notifiée » (jamais de WhatsApp, tableau de bord honnête).
+- **Supervision admin `/admin/appareils`** : génération de code d'appairage
+  (affiché une seule fois, stocké haché), état de connexion (appairé / en ligne
+  / révoqué), révocation durable, et un bouton **« test »** qui pousse un
+  événement SSE jusqu'à l'iPad de bout en bout.
+- **Décisions de conception** (à connaître avant de continuer) :
+  - Le ticket est une **projection** de `delivery_orders`, pas une seconde
+    vérité : `delivery_orders.status` reste la machine client/paiement,
+    `kitchen_tickets.status` l'état ops ; la réconciliation les aligne.
+  - Livraisons en **2 acteurs** (décision Babakar) : la cuisine s'arrête à
+    « Prête », l'accueil gère le départ. La PWA accueil (tables, « Je prends »,
+    départ, push) est la **Phase 2** ; en Phase 1 le départ passe encore par le
+    lien magique / le board admin existants (gate paiement inchangé).
+  - **Mono-instance** : fan-out SSE en mémoire → valide à 1 replica Railway
+    seulement (comme le reste). Scaler exigera un pub/sub Postgres.
+  - Note par ligne d'article et modèle « salle » (espaces Canapé/Terrasse/
+    Pergola, sessions, schémas) : **Phase 2**, non implémentés ici.
+- **Pour mettre en service** (checklist, rien de tout ça n'est fait) : pointer
+  le DNS `cuisine.revive.sn` sur le service Railway ; installer la PWA sur
+  l'écran d'accueil de l'iPad (iPadOS ≥ 16.4, notifications par geste) ;
+  générer un code dans `/admin/appareils` et appairer l'iPad ; garder
+  `INTERNAL_NOTIFY_MODE=parallel` pendant le pilote de 7 jours puis basculer en
+  `fallback`. Web Push (arrière-plan) et la PWA accueil arriveront en Phase 2.
+- Validation : `npm run build` + **610 tests unitaires** verts ; **145 tests
+  d'intégration** verts, dont 18 nouveaux (cycle de vie ticket, ACK/claim
+  fallback, réconciliation create/complete/cancel, pairing/révocation, et le
+  flux HTTP complet pairing → kiosque → autorisation des actions). Aucune
+  régression des 34 scénarios livraison.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
