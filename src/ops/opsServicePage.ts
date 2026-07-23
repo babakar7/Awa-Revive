@@ -345,7 +345,21 @@ export const SERVICE_APP_JS = String.raw`(function(){
 
   function setOnline(on){ dot.classList.toggle('on',on); offline.classList.toggle('show',!on); }
 
+  // Re-fetch the authoritative board state on load, so a stale cached page (an old
+  // inline boot without spots) self-heals to the current spots/sessions/menu.
+  function refreshState(){
+    fetch(BASE+'/state',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+      if(!d)return;
+      SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
+      if(d.menu&&d.menu.length) MENU=d.menu;
+      sessions=new Map(); (d.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
+      tickets=new Map(); (d.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
+      render();
+    }).catch(function(){});
+  }
+
   render();
+  refreshState();
 
   var es=new EventSource(BASE+'/events?since='+cursor);
   es.onopen=function(){setOnline(true);};

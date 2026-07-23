@@ -313,22 +313,24 @@ function buildServiceMenu(): Array<{ category: string; items: unknown[] }> {
   return cats;
 }
 
-/** Everything the reception board needs to render on first paint: the fixed spot
- *  tiles, which are occupied (open sessions), their open tickets, and the menu. */
-async function serviceBoot(): Promise<string> {
+/** Everything the reception board needs to render: the fixed spot tiles, which
+ *  are occupied (open sessions), their open tickets, and the menu. Used both for
+ *  the inline page boot AND the /state endpoint the client re-fetches on load (so
+ *  a stale cached page self-heals). */
+async function serviceBootData(): Promise<unknown> {
   const [spots, sessions, tickets, cursor] = await Promise.all([
     listActiveSpots(),
     listOpenSessions(),
     listOpenKitchenTickets(),
     latestOpsEventId(ACCUEIL_CHANNEL),
   ]);
-  return JSON.stringify({
+  return {
     cursor,
     spots,
     sessions,
     tickets: tickets.filter((t) => t.source === "TABLE").map(kitchenTicketView),
     menu: buildServiceMenu(),
-  });
+  };
 }
 
 /** Serve the reception home: board if paired, pairing screen otherwise. */
@@ -345,7 +347,7 @@ async function serveServiceHome(req: FastifyRequest, reply: FastifyReply): Promi
   }
   reply.type("text/html");
   if (!device) return reply.send(servicePairingPage());
-  return reply.send(serviceBoardPage(await serviceBoot()));
+  return reply.send(serviceBoardPage(JSON.stringify(await serviceBootData())));
 }
 
 /** Host-aware redirect for service.revive.sn "/" → the PWA scope. */
@@ -481,6 +483,15 @@ function registerServiceRoutes(app: FastifyInstance): void {
     const reason = typeof (req.body as any)?.reason === "string" ? (req.body as any).reason.slice(0, 200) : null;
     const t = await cancelTableTicket((req.params as any).id, reason);
     return reply.type("application/json").send({ ok: !!t });
+  });
+
+  // Fresh board state (JSON) — the client re-fetches this on load so a stale
+  // cached page (old inline boot) self-heals to the current spots/sessions.
+  app.get(`${SERVICE_BASE}/state`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    reply.header("Cache-Control", "no-store");
+    return reply.type("application/json").send(await serviceBootData());
   });
 
   // ── SSE stream (accueil channel) ──
