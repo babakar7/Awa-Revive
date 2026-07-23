@@ -22,6 +22,7 @@ import {
   type ClientPingKind,
   type DeliveryOrderView,
 } from "./deliveryRules.js";
+import { reconcileDeliveryTickets } from "./kitchenTicketRepo.js";
 import {
   activateDueScheduledDeliveries,
   claimActivationNotify,
@@ -382,6 +383,15 @@ async function attemptKitchenNotify(id: string, log: Log): Promise<void> {
 export async function sweepDeliveries(log: Log): Promise<number> {
   // 0. Durable activation gate. Concurrent sweeps return disjoint rows.
   await activateDueScheduledDeliveries();
+  // 0b. Project delivery_orders onto kitchen tickets (create at activation,
+  // complete/cancel when the source order leaves the kitchen). Idempotent
+  // backstop for the iPad board; also heals a crash between activation and
+  // ticket insert. Own try/catch so a ticket hiccup never blocks notifications.
+  try {
+    await reconcileDeliveryTickets(config.OPS_KITCHEN_FALLBACK_SECONDS);
+  } catch (err) {
+    log.error({ err }, "Kitchen-ticket reconcile failed");
+  }
   // 1. Kitchen notifications still pending/failed (including newly activated).
   for (const id of await pendingKitchenNotifies()) {
     await attemptKitchenNotify(id, log).catch((err) =>

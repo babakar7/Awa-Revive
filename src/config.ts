@@ -66,6 +66,22 @@ export const config = {
   // in flight keep their SLA).
   DELIVERY_SLA_MINUTES: parseInt(optional("DELIVERY_SLA_MINUTES", "20"), 10),
 
+  // ── Opérations temps réel (PWA cuisine, Phase 1) ──
+  // Hôtes des interfaces PWA (dispatch host-aware, cf. menu.revive.sn). L'iPad
+  // cuisine et, plus tard, les téléphones accueil vivent sur ces sous-domaines,
+  // tous pointant sur ce même service Railway.
+  CUISINE_HOST: optional("CUISINE_HOST", "cuisine.revive.sn"),
+  SERVICE_HOST: optional("SERVICE_HOST", "service.revive.sn"),
+  // Deux modes du canal WhatsApp interne cuisine :
+  //  - parallel (pilote) : le ticket WhatsApp part SYSTÉMATIQUEMENT, en plus de
+  //    l'iPad, pour comparer les deux canaux.
+  //  - fallback (après pilote) : le WhatsApp ne part QUE si l'iPad n'a pas accusé
+  //    réception du ticket avant OPS_KITCHEN_FALLBACK_SECONDS.
+  INTERNAL_NOTIFY_MODE: optional("INTERNAL_NOTIFY_MODE", "parallel"),
+  // Délai de grâce (s) avant l'envoi du WhatsApp de secours en mode fallback :
+  // le compteur démarre à la création du ticket (= activation de la livraison).
+  OPS_KITCHEN_FALLBACK_SECONDS: parseInt(optional("OPS_KITCHEN_FALLBACK_SECONDS", "15"), 10),
+
   // Wix
   WIX_API_KEY: required("WIX_API_KEY"),
   WIX_SITE_ID: required("WIX_SITE_ID"),
