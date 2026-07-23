@@ -16,12 +16,25 @@ import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
 import { createDeliveryTicket } from "../domain/kitchenTicketRepo.js";
 import {
+  createPairingDevice,
+  deleteOpsDevice,
+  listOpsDevices,
+  revokeOpsDevice,
+  type OpsDeviceRole,
+} from "../domain/opsDeviceRepo.js";
+import { recordOpsEvent } from "../domain/opsEvents.js";
+import { CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
+import { hashOpsToken, newPairCode, PAIR_CODE_TTL_MS } from "../ops/opsAuth.js";
+import { renderDevicesPage } from "./devicesPage.js";
+import {
   attemptActivationNotify,
   attemptCreatedNotify,
   attemptRescheduleNotify,
   attemptRouteNotify,
+  internalNotifyMode,
   notifyKitchenForOrder,
   renotifyKitchen,
+  scheduleKitchenFallback,
 } from "../domain/deliveryNotify.js";
 import {
   formatDakarDateTime,
@@ -782,18 +795,28 @@ ${
         if (order.activated_at) {
           // Project the active order onto a kitchen ticket right away so the
           // cuisine iPad shows it instantly (the sweep reconcile is the backstop).
-          await createDeliveryTicket(order, config.OPS_KITCHEN_FALLBACK_SECONDS).catch((e) =>
-            req.log.error({ err: e, order: order.id }, "Kitchen ticket create failed"),
-          );
-          const claimed = await delivery.claimKitchenNotify(order.id);
-          if (claimed) {
-            try {
-              await notifyKitchenForOrder(claimed, token, req.log);
-              const fresh = await delivery.findDeliveryOrder(order.id);
-              kitchenOk = !!fresh && ["sent", "sent_template", "partial", "fallback_reception"].includes(fresh.kitchen_notify_status);
-            } catch (e) {
-              req.log.error({ err: e, order: order.id }, "Delivery kitchen notify threw");
+          const ticket = await createDeliveryTicket(order, config.OPS_KITCHEN_FALLBACK_SECONDS)
+            .then((r) => r.ticket)
+            .catch((e) => {
+              req.log.error({ err: e, order: order.id }, "Kitchen ticket create failed");
+              return null;
+            });
+          if (internalNotifyMode() === "parallel") {
+            // Pilot: the WhatsApp ticket fires immediately, alongside the iPad.
+            const claimed = await delivery.claimKitchenNotify(order.id);
+            if (claimed) {
+              try {
+                await notifyKitchenForOrder(claimed, token, req.log);
+                const fresh = await delivery.findDeliveryOrder(order.id);
+                kitchenOk = !!fresh && ["sent", "sent_template", "partial", "fallback_reception"].includes(fresh.kitchen_notify_status);
+              } catch (e) {
+                req.log.error({ err: e, order: order.id }, "Delivery kitchen notify threw");
+              }
             }
+          } else {
+            // Post-pilot: the iPad is primary; arm the 15s WhatsApp safety net.
+            if (ticket) scheduleKitchenFallback(order.id, ticket.id, config.OPS_KITCHEN_FALLBACK_SECONDS, req.log);
+            kitchenOk = !!ticket; // the ticket reached the iPad board
           }
           if (scheduledFor) await attemptActivationNotify(order.id, req.log);
         }
@@ -915,6 +938,69 @@ ${
         if (!order) return reply.redirect("/admin/livraisons?err=commande introuvable", 303);
         const ok = await renotifyKitchen(order, req.log);
         return reply.redirect(ok ? "/admin/livraisons?done=renotified" : "/admin/livraisons?err=commande déjà partie/close", 303);
+      });
+
+      // ---------- Appareils PWA (iPad cuisine, téléphones accueil) ----------
+      const OPS_ROLES: OpsDeviceRole[] = ["cuisine", "accueil", "owner"];
+      const renderDevices = async (
+        extra: Partial<Parameters<typeof renderDevicesPage>[0]> = {},
+      ) => {
+        const devices = await listOpsDevices();
+        const latestEvent = await pool.query(
+          `select max(created_at) as at from ops_events where channel = $1`,
+          [CUISINE_CHANNEL],
+        );
+        return renderDevicesPage({
+          devices,
+          latestEventAt: latestEvent.rows[0]?.at ?? null,
+          fresh: null,
+          notice: null,
+          error: null,
+          ...extra,
+        });
+      };
+
+      admin.get("/appareils", async (req, reply) => {
+        const done = (req.query as any)?.done as string | undefined;
+        const err = (req.query as any)?.err as string | undefined;
+        const body = await renderDevices({
+          notice: done === "revoked" ? "Appareil révoqué." : done === "deleted" ? "Appareil supprimé." : done === "tested" ? "Événement de test envoyé à la cuisine." : null,
+          error: err ?? null,
+        });
+        reply.type("text/html").send(await layout("Appareils", "/admin/appareils", body, { subtitle: "iPad cuisine & écrans temps réel", contentWidth: "wide" }));
+      });
+
+      admin.post("/appareils", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const label = String(b.label ?? "").trim().slice(0, 40);
+        const role = String(b.role ?? "") as OpsDeviceRole;
+        if (!label || !OPS_ROLES.includes(role)) {
+          const body = await renderDevices({ error: "Nom et type requis." });
+          return reply.type("text/html").send(await layout("Appareils", "/admin/appareils", body, { contentWidth: "wide" }));
+        }
+        const code = newPairCode();
+        await createPairingDevice(label, role, hashOpsToken(code), new Date(Date.now() + PAIR_CODE_TTL_MS));
+        // Rendered directly (not a redirect) so the one-time code never lands in
+        // a URL / the audit log.
+        const body = await renderDevices({ fresh: { label, role, code } });
+        return reply.type("text/html").send(await layout("Appareils", "/admin/appareils", body, { contentWidth: "wide" }));
+      });
+
+      admin.post("/appareils/:id/revoke", async (req, reply) => {
+        await revokeOpsDevice((req.params as any).id);
+        return reply.redirect("/admin/appareils?done=revoked", 303);
+      });
+
+      admin.post("/appareils/:id/delete", async (req, reply) => {
+        await deleteOpsDevice((req.params as any).id);
+        return reply.redirect("/admin/appareils?done=deleted", 303);
+      });
+
+      admin.post("/appareils/test", async (req, reply) => {
+        // A harmless ping the paired iPad receives over SSE — proves the realtime
+        // path end to end without creating a fake ticket.
+        await recordOpsEvent(CUISINE_CHANNEL, "ping", { test: true, by: req.adminUser ?? "admin" });
+        return reply.redirect("/admin/appareils?done=tested", 303);
       });
 
       // ---------- Factures (demande client → la réception la crée ici) ----------

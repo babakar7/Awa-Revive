@@ -147,15 +147,60 @@ export async function advanceTicketByCuisine(
   return ticket;
 }
 
-/** First iPad ACK stops the WhatsApp fallback for this ticket (idempotent). */
+/**
+ * First iPad ACK stops the WhatsApp fallback for this ticket (idempotent). Also
+ * marks the linked delivery's kitchen notification as done when it was still
+ * merely 'pending' — the kitchen HAS been notified, via the iPad — so the board
+ * reads honestly and the sweep stops considering it. The guard `= 'pending'`
+ * never overrides a real WhatsApp outcome (sent/failed/partial), so PARALLEL
+ * mode (where the WhatsApp already fired) is unaffected.
+ */
 export async function ackTicketDisplayed(id: string): Promise<boolean> {
   if (!UUID_RE.test(String(id))) return false;
   const res = await pool.query(
-    `update kitchen_tickets set ipad_ack_at = now(), updated_at = now()
-      where id = $1 and ipad_ack_at is null`,
+    `with acked as (
+       update kitchen_tickets set ipad_ack_at = now(), updated_at = now()
+        where id = $1 and ipad_ack_at is null
+        returning delivery_order_id
+     )
+     update delivery_orders d
+        set kitchen_notify_status = 'sent',
+            kitchen_notified_at = coalesce(kitchen_notified_at, now()),
+            updated_at = now()
+      where d.id in (select delivery_order_id from acked where delivery_order_id is not null)
+        and d.kitchen_notify_status = 'pending'`,
+    [id],
+  );
+  // rowCount here is the delivery_orders update; the ack itself may still have
+  // happened for a ticket whose order was already 'sent'. Re-check cheaply.
+  return (res.rowCount ?? 0) > 0 || (await wasAcked(id));
+}
+
+async function wasAcked(id: string): Promise<boolean> {
+  const res = await pool.query(
+    `select 1 from kitchen_tickets where id = $1 and ipad_ack_at is not null`,
     [id],
   );
   return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * Delivery order ids whose kitchen WhatsApp is UNLOCKED in fallback mode: the
+ * ticket's fallback was claimed (iPad never acked in time) and the order still
+ * needs a (re)send. This is the fallback-mode analogue of pendingKitchenNotifies
+ * — the WhatsApp only flows once the grace window lapsed without an ack.
+ */
+export async function unlockedPendingKitchenOrderIds(): Promise<string[]> {
+  const res = await pool.query(
+    `select d.id from delivery_orders d
+       join kitchen_tickets k on k.delivery_order_id = d.id
+      where d.status = 'IN_KITCHEN' and d.activated_at is not null
+        and k.fallback_claimed_at is not null
+        and d.kitchen_notify_attempts < 3
+        and ( d.kitchen_notify_status in ('pending','failed')
+              or (d.kitchen_notify_status = 'claimed' and d.updated_at < now() - interval '2 minutes') )`,
+  );
+  return res.rows.map((r: any) => r.id as string);
 }
 
 // ---------- source-driven terminal transitions ----------

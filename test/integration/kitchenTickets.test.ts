@@ -19,7 +19,9 @@ import {
   reconcileDeliveryTickets,
   listOpenKitchenTickets,
   ticketByDeliveryOrder,
+  unlockedPendingKitchenOrderIds,
 } from "../../src/domain/kitchenTicketRepo.js";
+import { findDeliveryOrder } from "../../src/domain/deliveryRepo.js";
 import { opsEventsSince, latestOpsEventId } from "../../src/domain/opsEvents.js";
 import {
   createPairingDevice,
@@ -225,6 +227,39 @@ describe("source-driven terminal helpers", () => {
 
     const events = await opsEventsSince("cuisine", cursor);
     expect(events.filter((e) => e.kind === "ticket_removed")).toHaveLength(2);
+  });
+});
+
+describe("fallback-mode WhatsApp gating", () => {
+  it("an acked ticket marks the order kitchen-notified and never unlocks the WhatsApp", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+    // Order starts 'pending' (no WhatsApp sent yet in fallback mode).
+    expect((await findDeliveryOrder(order.id))?.kitchen_notify_status).toBe("pending");
+
+    await ackTicketDisplayed(ticket.id);
+    // The iPad displayed it → the order reads 'sent', honestly.
+    expect((await findDeliveryOrder(order.id))?.kitchen_notify_status).toBe("sent");
+
+    // Even past the deadline, an acked ticket is never claimable → never WhatsApp'd.
+    await pool.query("update kitchen_tickets set fallback_due_at = now() - interval '1 second'");
+    expect(await claimTicketFallback(ticket.id)).toBeNull();
+    expect(await unlockedPendingKitchenOrderIds()).toHaveLength(0);
+  });
+
+  it("only unlocks the WhatsApp once the fallback is claimed (no ack, past grace)", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+
+    // Before the grace lapses, the order is not unlocked.
+    expect(await unlockedPendingKitchenOrderIds()).toHaveLength(0);
+
+    await pool.query("update kitchen_tickets set fallback_due_at = now() - interval '1 second'");
+    const claim = await claimTicketFallback(ticket.id);
+    expect(claim?.deliveryOrderId).toBe(order.id);
+
+    // Now the WhatsApp is unlocked for the sweep to send.
+    expect(await unlockedPendingKitchenOrderIds()).toContain(order.id);
   });
 });
 
