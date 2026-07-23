@@ -9,6 +9,8 @@ import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
+import { sendCommitmentProgress, sendCommitmentComplete } from "../lib/commitmentMessages.js";
+import * as commitments from "./commitments.js";
 import { classTip } from "../lib/classTips.js";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import {
@@ -273,17 +275,6 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
   // must never refund or delete a seat that is already paid and reserved.
   await recordWixOrderForBooking(booking.id, log);
 
-  // Book-first, menu-after: now that the class is confirmed, offer the bar
-  // menu as its own (separate) order. Non-blocking.
-  if (extras.length === 0) {
-    await sendCafeMenuOffer({
-      waPhone: client.wa_phone,
-      clientId: booking.client_id,
-      lang,
-      log,
-    });
-  }
-
   if (extras.length > 0) {
     try {
       notifyReception(
@@ -299,6 +290,63 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
     } catch (err) {
       log.error({ err, bookingId: booking.id }, "Bar order notification failed");
     }
+  }
+
+  // Multi-session commitment progression. The server advances the plan ONLY
+  // here (shared BOOKED transition) — never Awa's wording. While the plan is
+  // incomplete, the "session X/N — continue?" message REPLACES the café offer;
+  // for an unlinked client the account-linking invitation rides along as a
+  // third button so a client who stops early still receives it. At completion,
+  // linking-if-due wins over the café upsell (account integrity > upsell).
+  const progress = await commitments
+    .advanceOnBooking(booking.id)
+    .catch((err) => {
+      log.error({ err, bookingId: booking.id }, "Commitment progression failed (non-blocking)");
+      return null;
+    });
+
+  if (progress && !progress.is_complete) {
+    const showLink = extras.length === 0 && (await shouldAskUnlinked(client));
+    if (showLink) await repo.markEmailPrompted(client.id).catch(() => {});
+    await sendCommitmentProgress({
+      waPhone: client.wa_phone,
+      clientId: booking.client_id,
+      commitmentId: progress.commitment_id,
+      lang,
+      serviceName: progress.service_name,
+      booked: progress.booked_count,
+      requested: progress.requested_count,
+      showLink,
+      log,
+    });
+    return; // café + link deferred until the plan completes
+  }
+
+  if (progress && progress.is_complete) {
+    await sendCommitmentComplete({
+      waPhone: client.wa_phone,
+      clientId: booking.client_id,
+      lang,
+      serviceName: progress.service_name,
+      requested: progress.requested_count,
+      log,
+    });
+    // Completion precedence: account linking first if due, else the café offer.
+    const askedLinking = await maybeHandleUnlinkedClient(client, booking, lang, log);
+    if (!askedLinking && extras.length === 0) {
+      await sendCafeMenuOffer({ waPhone: client.wa_phone, clientId: booking.client_id, lang, log });
+    }
+    return;
+  }
+
+  // Standalone booking (no commitment): book-first, menu-after.
+  if (extras.length === 0) {
+    await sendCafeMenuOffer({
+      waPhone: client.wa_phone,
+      clientId: booking.client_id,
+      lang,
+      log,
+    });
   }
 
   await maybeHandleUnlinkedClient(client, booking, lang, log);
@@ -735,19 +783,31 @@ export function planConfirmationMessage(
  *   2. Email reception so the duplicate is known even if the client ignores
  *      the question.
  */
+/**
+ * Whether the one-shot account-linking invitation is still due for this client:
+ * never asked, no claimed email, and their WhatsApp number matches no unique Wix
+ * contact. Shared by the commitment progress message (to decide the ms_link
+ * button) and maybeHandleUnlinkedClient.
+ */
+async function shouldAskUnlinked(client: any): Promise<boolean> {
+  if (client.email_prompted_at || client.claimed_email) return false;
+  const contactId = await wix
+    .findContactIdByPhone(`+${String(client.wa_phone).replace(/^\+/, "")}`, client.name ?? undefined)
+    .catch(() => null);
+  return !contactId;
+}
+
+/** Returns true when the linking invitation was actually sent this call. */
 async function maybeHandleUnlinkedClient(
   client: any,
   booking: any,
   lang: string,
   log: any,
-): Promise<void> {
+): Promise<boolean> {
   try {
-    if (client.email_prompted_at || client.claimed_email) return; // one-shot
-    const contactId = await wix.findContactIdByPhone(
-      `+${String(client.wa_phone).replace(/^\+/, "")}`,
-      client.name ?? undefined,
-    );
-    if (contactId) return; // linked to a unique account — nothing to do
+    // Already prompted (incl. armed by the ms_link button on a progress message)
+    // or already linked → nothing to send.
+    if (!(await shouldAskUnlinked(client))) return false;
 
     await repo.markEmailPrompted(client.id);
 
@@ -769,8 +829,10 @@ async function maybeHandleUnlinkedClient(
         `futures réservations et abonnements seront alors reliés automatiquement.`,
     );
     log.info({ clientId: client.id }, "Unlinked client: asked for email in chat + reception notified");
+    return true;
   } catch (err) {
     log.error({ err, clientId: client?.id }, "Unlinked-client handling failed (non-blocking)");
+    return false;
   }
 }
 

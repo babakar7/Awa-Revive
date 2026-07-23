@@ -396,6 +396,67 @@ create unique index if not exists idx_link_requests_one_open
   on link_requests (client_id)
   where status in ('AWAITING_EMAIL','AWAITING_CODE','NEEDS_RECEPTION');
 
+-- Engagement multi-séances : un client qui veut payer N séances à la carte
+-- (une par lien). Persiste le plan À TRAVERS les paiements, ce que la
+-- conversation seule ne fait pas (échec « Amy Ndiaye » : 3/5 payées, silence).
+-- Le SERVEUR fait avancer la progression sur la transition BOOKED partagée ;
+-- jamais la formulation d'Awa. Périmètre v1 : séances Wave/OM/Max It payées à
+-- l'unité — les réservations sur abonnement (book_with_membership) en sont
+-- exclues (pas d'interruption de paiement, donc pas de mode d'échec Amy).
+create table if not exists multi_session_commitments (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  service_id text not null,
+  service_name text not null,
+  requested_count integer not null,
+  status text not null default 'ACTIVE'
+    check (status in ('ACTIVE','COMPLETED','ABANDONED','EXPIRED')),
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+-- Au plus un engagement ACTIF par client (même motif que link_requests).
+create unique index if not exists idx_ms_commitments_one_active
+  on multi_session_commitments (client_id)
+  where status = 'ACTIVE';
+
+-- Une ligne PAR séance de l'engagement. Porte l'INTENTION (créneau agréé,
+-- résolu en event_id Wix + date via slot_cache). L'état paiement/réservation
+-- n'est PAS dupliqué ici : il se dérive des tentatives dans pending_bookings
+-- (FK inversée commitment_item_id ci-dessous), donc zéro dérive possible.
+create table if not exists multi_session_commitment_items (
+  id uuid primary key default gen_random_uuid(),
+  commitment_id uuid not null references multi_session_commitments(id),
+  position integer not null,
+  event_id text not null,
+  slot_start timestamptz not null,
+  intent_status text not null default 'PLANNED'
+    check (intent_status in ('PLANNED','NEEDS_RESELECTION','CANCELLED')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists idx_ms_commitment_items_position
+  on multi_session_commitment_items (commitment_id, position);
+create index if not exists idx_ms_commitment_items_commitment
+  on multi_session_commitment_items (commitment_id);
+
+-- FK inversée : chaque tentative de paiement d'une séance pointe vers son item.
+-- Plusieurs tentatives historiques par item (1er lien expiré → 2e lien payé)
+-- sans perdre l'audit trail. NULL pour les bookings hors engagement (standalone).
+alter table pending_bookings
+  add column if not exists commitment_item_id uuid;
+-- Invariant serveur : au plus UNE tentative « bloquante » par item — refuse une
+-- nouvelle tentative tant qu'une existe en DRAFT/AWAITING_PAYMENT/PAID/BOOKED/
+-- REFUND_NEEDED. Les tentatives EXPIRED/REFUNDED/CANCELLED (terminales non
+-- bloquantes) laissent l'item re-tentable.
+create unique index if not exists idx_pending_bookings_one_active_per_item
+  on pending_bookings (commitment_item_id)
+  where commitment_item_id is not null
+    and status in ('DRAFT','AWAITING_PAYMENT','PAID','BOOKED','REFUND_NEEDED');
+create index if not exists idx_pending_bookings_commitment_item
+  on pending_bookings (commitment_item_id)
+  where commitment_item_id is not null;
+
 -- Groupes de doublons marqués « traités » depuis /admin/crm (typiquement des
 -- fiches 100 % comptes membres que Wix refuse de fusionner — réglés à la main
 -- dans Wix ou assumés). Masqués de la page tant que leur composition ne change

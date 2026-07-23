@@ -5,6 +5,7 @@ import { cafeMenuVersion, extrasFromJson, formatExtrasOneLine, getCafeMenu } fro
 import type { MembershipContext } from "../lib/membershipContext.js";
 import type { BookingHabit, CafeOrder, PendingBooking, PlanOrder } from "../domain/repo.js";
 import type { DeliveryOrder } from "../domain/deliveryRepo.js";
+import type { CommitmentSnapshot } from "../domain/commitments.js";
 
 /**
  * General business info (hours, location, what to bring...) — the ONLY source
@@ -89,11 +90,11 @@ ${getCafeMenu().promptText}
 # Multi-session requests ("je veux 5 séances", several dates)
 - "N séances" for ONE person means N DIFFERENT dates (usually the same weekly slot repeated), participants: 1 on each — NEVER N spots on a single slot and NEVER N people. Treat it as a group only when the client explicitly says several PEOPLE are coming together.
 - BEFORE quoting N separate per-session prices, check list_plans once: a carnet/pack covering that class with roughly N sessions is ONE payment and often cheaper — offer it first. If no plan fits or the client prefers paying per session, continue per session.
-- Per-session path: agree the FULL list of dates up front (check_availability over as many windows as needed), recap them explicitly ("donc : mercredi 22, dimanche 26 et mercredi 29 — il en reste 2 à caler"), then create the payment links ONE at a time (server rule: one active link per client). Number each link ("séance 2/5") so the client always knows where they stand.
+- Per-session path (SAME class, N dates): agree the FULL list of dates up front (check_availability over as many windows as needed), recap them explicitly ("donc : mercredi 22, dimanche 26 et mercredi 29"), THEN call start_multi_session_commitment with those slots' choice_ids. This persists the plan server-side so it can never be silently dropped. It returns next_commitment_item_id — create the FIRST link with create_payment_link passing that commitment_item_id. From then on the SERVER tracks progress: after each paid session it sends the client a "séance X/N confirmée — on continue ?" message with buttons, and your context shows the ACTIVE plan line with the next commitment_item_id to use. (start_multi_session_commitment is for ONE class over several dates; for several DIFFERENT classes, just book them one by one without it.)
 - SEVERAL DIFFERENT classes in one message ("pilates lundi, aquababy mercredi, aquabike jeudi"): the client already told you which class goes with which day — hold that mapping for the whole flow. When they later say just "et jeudi ?" or "le mercredi maintenant", use the class THEY already named for that day; never re-ask "quel cours ?" for a day they already specified. Only ask when a detail is genuinely missing (e.g. a Pilates variant/level they didn't give).
-- CONTINUE THE PLAN after each payment: once a ✅ payment confirmation appears in the history and agreed dates remain, your next reply — whatever the client writes, even a bare "ok" — must move to the NEXT agreed date's link (answer any question of theirs first, then continue; no re-asking which date, no re-confirmation). With each link, invite them to send a quick "ok" here once paid so you can send the next one.
-- NEVER promise to send the next link automatically after a payment — you can only act when the client writes. The automatic message after payment is the booking confirmation only.
-- Never let a multi-session plan end silently incomplete: while agreed sessions remain unbooked, keep the count visible and propose concrete dates; if the searched window has none left, say so and offer to look further ahead — the client asked for N sessions, and stopping at fewer without flagging it is a failure.
+- CONTINUE THE PLAN after each payment: when the ACTIVE plan line shows sessions remain, your next reply — whatever the client writes, even a bare "ok" or a tapped "Continuer" — must move to the NEXT session (answer any question of theirs first, then continue; no re-asking which date, no re-confirmation): run check_availability for that class around the agreed date, then create_payment_link with the chosen slot's choice_id AND the plan's commitment_item_id. If that agreed slot is full, offer the nearest alternative and pass its choice_id with the SAME commitment_item_id — the server re-points that session.
+- NEVER promise to send the next link automatically after a payment — the server's "on continue ?" message handles the nudge; you only act when the client writes or taps. The automatic message after payment is the booking confirmation + that progress prompt.
+- If the client wants to STOP the plan ("laisse tomber le reste"), call abandon_multi_session_commitment — already-paid sessions are kept. To start a DIFFERENT plan while one is active, abandon the current one first.
 
 # Bar Revive (menu in <cafe_menu>)
 - Menu questions: answer anytime, ONLY from <cafe_menu> — never invent items, prices or ingredients. Item not on the menu ⇒ say you don't know and mention the counter.
@@ -250,6 +251,8 @@ export function dynamicContext(args: {
   capabilityMenu?: "upcoming" | "onboarding" | null;
   /** Awa has never replied to this client before — mandate the AI self-intro. */
   firstContact?: boolean;
+  /** Active multi-session commitment (server-owned progress), or null. */
+  activeCommitment?: CommitmentSnapshot | null;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -468,6 +471,25 @@ export function dynamicContext(args: {
   }
   const upcoming = args.upcomingBookingsCount ?? 0;
   lines.push(`upcoming_bookings_count (Awa BOOKED, slot in the future): ${upcoming}.`);
+  if (args.activeCommitment) {
+    const c = args.activeCommitment;
+    const next = c.next_item;
+    const nextLabel = next
+      ? `${new Date(next.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE, weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}${next.effective_state === "NEEDS_RESELECTION" ? " (ce créneau n'est plus dispo — propose-lui de re-choisir une date pour cette séance)" : ""}`
+      : "aucune séance à payer pour l'instant";
+    lines.push(
+      `ACTIVE multi-session plan (server-tracked): ${c.booked_count}/${c.commitment.requested_count} sessions of ` +
+        `"${c.commitment.service_name}" confirmed. ` +
+        (next
+          ? `Next unpaid session — commitment_item_id ${next.id}, agreed date ${nextLabel}. ` +
+            `To book it: run check_availability for this class around that date, then create_payment_link with the ` +
+            `chosen slot's choice_id AND commitment_item_id ${next.id}. If the client tapped "Continuer" (ms_continue), ` +
+            `do exactly that now. While this plan is active, EVERY link for "${c.commitment.service_name}" MUST carry a ` +
+            `commitment_item_id — never create an ungrouped link for this class. If the client wants to STOP, call ` +
+            `abandon_multi_session_commitment. Never promise to send the next link automatically after a payment.`
+          : `All agreed sessions are booked or in progress — nothing to relaunch right now.`),
+    );
+  }
   const cap = args.capabilityMenu ?? null;
   if (cap === "upcoming") {
     lines.push(

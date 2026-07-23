@@ -2400,6 +2400,59 @@ incomplet en silence). Correctifs livrés :
   ajouté à business-info (`a34e84e`, autre agent, 22:43 le soir même).
 - Build + 491 tests unitaires + 96 intégration verts.
 
+### 6.9bis Engagements multi-séances DURABLES (persistance serveur) (23/07/2026)
+
+Le fix §6.9 était **prompt-only** : le plan multi-séances ne vivait que dans
+l'historique 30 tours, donc un plan pouvait encore retomber au silence (mode
+d'échec Amy : 3/5 payées puis rien). Cette itération le rend **durable et piloté
+serveur** (« le serveur avance la progression, jamais la formulation d'Awa »).
+
+- **Schéma** ([schema.ts](src/db/schema.ts)) : `multi_session_commitments`
+  (1 engagement ACTIF/client, index unique partiel) + `multi_session_commitment_items`
+  (1 ligne/séance, `intent_status PLANNED|NEEDS_RESELECTION|CANCELLED`, position
+  unique). **FK inversée** `pending_bookings.commitment_item_id` : plusieurs
+  tentatives historiques/séance (1er lien expiré → 2e payé) sans perdre l'audit.
+  Index unique partiel = **au plus une tentative bloquante/item**
+  (DRAFT/AWAITING/PAID/BOOKED/REFUND_NEEDED).
+- **[commitments.ts](src/domain/commitments.ts)** : `deriveItemState` PURE
+  (précédence BOOKED→PAID/REFUND_NEEDED→AWAITING/DRAFT→intent ; EXPIRED-only =
+  re-tentable). **Progression = COUNT(items BOOKED)** → idempotent face aux
+  webhooks dupliqués (jamais un compteur incrémenté). Verrou consultatif
+  par client (`pg_advisory_xact_lock`, comme bookingFunnel). `startCommitment`
+  idempotent (même plan → existant ; plan différent → `conflict`). Sweep
+  d'expiration (inactivité 7 j, rafraîchie à chaque BOOKED ; ou toutes dates
+  passées sauf items NEEDS_RESELECTION). `closeCommitment` ORDONNÉ : expire les
+  liens DRAFT/AWAITING **avant** de CANCELLER les items ; **différé** tant qu'une
+  tentative PAID attend son fulfillment ; jamais BOOKED/REFUND_NEEDED touchés.
+- **Outils** ([tools.ts](src/agent/tools.ts)) : `start_multi_session_commitment`
+  (résout les choice_id via slot_cache, exige exactement N slots),
+  `abandon_multi_session_commitment`. `create_payment_link` gate : tant qu'un
+  engagement ACTIF existe pour LE MÊME service, `commitment_item_id` est EXIGÉ
+  (sinon lien orphelin) ; re-sélection d'un item NEEDS_RESELECTION via un
+  nouveau choice_id (même outil, pas d'outil en plus). **Pas de règle des 16h à
+  l'achat** (elle ne vaut qu'à l'annulation).
+- **[fulfillment.ts](src/domain/fulfillment.ts)** : après BOOKED (rail Wave/OM/
+  Max It — transition partagée), `advanceOnBooking` ; si plan incomplet →
+  message « Séance X/N confirmée — on continue ? » avec boutons
+  `ms_continue`/`ms_later`/`ms_link` (le 3e = invitation de liaison intégrée pour
+  un client non lié, sinon perdue s'il s'arrête tôt), qui **remplace** l'offre
+  café ; à la complétion → liaison-si-due **avant** l'offre café (intégrité du
+  compte > upsell). Paiement tardif après clôture : honoré (invariant
+  `EXPIRED→PAID` intact), engagement NON rouvert, pas de « on continue ».
+- **Taps `ms_*`** ([index.ts](src/agent/index.ts)) : `ms_later`/`ms_link` routés
+  serveur (déterministes, sans modèle) ; `ms_continue` → le modèle re-lance
+  `check_availability` (le slot_cache a un TTL 2 h, périmé pour un plan
+  multi-jours) puis `create_payment_link` avec l'item — guidé par la ligne
+  dynamicContext « ACTIVE multi-session plan ». `ms_link` = invitation
+  *présentée* (le compte n'est LIÉ qu'après `submit_verification_code`).
+- **Périmètre v1** : séances Wave/OM/Max It payées à l'unité uniquement —
+  `book_with_membership` EXCLU (pas d'interruption de paiement, pas de mode Amy).
+- **Hors périmètre** (projets séparés) : file de suivi 4-états + assignation ;
+  persistance delivered/read WhatsApp ; carte « Situation actuelle » réception
+  (Phase 3) + `buildClientJourneySnapshot` (Phase 2).
+- Build + 634 tests unitaires + 187 intégration verts (dont 13 domaine
+  commitments + 2 E2E : gating create_payment_link, webhook→« Séance 1/3 »+boutons).
+
 ### 6.10 Messages non-texte lisibles dans l'admin + réactions silencieuses (21/07/2026)
 
 Un client (+1 301…, takeover actif) envoie un message que le webhook ne gère

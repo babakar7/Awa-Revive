@@ -17,6 +17,9 @@ import {
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
 import { isHumanTakeoverActive } from "../domain/adminOperations.js";
 import * as deliveries from "../domain/deliveryRepo.js";
+import * as commitments from "../domain/commitments.js";
+import { emailAskMessage } from "../lib/linkAsk.js";
+import { commitmentLaterAck } from "../lib/commitmentMessages.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -326,6 +329,42 @@ export function detectLanguage(text: string): "fr" | "en" | "wo" | null {
  * Agent loop (SPEC §6): load history + client → Claude with tools → execute
  * tool calls → send final reply on WhatsApp. All turns persisted.
  */
+/**
+ * Server-side routing of multi-session commitment button taps (ms_*). Returns
+ * true when the tap was fully handled here (no model turn needed):
+ *  - ms_later → acknowledge; the plan resumes on the client's next message.
+ *  - ms_link  → send the account-linking invitation (the ms_link button already
+ *    armed the one-shot when it was shown); the client then replies with their
+ *    email and the normal request_email_verification flow takes over.
+ * ms_continue is intentionally NOT handled here (returns false) — it needs a
+ * fresh check_availability (the stored slot's cache entry has a 2h TTL), which
+ * is the model's job via the tools; the dynamicContext commitment line + prompt
+ * rule tell it exactly which session and date to book next.
+ */
+async function maybeHandleCommitmentTap(
+  client: repo.Client,
+  text: string,
+): Promise<boolean> {
+  const m = text.match(/\(id:\s*(ms_[a-z]+):([0-9a-f-]+)\)\s*$/i);
+  if (!m) return false;
+  const action = m[1].toLowerCase();
+  const lang = client.language ?? "fr";
+
+  if (action === "ms_later") {
+    const msg = commitmentLaterAck(lang);
+    await sendText(client.wa_phone, msg);
+    await repo.addTurn(client.id, "assistant", msg);
+    return true;
+  }
+  if (action === "ms_link") {
+    const msg = emailAskMessage(lang);
+    await sendText(client.wa_phone, msg);
+    await repo.addTurn(client.id, "assistant", msg);
+    return true;
+  }
+  return false; // ms_continue → let the model run availability + link
+}
+
 export async function handleInboundText(args: {
   waPhone: string;
   text: string;
@@ -355,6 +394,13 @@ export async function handleInboundText(args: {
     return;
   }
 
+  // Multi-session commitment button taps are routed by the SERVER (deterministic,
+  // "le serveur décide"): ms_later and ms_link are self-contained and answered
+  // here without the model; ms_continue falls through to the model, which re-runs
+  // check_availability (the stored slot's slot_cache entry has a 2h TTL and is
+  // long gone for a multi-day plan) then create_payment_link with the item id.
+  if (await maybeHandleCommitmentTap(client, args.text)) return;
+
   // Blue ticks + "typing…" bubble while the agent thinks (best-effort, non-blocking).
   void sendTypingIndicator(args.waMessageId);
 
@@ -364,6 +410,7 @@ export async function handleInboundText(args: {
     repo.expireStalePlanOrders(),
     repo.expireStaleCafeOrders(),
     deliveries.expireStaleDeliveryPaymentAttempts(),
+    commitments.expireStaleCommitments(),
   ]);
   const [
     activeBooking,
@@ -375,6 +422,7 @@ export async function handleInboundText(args: {
     upcomingBookingsCount,
     preferredPaymentMethod,
     deliveryOrders,
+    activeCommitment,
   ] = await Promise.all([
     repo.activeAwaitingPayment(client.id),
     repo.activeAwaitingPlanOrder(client.id),
@@ -385,6 +433,7 @@ export async function handleInboundText(args: {
     repo.countUpcomingBooked(client.id),
     repo.lastSuccessfulBookingPaymentMethod(client.id),
     deliveries.actionableDeliveriesForPhone(client.wa_phone),
+    commitments.activeCommitmentSnapshot(client.id),
   ]);
 
   const history = await repo.lastTurnsForReplay(client.id, 30);
@@ -448,6 +497,7 @@ export async function handleInboundText(args: {
         preferredPaymentMethod,
         capabilityMenu,
         firstContact: isFirstContact,
+        activeCommitment,
       }),
     },
   ];
