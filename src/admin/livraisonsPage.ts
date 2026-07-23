@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import { type CafeMenuItem, formatExtrasMultiline, formatExtrasOneLine } from "../lib/cafeMenu.js";
 import {
   orderItems,
+  type ClosedDeliveryOrder,
   type DeliveryOrder,
   type DeliveryStats,
   type RecentDeliveryClient,
@@ -273,24 +274,43 @@ function scheduledRow(o: DeliveryOrder): string {
 </tr>`;
 }
 
-function closedRow(o: DeliveryOrder): string {
-  const prepStartedAt = o.kitchen_notify_at ?? o.created_at;
-  const prep = o.out_for_delivery_at
-    ? `${minutesSince(prepStartedAt) - minutesSince(o.out_for_delivery_at)} min`
-    : "—";
+/** Whole minutes between two instants, or null if either is missing. */
+function minutesBetween(from: Date | string | null, to: Date | string | null): number | null {
+  if (!from || !to) return null;
+  return Math.max(0, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 60000));
+}
+
+/** Per-order duration breakdown for a delivered order: preparation
+ *  (start → kitchen READY), transit (departure → delivered) and total. Each
+ *  segment is shown only when its timestamps exist (older orders have no
+ *  kitchen ticket / never tapped a departure). */
+function durationsCell(o: ClosedDeliveryOrder): string {
+  if (o.status !== "DELIVERED") return `<span class="muted">—</span>`;
+  const start = o.kitchen_notify_at ?? o.activated_at ?? o.created_at;
+  const prep = minutesBetween(start, o.kitchen_ready_at);
+  const transit = minutesBetween(o.out_for_delivery_at, o.delivered_at);
+  const total = minutesBetween(start, o.delivered_at);
+  const parts: string[] = [];
+  if (prep !== null) parts.push(`<span class="muted">Prépa</span> ${prep} min`);
+  if (transit !== null) parts.push(`<span class="muted">Transit</span> ${transit} min`);
+  if (total !== null) parts.push(`<b>Total ${total} min</b>`);
+  return parts.length ? parts.join(" · ") : `<span class="muted">—</span>`;
+}
+
+function closedRow(o: ClosedDeliveryOrder): string {
   const state = o.status === "DELIVERED" ? "🛵 livrée" : "✖ annulée";
   return `<tr>
 <td data-label="État">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}${esc(state)}</td>
 <td data-label="Client">${esc(o.client_name)}${o.recipient_name && o.recipient_phone ? `<br><span class="muted">Remise à ${esc(o.recipient_name)} (+${esc(o.recipient_phone)})</span>` : ""}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(orderItems(o)))}</td>
 <td data-label="Paiement" class="hide-sm">${paymentCell(o)}</td>
-<td data-label="Départ" class="hide-sm">${o.status === "DELIVERED" ? esc(prep) : "—"}</td>
+<td data-label="Durées">${durationsCell(o)}</td>
 </tr>`;
 }
 
 export interface BoardData {
   open: DeliveryOrder[];
-  recent: DeliveryOrder[];
+  recent: ClosedDeliveryOrder[];
   stats: DeliveryStats;
   banner: string;
 }
@@ -307,7 +327,7 @@ export function renderLivraisonsBoard(data: BoardData): string {
     ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Délai</th><th>Client</th><th>Commande</th><th class="hide-sm">Adresse</th><th>Paiement</th><th class="hide-sm">Cuisine</th><th>Actions</th></tr></thead><tbody>${active.map(openRow).join("")}</tbody></table></div>`
     : `<div class="empty"><b>Aucune commande en cours</b><p>Les nouvelles livraisons apparaîtront ici avec leur délai.</p></div>`;
   const recentTable = recent.length
-    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Paiement</th><th class="hide-sm">Départ</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Paiement</th><th>Durées</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table></div>`
     : `<div class="empty"><b>Aucun historique récent</b></div>`;
   return `${data.banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Livraisons</h2><p>Suivez le délai cuisine, le choix de paiement et le départ de chaque commande.</p></div><div class="page-header-actions"><a href="/admin/livraisons/new" class="act">Nouvelle commande</a></div></header>

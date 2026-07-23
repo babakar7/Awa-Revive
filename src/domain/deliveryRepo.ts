@@ -1036,13 +1036,20 @@ export async function listOpenDeliveryOrders(): Promise<DeliveryOrder[]> {
   return res.rows as DeliveryOrder[];
 }
 
-export async function recentClosedDeliveryOrders(limit = 20): Promise<DeliveryOrder[]> {
+/** A closed order plus its kitchen ticket's ready time, for the per-order
+ *  duration breakdown (prep / transit / total) on the reception board. */
+export type ClosedDeliveryOrder = DeliveryOrder & { kitchen_ready_at: Date | null };
+
+export async function recentClosedDeliveryOrders(limit = 20): Promise<ClosedDeliveryOrder[]> {
   const res = await pool.query(
-    `select * from delivery_orders where status in ('DELIVERED','CANCELLED')
-      order by coalesce(delivered_at, cancelled_at, updated_at) desc limit $1`,
+    `select d.*, kt.ready_at as kitchen_ready_at
+       from delivery_orders d
+       left join kitchen_tickets kt on kt.delivery_order_id = d.id
+      where d.status in ('DELIVERED','CANCELLED')
+      order by coalesce(d.delivered_at, d.cancelled_at, d.updated_at) desc limit $1`,
     [limit],
   );
-  return res.rows as DeliveryOrder[];
+  return res.rows as ClosedDeliveryOrder[];
 }
 
 export interface RecentDeliveryClient {
