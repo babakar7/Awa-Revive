@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { buildServer } from "../../src/server.js";
+import { config } from "../../src/config.js";
 import { pool, migrate } from "../../src/db/index.js";
 import { truncateAll } from "./helpers.js";
 import type { ExtraLine } from "../../src/lib/cafeMenu.js";
@@ -300,5 +303,64 @@ describe("ops device pairing", () => {
       new Date(Date.now() - 1000), // already expired
     );
     expect(await redeemPairing(hashOpsToken(code), hashOpsToken(newOpsToken()))).toBeNull();
+  });
+});
+
+describe("cuisine PWA over HTTP", () => {
+  let app: FastifyInstance;
+  beforeAll(async () => {
+    app = buildServer();
+    await app.ready();
+  });
+
+  it("serves the manifest and app.js as static assets", async () => {
+    const manifest = await app.inject({ method: "GET", url: "/ops/cuisine/manifest.webmanifest" });
+    expect(manifest.statusCode).toBe(200);
+    expect(JSON.parse(manifest.body).scope).toBe("/ops/cuisine/");
+    const appjs = await app.inject({ method: "GET", url: "/ops/cuisine/app.js" });
+    expect(appjs.statusCode).toBe(200);
+    expect(appjs.headers["content-type"]).toContain("javascript");
+  });
+
+  it("redirects the cuisine host root into the PWA scope", async () => {
+    const res = await app.inject({ method: "GET", url: "/", headers: { host: config.CUISINE_HOST } });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/ops/cuisine/");
+  });
+
+  it("shows the pairing screen to an unpaired device and 401s the SSE stream", async () => {
+    const home = await app.inject({ method: "GET", url: "/ops/cuisine/" });
+    expect(home.statusCode).toBe(200);
+    expect(home.body).toContain("Appairer cet écran");
+    const sse = await app.inject({ method: "GET", url: "/ops/cuisine/events" });
+    expect(sse.statusCode).toBe(401);
+  });
+
+  it("pairs via HTTP, then serves the kiosque and accepts ticket actions", async () => {
+    const code = newPairCode();
+    await createPairingDevice("iPad Cuisine", "cuisine", hashOpsToken(code), new Date(Date.now() + 60_000));
+    const pair = await app.inject({
+      method: "POST",
+      url: "/ops/cuisine/pair",
+      payload: `code=${code}`,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    expect(pair.statusCode).toBe(303);
+    const setCookie = String(pair.headers["set-cookie"]);
+    expect(setCookie).toContain("ops_device=");
+    const cookie = setCookie.split(";")[0];
+
+    const home = await app.inject({ method: "GET", url: "/ops/cuisine/", headers: { cookie } });
+    expect(home.statusCode).toBe(200);
+    expect(home.body).toContain("window.__BOOT__");
+
+    // A ticket action is accepted with the device cookie, rejected without it.
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+    const ok = await app.inject({ method: "POST", url: `/ops/cuisine/tickets/${ticket.id}/ready`, headers: { cookie } });
+    expect(ok.statusCode).toBe(200);
+    expect(JSON.parse(ok.body).ok).toBe(true);
+    const denied = await app.inject({ method: "POST", url: `/ops/cuisine/tickets/${ticket.id}/preparing` });
+    expect(denied.statusCode).toBe(401);
   });
 });
