@@ -1349,6 +1349,10 @@ create table if not exists service_spots (
   active boolean not null default true,
   created_at timestamptz not null default now()
 );
+-- ALTER additifs (create table if not exists n'ajoute PAS de colonne à une table
+-- déjà créée par un boot antérieur) : capacités d'affichage.
+alter table service_spots add column if not exists capacity integer;
+alter table service_spots add column if not exists capacity_max integer;
 create index if not exists idx_service_spots_area on service_spots (area_id, sort_order) where active;
 -- Seed idempotent : UNE place par espace (config actuelle — un canapé, une table
 -- terrasse extensible, la pergola). Ne ré-insère jamais si l'espace a déjà une place.
