@@ -584,8 +584,9 @@ create index if not exists idx_notification_log_rule_event
 
 -- Commandes bar LIVRAISON : la réception saisit une commande passée au téléphone,
 -- la cuisine est notifiée (WhatsApp + lien magique « ✅ prête »), un SLA déclenche
--- une alerte réception, et le client est prévenu quand c'est prêt. Paiement HORS
--- système (encaissé à la livraison) — on ne mémorise que le montant dû.
+-- une alerte réception, et le client est prévenu quand la commande part. Le
+-- client choisit Wave / OM / Max It / espèces via Awa ; aucun départ n'est
+-- permis tant que le choix espèces ou un paiement mobile confirmé ne l'autorise.
 -- Statuts : IN_KITCHEN → OUT_FOR_DELIVERY → DELIVERED ; les 2 états ouverts →
 -- CANCELLED (IN_KITCHEN→DELIVERED reste permis si la réception clôt une commande
 -- dont le départ n'a jamais été tapé — pas de ping route alors). L'étape READY a
@@ -643,9 +644,51 @@ alter table delivery_orders add column if not exists route_notified_at timestamp
 alter table delivery_orders add column if not exists route_notify_attempts integer not null default 0;
 alter table delivery_orders add column if not exists route_notify_wamid text;
 alter table delivery_orders add column if not exists is_test boolean not null default false;
+alter table delivery_orders add column if not exists wix_contact_id text;
+-- Backward-compatible cutover: orders created under the former "cash at the
+-- door" flow stay dispatchable. This block runs only when the column is first
+-- introduced; new orders created afterwards retain PENDING_CHOICE.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema='public' and table_name='delivery_orders' and column_name='payment_status'
+  ) then
+    alter table delivery_orders add column payment_status text not null default 'PENDING_CHOICE';
+    update delivery_orders
+       set payment_status=case
+         when status='DELIVERED' then 'PAID'
+         when status in ('IN_KITCHEN','OUT_FOR_DELIVERY','READY') then 'CASH_DUE'
+         else 'PENDING_CHOICE'
+       end;
+  end if;
+end $$;
+alter table delivery_orders add column if not exists payment_method text;
+alter table delivery_orders add column if not exists active_payment_attempt_id uuid;
+alter table delivery_orders add column if not exists payment_ref text;
+alter table delivery_orders add column if not exists paid_at timestamptz;
+alter table delivery_orders add column if not exists payment_issue text;
+update delivery_orders
+   set payment_method=coalesce(payment_method,'cash')
+ where payment_method is null and payment_status in ('CASH_DUE','PAID');
+update delivery_orders
+   set payment_ref=coalesce(payment_ref,'legacy-cash:' || id::text),
+       paid_at=coalesce(paid_at,delivered_at,updated_at)
+ where status='DELIVERED' and payment_status='PAID' and payment_method='cash';
+alter table delivery_orders drop constraint if exists delivery_orders_payment_status_check;
+alter table delivery_orders add constraint delivery_orders_payment_status_check
+  check (payment_status in ('PENDING_CHOICE','AWAITING_PAYMENT','CASH_DUE','PAID','REFUND_NEEDED'));
+alter table delivery_orders drop constraint if exists delivery_orders_payment_method_check;
+alter table delivery_orders add constraint delivery_orders_payment_method_check
+  check (payment_method is null or payment_method in ('wave','orange_money','maxit','cash'));
 alter table delivery_orders add column if not exists out_for_delivery_at timestamptz;
 alter table delivery_orders add column if not exists out_for_delivery_by text;   -- 'kitchen-link' | 'admin-<user>'
 alter table delivery_orders add column if not exists pickup_alerted_at timestamptz; -- alerte enlèvement one-shot
+update delivery_orders
+   set status='OUT_FOR_DELIVERY',
+       out_for_delivery_at=coalesce(out_for_delivery_at,ready_at,updated_at),
+       out_for_delivery_by=coalesce(out_for_delivery_by,ready_by,'legacy-ready')
+ where status='READY';
 alter table delivery_orders drop constraint if exists delivery_orders_status_check;
 alter table delivery_orders add constraint delivery_orders_status_check
   check (status in ('IN_KITCHEN','OUT_FOR_DELIVERY','DELIVERED','CANCELLED'));
@@ -653,6 +696,31 @@ create index if not exists idx_delivery_orders_created_wamid
   on delivery_orders (created_notify_wamid) where created_notify_wamid is not null;
 create index if not exists idx_delivery_orders_route_wamid
   on delivery_orders (route_notify_wamid) where route_notify_wamid is not null;
+
+-- Chaque lien mobile possède sa propre référence fournisseur. Cela permet de
+-- reconnaître un ancien lien payé tardivement après un changement de moyen et
+-- d'éviter de confondre ce paiement avec l'essai actuellement affiché par Awa.
+create table if not exists delivery_payment_attempts (
+  id uuid primary key default gen_random_uuid(),
+  delivery_order_id uuid not null references delivery_orders(id),
+  client_id uuid not null references clients(id),
+  method text not null check (method in ('wave','orange_money','maxit')),
+  amount_xof integer not null check (amount_xof > 0),
+  status text not null default 'DRAFT'
+    check (status in ('DRAFT','AWAITING_PAYMENT','EXPIRED','FAILED','PAID','REFUND_NEEDED')),
+  session_id text,
+  payment_link text,
+  link_expires_at timestamptz,
+  payer_phone text,
+  paid_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_delivery_payment_attempts_order
+  on delivery_payment_attempts (delivery_order_id, created_at desc);
+create unique index if not exists idx_delivery_payment_attempts_active
+  on delivery_payment_attempts (delivery_order_id)
+  where status in ('DRAFT','AWAITING_PAYMENT');
 
 -- Factures réception : un client demande une facture (aujourd'hui → handoff, la
 -- réception n'avait aucun outil). Elle la crée ici, l'imprime (PDF navigateur) et

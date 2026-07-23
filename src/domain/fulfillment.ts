@@ -17,6 +17,7 @@ import {
 } from "../lib/receptionContact.js";
 import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { backfillBookingContacts } from "./bookingContactBackfill.js";
+import * as deliveries from "./deliveryRepo.js";
 
 /**
  * Payment fulfillment — shared by Wave and Orange Money / Max It webhooks.
@@ -51,6 +52,13 @@ export async function processPayment(
       await processCafePayment(cafeOrder, log);
       return;
     }
+    const deliveryAttempt = await deliveries
+      .findDeliveryPaymentAttemptById(clientReference)
+      .catch(() => null);
+    if (deliveryAttempt) {
+      await processDeliveryPayment(deliveryAttempt.id, opts.payerPhone ?? null, log);
+      return;
+    }
     log.warn({ clientReference }, "Payment: unknown client_reference — ignoring");
     return;
   }
@@ -80,6 +88,58 @@ export async function processPayment(
   }
 
   await fulfillPaidBooking(booking.id, log);
+}
+
+/** Verified provider payment for an admin-created delivery. */
+export async function processDeliveryPayment(
+  attemptId: string,
+  payerPhone: string | null,
+  log: PaymentLog,
+): Promise<void> {
+  const result = await deliveries.markDeliveryPaymentAttemptPaid(attemptId, payerPhone);
+  if (!result || result.outcome === "duplicate") return;
+  const { order, attempt } = result;
+  const client = await repo.upsertClient(order.client_phone);
+  if (!client.name) {
+    await repo.updateClientName(client.id, order.client_name).catch(() => {});
+    client.name = order.client_name;
+  }
+
+  if (result.outcome === "refund_needed") {
+    const msg =
+      client.language === "en"
+        ? `⚠️ We received your ${attempt.amount_xof} FCFA payment, but this delivery was already closed or paid. The Revive team is checking it and will contact you about the refund.`
+        : `⚠️ Nous avons reçu ton paiement de ${attempt.amount_xof} FCFA, mais cette livraison était déjà clôturée ou payée. L'équipe Revive vérifie et te recontacte pour le remboursement.`;
+    await sendText(order.client_phone, msg).catch((err) =>
+      log.error({ err, order: order.id }, "Delivery refund-warning client send failed"),
+    );
+    await repo.addTurn(client.id, "assistant", msg).catch(() => {});
+    notifyReception(
+      "💸 REMBOURSEMENT à vérifier — paiement livraison tardif/double",
+      `Client : ${order.client_name} (+${order.client_phone})\n` +
+        `Commande : ${order.id}\nMontant : ${attempt.amount_xof} FCFA\n` +
+        `Moyen : ${paymentMethodLabel(attempt.method)}\nRéférence : ${attempt.session_id ?? attempt.id}\n` +
+        `Motif : ${order.payment_issue ?? "paiement tardif ou double"}`,
+      { whatsappFirst: true, preferTemplate: true },
+    );
+    return;
+  }
+
+  const msg =
+    client.language === "en"
+      ? `✅ Payment received — ${order.amount_xof} FCFA via ${paymentMethodLabel(attempt.method)}. Your delivery can now leave; you won't need to pay the delivery person.`
+      : `✅ Paiement reçu — ${order.amount_xof} FCFA via ${paymentMethodLabel(attempt.method)}. Ta livraison peut maintenant partir ; tu n'auras rien à régler au livreur.`;
+  await sendText(order.client_phone, msg).catch((err) =>
+    log.error({ err, order: order.id }, "Delivery payment confirmation send failed"),
+  );
+  await repo.addTurn(client.id, "assistant", msg).catch(() => {});
+  notifyReception(
+    `${order.is_test ? "🧪 TEST — " : ""}✅ Livraison payée — départ autorisé`,
+    `Client : ${order.client_name} (+${order.client_phone})\n` +
+      `Montant reçu : ${order.amount_xof} FCFA via ${paymentMethodLabel(attempt.method)}\n` +
+      `Commande : ${order.id}\nNe rien encaisser auprès du client.`,
+    { whatsappFirst: true, preferTemplate: true },
+  );
 }
 
 /**

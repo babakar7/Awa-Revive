@@ -62,6 +62,8 @@ function viewOf(o: DeliveryOrder): DeliveryOrderView {
     items: orderItems(o),
     amount_xof: o.amount_xof,
     is_test: o.is_test,
+    payment_status: o.payment_status,
+    payment_method: o.payment_method,
   };
 }
 
@@ -247,8 +249,12 @@ async function sendClientPing(
   const cfg = CLIENT_PING[kind];
   const tag = `[${order.is_test ? "TEST " : ""}livraison ${order.id.slice(0, 8)}]`;
   const view = viewOf(order);
-  const client = await repo.findClientByPhone([order.client_phone]).catch(() => null);
-  const lang = client?.language ?? "fr";
+  const client = await repo.upsertClient(order.client_phone);
+  if (!client.name) {
+    await repo.updateClientName(client.id, order.client_name).catch(() => {});
+    client.name = order.client_name;
+  }
+  const lang = client.language ?? "fr";
   const msg = cfg.message(lang, view);
   const template = cfg.template();
 
@@ -262,7 +268,6 @@ async function sendClientPing(
       );
       await recordDeliveryLog(order.client_phone, `${tag} (template) ${msg}`, "sent_template", null, wamid);
       await cfg.setOutcome(order.id, "sent_template", wamid);
-      if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
       return;
     } catch (err) {
       log.error({ err, order: order.id }, `Delivery ${cfg.label} template send failed — trying free-text`);
@@ -273,7 +278,6 @@ async function sendClientPing(
     const wamid = await sendText(order.client_phone, msg);
     await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "sent", null, wamid);
     await cfg.setOutcome(order.id, "sent", wamid);
-    if (client) await repo.addTurn(client.id, "assistant", msg).catch(() => {});
   } catch (err) {
     await recordDeliveryLog(order.client_phone, `${tag} ${msg}`, "failed", String(err).slice(0, 300));
     await cfg.setOutcome(order.id, "failed");

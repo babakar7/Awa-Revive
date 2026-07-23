@@ -44,6 +44,23 @@ export interface DeliveryOrderView {
   items: ExtraLine[];
   amount_xof: number;
   is_test?: boolean;
+  payment_status?: "PENDING_CHOICE" | "AWAITING_PAYMENT" | "CASH_DUE" | "PAID" | "REFUND_NEEDED";
+  payment_method?: "wave" | "orange_money" | "maxit" | "cash" | null;
+}
+
+export function deliveryPaymentStaffText(o: DeliveryOrderView): string {
+  switch (o.payment_status) {
+    case "PAID":
+      return `payé${o.payment_method ? ` (${o.payment_method})` : ""} — ne rien encaisser`;
+    case "CASH_DUE":
+      return `${o.amount_xof} FCFA en espèces à encaisser à la livraison`;
+    case "AWAITING_PAYMENT":
+      return "lien mobile envoyé — départ bloqué jusqu'à confirmation";
+    case "REFUND_NEEDED":
+      return "incident paiement / remboursement — voir réception";
+    default:
+      return "choix client en attente via Awa — départ bloqué";
+  }
 }
 
 /**
@@ -129,7 +146,8 @@ export function kitchenMessage(
     `Adresse : ${o.address}`,
     "",
     formatExtrasMultiline(o.items),
-    `Total : ${o.amount_xof} FCFA (à encaisser à la livraison)`,
+    `Total : ${o.amount_xof} FCFA`,
+    `Paiement : ${deliveryPaymentStaffText(o)}`,
   ];
   if (o.note) lines.push(`Note : ${o.note}`);
   lines.push(
@@ -150,12 +168,14 @@ export function createdClientMessage(lang: string | null, o: DeliveryOrderView):
   if (lang === "en") {
     return (
       `${testPrefix}📝 Thanks${first ? ` ${first}` : ""}! Your Revive order is confirmed: ${summary} — ` +
-      `${o.amount_xof} FCFA to pay on delivery, to ${o.address}. We'll let you know as soon as it's on its way!`
+      `total ${o.amount_xof} FCFA, delivery to ${o.address}. Reply WAVE, OM, MAXIT or CASH to choose how to pay. ` +
+      `We'll let you know as soon as it's on its way!`
     );
   }
   return (
     `${testPrefix}📝 Merci${first ? ` ${first}` : ""} ! Votre commande Revive est bien reçue : ${summary} — ` +
-    `${o.amount_xof} FCFA à régler à la livraison, à ${o.address}. On vous prévient dès qu'elle part en livraison !`
+    `total ${o.amount_xof} FCFA, livraison à ${o.address}. Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton mode de paiement. ` +
+    `On te prévient dès qu'elle part en livraison !`
   );
 }
 
@@ -164,15 +184,9 @@ export function routeClientMessage(lang: string | null, o: DeliveryOrderView): s
   const first = firstName(o.client_name);
   const testPrefix = o.is_test ? "🧪 TEST — " : "";
   if (lang === "en") {
-    return (
-      `${testPrefix}🛵 On its way${first ? ` ${first}` : ""}! Your Revive order is out for delivery — ` +
-      `${o.amount_xof} FCFA to pay on delivery. See you soon!`
-    );
+    return `${testPrefix}🛵 On its way${first ? ` ${first}` : ""}! Your Revive order is out for delivery. See you soon!`;
   }
-  return (
-    `${testPrefix}🛵 C'est parti${first ? ` ${first}` : ""} ! Votre commande Revive est en route — ` +
-    `${o.amount_xof} FCFA à régler à la livraison. À tout de suite !`
-  );
+  return `${testPrefix}🛵 C'est parti${first ? ` ${first}` : ""} ! Votre commande Revive est en route. À tout de suite !`;
 }
 
 /** Should we try the Utility template after a free-text 131047 (window closed)? Pure. */
@@ -191,8 +205,8 @@ export function deliveryUpdateTemplateParams(
 ): [string, string] {
   const text =
     kind === "created"
-      ? `bien reçue : ${formatExtrasOneLine(o.items)} — ${o.amount_xof} FCFA à régler à la livraison`
-      : `en route ! ${o.amount_xof} FCFA à régler à la livraison — à tout de suite`;
+      ? `bien reçue — total ${o.amount_xof} FCFA. Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton paiement. Commande : ${formatExtrasOneLine(o.items)}`
+      : `en route ! À tout de suite`;
   return [
     toTemplateParam(firstName(o.client_name) || o.client_name || "client", 60),
     toTemplateParam(`${o.is_test ? "TEST — " : ""}${text}`, 200),

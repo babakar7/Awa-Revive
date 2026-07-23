@@ -207,9 +207,9 @@ export async function recentPaidCandidates(): Promise<InvoiceCandidate[]> {
     ),
     pool.query(
       `select id, client_name, client_phone, items_json, amount_xof, delivered_at,
-              updated_at, created_at
+              payment_method, payment_ref, paid_at, updated_at, created_at
         from delivery_orders
-        where status = 'DELIVERED' and is_test = false
+        where status = 'DELIVERED' and payment_status = 'PAID' and is_test = false
           and coalesce(delivered_at, updated_at) > now() - interval '30 days'
         order by coalesce(delivered_at, updated_at) desc limit 10`,
     ),
@@ -268,9 +268,9 @@ export async function recentPaidCandidates(): Promise<InvoiceCandidate[]> {
       clientPhone: d.client_phone ?? null,
       lines: lines.length ? lines : [{ label: "Livraison bar", qty: 1, unit_xof: d.amount_xof, total_xof: d.amount_xof }],
       totalXof: d.amount_xof,
-      paidVia: "Espèces / à la livraison",
-      paymentRef: null,
-      paidAt: new Date(d.delivered_at ?? d.updated_at ?? d.created_at),
+      paidVia: paymentMethodLabel(d.payment_method),
+      paymentRef: d.payment_ref ?? null,
+      paidAt: new Date(d.paid_at ?? d.delivered_at ?? d.updated_at ?? d.created_at),
     });
   }
   out.sort((a, b) => b.paidAt.getTime() - a.paidAt.getTime());

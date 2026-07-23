@@ -12,6 +12,8 @@ export function paymentMethodLabel(raw: unknown): string {
       return "Max It";
     case "membership":
       return "Abonnement";
+    case "cash":
+      return "Espèces à la livraison";
     default:
       return method || "—";
   }

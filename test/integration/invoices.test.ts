@@ -181,4 +181,35 @@ describe("one facture per payment (send_invoice dedup)", () => {
     expect(await findInvoiceBySource("plan", sourceId)).toBeNull();
     expect(await findInvoiceBySource("booking", "not-a-uuid")).toBeNull();
   });
+
+  it("offers only paid deliveries and keeps the verified payment rail/reference", async () => {
+    const paid = await pool.query(
+      `insert into delivery_orders
+         (client_name, client_phone, address, items_json, amount_xof, ready_token_hash,
+          status, payment_status, payment_method, payment_ref, paid_at, delivered_at)
+       values
+         ('Rama Fall','221770009988','Ngor',
+          '[{"id":"SMOOTHIE_JANT_BI","name":"Jant Bi","qty":2,"unitPriceXof":3000,"lineTotalXof":6000}]'::jsonb,
+          6000,'invoice-delivery-paid','DELIVERED','PAID','wave','cos-delivery-1',now(),now())
+       returning id`,
+    );
+    await pool.query(
+      `insert into delivery_orders
+         (client_name, client_phone, address, items_json, amount_xof, ready_token_hash,
+          status, payment_status, delivered_at)
+       values ('Non payée','221770001111','Ngor','[]'::jsonb,3000,
+               'invoice-delivery-unpaid','DELIVERED','PENDING_CHOICE',now())`,
+    );
+
+    const { recentPaidCandidates } = await import("../../src/domain/invoiceRepo.js");
+    const deliveries = (await recentPaidCandidates()).filter((candidate) => candidate.kind === "delivery");
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({
+      id: paid.rows[0].id,
+      clientName: "Rama Fall",
+      totalXof: 6000,
+      paidVia: "Wave",
+      paymentRef: "cos-delivery-1",
+    });
+  });
 });

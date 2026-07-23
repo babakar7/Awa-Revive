@@ -84,3 +84,33 @@ describe("dynamicContext — unlinked-number note (brand-new by default, no proa
     expect(ctx).toContain("ACTIVE abonnement");
   });
 });
+
+describe("dynamicContext — delivery payment handover", () => {
+  it("binds a payment-method reply to the exact delivery without hijacking unrelated replies", () => {
+    const ctx = dynamicContext({
+      ...base,
+      deliveryOrders: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          payment_status: "PENDING_CHOICE",
+          payment_method: null,
+          amount_xof: 6000,
+          items_json: [
+            {
+              id: "SMOOTHIE_JANT_BI",
+              name: "Jant Bi",
+              qty: 2,
+              unitPriceXof: 3000,
+              lineTotalXof: 6000,
+            },
+          ],
+          address: "Ngor",
+        } as never,
+      ],
+    });
+    expect(ctx).toContain("delivery_order_id=11111111-1111-4111-8111-111111111111");
+    expect(ctx).toContain("total=6000 FCFA");
+    expect(ctx).toMatch(/latest message is a payment-method choice/i);
+    expect(ctx).toMatch(/otherwise answer .* normally/i);
+  });
+});

@@ -24,7 +24,6 @@ import {
 } from "../lib/cafeMenu.js";
 import * as wix from "../lib/wix.js";
 import { planVerifiedMerge } from "../lib/crmAudit.js";
-import * as wave from "../lib/wave.js";
 import * as om from "../lib/orangeMoney.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import * as links from "../domain/linkRequests.js";
@@ -33,6 +32,8 @@ import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
 import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
 import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
+import { createClientPaymentSession } from "../domain/paymentSession.js";
+import * as deliveries from "../domain/deliveryRepo.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -79,46 +80,6 @@ export function resolvePaymentMethod(
     error: "invalid_payment_method",
     message: "payment_method must be wave, orange_money, or maxit.",
   };
-}
-
-async function createClientPaymentSession(args: {
-  method: ClientPaymentMethod;
-  amountXof: number;
-  clientReference: string;
-  name: string;
-}): Promise<{ sessionId: string; paymentLink: string; expiresAt: Date; method: ClientPaymentMethod }> {
-  const ttlMin = config.PAYMENT_LINK_TTL_MINUTES;
-  const t0 = Date.now();
-  if (args.method === "wave") {
-    const session = await wave.createCheckoutSession({
-      amountXof: args.amountXof,
-      clientReference: args.clientReference,
-    });
-    console.log(`[pay] wave checkout ${Date.now() - t0}ms`);
-    return {
-      sessionId: session.id,
-      paymentLink: session.wave_launch_url,
-      expiresAt: new Date(Date.now() + ttlMin * 60_000),
-      method: "wave",
-    };
-  }
-  // Token should already be warm (boot keep-alive); getAccessToken is free if cached.
-  const qr = await om.createQrPayment({
-    amountXof: args.amountXof,
-    clientReference: args.clientReference,
-    name: args.name,
-    validityMinutes: ttlMin,
-    callbackUrl: `${config.BASE_URL}/webhooks/orange-money`,
-    successUrl: `${config.BASE_URL}/payment/success`,
-    cancelUrl: `${config.BASE_URL}/payment/error`,
-  });
-  const link = om.pickDeepLink(args.method, qr.deepLink, qr.deepLinks);
-  const expiresAt =
-    qr.validUntil && qr.validUntil.getTime() > Date.now()
-      ? new Date(Math.min(qr.validUntil.getTime(), Date.now() + ttlMin * 60_000))
-      : new Date(Date.now() + ttlMin * 60_000);
-  console.log(`[pay] om/${args.method} session ${Date.now() - t0}ms qrId=${qr.qrId}`);
-  return { sessionId: qr.qrId, paymentLink: link, expiresAt, method: args.method };
 }
 
 /**
@@ -437,6 +398,30 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         },
       },
       required: ["extras"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_delivery_payment_link",
+    description:
+      "Record CASH or create a Wave / Orange Money / Max It payment link for an EXISTING delivery " +
+      "that the server placed in this client's live delivery context. The server owns the items and total; " +
+      "never use create_cafe_payment_link for a delivery.",
+    input_schema: {
+      type: "object",
+      properties: {
+        delivery_order_id: {
+          type: "string",
+          description: "Delivery id from the live delivery_payment context.",
+        },
+        payment_method: {
+          type: "string",
+          enum: ["wave", "orange_money", "maxit", "cash"],
+          description:
+            "Client's explicit choice. Map WAVE→wave, OM/Orange Money→orange_money, MAXIT→maxit, ESPÈCES/CASH→cash.",
+        },
+      },
+      required: ["delivery_order_id", "payment_method"],
       additionalProperties: false,
     },
   },
@@ -1475,6 +1460,126 @@ export async function executeTool(
         note: booking
           ? `Relay the link (open in ${appLabel}) — ONLY the bar order. Confirmation arrives automatically once paid.`
           : `Relay the link (open in ${appLabel}) — standalone bar order, pick up at the counter. Confirmation automatic once paid.`,
+      });
+    }
+
+    case "create_delivery_payment_link": {
+      const orderId = String(input.delivery_order_id ?? "").trim();
+      const rawMethod = String(input.payment_method ?? "").trim().toLowerCase();
+      const order = await deliveries.findDeliveryOrder(orderId);
+      if (!order || order.client_phone.replace(/\D/g, "") !== client.wa_phone.replace(/\D/g, "")) {
+        return JSON.stringify({
+          error: "unknown_delivery",
+          message: "This open delivery does not belong to this WhatsApp client.",
+        });
+      }
+      if (!['IN_KITCHEN', 'OUT_FOR_DELIVERY'].includes(order.status)) {
+        return JSON.stringify({
+          error: "delivery_closed",
+          message: "This delivery is already closed and its payment choice cannot be changed.",
+        });
+      }
+      if (order.payment_status === "PAID") {
+        return JSON.stringify({
+          already_paid: true,
+          amount_fcfa: order.amount_xof,
+          payment_method: order.payment_method,
+          note: "Confirm that payment was already received. Do not create or send another link.",
+        });
+      }
+      if (order.payment_status === "REFUND_NEEDED") {
+        return JSON.stringify({
+          error: "payment_review_required",
+          message: "A late or duplicate payment needs reception review. Do not request another payment.",
+        });
+      }
+
+      if (rawMethod === "cash" || rawMethod === "especes" || rawMethod === "espèces") {
+        const selected = await deliveries.selectDeliveryCash(order.id);
+        if (!selected) return JSON.stringify({ error: "delivery_not_payable" });
+        notifyReception(
+          `${order.is_test ? "🧪 TEST — " : ""}💵 Espèces choisies — livraison`,
+          `Client : ${order.client_name} (+${order.client_phone})\n` +
+            `Montant à encaisser à la livraison : ${order.amount_xof} FCFA\n` +
+            `Commande : ${formatExtrasOneLine(deliveries.orderItems(order))}\n` +
+            `Le départ est maintenant autorisé.`,
+          { whatsappFirst: true, preferTemplate: true },
+        );
+        return JSON.stringify({
+          cash_selected: true,
+          delivery_order_id: order.id,
+          amount_fcfa: order.amount_xof,
+          note:
+            "Confirm that cash is recorded and the exact amount will be handed to the delivery person. Do not send a payment link.",
+        });
+      }
+
+      const pay = resolvePaymentMethod(rawMethod, om.isOmEnabled());
+      if (!pay.ok) {
+        return JSON.stringify({
+          error: pay.error,
+          message:
+            pay.error === "payment_method_required"
+              ? "Ask the client to choose Wave, Orange Money, Max It, or cash."
+              : pay.message,
+        });
+      }
+
+      const active = await deliveries.activeDeliveryPaymentAttempt(order.id);
+      if (active && active.method === pay.method && active.payment_link && active.link_expires_at) {
+        return JSON.stringify({
+          payment_link: active.payment_link,
+          payment_method: active.method,
+          payment_app: paymentMethodLabel(active.method),
+          amount_fcfa: active.amount_xof,
+          delivery_order_id: order.id,
+          expires_in_minutes: Math.max(
+            1,
+            Math.round((new Date(active.link_expires_at).getTime() - Date.now()) / 60_000),
+          ),
+          reused_active_link: true,
+          note: "Send only this delivery payment link and its amount. Confirmation is automatic after verified payment.",
+        });
+      }
+
+      const attempt = await deliveries.createDraftDeliveryPaymentAttempt({
+        orderId: order.id,
+        clientId: client.id,
+        clientPhone: client.wa_phone,
+        method: pay.method,
+      });
+      if (!attempt) return JSON.stringify({ error: "delivery_not_payable" });
+
+      let session;
+      try {
+        session = await createClientPaymentSession({
+          method: pay.method,
+          amountXof: attempt.amount_xof,
+          clientReference: attempt.id,
+          name: `Livraison Revive — ${order.client_name}`,
+        });
+      } catch (error) {
+        await deliveries.setDeliveryPaymentAttemptFailed(attempt.id);
+        throw error;
+      }
+      const awaiting = await deliveries.setDeliveryPaymentAwaiting({
+        attemptId: attempt.id,
+        sessionId: session.sessionId,
+        paymentLink: session.paymentLink,
+        expiresAt: session.expiresAt,
+      });
+      if (!awaiting) return JSON.stringify({ error: "delivery_not_payable" });
+
+      return JSON.stringify({
+        payment_link: session.paymentLink,
+        payment_method: session.method,
+        payment_app: paymentMethodLabel(session.method),
+        amount_fcfa: order.amount_xof,
+        delivery_order_id: order.id,
+        expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
+        items: formatExtrasOneLine(deliveries.orderItems(order)),
+        note:
+          "Send only the delivery total, expiry, and payment link. Do not mention cash on delivery. Verified payment automatically unlocks departure.",
       });
     }
 

@@ -3,6 +3,7 @@ import { formatExtrasMultiline } from "./lib/cafeMenu.js";
 import { attemptRouteNotify } from "./domain/deliveryNotify.js";
 import {
   findDeliveryOrderByToken,
+  deliveryMayDepart,
   markOutForDelivery,
   orderItems,
   type DeliveryOrder,
@@ -74,14 +75,28 @@ const notFound = () =>
 function orderCard(order: DeliveryOrder, token: string): string {
   const items = formatExtrasMultiline(orderItems(order));
   if (order.status === "IN_KITCHEN") {
+    const mayDepart = deliveryMayDepart(order);
+    const payment =
+      order.payment_status === "PAID"
+        ? `✅ Payé via ${esc(order.payment_method ?? "mobile money")} — ne rien encaisser.`
+        : order.payment_status === "CASH_DUE"
+          ? `💵 ${esc(order.amount_xof)} FCFA en espèces à encaisser auprès du client.`
+          : order.payment_status === "REFUND_NEEDED"
+            ? `⚠️ Incident de paiement — contacter la réception.`
+            : order.payment_status === "AWAITING_PAYMENT"
+              ? `⏳ Lien de paiement envoyé — confirmation en attente.`
+              : `⏳ Le client n'a pas encore choisi son moyen de paiement.`;
     return shell(
       "Commande à préparer",
       `<h1>🛵 Commande livraison</h1>
 <p class="muted">${esc(order.client_name)} — ${esc(order.address)}</p>
 <div class="items">${esc(items)}</div>
-<p class="total">Total : ${esc(order.amount_xof)} FCFA <span class="muted">(à encaisser à la livraison)</span></p>
-<p class="muted">Touchez ci-dessous quand le livreur part avec la commande — le client est prévenu automatiquement.</p>
-<form method="post" action="/livraison/${esc(token)}"><button class="route" type="submit">🛵 Partie en livraison</button></form>`,
+<p class="total">Total : ${esc(order.amount_xof)} FCFA</p>
+<p class="${mayDepart ? "done" : "muted"}">${payment}</p>
+${mayDepart
+  ? `<p class="muted">Touchez ci-dessous quand le livreur part — le client sera prévenu automatiquement.</p>
+<form method="post" action="/livraison/${esc(token)}"><button class="route" type="submit">🛵 Partie en livraison</button></form>`
+  : `<p class="muted">Départ bloqué. Rechargez cette page après le choix espèces ou la confirmation du paiement.</p>`}`,
     );
   }
   // Terminal / en-route: no address repeated.

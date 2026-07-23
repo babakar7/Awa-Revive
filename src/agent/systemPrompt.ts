@@ -4,6 +4,7 @@ import { config } from "../config.js";
 import { cafeMenuVersion, extrasFromJson, formatExtrasOneLine, getCafeMenu } from "../lib/cafeMenu.js";
 import type { MembershipContext } from "../lib/membershipContext.js";
 import type { BookingHabit, CafeOrder, PendingBooking, PlanOrder } from "../domain/repo.js";
+import type { DeliveryOrder } from "../domain/deliveryRepo.js";
 
 /**
  * General business info (hours, location, what to bring...) — the ONLY source
@@ -111,6 +112,13 @@ ${getCafeMenu().promptText}
 - A client can also ask for the menu on their own at any point after booking a class — same handling: present the items, then create_cafe_payment_link.
 - Bar order WITHOUT any class booking: possible, but ONLY when the client explicitly asks to order from the menu — NEVER offer or suggest the menu yourself to a client who isn't booking a class. Same flow (present the items if they want to see them, then create_cafe_payment_link — it attaches to nothing and the result says standalone_order): relay the link, state items + total, and say the order is picked up at the counter (ready as soon as possible unless they gave a timing in order_note). Payment first, as always.
 - Changing a bar order before payment: create a fresh link with the corrected extras (the old link is cancelled automatically — say so). After payment: no changes through you; direct to the counter.
+
+# Paiement des livraisons
+- A delivery entered by reception is already priced and appears in the live delivery_payment context. Never rebuild its basket and never use create_cafe_payment_link for it.
+- When the client replies WAVE, OM / ORANGE MONEY, MAXIT, or ESPÈCES / CASH after the delivery template, call create_delivery_payment_link immediately with that delivery id and exact method.
+- Cash creates no link: confirm the exact amount to hand to the delivery person. A mobile payment reply contains only the delivery total, expiry, and returned link; verified payment is confirmed automatically.
+- If several open deliveries are listed and the reply does not identify one, show their short summaries and ask which one. Never charge an arbitrary delivery.
+- A delivery marked PAID must never receive another link. REFUND_NEEDED is handled by reception; do not request another payment.
 
 # Abonnements (memberships)
 - The context above tells you on EVERY message whether this client has an active abonnement, which classes it covers AND its remaining session balance — you never have to wait for them to mention it.
@@ -222,6 +230,7 @@ export function dynamicContext(args: {
   activeBooking: PendingBooking | null;
   activePlanOrder: PlanOrder | null;
   activeCafeOrder?: CafeOrder | null;
+  deliveryOrders?: DeliveryOrder[];
   memberships: MembershipContext[] | null;
   /** The number matches no unique Wix contact and hasn't been asked yet:
    *  invite them (once, ignorably) to link an existing account by email or to
@@ -352,6 +361,20 @@ export function dynamicContext(args: {
         "client_name — a code is emailed, and once they type it back (submit_verification_code) the new Revive account " +
         "is created and linked. Never create an account or claim one exists without that verified code. (After a first " +
         "payment from this number the system itself sends a one-time linking invitation — you don't handle that.)",
+    );
+  }
+  const deliveryOrders = args.deliveryOrders ?? [];
+  if (deliveryOrders.length > 0) {
+    lines.push(
+      `delivery_payment: ${deliveryOrders.length} open delivery order(s) belong to this WhatsApp client:`,
+      ...deliveryOrders.map(
+        (d) =>
+          `  • delivery_order_id=${d.id}; state=${d.payment_status}; method=${d.payment_method ?? "none"}; ` +
+          `total=${d.amount_xof} FCFA; items=${formatExtrasOneLine(extrasFromJson(d.items_json))}; address=${d.address}`,
+      ),
+      deliveryOrders.length === 1
+        ? `If the client's latest message is a payment-method choice for this delivery, it applies to delivery_order_id=${deliveryOrders[0].id}: call create_delivery_payment_link now. Otherwise answer their message normally.`
+        : `If the latest message is about paying a delivery, do not guess which one they mean: ask them to pick one unless their message clearly identifies it. Otherwise answer normally.`,
     );
   }
   if (args.activeBooking) {

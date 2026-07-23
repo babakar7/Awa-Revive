@@ -45,6 +45,7 @@ import {
   listServices,
   findMemberContactIds,
   phoneMatchVariants,
+  searchWixDeliveryClients,
   wixContactFullName,
 } from "../lib/wix.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
@@ -649,11 +650,24 @@ ${
         reply.type("text/html").send(await layout("Nouvelle livraison", "/admin/livraisons", body, { subtitle: "Commande téléphonique", contentWidth: "standard", breadcrumbs: [{ href: "/admin/livraisons", label: "Livraisons" }, { label: "Nouvelle" }] }));
       });
 
+      admin.get("/livraisons/clients", async (req, reply) => {
+        const term = String((req.query as { q?: string })?.q ?? "").trim();
+        if (term.length < 2) return reply.send({ clients: [] });
+        try {
+          const clients = await searchWixDeliveryClients(term, 12);
+          return reply.header("Cache-Control", "private, max-age=30").send({ clients });
+        } catch (error) {
+          req.log.warn({ err: error, term }, "Wix delivery client search failed");
+          return reply.code(502).send({ clients: [], error: "wix_unavailable" });
+        }
+      });
+
       admin.post("/livraisons", async (req, reply) => {
         const b = (req.body ?? {}) as Record<string, string>;
         const name = String(b.client_name ?? "").trim();
         const address = String(b.address ?? "").trim();
         const note = String(b.note ?? "").trim() || null;
+        const wixContactId = String(b.wix_contact_id ?? "").trim().slice(0, 100) || null;
         const isTest = b.is_test === "1";
         const phone = normalizeDeliveryPhone(String(b.client_phone ?? ""));
         // On a validation error, re-render the form (200) with everything the
@@ -674,6 +688,7 @@ ${
           const form = renderLivraisonForm(getCafeMenu().items, livraisonsBanner(undefined, msg), recents, {
             client_name: b.client_name,
             client_phone: b.client_phone,
+            wix_contact_id: b.wix_contact_id,
             address: b.address,
             note: b.note,
             sla_minutes: b.sla_minutes,
@@ -700,6 +715,7 @@ ${
         const { order, token } = await delivery.createDeliveryOrder({
           client_name: name,
           client_phone: phone,
+          wix_contact_id: wixContactId,
           address,
           note,
           items: priced.lines,
@@ -719,7 +735,8 @@ ${
           `${isTest ? "🧪 COMMANDE DE TEST — exclue des statistiques.\n" : ""}` +
             `Client : ${name} (+${phone})\n` +
             `Commande : ${formatExtrasOneLine(priced.lines)}\n` +
-            `Total : ${priced.totalXof} FCFA (à encaisser à la livraison)\n` +
+            `Total : ${priced.totalXof} FCFA\n` +
+            `Paiement : choix client en attente via Awa — départ bloqué\n` +
             `Adresse : ${address}\n` +
             (note ? `Note : ${note}\n` : "") +
             `Suivi : /admin/livraisons`,
@@ -749,20 +766,54 @@ ${
           await attemptRouteNotify(id, req.log); // await so the board shows the ping outcome
           return reply.redirect("/admin/livraisons?done=departed", 303);
         }
-        return reply.redirect("/admin/livraisons?err=commande déjà traitée — recharge la page", 303);
+        const current = await delivery.findDeliveryOrder(id);
+        const err = current?.status === "IN_KITCHEN" && !delivery.deliveryMayDepart(current)
+          ? "départ bloqué : attendre le choix espèces ou la confirmation du paiement mobile"
+          : "commande déjà traitée — recharge la page";
+        return reply.redirect(`/admin/livraisons?err=${encodeURIComponent(err)}`, 303);
       });
 
       admin.post("/livraisons/:id/delivered", async (req, reply) => {
         const { id } = req.params as { id: string };
         const updated = await delivery.markDelivered(id, `admin-${req.adminUser ?? "?"}`);
         if (updated) req.log.info({ order: id, by: req.adminUser }, "Delivery order marked delivered");
-        return reply.redirect(updated ? "/admin/livraisons?done=delivered" : "/admin/livraisons?err=commande déjà traitée", 303);
+        if (updated) return reply.redirect("/admin/livraisons?done=delivered", 303);
+        const current = await delivery.findDeliveryOrder(id);
+        const err = current && !delivery.deliveryMayDepart(current)
+          ? "livraison bloquée : paiement non choisi ou non confirmé"
+          : "commande déjà traitée";
+        return reply.redirect(`/admin/livraisons?err=${encodeURIComponent(err)}`, 303);
+      });
+
+      admin.post("/livraisons/:id/cash", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const updated = await delivery.selectDeliveryCash(id);
+        if (updated) {
+          req.log.info({ order: id, by: req.adminUser }, "Delivery cash payment selected by admin");
+          notifyReception(
+            `${updated.is_test ? "🧪 TEST — " : ""}💵 Espèces choisies — livraison`,
+            `Client : ${updated.client_name} (+${updated.client_phone})\n` +
+              `Montant à encaisser : ${updated.amount_xof} FCFA\nLe départ est autorisé.`,
+            { whatsappFirst: true, preferTemplate: true },
+          );
+        }
+        return reply.redirect(updated ? "/admin/livraisons?done=cash" : "/admin/livraisons?err=paiement déjà traité", 303);
       });
 
       admin.post("/livraisons/:id/cancel", async (req, reply) => {
         const { id } = req.params as { id: string };
         const updated = await delivery.markCancelled(id, `admin-${req.adminUser ?? "?"}`);
-        if (updated) req.log.info({ order: id, by: req.adminUser }, "Delivery order cancelled");
+        if (updated) {
+          req.log.info({ order: id, by: req.adminUser }, "Delivery order cancelled");
+          if (updated.payment_status === "REFUND_NEEDED") {
+            notifyReception(
+              "💸 REMBOURSEMENT à faire — livraison annulée après paiement",
+              `Client : ${updated.client_name} (+${updated.client_phone})\n` +
+                `Montant : ${updated.amount_xof} FCFA\nRéférence : ${updated.payment_ref ?? "?"}`,
+              { whatsappFirst: true, preferTemplate: true },
+            );
+          }
+        }
         return reply.redirect(updated ? "/admin/livraisons?done=cancelled" : "/admin/livraisons?err=commande déjà traitée", 303);
       });
 

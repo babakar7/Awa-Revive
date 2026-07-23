@@ -10,6 +10,7 @@ import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { sweepStaffNotifications } from "./domain/notificationSweep.js";
 import { sweepDeliveries } from "./domain/deliveryNotify.js";
+import { expireStaleDeliveryPaymentAttempts } from "./domain/deliveryRepo.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import {
   reconcileStuckPlanOrders,
@@ -66,7 +67,8 @@ async function main() {
       const n =
         (await expireStaleBookings()) +
         (await expireStalePlanOrders()) +
-        (await expireStaleCafeOrders());
+        (await expireStaleCafeOrders()) +
+        (await expireStaleDeliveryPaymentAttempts());
       if (n > 0) app.log.info({ expired: n }, "Expired stale payment links");
       await closeInactiveBookingJourneys();
       // One-shot "want a fresh link?" follow-up for links that just expired.

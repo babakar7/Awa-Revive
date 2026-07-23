@@ -16,6 +16,7 @@ import {
 } from "../lib/receptionContact.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
 import { isHumanTakeoverActive } from "../domain/adminOperations.js";
+import * as deliveries from "../domain/deliveryRepo.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -362,6 +363,7 @@ export async function handleInboundText(args: {
     repo.expireStaleBookings(),
     repo.expireStalePlanOrders(),
     repo.expireStaleCafeOrders(),
+    deliveries.expireStaleDeliveryPaymentAttempts(),
   ]);
   const [
     activeBooking,
@@ -372,6 +374,7 @@ export async function handleInboundText(args: {
     habit,
     upcomingBookingsCount,
     preferredPaymentMethod,
+    deliveryOrders,
   ] = await Promise.all([
     repo.activeAwaitingPayment(client.id),
     repo.activeAwaitingPlanOrder(client.id),
@@ -381,6 +384,7 @@ export async function handleInboundText(args: {
     repo.bookingHabit(client.id),
     repo.countUpcomingBooked(client.id),
     repo.lastSuccessfulBookingPaymentMethod(client.id),
+    deliveries.actionableDeliveriesForPhone(client.wa_phone),
   ]);
 
   const history = await repo.lastTurnsForReplay(client.id, 30);
@@ -396,7 +400,12 @@ export async function handleInboundText(args: {
   // failed membership booking). The account question still fires automatically
   // after a first payment from an unlinked number (fulfillment.ts).
   const unlinkedNeverAsked = shouldOfferLinking(memberships, client);
-  const hasActivePaymentLink = !!(activeBooking || activePlanOrder || activeCafeOrder);
+  const hasActivePaymentLink = !!(
+    activeBooking ||
+    activePlanOrder ||
+    activeCafeOrder ||
+    deliveryOrders.some((order) => order.payment_status === "AWAITING_PAYMENT")
+  );
   // First contact = Awa has never replied to this client before (the current
   // inbound turn is already persisted at this point, so we look for a prior
   // ASSISTANT turn, not an empty history). Drives the mandatory "I'm an AI
@@ -430,6 +439,7 @@ export async function handleInboundText(args: {
         activeBooking,
         activePlanOrder,
         activeCafeOrder,
+        deliveryOrders,
         memberships: memberships === null ? null : memberships.plans,
         unlinkedNeverAsked,
         recentRefunds,

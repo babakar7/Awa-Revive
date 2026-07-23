@@ -9,6 +9,7 @@ import {
 } from "../lib/orangeMoney.js";
 import { notifyReception } from "../lib/notify.js";
 import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
+import { findDeliveryPaymentAttemptById } from "../domain/deliveryRepo.js";
 
 /**
  * Orange Money / Max It payment notification (X-Callback-Url on QR create).
@@ -121,7 +122,8 @@ async function findPendingAny(
   const plan = await repo.findPlanOrderById(orderId).catch(() => null);
   if (plan) return plan;
   const cafe = await repo.findCafeOrderById(orderId).catch(() => null);
-  return cafe;
+  if (cafe) return cafe;
+  return findDeliveryPaymentAttemptById(orderId).catch(() => null);
 }
 
 async function recordClassVerificationFailure(

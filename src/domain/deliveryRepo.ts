@@ -28,15 +28,29 @@ export type NotifyStatus =
   | "fallback_reception"
   | "failed";
 
+export type DeliveryPaymentStatus =
+  | "PENDING_CHOICE"
+  | "AWAITING_PAYMENT"
+  | "CASH_DUE"
+  | "PAID"
+  | "REFUND_NEEDED";
+
 export interface DeliveryOrder {
   id: string;
   client_name: string;
   client_phone: string;
+  wix_contact_id: string | null;
   address: string;
   note: string | null;
   items_json: unknown;
   amount_xof: number;
   is_test: boolean;
+  payment_status: DeliveryPaymentStatus;
+  payment_method: "wave" | "orange_money" | "maxit" | "cash" | null;
+  active_payment_attempt_id: string | null;
+  payment_ref: string | null;
+  paid_at: Date | null;
+  payment_issue: string | null;
   status: DeliveryStatus;
   sla_minutes: number;
   ready_token_hash: string;
@@ -73,6 +87,7 @@ export function orderItems(o: DeliveryOrder): ExtraLine[] {
 export interface CreateDeliveryInput {
   client_name: string;
   client_phone: string; // already normalized (wa_id digits)
+  wix_contact_id: string | null;
   address: string;
   note: string | null;
   items: ExtraLine[];
@@ -90,13 +105,14 @@ export async function createDeliveryOrder(
   const token = newReadyToken();
   const res = await pool.query(
     `insert into delivery_orders
-       (client_name, client_phone, address, note, items_json, amount_xof,
+       (client_name, client_phone, wix_contact_id, address, note, items_json, amount_xof,
         sla_minutes, ready_token_hash, created_by, is_test)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      returning *`,
     [
       input.client_name,
       input.client_phone,
+      input.wix_contact_id,
       input.address,
       input.note,
       JSON.stringify(input.items),
@@ -131,49 +147,85 @@ export async function findDeliveryOrderByToken(token: string): Promise<DeliveryO
 
 // ---------- status transitions (atomic) ----------
 
-async function transition(
-  id: string,
-  fromStatuses: DeliveryStatus[],
-  set: string,
-  params: unknown[],
-): Promise<DeliveryOrder | null> {
-  if (!UUID_RE.test(String(id))) return null;
-  const res = await pool.query(
-    `update delivery_orders set ${set}, updated_at = now()
-      where id = $1 and status = any($2) returning *`,
-    [id, fromStatuses, ...params],
-  );
-  return (res.rows[0] as DeliveryOrder) ?? null;
-}
-
 /** IN_KITCHEN → OUT_FOR_DELIVERY. Null if already departed/closed (idempotent double-tap). */
 export function markOutForDelivery(id: string, by: string): Promise<DeliveryOrder | null> {
-  return transition(
-    id,
-    ["IN_KITCHEN"],
-    "status='OUT_FOR_DELIVERY', out_for_delivery_at=now(), out_for_delivery_by=$3",
-    [by],
-  );
+  if (!UUID_RE.test(String(id))) return Promise.resolve(null);
+  return pool
+    .query(
+      `update delivery_orders
+          set status='OUT_FOR_DELIVERY', out_for_delivery_at=now(),
+              out_for_delivery_by=$2, updated_at=now()
+        where id=$1 and status='IN_KITCHEN'
+          and payment_status in ('CASH_DUE','PAID')
+        returning *`,
+      [id, by],
+    )
+    .then((res) => (res.rows[0] as DeliveryOrder) ?? null);
 }
 
-/** IN_KITCHEN|OUT_FOR_DELIVERY → DELIVERED (closing an order whose departure was
- *  never tapped is allowed — the client just never gets a route ping). */
+/** Whether the kitchen/admin departure action is currently allowed. */
+export function deliveryMayDepart(order: Pick<DeliveryOrder, "payment_status">): boolean {
+  return order.payment_status === "CASH_DUE" || order.payment_status === "PAID";
+}
+
+/** Cash is considered collected when reception closes the delivered order. */
 export function markDelivered(id: string, by: string): Promise<DeliveryOrder | null> {
-  return transition(
-    id,
-    ["IN_KITCHEN", "OUT_FOR_DELIVERY"],
-    "status='DELIVERED', delivered_at=now(), delivered_by=$3",
-    [by],
-  );
+  if (!UUID_RE.test(String(id))) return Promise.resolve(null);
+  return pool
+    .query(
+      `update delivery_orders
+          set status='DELIVERED', delivered_at=now(), delivered_by=$2,
+              payment_status=case when payment_status='CASH_DUE' then 'PAID' else payment_status end,
+              paid_at=case when payment_status='CASH_DUE' then now() else paid_at end,
+              payment_ref=case when payment_status='CASH_DUE' then coalesce(payment_ref, 'cash:' || id::text) else payment_ref end,
+              updated_at=now()
+        where id=$1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+          and payment_status in ('CASH_DUE','PAID')
+        returning *`,
+      [id, by],
+    )
+    .then((res) => (res.rows[0] as DeliveryOrder) ?? null);
 }
 
-export function markCancelled(id: string, by: string): Promise<DeliveryOrder | null> {
-  return transition(
-    id,
-    ["IN_KITCHEN", "OUT_FOR_DELIVERY"],
-    "status='CANCELLED', cancelled_at=now(), cancelled_by=$3",
-    [by],
-  );
+export async function markCancelled(id: string, by: string): Promise<DeliveryOrder | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+    const result = await db.query(
+      `update delivery_orders
+          set status='CANCELLED', cancelled_at=now(), cancelled_by=$2,
+              payment_status=case
+                when payment_status='PAID' and payment_method <> 'cash' then 'REFUND_NEEDED'
+                else payment_status end,
+              payment_issue=case
+                when payment_status='PAID' and payment_method <> 'cash' then 'cancelled_after_online_payment'
+                else payment_issue end,
+              updated_at=now()
+        where id=$1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+        returning *`,
+      [id, by],
+    );
+    const order = (result.rows[0] as DeliveryOrder) ?? null;
+    if (order) {
+      await db.query(
+        `update delivery_payment_attempts
+            set status=case when $2='REFUND_NEEDED' and status='PAID' then 'REFUND_NEEDED' else 'EXPIRED' end,
+                updated_at=now()
+          where delivery_order_id=$1
+            and status in ('DRAFT','AWAITING_PAYMENT','PAID')
+            and (status<>'PAID' or $2='REFUND_NEEDED')`,
+        [id, order.payment_status],
+      );
+    }
+    await db.query("commit");
+    return order;
+  } catch (error) {
+    await db.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    db.release();
+  }
 }
 
 /** Fresh token for an open order (invalidates the old magic link). Null if the
@@ -188,6 +240,333 @@ export async function rotateReadyToken(id: string): Promise<string | null> {
     [id, hashReadyToken(token)],
   );
   return (res.rowCount ?? 0) > 0 ? token : null;
+}
+
+// ---------- payment choice + provider attempts ----------
+
+export interface DeliveryPaymentAttempt {
+  id: string;
+  delivery_order_id: string;
+  client_id: string;
+  method: "wave" | "orange_money" | "maxit";
+  amount_xof: number;
+  status: "DRAFT" | "AWAITING_PAYMENT" | "EXPIRED" | "FAILED" | "PAID" | "REFUND_NEEDED";
+  session_id: string | null;
+  payment_link: string | null;
+  link_expires_at: Date | null;
+  payer_phone: string | null;
+  paid_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export async function actionableDeliveriesForPhone(phone: string): Promise<DeliveryOrder[]> {
+  const digits = String(phone).replace(/\D/g, "");
+  const res = await pool.query(
+    `select * from delivery_orders
+      where regexp_replace(client_phone, '\\D', '', 'g') = $1
+        and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+        and payment_status <> 'REFUND_NEEDED'
+      order by created_at desc limit 5`,
+    [digits],
+  );
+  return res.rows as DeliveryOrder[];
+}
+
+export async function findDeliveryPaymentAttemptById(
+  id: string,
+): Promise<DeliveryPaymentAttempt | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(`select * from delivery_payment_attempts where id=$1`, [id]);
+  return (res.rows[0] as DeliveryPaymentAttempt) ?? null;
+}
+
+export async function activeDeliveryPaymentAttempt(
+  orderId: string,
+): Promise<DeliveryPaymentAttempt | null> {
+  if (!UUID_RE.test(String(orderId))) return null;
+  const res = await pool.query(
+    `select * from delivery_payment_attempts
+      where delivery_order_id=$1 and status='AWAITING_PAYMENT'
+        and link_expires_at > now()
+      order by created_at desc limit 1`,
+    [orderId],
+  );
+  return (res.rows[0] as DeliveryPaymentAttempt) ?? null;
+}
+
+export async function createDraftDeliveryPaymentAttempt(args: {
+  orderId: string;
+  clientId: string;
+  clientPhone: string;
+  method: "wave" | "orange_money" | "maxit";
+}): Promise<DeliveryPaymentAttempt | null> {
+  if (!UUID_RE.test(args.orderId) || !UUID_RE.test(args.clientId)) return null;
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+    const orderRes = await db.query(
+      `select * from delivery_orders
+        where id=$1 and regexp_replace(client_phone, '\\D', '', 'g')=$2
+          and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+          and payment_status not in ('PAID','REFUND_NEEDED')
+        for update`,
+      [args.orderId, args.clientPhone.replace(/\D/g, "")],
+    );
+    const order = orderRes.rows[0] as DeliveryOrder | undefined;
+    if (!order) {
+      await db.query("rollback");
+      return null;
+    }
+    await db.query(
+      `update delivery_payment_attempts
+          set status='EXPIRED', updated_at=now()
+        where delivery_order_id=$1 and status in ('DRAFT','AWAITING_PAYMENT')`,
+      [args.orderId],
+    );
+    if (order.payment_status === "AWAITING_PAYMENT") {
+      await db.query(
+        `update delivery_orders
+            set payment_status='PENDING_CHOICE', payment_method=null,
+                active_payment_attempt_id=null, payment_ref=null, updated_at=now()
+          where id=$1 and payment_status='AWAITING_PAYMENT'`,
+        [args.orderId],
+      );
+    }
+    const attempt = await db.query(
+      `insert into delivery_payment_attempts
+         (delivery_order_id, client_id, method, amount_xof)
+       values ($1,$2,$3,$4) returning *`,
+      [args.orderId, args.clientId, args.method, order.amount_xof],
+    );
+    await db.query("commit");
+    return attempt.rows[0] as DeliveryPaymentAttempt;
+  } catch (error) {
+    await db.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+
+export async function setDeliveryPaymentAttemptFailed(id: string): Promise<void> {
+  await pool.query(
+    `update delivery_payment_attempts set status='FAILED', updated_at=now()
+      where id=$1 and status='DRAFT'`,
+    [id],
+  );
+}
+
+export async function setDeliveryPaymentAwaiting(args: {
+  attemptId: string;
+  sessionId: string;
+  paymentLink: string;
+  expiresAt: Date;
+}): Promise<DeliveryOrder | null> {
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+    const attemptRes = await db.query(
+      `update delivery_payment_attempts
+          set status='AWAITING_PAYMENT', session_id=$2, payment_link=$3,
+              link_expires_at=$4, updated_at=now()
+        where id=$1 and status='DRAFT' returning *`,
+      [args.attemptId, args.sessionId, args.paymentLink, args.expiresAt],
+    );
+    const attempt = attemptRes.rows[0] as DeliveryPaymentAttempt | undefined;
+    if (!attempt) {
+      await db.query("rollback");
+      return null;
+    }
+    const orderRes = await db.query(
+      `update delivery_orders
+          set payment_status='AWAITING_PAYMENT', payment_method=$2,
+              active_payment_attempt_id=$3, payment_ref=null, paid_at=null,
+              payment_issue=null, updated_at=now()
+        where id=$1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+          and payment_status not in ('PAID','REFUND_NEEDED')
+        returning *`,
+      [attempt.delivery_order_id, attempt.method, attempt.id],
+    );
+    if (!orderRes.rows[0]) {
+      await db.query(
+        `update delivery_payment_attempts set status='EXPIRED', updated_at=now() where id=$1`,
+        [attempt.id],
+      );
+      await db.query("commit");
+      return null;
+    }
+    await db.query("commit");
+    return orderRes.rows[0] as DeliveryOrder;
+  } catch (error) {
+    await db.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+
+export async function selectDeliveryCash(orderId: string): Promise<DeliveryOrder | null> {
+  if (!UUID_RE.test(String(orderId))) return null;
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+    const orderRes = await db.query(
+      `update delivery_orders
+          set payment_status='CASH_DUE', payment_method='cash',
+              active_payment_attempt_id=null, payment_ref=null, paid_at=null,
+              payment_issue=null, updated_at=now()
+        where id=$1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+          and payment_status not in ('PAID','REFUND_NEEDED')
+        returning *`,
+      [orderId],
+    );
+    if (!orderRes.rows[0]) {
+      await db.query("rollback");
+      return null;
+    }
+    await db.query(
+      `update delivery_payment_attempts set status='EXPIRED', updated_at=now()
+        where delivery_order_id=$1 and status in ('DRAFT','AWAITING_PAYMENT')`,
+      [orderId],
+    );
+    await db.query("commit");
+    return orderRes.rows[0] as DeliveryOrder;
+  } catch (error) {
+    await db.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+
+export async function expireStaleDeliveryPaymentAttempts(): Promise<number> {
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+    const expired = await db.query(
+      `update delivery_payment_attempts
+          set status='EXPIRED', updated_at=now()
+        where (status='AWAITING_PAYMENT' and link_expires_at < now())
+           or (status='DRAFT' and created_at < now() - interval '1 hour')
+        returning id, delivery_order_id`,
+    );
+    for (const row of expired.rows) {
+      await db.query(
+        `update delivery_orders
+            set payment_status='PENDING_CHOICE', payment_method=null,
+                active_payment_attempt_id=null, payment_ref=null, updated_at=now()
+          where id=$1 and payment_status='AWAITING_PAYMENT'
+            and active_payment_attempt_id=$2`,
+        [row.delivery_order_id, row.id],
+      );
+    }
+    await db.query("commit");
+    return expired.rowCount ?? 0;
+  } catch (error) {
+    await db.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+
+export type DeliveryPaymentOutcome = "paid" | "duplicate" | "refund_needed";
+
+export async function markDeliveryPaymentAttemptPaid(
+  attemptId: string,
+  payerPhone: string | null,
+): Promise<{
+  outcome: DeliveryPaymentOutcome;
+  order: DeliveryOrder;
+  attempt: DeliveryPaymentAttempt;
+} | null> {
+  if (!UUID_RE.test(String(attemptId))) return null;
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+    const attemptRes = await db.query(
+      `select * from delivery_payment_attempts where id=$1 for update`,
+      [attemptId],
+    );
+    let attempt = attemptRes.rows[0] as DeliveryPaymentAttempt | undefined;
+    if (!attempt) {
+      await db.query("rollback");
+      return null;
+    }
+    const orderRes = await db.query(
+      `select * from delivery_orders where id=$1 for update`,
+      [attempt.delivery_order_id],
+    );
+    let order = orderRes.rows[0] as DeliveryOrder | undefined;
+    if (!order) {
+      await db.query("rollback");
+      return null;
+    }
+    const ref = attempt.session_id || attempt.id;
+    if (attempt.status === "PAID" && order.payment_status === "PAID" && order.payment_ref === ref) {
+      await db.query("commit");
+      return { outcome: "duplicate", order, attempt };
+    }
+    if (attempt.status === "REFUND_NEEDED" && order.payment_status === "REFUND_NEEDED") {
+      await db.query("commit");
+      return { outcome: "duplicate", order, attempt };
+    }
+
+    const conflict =
+      order.status === "CANCELLED" ||
+      order.status === "DELIVERED" ||
+      (order.payment_status === "PAID" && order.payment_ref !== ref) ||
+      order.payment_status === "REFUND_NEEDED";
+    const attemptStatus = conflict ? "REFUND_NEEDED" : "PAID";
+    attempt = (
+      await db.query(
+        `update delivery_payment_attempts
+            set status=$2, payer_phone=$3, paid_at=coalesce(paid_at,now()), updated_at=now()
+          where id=$1 returning *`,
+        [attempt.id, attemptStatus, payerPhone],
+      )
+    ).rows[0] as DeliveryPaymentAttempt;
+
+    if (conflict) {
+      order = (
+        await db.query(
+          `update delivery_orders
+              set payment_status='REFUND_NEEDED',
+                  payment_issue='late_or_duplicate_online_payment', updated_at=now()
+            where id=$1 returning *`,
+          [order.id],
+        )
+      ).rows[0] as DeliveryOrder;
+      await db.query("commit");
+      return { outcome: "refund_needed", order, attempt };
+    }
+
+    await db.query(
+      `update delivery_payment_attempts
+          set status='EXPIRED', updated_at=now()
+        where delivery_order_id=$1 and id<>$2 and status in ('DRAFT','AWAITING_PAYMENT')`,
+      [order.id, attempt.id],
+    );
+
+    order = (
+      await db.query(
+        `update delivery_orders
+            set payment_status='PAID', payment_method=$2,
+                active_payment_attempt_id=$3, payment_ref=$4,
+                paid_at=now(), payment_issue=null, updated_at=now()
+          where id=$1 returning *`,
+        [order.id, attempt.method, attempt.id, ref],
+      )
+    ).rows[0] as DeliveryOrder;
+    await db.query("commit");
+    return { outcome: "paid", order, attempt };
+  } catch (error) {
+    await db.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    db.release();
+  }
 }
 
 // ---------- notification outbox (kitchen + client) ----------

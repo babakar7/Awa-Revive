@@ -658,11 +658,149 @@ export interface WixContactMatch {
   fullName: string | null;
 }
 
+/** Minimal, presentation-safe contact snapshot used by the delivery form. */
+export interface WixDeliveryClient {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+}
+
 export function wixContactFullName(contact: any): string | null {
   const first = String(contact?.info?.name?.first ?? "").trim();
   const last = String(contact?.info?.name?.last ?? "").trim();
   const name = [first, last].filter(Boolean).join(" ").trim();
   return name || null;
+}
+
+function firstContactItem(value: any): any | null {
+  const items: any[] = Array.isArray(value?.items) ? value.items : [];
+  return (
+    items.find((item) => item?.primary === true || String(item?.tag ?? "").toUpperCase() === "MAIN") ??
+    items[0] ??
+    null
+  );
+}
+
+/** Convert Wix's nested Contact V4 shape into the fields a delivery needs. */
+export function wixDeliveryClientFromContact(contact: any): WixDeliveryClient | null {
+  if (!contact?.id) return null;
+
+  const phoneItem = firstContactItem(contact?.info?.phones);
+  const emailItem = firstContactItem(contact?.info?.emails);
+  const addressItem = firstContactItem(contact?.info?.addresses);
+  const rawAddress = addressItem?.address ?? addressItem;
+  const formattedAddress = String(rawAddress?.formattedAddress ?? "").trim();
+  const streetAddress = [rawAddress?.streetAddress?.number, rawAddress?.streetAddress?.name]
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const address =
+    formattedAddress ||
+    [
+      rawAddress?.addressLine ?? streetAddress,
+      rawAddress?.addressLine2,
+      rawAddress?.city,
+    ]
+      .map((part) => String(part ?? "").trim())
+      .filter(Boolean)
+      .join(", ");
+  const phone = String(
+    contact?.primaryInfo?.phone ?? phoneItem?.e164Phone ?? phoneItem?.phone ?? "",
+  ).trim();
+  const email = String(contact?.primaryInfo?.email ?? emailItem?.email ?? "").trim();
+  const name = wixContactFullName(contact) || email || phone || "Client Wix";
+
+  return {
+    id: String(contact.id),
+    name: name || "Client Wix",
+    phone: phone || null,
+    email: email || null,
+    address: address || null,
+  };
+}
+
+function deliveryClientSearchRank(client: WixDeliveryClient, term: string): number {
+  const norm = (value: string | null) =>
+    String(value ?? "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  const q = norm(term);
+  const name = norm(client.name);
+  const email = norm(client.email);
+  const phone = String(client.phone ?? "").replace(/\D/g, "");
+  const qPhone = term.replace(/\D/g, "");
+  if (name === q) return 0;
+  if (name.startsWith(q)) return 1;
+  if (name.split(/\s+/).some((part) => part.startsWith(q))) return 2;
+  if (email.startsWith(q)) return 3;
+  if (qPhone.length >= 3 && phone.includes(qPhone)) return 4;
+  if (name.includes(q)) return 5;
+  return 6;
+}
+
+/**
+ * Search Wix Contacts V4 without shipping the whole CRM to the browser. Wix
+ * supports case-insensitive `$startsWith` on these fields; separate name
+ * tokens make "Awa Ndiaye" useful even though first/last names are distinct.
+ */
+export async function searchWixDeliveryClients(
+  rawTerm: string,
+  limit = 12,
+): Promise<WixDeliveryClient[]> {
+  const term = rawTerm.trim().slice(0, 100);
+  if (term.length < 2) return [];
+
+  const words = [...new Set(term.split(/\s+/).filter((word) => word.length >= 2))];
+  const conditions: Record<string, unknown>[] = [];
+  for (const word of words.length ? words : [term]) {
+    conditions.push(
+      { "info.name.first": { $startsWith: word } },
+      { "info.name.last": { $startsWith: word } },
+    );
+  }
+  conditions.push(
+    { "primaryInfo.email": { $startsWith: term } },
+    { "info.emails.email": { $startsWith: term } },
+  );
+
+  const phoneValues = new Set<string>([term]);
+  const digits = term.replace(/\D/g, "");
+  if (digits.length >= 3) {
+    phoneValues.add(digits);
+    phoneValues.add(`+${digits}`);
+    if (digits.length <= 9 && digits.startsWith("7")) phoneValues.add(`+221${digits}`);
+  }
+  for (const value of phoneValues) {
+    conditions.push(
+      { "primaryInfo.phone": { $startsWith: value } },
+      { "info.phones.phone": { $startsWith: value } },
+    );
+  }
+
+  const data = await wixPost("/contacts/v4/contacts/query", {
+    query: {
+      filter: { $or: conditions },
+      paging: { limit: Math.min(50, Math.max(20, limit * 3)), offset: 0 },
+    },
+  });
+  const seen = new Set<string>();
+  const contacts: any[] = Array.isArray(data?.contacts) ? data.contacts : [];
+  return contacts
+    .map((contact): WixDeliveryClient | null => wixDeliveryClientFromContact(contact))
+    .filter((client): client is WixDeliveryClient => {
+      if (!client || seen.has(client.id)) return false;
+      seen.add(client.id);
+      return true;
+    })
+    .sort(
+      (a, b) =>
+        deliveryClientSearchRank(a, term) - deliveryClientSearchRank(b, term) ||
+        a.name.localeCompare(b.name, "fr"),
+    )
+    .slice(0, Math.max(1, limit));
 }
 
 export function splitContactName(name: string): { firstName: string; lastName?: string } {

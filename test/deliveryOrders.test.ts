@@ -137,12 +137,18 @@ describe("message bodies", () => {
     expect(body).toContain(link);
   });
   it("createdClientMessage localizes fr/en, names the client, includes the address", () => {
-    expect(createdClientMessage("fr", ORDER)).toContain("Merci Rama");
-    expect(createdClientMessage("fr", ORDER)).toContain("bien reçue");
-    expect(createdClientMessage("fr", ORDER)).toContain("Almadies, villa 12");
-    expect(createdClientMessage("fr", ORDER)).toContain("à régler à la livraison");
-    expect(createdClientMessage("en", ORDER)).toContain("Thanks Rama");
-    expect(createdClientMessage("en", ORDER)).toContain("Almadies, villa 12");
+    const fr = createdClientMessage("fr", ORDER);
+    const en = createdClientMessage("en", ORDER);
+    expect(fr).toContain("Merci Rama");
+    expect(fr).toContain("bien reçue");
+    expect(fr).toContain("Almadies, villa 12");
+    expect(fr).toContain("9500 FCFA");
+    expect(fr).toContain("WAVE, OM, MAXIT ou ESPÈCES");
+    expect(fr).not.toContain("à régler à la livraison");
+    expect(en).toContain("Thanks Rama");
+    expect(en).toContain("Almadies, villa 12");
+    expect(en).toContain("WAVE, OM, MAXIT or CASH");
+    expect(en).not.toContain("to pay on delivery");
   });
   it("labels every test-order message and template update explicitly", () => {
     const testOrder = { ...ORDER, is_test: true };
@@ -153,11 +159,16 @@ describe("message bodies", () => {
     expect(deliveryUpdateTemplateParams("created", testOrder)[1]).toContain("TEST");
   });
   it("routeClientMessage localizes fr/en and says the order is on its way", () => {
-    expect(routeClientMessage("fr", ORDER)).toContain("C'est parti Rama");
-    expect(routeClientMessage("fr", ORDER)).toContain("en route");
-    expect(routeClientMessage("fr", ORDER)).toContain("à régler à la livraison");
-    expect(routeClientMessage("en", ORDER)).toContain("On its way Rama");
-    expect(routeClientMessage("en", ORDER)).toContain("out for delivery");
+    const fr = routeClientMessage("fr", ORDER);
+    const en = routeClientMessage("en", ORDER);
+    expect(fr).toContain("C'est parti Rama");
+    expect(fr).toContain("en route");
+    expect(fr).not.toContain("9500");
+    expect(fr).not.toContain("régler");
+    expect(en).toContain("On its way Rama");
+    expect(en).toContain("out for delivery");
+    expect(en).not.toContain("9500");
+    expect(en).not.toContain("payment");
   });
   it("deliveryUpdateTemplateParams: 2 sanitized params, created ≠ route text", () => {
     const created = deliveryUpdateTemplateParams("created", ORDER);
@@ -167,6 +178,8 @@ describe("message bodies", () => {
     expect(created[1]).not.toMatch(/\n/);
     expect(created[1]).toContain("bien reçue");
     expect(route[1]).toContain("en route");
+    expect(created[1]).toContain("WAVE, OM, MAXIT ou ESPÈCES");
+    expect(route[1]).not.toContain("FCFA");
     expect(created[1]).not.toBe(route[1]);
   });
 

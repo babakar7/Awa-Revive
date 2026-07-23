@@ -30,6 +30,7 @@ const BANNERS: Record<string, string> = {
   delivered: "Commande marquée livrée.",
   cancelled: "Commande annulée.",
   renotified: "Cuisine renotifiée.",
+  cash: "Paiement en espèces enregistré — le départ est autorisé.",
 };
 
 export function livraisonsBanner(done?: string, err?: string): string {
@@ -87,10 +88,14 @@ function actionsCell(o: DeliveryOrder): string {
   const parts: string[] = [];
   const kitchenBad = ["failed", "partial", "fallback_reception"].includes(o.kitchen_notify_status);
   if (o.status === "IN_KITCHEN") {
-    parts.push(inlineForm(`${base}/depart`, "🛵 Partie", undefined, "ok"));
+    if (o.payment_status === "CASH_DUE" || o.payment_status === "PAID") {
+      parts.push(inlineForm(`${base}/depart`, "🛵 Partie", undefined, "ok"));
+      parts.push(inlineForm(`${base}/delivered`, "✓ Livrée", undefined, "ghost"));
+    } else if (o.payment_status !== "REFUND_NEEDED") {
+      parts.push(`<span class="badge badge--amber">Départ bloqué</span>`);
+      parts.push(inlineForm(`${base}/cash`, "💵 Espèces", "Confirmer le paiement en espèces à la livraison ?", "ghost"));
+    }
     if (kitchenBad) parts.push(inlineForm(`${base}/renotify-kitchen`, "🔁 Renvoyer", undefined, "ghost"));
-    // Direct close for an order whose departure was never tapped (no route ping).
-    parts.push(inlineForm(`${base}/delivered`, "✓ Livrée", undefined, "ghost"));
     parts.push(inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande ?", "danger"));
   } else if (o.status === "OUT_FOR_DELIVERY") {
     parts.push(inlineForm(`${base}/delivered`, "✓ Livrée", undefined, "ok"));
@@ -99,6 +104,31 @@ function actionsCell(o: DeliveryOrder): string {
     );
   }
   return parts.join(" ");
+}
+
+function paymentCell(o: DeliveryOrder): string {
+  const method =
+    o.payment_method === "wave"
+      ? "Wave"
+      : o.payment_method === "orange_money"
+        ? "Orange Money"
+        : o.payment_method === "maxit"
+          ? "Max It"
+          : o.payment_method === "cash"
+            ? "Espèces"
+            : "mobile money";
+  switch (o.payment_status) {
+    case "PAID":
+      return `<span class="ok">✓ Payé</span><br><span class="muted">${esc(method)}</span>`;
+    case "CASH_DUE":
+      return `<b>${esc(o.amount_xof)} F</b><br><span class="warn-text">espèces à encaisser</span>`;
+    case "AWAITING_PAYMENT":
+      return `<b>${esc(o.amount_xof)} F</b><br><span class="muted">lien envoyé</span>`;
+    case "REFUND_NEEDED":
+      return `<span class="danger-text">Remboursement à traiter</span>`;
+    default:
+      return `<b>${esc(o.amount_xof)} F</b><br><span class="muted">choix en attente</span>`;
+  }
 }
 
 /**
@@ -132,7 +162,7 @@ function openRow(o: DeliveryOrder): string {
 <td data-label="Client">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}<b>${esc(o.client_name)}</b><br><a href="https://wa.me/${esc(o.client_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(items))}<details><summary class="muted">Voir le détail</summary><div style="white-space:pre-wrap">${esc(formatExtrasMultiline(items))}</div></details></td>
 <td data-label="Adresse" class="hide-sm">${esc(o.address)}</td>
-<td data-label="Montant" class="nowrap"><b>${esc(o.amount_xof)} F</b><br><span class="muted">à encaisser</span></td>
+<td data-label="Paiement" class="nowrap">${paymentCell(o)}</td>
 <td data-label="Cuisine" class="hide-sm">${kitchenStatusCell(o)}</td>
 <td data-label="Actions">${actionsCell(o)}</td>
 </tr>`;
@@ -147,7 +177,7 @@ function closedRow(o: DeliveryOrder): string {
 <td data-label="État">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}${esc(state)}</td>
 <td data-label="Client">${esc(o.client_name)}</td>
 <td data-label="Commande">${esc(formatExtrasOneLine(orderItems(o)))}</td>
-<td data-label="Montant" class="hide-sm">${esc(o.amount_xof)} F</td>
+<td data-label="Paiement" class="hide-sm">${paymentCell(o)}</td>
 <td data-label="Départ" class="hide-sm">${o.status === "DELIVERED" ? esc(prep) : "—"}</td>
 </tr>`;
 }
@@ -163,13 +193,13 @@ export function renderLivraisonsBoard(data: BoardData): string {
   const { open, recent, stats } = data;
   const avg = stats.avgPrepMinutes === null ? "—" : `${Math.round(stats.avgPrepMinutes)} min`;
   const openTable = open.length
-    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Délai</th><th>Client</th><th>Commande</th><th class="hide-sm">Adresse</th><th>Montant</th><th class="hide-sm">Cuisine</th><th>Actions</th></tr></thead><tbody>${open.map(openRow).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Délai</th><th>Client</th><th>Commande</th><th class="hide-sm">Adresse</th><th>Paiement</th><th class="hide-sm">Cuisine</th><th>Actions</th></tr></thead><tbody>${open.map(openRow).join("")}</tbody></table></div>`
     : `<div class="empty"><b>Aucune commande en cours</b><p>Les nouvelles livraisons apparaîtront ici avec leur délai.</p></div>`;
   const recentTable = recent.length
-    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Montant</th><th class="hide-sm">Départ</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Paiement</th><th class="hide-sm">Départ</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table></div>`
     : `<div class="empty"><b>Aucun historique récent</b></div>`;
   return `${data.banner}
-<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Livraisons</h2><p>Suivez le délai cuisine, la notification client et l’encaissement à la livraison.</p></div><div class="page-header-actions"><a href="/admin/livraisons/new" class="act">Nouvelle commande</a></div></header>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Livraisons</h2><p>Suivez le délai cuisine, le choix de paiement et le départ de chaque commande.</p></div><div class="page-header-actions"><a href="/admin/livraisons/new" class="act">Nouvelle commande</a></div></header>
 <div class="stat-grid">
   <div class="stat"><span class="muted">En cours</span><b>${stats.openCount}</b></div>
   <div class="stat"><span class="muted">Départ moyen (30 j)</span><b>${avg}</b></div>
@@ -205,6 +235,7 @@ function normalizeSearch(value: string): string {
 export interface LivraisonPrefill {
   client_name?: string;
   client_phone?: string;
+  wix_contact_id?: string;
   address?: string;
   note?: string;
   sla_minutes?: string;
@@ -268,11 +299,27 @@ ${optionSelect}</div>`;
     ? `<input id="liv-search" type="search" placeholder="🔍 Rechercher un article…" autocomplete="off" style="width:100%">`
     : "";
   const sla = prefill.sla_minutes ?? String(config.DELIVERY_SLA_MINUTES);
+  const hasWixClient = !!prefill.wix_contact_id;
   return `${banner}
-<style>.liv-item.on{background:var(--brand-soft);border-radius:8px}.liv-item.on>span:first-child{font-weight:650}</style>
-<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Livraisons</span><h2>Nouvelle commande</h2><p>Paiement à la livraison. Le montant est calculé automatiquement depuis le menu actif.</p></div></header>
+<style>
+.liv-item.on{background:var(--brand-soft);border-radius:8px}.liv-item.on>span:first-child{font-weight:650}
+.liv-wix-results{display:grid;gap:.35rem;max-height:18rem;overflow:auto;margin-top:.45rem;padding:.45rem}
+.liv-wix-result{display:block;width:100%;text-align:left;white-space:normal}
+.liv-wix-result small{display:block;margin-top:.15rem;font-weight:400}
+</style>
+<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Livraisons</span><h2>Nouvelle commande</h2><p>Le client choisira Wave, Orange Money, Max It ou espèces avec Awa. Le montant est calculé automatiquement depuis le menu actif.</p></div></header>
 <form method="post" action="/admin/livraisons" class="col">
   <div class="card col">
+    <div>
+      <label for="liv-wix-search">Client Wix <span class="muted">(nom, téléphone ou e-mail)</span></label>
+      <input id="liv-wix-search" type="search" autocomplete="off" placeholder="Commencer à saisir…" aria-controls="liv-wix-results" aria-autocomplete="list">
+      <input id="liv-wix-id" name="wix_contact_id" type="hidden" value="${esc(prefill.wix_contact_id ?? "")}">
+      <div id="liv-wix-results" class="card liv-wix-results" role="listbox" hidden></div>
+      <div style="display:flex;align-items:center;gap:.5rem;margin-top:.35rem">
+        <span id="liv-wix-status" class="muted" aria-live="polite">${hasWixClient ? `✓ Fiche Wix liée à ${esc(prefill.client_name ?? "ce client")}` : "La saisie manuelle reste disponible."}</span>
+        <button id="liv-wix-clear" type="button" class="act act--ghost act--sm"${hasWixClient ? "" : " hidden"}>Retirer le lien Wix</button>
+      </div>
+    </div>
     ${recentSelect}
     <label>Nom du client<input name="client_name" required value="${esc(prefill.client_name ?? "")}"></label>
     <label>Téléphone (WhatsApp)<input name="client_phone" type="tel" inputmode="tel" required placeholder="77 123 45 67 ou +221…" value="${esc(prefill.client_phone ?? "")}"></label>
@@ -297,6 +344,61 @@ ${optionSelect}</div>`;
 </form>
 <script>
 (function(){
+  var form=document.querySelector('form[action="/admin/livraisons"]');
+  var wixSearch=document.getElementById('liv-wix-search');
+  var wixId=document.getElementById('liv-wix-id');
+  var wixResults=document.getElementById('liv-wix-results');
+  var wixStatus=document.getElementById('liv-wix-status');
+  var wixClear=document.getElementById('liv-wix-clear');
+  var clientName=form&&form.querySelector('[name="client_name"]');
+  var clientPhone=form&&form.querySelector('[name="client_phone"]');
+  var clientAddress=form&&form.querySelector('[name="address"]');
+  var wixTimer=null,wixRequest=null;
+  function hideWixResults(){wixResults.hidden=true;wixResults.replaceChildren();}
+  function pickWixClient(client){
+    wixId.value=client.id||'';
+    if(clientName)clientName.value=client.name||'';
+    if(clientPhone)clientPhone.value=client.phone||'';
+    if(clientAddress)clientAddress.value=client.address||'';
+    wixSearch.value=client.name||'';
+    wixStatus.textContent='✓ Client Wix sélectionné'+(client.address?' — adresse préremplie':' — adresse à compléter');
+    wixClear.hidden=false;
+    hideWixResults();
+  }
+  function showWixClients(clients){
+    wixResults.replaceChildren();
+    if(!clients.length){wixStatus.textContent='Aucun client Wix trouvé. Vous pouvez continuer manuellement.';wixResults.hidden=true;return;}
+    clients.forEach(function(client){
+      var button=document.createElement('button');
+      button.type='button';button.className='act act--ghost liv-wix-result';button.setAttribute('role','option');
+      var title=document.createElement('b');title.textContent=client.name||'Client Wix';button.appendChild(title);
+      var details=[client.phone,client.email,client.address].filter(Boolean);
+      if(details.length){var small=document.createElement('small');small.className='muted';small.textContent=details.join(' · ');button.appendChild(small);}
+      button.addEventListener('click',function(){pickWixClient(client);});
+      wixResults.appendChild(button);
+    });
+    wixStatus.textContent=clients.length+' résultat(s) — choisissez une fiche.';
+    wixResults.hidden=false;
+  }
+  if(wixSearch)wixSearch.addEventListener('input',function(){
+    var q=this.value.trim();
+    wixId.value='';wixClear.hidden=true;
+    clearTimeout(wixTimer);if(wixRequest)wixRequest.abort();
+    if(q.length<2){hideWixResults();wixStatus.textContent=q?'Saisissez au moins 2 caractères.':'La saisie manuelle reste disponible.';return;}
+    wixStatus.textContent='Recherche dans Wix…';
+    wixTimer=setTimeout(function(){
+      wixRequest=new AbortController();
+      fetch('/admin/livraisons/clients?q='+encodeURIComponent(q),{headers:{Accept:'application/json'},signal:wixRequest.signal})
+        .then(function(response){if(!response.ok)throw new Error('Wix indisponible');return response.json();})
+        .then(function(data){if(wixSearch.value.trim()===q)showWixClients(Array.isArray(data.clients)?data.clients:[]);})
+        .catch(function(error){if(error.name!=='AbortError'){hideWixResults();wixStatus.textContent='Recherche Wix indisponible — utilisez la saisie manuelle.';}});
+    },250);
+  });
+  if(wixClear)wixClear.addEventListener('click',function(){
+    wixId.value='';wixSearch.value='';wixClear.hidden=true;hideWixResults();
+    wixStatus.textContent='Lien Wix retiré. Les coordonnées saisies sont conservées.';
+    wixSearch.focus();
+  });
   function recompute(){
     var t=0,c=0;
     document.querySelectorAll('input[name^="qty_"]').forEach(function(i){
@@ -351,6 +453,8 @@ ${optionSelect}</div>`;
     f.client_name.value=o.dataset.name||'';
     f.client_phone.value=o.dataset.phone||'';
     f.address.value=o.dataset.address||'';
+    wixId.value='';wixSearch.value='';wixClear.hidden=true;hideWixResults();
+    wixStatus.textContent='Client récent sélectionné — aucune fiche Wix liée.';
   });
   recompute();
 })();

@@ -7,13 +7,24 @@ import { config } from "../../src/config.js";
 import { sweepDeliveries } from "../../src/domain/deliveryNotify.js";
 import {
   deliveryStats,
+  expireStaleDeliveryPaymentAttempts,
   markClientPingFailedByWamid,
   recentDeliveryClients,
 } from "../../src/domain/deliveryRepo.js";
+import * as clientRepo from "../../src/domain/repo.js";
+import { executeTool } from "../../src/agent/tools.js";
 import { markLogFailedByWamid, recordDeliveryLog } from "../../src/domain/notificationRepo.js";
 import { hashReadyToken, newReadyToken } from "../../src/domain/deliveryRules.js";
 import { planningNowSlot } from "../../src/domain/staffPlanningRules.js";
-import { makeFetchMock, type FetchMock, truncateAll, waitFor, settle } from "./helpers.js";
+import {
+  deliverOmWebhook,
+  deliverWaveWebhook,
+  makeFetchMock,
+  type FetchMock,
+  truncateAll,
+  waitFor,
+  settle,
+} from "./helpers.js";
 
 /**
  * Delivery-orders end-to-end against a real Postgres, all HTTP mocked. Exercises
@@ -78,6 +89,16 @@ async function createOrder(overrides: Record<string, string> = {}): Promise<stri
   return row.rows[0].id as string;
 }
 
+async function chooseCash(id: string): Promise<void> {
+  const res = await app.inject({
+    method: "POST",
+    url: `/admin/livraisons/${id}/cash`,
+    headers: { authorization: AUTH },
+  });
+  expect(res.statusCode).toBe(303);
+  expect(res.headers.location).toContain("done=cash");
+}
+
 /** Newest-first: the mock accumulates texts across a test, so the latest kitchen
  *  message (e.g. after a renotify/rotate) is at the end. Token-only URL. */
 function magicLinkFrom(texts: string[]): string {
@@ -91,12 +112,15 @@ function magicLinkFrom(texts: string[]): string {
 describe("delivery order creation → kitchen notify", () => {
   it("prices server-side, creates IN_KITCHEN, and WhatsApps the kitchen a magic link", async () => {
     await seedKitchenContact();
-    const id = await createOrder();
+    const id = await createOrder({ wix_contact_id: "wix-contact-123" });
 
     const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
     expect(order.status).toBe("IN_KITCHEN");
     expect(order.amount_xof).toBe(6000); // 2 × Jant Bi @ 3000 — from the menu, not the form
     expect(order.client_phone).toBe("221770009988");
+    expect(order.wix_contact_id).toBe("wix-contact-123");
+    expect(order.payment_status).toBe("PENDING_CHOICE");
+    expect(order.payment_method).toBeNull();
     expect(["sent", "sent_template"]).toContain(order.kitchen_notify_status);
 
     const link = magicLinkFrom(mock.waTextsTo("221770000099"));
@@ -150,6 +174,44 @@ describe("delivery order creation → kitchen notify", () => {
       config.WA_RECEPTION_TEMPLATE = previousReception;
       config.WA_RECEPTION_TEMPLATE_LANG = previousLang;
     }
+  });
+});
+
+describe("Wix client picker", () => {
+  it("returns only the delivery snapshot needed by the admin form", async () => {
+    mock.wix.contacts = [
+      {
+        id: "wix-1",
+        revision: 7,
+        info: {
+          name: { first: "Rama", last: "Fall" },
+          phones: { items: [{ tag: "MAIN", e164Phone: "+221770009988" }] },
+          emails: { items: [{ tag: "MAIN", email: "rama@example.com" }] },
+          addresses: {
+            items: [{ tag: "MAIN", address: { addressLine: "Ngor", city: "Dakar" } }],
+          },
+        },
+      },
+    ];
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/admin/livraisons/clients?q=Rama",
+      headers: { authorization: AUTH },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      clients: [
+        {
+          id: "wix-1",
+          name: "Rama Fall",
+          phone: "+221770009988",
+          email: "rama@example.com",
+          address: "Ngor, Dakar",
+        },
+      ],
+    });
   });
 });
 
@@ -220,11 +282,198 @@ describe("kitchen shift gate (published staff planning)", () => {
   });
 });
 
+describe("delivery payment handover to Awa", () => {
+  it("blocks both admin and kitchen departure until cash or a verified payment", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+    const link = magicLinkFrom(mock.waTextsTo("221770000099"));
+
+    const boardDepart = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/depart`,
+      headers: { authorization: AUTH },
+    });
+    expect(boardDepart.statusCode).toBe(303);
+    expect(boardDepart.headers.location).toContain("err=");
+
+    const kitchenPage = await app.inject({ method: "GET", url: link });
+    expect(kitchenPage.body).toContain("Départ bloqué");
+    expect(kitchenPage.body).not.toContain("type=\"submit\"");
+    await app.inject({ method: "POST", url: link });
+    expect(
+      (await pool.query(`select status from delivery_orders where id=$1`, [id])).rows[0].status,
+    ).toBe("IN_KITCHEN");
+
+    await chooseCash(id);
+    const departed = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/depart`,
+      headers: { authorization: AUTH },
+    });
+    expect(departed.headers.location).toContain("done=departed");
+  });
+
+  it("lets Awa record cash for the exact client delivery", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+    const client = await clientRepo.upsertClient("221770009988");
+
+    const result = JSON.parse(
+      await executeTool(client, "create_delivery_payment_link", {
+        delivery_order_id: id,
+        payment_method: "cash",
+      }),
+    );
+    expect(result).toMatchObject({
+      cash_selected: true,
+      delivery_order_id: id,
+      amount_fcfa: 6000,
+    });
+    const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+    expect(order.payment_status).toBe("CASH_DUE");
+    expect(order.payment_method).toBe("cash");
+  });
+
+  it("creates a Wave link, verifies the webhook, and unlocks departure", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+    const client = await clientRepo.upsertClient("221770009988");
+
+    const result = JSON.parse(
+      await executeTool(client, "create_delivery_payment_link", {
+        delivery_order_id: id,
+        payment_method: "wave",
+      }),
+    );
+    expect(result).toMatchObject({
+      payment_link: "https://pay.wave.com/c/test",
+      payment_method: "wave",
+      amount_fcfa: 6000,
+      delivery_order_id: id,
+    });
+    const attempt = (
+      await pool.query(
+        `select * from delivery_payment_attempts where delivery_order_id=$1 order by created_at desc limit 1`,
+        [id],
+      )
+    ).rows[0];
+    expect(attempt.status).toBe("AWAITING_PAYMENT");
+
+    expect((await deliverWaveWebhook(app, attempt.id)).statusCode).toBe(200);
+    const paid = await waitFor(async () => {
+      const row = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+      return row?.payment_status === "PAID" ? row : null;
+    }, "delivery Wave payment");
+    expect(paid.payment_method).toBe("wave");
+    expect(paid.payment_ref).toBe(attempt.session_id);
+
+    const departed = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/depart`,
+      headers: { authorization: AUTH },
+    });
+    expect(departed.headers.location).toContain("done=departed");
+    const routeText = mock
+      .waTextsTo("221770009988")
+      .find((text) => text.includes("en route"));
+    expect(routeText).toBeDefined();
+    expect(routeText).not.toContain("6000");
+    expect(routeText).not.toContain("paiement");
+  });
+
+  it("uses the verified Orange Money callback for a Max It delivery payment", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+    const client = await clientRepo.upsertClient("221770009988");
+    const result = JSON.parse(
+      await executeTool(client, "create_delivery_payment_link", {
+        delivery_order_id: id,
+        payment_method: "maxit",
+      }),
+    );
+    expect(result.payment_method).toBe("maxit");
+    expect(result.payment_link).toBe("https://sugu.orange-sonatel.com/maxit");
+
+    const attempt = (
+      await pool.query(
+        `select * from delivery_payment_attempts where delivery_order_id=$1 order by created_at desc limit 1`,
+        [id],
+      )
+    ).rows[0];
+    const transactionId = "OM_TX_delivery_maxit";
+    mock.om.transactions[transactionId] = {
+      status: "SUCCESS",
+      amountValue: 6000,
+      partnerId: "553651",
+      metadata: { order: attempt.id, channel: "awa" },
+      customerId: "221770009988",
+    };
+    await deliverOmWebhook(app, { orderId: attempt.id, transactionId });
+
+    const paid = await waitFor(async () => {
+      const row = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+      return row?.payment_status === "PAID" ? row : null;
+    }, "delivery Max It payment");
+    expect(paid.payment_method).toBe("maxit");
+  });
+
+  it("expires stale links and flags a payment received after cancellation for refund", async () => {
+    await seedKitchenContact();
+    const firstId = await createOrder({ client_phone: "770009987" });
+    const firstClient = await clientRepo.upsertClient("221770009987");
+    await executeTool(firstClient, "create_delivery_payment_link", {
+      delivery_order_id: firstId,
+      payment_method: "wave",
+    });
+    const staleAttempt = (
+      await pool.query(
+        `select * from delivery_payment_attempts where delivery_order_id=$1 order by created_at desc limit 1`,
+        [firstId],
+      )
+    ).rows[0];
+    await pool.query(
+      `update delivery_payment_attempts set link_expires_at=now() - interval '1 minute' where id=$1`,
+      [staleAttempt.id],
+    );
+    expect(await expireStaleDeliveryPaymentAttempts()).toBe(1);
+    expect(
+      (await pool.query(`select payment_status from delivery_orders where id=$1`, [firstId])).rows[0]
+        .payment_status,
+    ).toBe("PENDING_CHOICE");
+
+    const secondId = await createOrder();
+    const secondClient = await clientRepo.upsertClient("221770009988");
+    await executeTool(secondClient, "create_delivery_payment_link", {
+      delivery_order_id: secondId,
+      payment_method: "wave",
+    });
+    const lateAttempt = (
+      await pool.query(
+        `select * from delivery_payment_attempts where delivery_order_id=$1 order by created_at desc limit 1`,
+        [secondId],
+      )
+    ).rows[0];
+    await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${secondId}/cancel`,
+      headers: { authorization: AUTH },
+    });
+    expect((await deliverWaveWebhook(app, lateAttempt.id)).statusCode).toBe(200);
+    const review = await waitFor(async () => {
+      const row = (await pool.query(`select * from delivery_orders where id=$1`, [secondId])).rows[0];
+      return row?.payment_status === "REFUND_NEEDED" ? row : null;
+    }, "late delivery payment refund flag");
+    expect(review.status).toBe("CANCELLED");
+    expect(review.payment_issue).toBe("late_or_duplicate_online_payment");
+  });
+});
+
 describe("magic link", () => {
   it("GET is read-only (prefetch-safe) and POST marks departure + pings the client once", async () => {
     await seedKitchenContact();
     const id = await createOrder();
     const link = magicLinkFrom(mock.waTextsTo("221770000099"));
+    await chooseCash(id);
 
     // GET must NOT mutate (WhatsApp prefetches links for previews).
     const get = await app.inject({ method: "GET", url: link });
@@ -382,6 +631,15 @@ describe("creation confirmation ping", () => {
     );
     const order = (await pool.query(`select created_notify_status from delivery_orders where id=$1`, [id])).rows[0];
     expect(["sent", "sent_template"]).toContain(order.created_notify_status);
+    const logged = (
+      await pool.query(
+        `select body from notification_log
+          where source='delivery' and recipient_phone='221770009988'
+         order by created_at desc limit 1`,
+      )
+    ).rows[0];
+    expect(logged.body).toContain("WAVE, OM, MAXIT ou ESPÈCES");
+    expect(logged.body).not.toContain("à régler à la livraison");
   });
 
   it("uses the approved delivery template first when it is configured", async () => {
@@ -479,6 +737,7 @@ describe("out for delivery (admin board)", () => {
   it("POST /admin/livraisons/:id/depart marks OUT_FOR_DELIVERY and pings the client", async () => {
     await seedKitchenContact();
     const id = await createOrder();
+    await chooseCash(id);
 
     const res = await app.inject({
       method: "POST",
@@ -496,6 +755,7 @@ describe("out for delivery (admin board)", () => {
   it("marking delivered directly from IN_KITCHEN (departure never tapped) sends no en-route ping", async () => {
     await seedKitchenContact();
     const id = await createOrder();
+    await chooseCash(id);
     await settle();
 
     const res = await app.inject({
@@ -512,6 +772,7 @@ describe("out for delivery (admin board)", () => {
   it("cancelling from OUT_FOR_DELIVERY is allowed and sends no client message", async () => {
     await seedKitchenContact();
     const id = await createOrder();
+    await chooseCash(id);
     await app.inject({ method: "POST", url: `/admin/livraisons/${id}/depart`, headers: { authorization: AUTH } });
     await settle();
     const before = mock.waTextsTo("221770009988").length;

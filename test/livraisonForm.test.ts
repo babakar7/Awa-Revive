@@ -47,6 +47,13 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(html).toContain(`data-search="iced matcha matcha matcha"`);
   });
 
+  it("searches Wix clients while keeping manual entry available", () => {
+    const html = renderLivraisonForm(menu(), "");
+    expect(html).toContain(`id="liv-wix-search"`);
+    expect(html).toContain(`/admin/livraisons/clients?q=`);
+    expect(html).toContain(`name="wix_contact_id" type="hidden" value=""`);
+    expect(html).toContain("La saisie manuelle reste disponible.");
+  });
 
   it("offers a test mode and preserves it after a validation error", () => {
     const normal = renderLivraisonForm(menu(), "");
@@ -62,11 +69,13 @@ describe("renderLivraisonForm — stepper & UX", () => {
     const html = renderLivraisonForm(menu(), "", [], {
       client_name: `A<script>x</script>`,
       client_phone: "+221771112233",
+      wix_contact_id: `wix"><script>x</script>`,
       address: "Almadies",
     });
     expect(html).toContain(`value="A&lt;script&gt;x&lt;/script&gt;"`);
     expect(html).toContain(`value="+221771112233"`);
     expect(html).toContain(`value="Almadies"`);
+    expect(html).toContain(`name="wix_contact_id" type="hidden" value="wix&quot;&gt;&lt;script&gt;x&lt;/script&gt;"`);
     expect(html).not.toContain("<script>x</script>");
   });
 
