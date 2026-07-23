@@ -15,6 +15,9 @@ import type { FastifyReply } from "fastify";
  */
 
 const BASE = "/ops/service";
+// Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
+// query string, so a fresh build can't be served stale from any cache.
+const ASSET_VERSION = "v4";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -144,8 +147,16 @@ padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom))}
 .stepper button{width:2.4rem;height:2.4rem;border-radius:50%;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:1.4rem;font-weight:800;line-height:1}
 .stepper button.plus{background:#7c547d;border-color:#7c547d}
 .stepper .qv{min-width:1.3rem;text-align:center;font-weight:800;font-size:1.1rem}
-.mi select{width:100%;padding:.6rem;border-radius:10px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:.95rem;margin-top:.45rem}
-.mi .ln{margin-top:.4rem;font-size:.92rem;padding:.55rem}
+.creq{margin-top:.5rem;border:1px solid #4a3d4a;border-radius:10px;padding:.5rem .6rem;background:#231b23}
+.creq.missing{border-color:#e0894a;background:#2e2012}
+.clab{font-size:.78rem;font-weight:800;color:#e7c08a;margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.04em}
+.creq.missing .clab{color:#f6a24a}
+.cpills{display:flex;gap:.45rem;flex-wrap:wrap}
+.cpill{padding:.55rem .85rem;border-radius:999px;border:1px solid #4a3d4a;background:#2c222c;color:#e7dbe7;font-weight:700;font-size:.95rem}
+.cpill.sel{background:#2f7650;border-color:#2f7650;color:#fff}
+.mi.needchoice{outline:2px solid #e0894a;outline-offset:2px;border-radius:10px}
+.mi .ln{margin-top:.5rem;font-size:.92rem;padding:.55rem}
+.mi .lnlab{font-size:.75rem;color:#8a7d8a;margin-top:.5rem}
 .wrap{width:100%}
 .nores{color:#8a7d8a;text-align:center;padding:2rem 0}
 .foot{position:sticky;bottom:0;background:#1c151c;padding:.6rem 0 .2rem;display:flex;gap:.6rem;align-items:center;border-top:1px solid #2a212a}
@@ -166,7 +177,7 @@ export function serviceBoardPage(bootJson: string): string {
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
 <script>window.__BOOT__=${bootJson}</script>
-<script src="${BASE}/app.js"></script>
+<script src="${BASE}/app.js?b=${ASSET_VERSION}"></script>
 </body></html>`;
 }
 
@@ -188,7 +199,7 @@ export const SERVICE_MANIFEST = JSON.stringify({
 });
 
 // ── Service worker (shell/assets only) ───────────────────────────────────────
-export const SERVICE_SW = `const CACHE='service-v3';
+export const SERVICE_SW = `const CACHE='service-${ASSET_VERSION}';
 const SHELL=['${BASE}/app.js','${BASE}/manifest.webmanifest','${BASE}/icon-192.png','${BASE}/icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
@@ -345,30 +356,41 @@ export const SERVICE_APP_JS = String.raw`(function(){
 
     function itemRow(it){
       var d=draft[it.id]||{qty:0,choice:'',note:''};
-      var row=el('div','mi'+(d.qty>0?' on':''));
-      var nm=el('div','nm'); var t=el('span',null,it.name); nm.appendChild(t);
+      var needsChoice=it.choices && it.choices.length;
+      var row=el('div','mi'+(d.qty>0?' on':'')); row.dataset.id=it.id;
+      var nm=el('div','nm'); nm.appendChild(el('span',null,it.name));
       if(d.qty>0){ nm.appendChild(el('span','qbadge','×'+d.qty)); }
       nm.appendChild(el('span','pr',it.price+' F')); row.appendChild(nm);
       var stp=el('div','stepper');
       var minus=el('button',null,'−'); var qv=el('span','qv',String(d.qty)); var plus=el('button','plus','+');
       var extra=el('div','wrap'); extra.style.display=d.qty>0?'block':'none';
+      var creq=null;
+      function markChoice(){ if(!creq)return; var dd=draft[it.id]||{qty:0}; var miss=dd.qty>0 && !dd.choice; creq.classList.toggle('missing',miss); row.classList.toggle('needchoice',miss); }
       function sync(){ var dd=draft[it.id]||{qty:0}; qv.textContent=dd.qty;
         extra.style.display=dd.qty>0?'block':'none'; row.classList.toggle('on',dd.qty>0);
-        // refresh the qty badge
         var old=nm.querySelector('.qbadge'); if(old) nm.removeChild(old);
         if(dd.qty>0){ var b=el('span','qbadge','×'+dd.qty); nm.insertBefore(b,nm.querySelector('.pr')); }
-        recompute();
+        markChoice(); recompute();
       }
       minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0) renderList(); };
       plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync(); };
       stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
-      if(it.choices && it.choices.length){ var selc=document.createElement('select');
-        var op0=document.createElement('option'); op0.value=''; op0.textContent=(it.optionLabel||'Choix')+'…'; selc.appendChild(op0);
-        it.choices.forEach(function(ch){ var o=document.createElement('option'); o.value=ch; o.textContent=ch; if(d.choice===ch)o.selected=true; selc.appendChild(o); });
-        selc.onchange=function(){ var dd=draft[it.id]||{qty:0}; dd.choice=selc.value; draft[it.id]=dd; }; extra.appendChild(selc); }
-      var ntn=el('input','ln'); ntn.placeholder='Note (ex: sans sucre)'; ntn.maxLength=140; ntn.value=d.note||'';
+      if(needsChoice){
+        creq=el('div','creq'); creq.appendChild(el('div','clab',(it.optionLabel||'Choix')+' · obligatoire'));
+        var pills=el('div','cpills');
+        it.choices.forEach(function(ch){
+          var p=el('button','cpill'+(d.choice===ch?' sel':''),ch);
+          p.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.choice=ch; draft[it.id]=dd;
+            Array.from(pills.children).forEach(function(c){c.classList.remove('sel');}); p.classList.add('sel'); markChoice(); };
+          pills.appendChild(p);
+        });
+        creq.appendChild(pills); extra.appendChild(creq);
+      }
+      extra.appendChild(el('div','lnlab','Note (optionnel)'));
+      var ntn=el('input','ln'); ntn.placeholder='ex: sans sucre, bien chaud…'; ntn.maxLength=140; ntn.value=d.note||'';
       ntn.oninput=function(){ var dd=draft[it.id]||{qty:0}; dd.note=ntn.value; draft[it.id]=dd; }; extra.appendChild(ntn);
       row.appendChild(extra);
+      markChoice();
       return row;
     }
 
@@ -399,6 +421,16 @@ export const SERVICE_APP_JS = String.raw`(function(){
     var foot=el('div','foot'); totalEl=el('div','total'); foot.appendChild(totalEl);
     var go=el('button','go','Envoyer en cuisine');
     go.onclick=function(){
+      // Client-side guard: every added item with a required option must have its
+      // choice picked. Reveal the offender (cart view + scroll) with a clear message.
+      var miss=null;
+      Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0 && !miss){ var it=findItem(id); if(it&&it.choices&&it.choices.length&&!d.choice) miss=it; } });
+      if(miss){
+        msg.textContent='Choisissez « '+(miss.optionLabel||'option')+' » pour '+miss.name+'.'; msg.style.display='block';
+        state.cartOnly=true; state.q=''; search.value=''; renderList();
+        var r=listEl.querySelector('[data-id="'+miss.id+'"]'); if(r&&r.scrollIntoView) r.scrollIntoView({block:'center'});
+        return;
+      }
       var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
       if(!items.length){ msg.textContent='Ajoutez au moins un article.'; msg.style.display='block'; return; }
       go.disabled=true; msg.style.display='none';
