@@ -16,6 +16,8 @@ import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
 import {
   createDeliveryTicket,
+  completeTicketForDelivery,
+  cancelTicketForDelivery,
   refreshDeliveryTicketContact,
 } from "../domain/kitchenTicketRepo.js";
 import {
@@ -958,6 +960,8 @@ ${
         const updated = await delivery.markOutForDelivery(id, `admin-${req.adminUser ?? "?"}`);
         if (updated) {
           req.log.info({ order: id, by: req.adminUser }, "Delivery order marked out-for-delivery from dashboard");
+          // Remove the kitchen ticket from the iPad live (sweep reconcile is the backstop).
+          await completeTicketForDelivery(id).catch((e) => req.log.error({ err: e, order: id }, "Ticket complete failed"));
           await attemptRouteNotify(id, req.log); // await so the board shows the ping outcome
           return reply.redirect("/admin/livraisons?done=departed", 303);
         }
@@ -973,8 +977,13 @@ ${
       admin.post("/livraisons/:id/delivered", async (req, reply) => {
         const { id } = req.params as { id: string };
         const updated = await delivery.markDelivered(id, `admin-${req.adminUser ?? "?"}`);
-        if (updated) req.log.info({ order: id, by: req.adminUser }, "Delivery order marked delivered");
-        if (updated) return reply.redirect("/admin/livraisons?done=delivered", 303);
+        if (updated) {
+          req.log.info({ order: id, by: req.adminUser }, "Delivery order marked delivered");
+          // A delivery closed straight from IN_KITCHEN (departure never tapped)
+          // must still leave the iPad board.
+          await completeTicketForDelivery(id).catch((e) => req.log.error({ err: e, order: id }, "Ticket complete failed"));
+          return reply.redirect("/admin/livraisons?done=delivered", 303);
+        }
         const current = await delivery.findDeliveryOrder(id);
         const err = current?.status === "IN_KITCHEN" && !current.activated_at
           ? "livraison bloquée : la commande programmée n'est pas encore activée"
@@ -1010,6 +1019,8 @@ ${
         const updated = await delivery.markCancelled(id, `admin-${req.adminUser ?? "?"}`);
         if (updated) {
           req.log.info({ order: id, by: req.adminUser }, "Delivery order cancelled");
+          // Pull the ticket off the iPad board immediately (sweep is the backstop).
+          await cancelTicketForDelivery(id, "livraison annulée").catch((e) => req.log.error({ err: e, order: id }, "Ticket cancel failed"));
           if (updated.payment_status === "REFUND_NEEDED") {
             notifyReception(
               "💸 REMBOURSEMENT à faire — livraison annulée après paiement",

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { formatExtrasMultiline } from "./lib/cafeMenu.js";
 import { attemptRouteNotify } from "./domain/deliveryNotify.js";
+import { completeTicketForDelivery } from "./domain/kitchenTicketRepo.js";
 import {
   findDeliveryOrderByToken,
   deliveryMayDepart,
@@ -148,6 +149,8 @@ export function registerDeliveryPublic(app: FastifyInstance): void {
     }
     const updated = await markOutForDelivery(order.id, "kitchen-link");
     if (updated) {
+      // Remove the ticket from the iPad board live (sweep reconcile is the backstop).
+      void completeTicketForDelivery(order.id).catch(() => {});
       // Fire-and-forget: the sweep reconciles if this attempt fails/crashes.
       void attemptRouteNotify(order.id, req.log);
       req.log.info({ order: order.id }, "Delivery order marked out-for-delivery via kitchen magic link");
