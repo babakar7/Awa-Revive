@@ -48,13 +48,17 @@ export function isOpenStatus(status: KitchenTicketStatus): boolean {
 
 // ---------- SSE event shapes ----------
 
-/** The only realtime channel in Phase 1. */
+/** Realtime channels: the kitchen iPad, and (Phase 2) the reception phones. */
 export const CUISINE_CHANNEL = "cuisine";
+export const ACCUEIL_CHANNEL = "accueil";
 
 export type OpsEventKind =
   | "ticket_new"
   | "ticket_update"
   | "ticket_removed"
+  | "session_new"
+  | "session_update"
+  | "session_closed"
   | "ping";
 
 // ---------- ticket view (what the iPad renders) ----------
@@ -76,6 +80,10 @@ export interface KitchenTicketView {
   created_at: Date | string;
   /** When the kitchen marked it READY — freezes the prep timer on the card. */
   ready_at: Date | string | null;
+  /** Accueil server who took a READY ticket to serve it ("Je prends"). TABLE only. */
+  serve_by?: string | null;
+  /** Source session id (TABLE tickets) — lets the accueil board group by session. */
+  session_id?: string | null;
 }
 
 /** One-line items summary reused by the ticket card and the fallback WhatsApp. */

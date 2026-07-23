@@ -1282,4 +1282,75 @@ create table if not exists ops_events (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_ops_events_channel on ops_events (channel, id);
+
+-- ═══ Phase 2 : commandes salle (service.revive.sn) ═══
+-- Espaces de la salle : pas de tables numérotées, on repère un groupe par un
+-- code court (C-24) et, optionnellement, un point sur un schéma versionné de
+-- l'espace. La personne qui sert n'est pas forcément celle qui a pris la commande.
+create table if not exists service_areas (
+  id uuid primary key default gen_random_uuid(),
+  -- Préfixe du code court (C = Canapé, T = Terrasse, P = Pergola). 1–2 lettres.
+  code text not null,
+  name text not null,
+  -- Image du schéma de l'espace (Phase 2b) ; versionnée pour qu'un schéma retouché
+  -- ne déplace jamais les repères des sessions déjà ouvertes.
+  diagram_url text,
+  diagram_version integer not null default 1,
+  sort_order integer not null default 0,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_service_areas_code on service_areas (upper(code));
+-- Seed idempotent des trois espaces (éditables ensuite en base).
+insert into service_areas (code, name, sort_order) values
+  ('C', 'Canapé', 1), ('T', 'Terrasse', 2), ('P', 'Pergola', 3)
+  on conflict (upper(code)) do nothing;
+
+-- Session de service = un groupe installé dans un espace. Porte le code court
+-- (repère humain, unique PARMI LES SESSIONS OUVERTES → réutilisable après clôture),
+-- la position optionnelle sur le schéma (x/y proportionnels ∈ [0,1]) et le prénom.
+-- INVARIANT : aucun montant n'y fait foi — le POS reste la seule compta, les totaux
+-- Resabot sont indicatifs. La clôture est refusée tant qu'un ticket cuisine reste
+-- ouvert (voir serviceSessionRepo.closeSession).
+create table if not exists service_sessions (
+  id uuid primary key default gen_random_uuid(),
+  area_id uuid not null references service_areas(id),
+  short_code text not null,           -- 'C-24'
+  seq integer not null,               -- numéro dans le code (petit, réutilisé après clôture)
+  diagram_version integer,            -- figée à l'ouverture
+  pos_x real, pos_y real,             -- proportionnel ∈ [0,1], nullable (repère optionnel)
+  first_name text,
+  opened_by text,                     -- label de l'appareil accueil
+  status text not null default 'OPEN' check (status in ('OPEN','CLOSED')),
+  opened_at timestamptz not null default now(),
+  closed_at timestamptz,
+  closed_by text
+);
+-- Code court unique UNIQUEMENT parmi les sessions ouvertes (libéré à la clôture).
+create unique index if not exists idx_service_sessions_open_code
+  on service_sessions (short_code) where status = 'OPEN';
+create index if not exists idx_service_sessions_open
+  on service_sessions (opened_at) where status = 'OPEN';
+
+-- Abonnements Web Push par appareil accueil (alerte « commande prête » écran
+-- verrouillé). Invalidés sur 410 Gone au moment de l'envoi.
+create table if not exists push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  device_id uuid not null references ops_devices(id) on delete cascade,
+  endpoint text not null,
+  p256dh text not null,
+  auth text not null,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_push_subscriptions_endpoint on push_subscriptions (endpoint);
+
+-- Extension de kitchen_tickets aux commandes salle (source 'TABLE') :
+--  · session_id : la session de service d'origine (NULL pour une livraison) ;
+--  · serve_by / serve_claimed_at : claim atomique « Je prends » par l'accueil au
+--    moment de servir (orthogonal à claimed_by, qui reste « qui a préparé »).
+alter table kitchen_tickets add column if not exists session_id uuid references service_sessions(id) on delete set null;
+alter table kitchen_tickets add column if not exists serve_by text;
+alter table kitchen_tickets add column if not exists serve_claimed_at timestamptz;
+create index if not exists idx_kitchen_tickets_session
+  on kitchen_tickets (session_id) where session_id is not null;
 `;

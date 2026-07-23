@@ -1,7 +1,8 @@
 import { pool } from "../db/index.js";
-import { extrasFromJson } from "../lib/cafeMenu.js";
+import { extrasFromJson, type ExtraLine } from "../lib/cafeMenu.js";
 import { recordOpsEvent } from "./opsEvents.js";
 import {
+  ACCUEIL_CHANNEL,
   CUISINE_CHANNEL,
   isOpenStatus,
   type KitchenTicketStatus,
@@ -45,6 +46,9 @@ export interface KitchenTicket {
   fallback_claimed_at: Date | null;
   ready_at: Date | null;
   completed_at: Date | null;
+  session_id: string | null;
+  serve_by: string | null;
+  serve_claimed_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -64,14 +68,26 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
     subheading: t.subheading,
     created_at: t.created_at,
     ready_at: t.ready_at,
+    serve_by: t.serve_by,
+    session_id: t.session_id,
   };
 }
 
+/**
+ * Every ticket event feeds BOTH realtime boards: the kitchen iPad (cuisine) and
+ * the reception phones (accueil). Two durable rows (one per channel) so each
+ * device replays only its own channel on reconnect. The accueil board ignores
+ * the transitions it doesn't care about; the cuisine board ignores session events.
+ */
 async function emitTicket(kind: "ticket_new" | "ticket_update", t: KitchenTicket): Promise<void> {
-  await recordOpsEvent(CUISINE_CHANNEL, kind, kitchenTicketView(t));
+  const view = kitchenTicketView(t);
+  await recordOpsEvent(CUISINE_CHANNEL, kind, view);
+  await recordOpsEvent(ACCUEIL_CHANNEL, kind, view);
 }
 async function emitRemoved(t: KitchenTicket): Promise<void> {
-  await recordOpsEvent(CUISINE_CHANNEL, "ticket_removed", { id: t.id, status: t.status });
+  const payload = { id: t.id, status: t.status };
+  await recordOpsEvent(CUISINE_CHANNEL, "ticket_removed", payload);
+  await recordOpsEvent(ACCUEIL_CHANNEL, "ticket_removed", payload);
 }
 
 // ---------- create (delivery → ticket) ----------
@@ -129,6 +145,140 @@ export async function refreshDeliveryTicketContact(
   const ticket = (res.rows[0] as KitchenTicket) ?? null;
   if (ticket) await emitTicket("ticket_update", ticket);
   return ticket;
+}
+
+// ---------- create (on-site session → TABLE ticket) ----------
+
+export interface TableTicketInput {
+  sessionId: string;
+  /** Frozen card labels: heading = short code (C-24), subheading = area · prénom. */
+  heading: string;
+  subheading: string;
+  /** Server-priced lines (computeExtras output) — never trust a client total. */
+  lines: ExtraLine[];
+  amountXof: number;
+  note: string | null;
+  /** Idempotency key per phone send: a replay returns the existing ticket. */
+  clientRequestId: string;
+  isTest: boolean;
+}
+
+/**
+ * Insert a NEW kitchen ticket for an on-site order, idempotent on
+ * client_request_id (a double-tap or a reconnect replay returns the existing
+ * ticket, never a second). No delivery order, no WhatsApp fallback (reception is
+ * on-site) — fallback_due_at stays NULL. Emits ticket_new only on a fresh insert.
+ */
+export async function createTableTicket(
+  input: TableTicketInput,
+): Promise<{ ticket: KitchenTicket; created: boolean }> {
+  const res = await pool.query(
+    `insert into kitchen_tickets
+       (source, session_id, client_request_id, items_json, note, amount_xof,
+        heading, subheading, is_test)
+     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8)
+     on conflict (client_request_id) where client_request_id is not null do nothing
+     returning *`,
+    [
+      input.sessionId,
+      input.clientRequestId,
+      JSON.stringify(input.lines),
+      input.note,
+      input.amountXof,
+      input.heading,
+      input.subheading,
+      input.isTest,
+    ],
+  );
+  const inserted = res.rows[0] as KitchenTicket | undefined;
+  if (inserted) {
+    await emitTicket("ticket_new", inserted);
+    return { ticket: inserted, created: true };
+  }
+  const existing = await ticketByClientRequest(input.clientRequestId);
+  return { ticket: existing as KitchenTicket, created: false };
+}
+
+async function ticketByClientRequest(clientRequestId: string): Promise<KitchenTicket | null> {
+  const res = await pool.query(
+    `select * from kitchen_tickets where client_request_id = $1`,
+    [clientRequestId],
+  );
+  return (res.rows[0] as KitchenTicket) ?? null;
+}
+
+// ---------- accueil transitions (reception phones, TABLE tickets) ----------
+
+/**
+ * "Je prends" — an accueil server atomically claims a READY table ticket to carry
+ * it out. The `serve_by is null` guard makes two phones racing resolve to a single
+ * winner (the loser gets null). Does NOT change status (the ticket is still READY,
+ * now shown as taken). Emits ticket_update.
+ */
+export async function claimTableServe(id: string, by: string | null): Promise<KitchenTicket | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update kitchen_tickets
+        set serve_by = $2, serve_claimed_at = now(), updated_at = now()
+      where id = $1 and source = 'TABLE' and status = 'READY' and serve_by is null
+      returning *`,
+    [id, by],
+  );
+  const ticket = (res.rows[0] as KitchenTicket) ?? null;
+  if (ticket) await emitTicket("ticket_update", ticket);
+  return ticket;
+}
+
+/**
+ * "Servie" — a READY table ticket is served and leaves both boards (COMPLETED).
+ * Idempotent (a second tap finds no READY row). Records the server if the ticket
+ * was never claimed. Emits ticket_removed.
+ */
+export async function serveTableTicket(id: string, by: string | null): Promise<KitchenTicket | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update kitchen_tickets
+        set status = 'COMPLETED', completed_at = now(),
+            serve_by = coalesce(serve_by, $2),
+            serve_claimed_at = coalesce(serve_claimed_at, now()),
+            updated_at = now()
+      where id = $1 and source = 'TABLE' and status = 'READY'
+      returning *`,
+    [id, by],
+  );
+  const ticket = (res.rows[0] as KitchenTicket) ?? null;
+  if (ticket) await emitRemoved(ticket);
+  return ticket;
+}
+
+/**
+ * Accueil cancels an on-site order (mistake, client left) from any open state.
+ * Leaves both boards (CANCELLED). Emits ticket_removed.
+ */
+export async function cancelTableTicket(id: string, reason: string | null): Promise<KitchenTicket | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update kitchen_tickets
+        set status = 'CANCELLED', cancel_reason = $2, updated_at = now()
+      where id = $1 and source = 'TABLE' and status in ('NEW','PREPARING','READY')
+      returning *`,
+    [id, reason],
+  );
+  const ticket = (res.rows[0] as KitchenTicket) ?? null;
+  if (ticket) await emitRemoved(ticket);
+  return ticket;
+}
+
+/** Open kitchen tickets (NEW/PREPARING/READY) of one session, oldest first. */
+export async function ticketsForSession(sessionId: string): Promise<KitchenTicket[]> {
+  if (!UUID_RE.test(String(sessionId))) return [];
+  const res = await pool.query(
+    `select * from kitchen_tickets
+      where session_id = $1 and status in ('NEW','PREPARING','READY')
+      order by created_at asc`,
+    [sessionId],
+  );
+  return res.rows as KitchenTicket[];
 }
 
 // ---------- cuisine transitions (iPad) ----------

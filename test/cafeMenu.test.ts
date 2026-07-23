@@ -5,6 +5,7 @@ import {
   type CafeMenuRow,
   cafeFavouriteOptions,
   cafeMenuVersion,
+  cleanLineNote,
   computeExtras,
   extrasFromJson,
   FAVOURITE_SEED_IDS,
@@ -140,6 +141,44 @@ describe("computeExtras", () => {
       const r = computeExtras(items, input);
       expect(r.ok).toBe(false);
     }
+  });
+});
+
+describe("computeExtras — per-line note (on-site orders)", () => {
+  const { items } = parseCafeMenu(FIXTURE);
+
+  it("freezes a trimmed per-line instruction onto the line", () => {
+    const r = computeExtras(items, [{ item_id: "SMOOTHIE_JANT_BI", qty: 1, note: "  sans sucre  " }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lines[0].note).toBe("sans sucre");
+  });
+
+  it("leaves note undefined when blank or absent", () => {
+    const r = computeExtras(items, [
+      { item_id: "SMOOTHIE_JANT_BI", qty: 1 },
+      { item_id: "MATCHA_VANILLE", qty: 1, note: "   " },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.lines[0].note).toBeUndefined();
+      expect(r.lines[1].note).toBeUndefined();
+    }
+  });
+
+  it("cleanLineNote caps length and collapses whitespace", () => {
+    expect(cleanLineNote("a\n  b")).toBe("a b");
+    expect(cleanLineNote("x".repeat(200))).toHaveLength(140);
+    expect(cleanLineNote("")).toBeUndefined();
+  });
+
+  it("formatters and extrasFromJson surface + preserve the note", () => {
+    const r = computeExtras(items, [{ item_id: "SMOOTHIE_JANT_BI", qty: 2, note: "sans oignons" }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(formatExtrasOneLine(r.lines)).toContain("— sans oignons");
+    expect(formatExtrasMultiline(r.lines)).toContain("— sans oignons");
+    const round = extrasFromJson(JSON.parse(JSON.stringify(r.lines)));
+    expect(round[0].note).toBe("sans oignons");
   });
 });
 

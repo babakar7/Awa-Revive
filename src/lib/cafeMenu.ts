@@ -43,6 +43,14 @@ export interface ExtraLine {
   lineTotalXof: number;
   /** The picked option for an item with a choice (e.g. "Jus d'orange"). */
   choice?: string;
+  /** Per-line kitchen instruction (e.g. "sans oignons"). On-site orders only. */
+  note?: string;
+}
+
+/** Trim + cap a per-line kitchen instruction; "" (or non-string) → undefined. */
+export function cleanLineNote(raw: unknown): string | undefined {
+  const s = String(raw ?? "").trim().replace(/\s+/g, " ").slice(0, 140);
+  return s || undefined;
 }
 
 export interface CafeMenu {
@@ -285,6 +293,8 @@ export function computeExtras(
         };
       }
     }
+    const note = cleanLineNote((entry as any)?.note);
+    if (note) line.note = note;
     lines.push(line);
   }
   if (unknownIds.length > 0)
@@ -303,14 +313,19 @@ function choiceSuffix(l: ExtraLine): string {
   return l.choice ? ` (${l.choice})` : "";
 }
 
+/** ` — sans oignons` when the line carries a per-line instruction, else "". */
+function noteSuffix(l: ExtraLine): string {
+  return l.note ? ` — ${l.note}` : "";
+}
+
 /** `• 2× Jant Bi — 6000 FCFA` per line — for client-facing messages. */
 export function formatExtrasMultiline(lines: ExtraLine[]): string {
-  return lines.map((l) => `• ${l.qty}× ${l.name}${choiceSuffix(l)} — ${l.lineTotalXof} FCFA`).join("\n");
+  return lines.map((l) => `• ${l.qty}× ${l.name}${choiceSuffix(l)}${noteSuffix(l)} — ${l.lineTotalXof} FCFA`).join("\n");
 }
 
 /** `2× Jant Bi + 1× Iced Matcha Vanille` — for one-line summaries. */
 export function formatExtrasOneLine(lines: ExtraLine[]): string {
-  return lines.map((l) => `${l.qty}× ${l.name}${choiceSuffix(l)}`).join(" + ");
+  return lines.map((l) => `${l.qty}× ${l.name}${choiceSuffix(l)}${noteSuffix(l)}`).join(" + ");
 }
 
 /** Defensive parse of the extras_json column (jsonb → ExtraLine[]). */
@@ -321,5 +336,9 @@ export function extrasFromJson(value: unknown): ExtraLine[] {
       (l): l is ExtraLine =>
         typeof l?.name === "string" && Number.isInteger(l?.qty) && Number.isInteger(l?.lineTotalXof),
     )
-    .map((l) => (typeof l.choice === "string" && l.choice ? l : { ...l, choice: undefined }));
+    .map((l) => ({
+      ...l,
+      choice: typeof l.choice === "string" && l.choice ? l.choice : undefined,
+      note: cleanLineNote(l.note),
+    }));
 }
