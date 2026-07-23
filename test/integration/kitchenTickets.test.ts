@@ -23,6 +23,7 @@ import {
   listOpenKitchenTickets,
   ticketByDeliveryOrder,
   unlockedPendingKitchenOrderIds,
+  kitchenTicketView,
 } from "../../src/domain/kitchenTicketRepo.js";
 import { findDeliveryOrder } from "../../src/domain/deliveryRepo.js";
 import { opsEventsSince, latestOpsEventId } from "../../src/domain/opsEvents.js";
@@ -118,6 +119,8 @@ describe("cuisine transitions", () => {
     const ready = await advanceTicketByCuisine(ticket.id, "READY", "iPad Cuisine");
     expect(ready?.status).toBe("READY");
     expect(ready?.ready_at).not.toBeNull();
+    // ready_at is exposed in the SSE payload so the iPad can freeze the prep timer.
+    expect(kitchenTicketView(ready!).ready_at).not.toBeNull();
 
     // Already READY → a second READY tap (or a backward move) is a no-op.
     expect(await advanceTicketByCuisine(ticket.id, "READY", "iPad Cuisine")).toBeNull();

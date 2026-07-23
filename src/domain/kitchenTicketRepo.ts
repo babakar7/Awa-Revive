@@ -63,6 +63,7 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
     heading: t.heading,
     subheading: t.subheading,
     created_at: t.created_at,
+    ready_at: t.ready_at,
   };
 }
 

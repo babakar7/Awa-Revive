@@ -97,7 +97,11 @@ padding:.9rem 1rem;display:flex;flex-direction:column;gap:.5rem}
 padding:.18rem .5rem;border-radius:999px;background:#0e2f52;color:#8fc3ff;white-space:nowrap}
 .badge.table{background:#3a2c10;color:#f0c579}
 .badge.test{background:#4a1d1d;color:#f6a5a5}
-.age{margin-left:auto;font-size:.8rem;color:#9a8c9a}
+.age{margin-left:auto;font-size:1.25rem;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.02em;color:#8bd3a8}
+.age.warn{color:#f0c579}
+.age.late{color:#ff6b6b;animation:pulse 1.2s ease-in-out infinite}
+.age.done{color:#6ee7a8;animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
 .heading{font-size:1.15rem;font-weight:700;line-height:1.2}
 .sub{font-size:.88rem;color:#c9bcc9}
 ul.items{list-style:none;margin:.2rem 0;padding:0;display:flex;flex-direction:column;gap:.15rem}
@@ -151,17 +155,21 @@ export const CUISINE_MANIFEST = JSON.stringify({
 });
 
 // ── Service worker (shell/assets only; never a mutation or the SSE stream) ────
-export const CUISINE_SW = `const CACHE='cuisine-v1';
+export const CUISINE_SW = `const CACHE='cuisine-v2';
 const SHELL=['${BASE}/app.js','${BASE}/manifest.webmanifest','${BASE}/icon-192.png','${BASE}/icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
 self.addEventListener('fetch',e=>{
   const url=new URL(e.request.url);
-  // Only ever touch our own static shell assets. Everything else — the page
-  // navigation, the SSE stream, and every POST mutation — goes straight to the
-  // network (never cached), so the kitchen never acts on stale data.
+  // Shell assets ONLY: network-first so a deployed (or dev-reloaded) update shows
+  // immediately when online; the cache is just an offline fallback. Everything
+  // else — the page navigation, the SSE stream, every POST mutation — is never
+  // touched here, so the kitchen never acts on stale data.
   if(e.request.method==='GET' && SHELL.includes(url.pathname)){
-    e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)));
+    e.respondWith(
+      fetch(e.request).then(r=>{const c=r.clone();caches.open(CACHE).then(cc=>cc.put(e.request,c));return r;})
+        .catch(()=>caches.match(e.request))
+    );
   }
 });`;
 
@@ -187,8 +195,15 @@ export const CUISINE_APP_JS = String.raw`(function(){
     var t=actx.currentTime; g.gain.exponentialRampToValueAtTime(.25,t+.02); g.gain.exponentialRampToValueAtTime(.001,t+.5);
     o.start(t); o.stop(t+.5);}catch(e){} }
 
-  function age(iso){ var s=Math.max(0,Math.floor((Date.now()-new Date(iso).getTime())/1000));
-    var m=Math.floor(s/60); return m<1? s+' s' : m+' min'; }
+  // Prep timer (MM:SS): counts up while the kitchen prepares, colored by urgency
+  // (green < 5 min, amber 5–10, red pulsing ≥ 10), and FREEZES when the ticket is
+  // marked READY — the kitchen's job is done; the delivery/total time belongs to
+  // reception (/admin/livraisons), not the iPad.
+  function fmtSecs(s){ s=Math.max(0,Math.floor(s)); var m=Math.floor(s/60), r=s%60; return (m<10?'0':'')+m+':'+(r<10?'0':'')+r; }
+  function fmtElapsed(iso){ return fmtSecs((Date.now()-new Date(iso).getTime())/1000); }
+  function betweenSecs(a,b){ return (new Date(b).getTime()-new Date(a).getTime())/1000; }
+  function elapsedMins(iso){ return (Date.now()-new Date(iso).getTime())/60000; }
+  function ageClass(iso){ var m=elapsedMins(iso); return m>=10?'age late':m>=5?'age warn':'age'; }
 
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
 
@@ -199,7 +214,14 @@ export const CUISINE_APP_JS = String.raw`(function(){
     var b=el('span','badge'+(t.source==='TABLE'?' table':''), t.source==='TABLE'?'🪑 Salle':'🛵 Livraison');
     top.appendChild(b);
     if(t.is_test) top.appendChild(el('span','badge test','Test'));
-    var a=el('span','age',age(t.created_at)); a.dataset.age=t.created_at; top.appendChild(a);
+    var a;
+    if(t.status==='READY' && t.ready_at){
+      // Frozen prep duration — no data-age, so the ticking interval skips it.
+      a=el('span','age done','✓ '+fmtSecs(betweenSecs(t.created_at,t.ready_at)));
+    } else {
+      a=el('span',ageClass(t.created_at),fmtElapsed(t.created_at)); a.dataset.age=t.created_at;
+    }
+    top.appendChild(a);
     c.appendChild(top);
     c.appendChild(el('div','heading',t.heading||'—'));
     if(t.subheading) c.appendChild(el('div','sub',t.subheading));
@@ -237,8 +259,9 @@ export const CUISINE_APP_JS = String.raw`(function(){
 
   function setOnline(on){ dot.classList.toggle('on',on); offline.classList.toggle('show',!on); }
 
-  // Refresh the little age labels every 20s without a full re-render.
-  setInterval(function(){ document.querySelectorAll('.age').forEach(function(a){ if(a.dataset.age) a.textContent=age(a.dataset.age); }); },20000);
+  // Tick the elapsed timers every second (MM:SS + urgency color) without a full re-render.
+  setInterval(function(){ document.querySelectorAll('[data-age]').forEach(function(a){
+    a.textContent=fmtElapsed(a.dataset.age); a.className=ageClass(a.dataset.age); }); },1000);
 
   render(); ackAll();
 

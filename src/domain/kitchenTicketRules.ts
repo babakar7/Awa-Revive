@@ -74,6 +74,8 @@ export interface KitchenTicketView {
   /** Secondary line: address (delivery) or space + first name (table). */
   subheading: string | null;
   created_at: Date | string;
+  /** When the kitchen marked it READY — freezes the prep timer on the card. */
+  ready_at: Date | string | null;
 }
 
 /** One-line items summary reused by the ticket card and the fallback WhatsApp. */
