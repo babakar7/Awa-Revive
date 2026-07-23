@@ -252,7 +252,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
     var c=el('div','spot '+(s?'occupied':'free')+(anyReady?' ready':'')); c.dataset.spot=sp.id; if(s)c.dataset.session=s.id;
     var h=el('div','sh'); h.appendChild(el('span','nm',sp.label)); var cap=capLabel(sp); if(cap)h.appendChild(el('span','cap',cap)); c.appendChild(h);
     if(!s){
-      c.appendChild(el('div','freehint','＋ Libre — prendre la commande'));
+      c.appendChild(el('div','freehint','Libre · touchez pour prendre la commande'));
       c.onclick=function(){ openOrder(sp,null); };
       return c;
     }
