@@ -5,13 +5,16 @@ import {
   canTransition,
   createdClientMessage,
   deliveryUpdateTemplateParams,
+  formatDakarDateTime,
   hashReadyToken,
   kitchenMessage,
   kitchenTemplateParams,
   magicLinkUrl,
   newReadyToken,
   normalizeDeliveryPhone,
+  parseDakarDateTime,
   parseDeliveryQtyFields,
+  rescheduledClientMessage,
   routeClientMessage,
   shouldFallbackDeliveryTemplate,
   verifyReadyToken,
@@ -107,6 +110,20 @@ describe("parseDeliveryQtyFields", () => {
   });
 });
 
+describe("Dakar delivery schedule", () => {
+  it("parses datetime-local as Dakar wall time and rejects invalid dates", () => {
+    expect(parseDakarDateTime("2026-08-04T14:30")?.toISOString()).toBe(
+      "2026-08-04T14:30:00.000Z",
+    );
+    expect(parseDakarDateTime("2026-02-30T14:30")).toBeNull();
+    expect(parseDakarDateTime("2026-08-04 14:30")).toBeNull();
+  });
+
+  it("formats the promised arrival explicitly in Dakar", () => {
+    expect(formatDakarDateTime("2026-08-04T14:30:00.000Z", "fr")).toContain("14:30");
+  });
+});
+
 describe("magic-link token", () => {
   it("newReadyToken is 32 hex chars (128 bits)", () => {
     for (let i = 0; i < 20; i++) expect(newReadyToken()).toMatch(/^[0-9a-f]{32}$/);
@@ -181,6 +198,21 @@ describe("message bodies", () => {
     expect(created[1]).toContain("WAVE, OM, MAXIT ou ESPÈCES");
     expect(route[1]).not.toContain("FCFA");
     expect(created[1]).not.toBe(route[1]);
+  });
+
+  it("adds the promised arrival to scheduled confirmations and omits payment on reschedule", () => {
+    const scheduled = { ...ORDER, scheduled_for: new Date("2026-08-04T14:30:00.000Z") };
+    const created = createdClientMessage("fr", scheduled);
+    const moved = rescheduledClientMessage("fr", scheduled);
+    expect(created).toContain("arrivée prévue");
+    expect(created).toContain("14:30");
+    expect(created).toContain("WAVE");
+    expect(moved).toContain("maintenant prévue");
+    expect(moved).toContain("14:30");
+    expect(moved).not.toMatch(/paiement|WAVE|OM|MAXIT|ESPÈCES/i);
+    expect(deliveryUpdateTemplateParams("rescheduled", scheduled)[1]).toContain(
+      "reprogrammée",
+    );
   });
 
   it("kitchenTemplateParams keep the exact 5-variable order of the Meta template", () => {

@@ -15,12 +15,19 @@ import {
 import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
 import {
+  attemptActivationNotify,
   attemptCreatedNotify,
+  attemptRescheduleNotify,
   attemptRouteNotify,
   notifyKitchenForOrder,
   renotifyKitchen,
 } from "../domain/deliveryNotify.js";
-import { normalizeDeliveryPhone, parseDeliveryQtyFields } from "../domain/deliveryRules.js";
+import {
+  formatDakarDateTime,
+  normalizeDeliveryPhone,
+  parseDakarDateTime,
+  parseDeliveryQtyFields,
+} from "../domain/deliveryRules.js";
 import {
   livraisonsBanner,
   renderLivraisonForm,
@@ -692,6 +699,9 @@ ${
             address: b.address,
             note: b.note,
             sla_minutes: b.sla_minutes,
+            delivery_mode: b.delivery_mode,
+            scheduled_for: b.scheduled_for,
+            kitchen_lead_minutes: b.kitchen_lead_minutes,
             is_test: b.is_test,
             qty,
             choice,
@@ -703,6 +713,19 @@ ${
         if (!name) return backErr("le nom du client est obligatoire");
         if (!phone) return backErr("numéro de téléphone invalide");
         if (!address) return backErr("l'adresse de livraison est obligatoire");
+        const deliveryMode = b.delivery_mode === "scheduled" ? "scheduled" : "now";
+        const leadRaw = parseInt(String(b.kitchen_lead_minutes ?? "60"), 10);
+        const kitchenLead = [30, 60, 90].includes(leadRaw) ? leadRaw : 60;
+        let scheduledFor: Date | null = null;
+        let kitchenNotifyAt: Date | null = null;
+        if (deliveryMode === "scheduled") {
+          scheduledFor = parseDakarDateTime(String(b.scheduled_for ?? ""));
+          if (!scheduledFor) return backErr("date et heure d'arrivée invalides");
+          if (scheduledFor.getTime() <= Date.now()) {
+            return backErr("l'heure d'arrivée doit être dans le futur");
+          }
+          kitchenNotifyAt = new Date(scheduledFor.getTime() - kitchenLead * 60_000);
+        }
         const parsed = parseDeliveryQtyFields(b);
         if ("error" in parsed) return backErr(parsed.error);
         // Prices/total resolved server-side from the menu (never trusted from the
@@ -723,6 +746,8 @@ ${
           sla_minutes: sla,
           created_by: req.adminUser ?? null,
           is_test: isTest,
+          scheduled_for: scheduledFor,
+          kitchen_notify_at: kitchenNotifyAt,
         });
         req.log.info({ order: order.id, by: req.adminUser }, "Delivery order created");
         // Confirm receipt to the client (fire-and-forget; the sweep reconciles).
@@ -731,31 +756,85 @@ ${
         // reception must see them to manage the delivery. Harmless self-echo
         // when reception entered the order herself.
         notifyReception(
-          isTest ? "🧪 TEST — nouvelle commande livraison" : "🛵 Nouvelle commande livraison",
+          isTest
+            ? "🧪 TEST — nouvelle commande livraison"
+            : scheduledFor
+              ? "🗓️ Nouvelle livraison programmée"
+              : "🛵 Nouvelle commande livraison",
           `${isTest ? "🧪 COMMANDE DE TEST — exclue des statistiques.\n" : ""}` +
             `Client : ${name} (+${phone})\n` +
             `Commande : ${formatExtrasOneLine(priced.lines)}\n` +
             `Total : ${priced.totalXof} FCFA\n` +
             `Paiement : choix client en attente via Awa — départ bloqué\n` +
             `Adresse : ${address}\n` +
+            (scheduledFor
+              ? `Arrivée promise : ${formatDakarDateTime(scheduledFor, "fr")} (heure de Dakar)\n` +
+                `Alerte cuisine : ${formatDakarDateTime(kitchenNotifyAt!, "fr")} (${kitchenLead} min avant)\n`
+              : "") +
             (note ? `Note : ${note}\n` : "") +
             `Suivi : /admin/livraisons`,
           { whatsappFirst: true, preferTemplate: true },
         );
-        // Notify the kitchen now (await so the banner is truthful). Claim first
-        // so a concurrent sweep can't double-send.
+        // Only active orders reach the kitchen. A scheduled order stays durable
+        // and silent until the 60-second sweep crosses kitchen_notify_at.
         let kitchenOk = false;
-        const claimed = await delivery.claimKitchenNotify(order.id);
-        if (claimed) {
-          try {
-            await notifyKitchenForOrder(claimed, token, req.log);
-            const fresh = await delivery.findDeliveryOrder(order.id);
-            kitchenOk = !!fresh && ["sent", "sent_template", "partial", "fallback_reception"].includes(fresh.kitchen_notify_status);
-          } catch (e) {
-            req.log.error({ err: e, order: order.id }, "Delivery kitchen notify threw");
+        if (order.activated_at) {
+          const claimed = await delivery.claimKitchenNotify(order.id);
+          if (claimed) {
+            try {
+              await notifyKitchenForOrder(claimed, token, req.log);
+              const fresh = await delivery.findDeliveryOrder(order.id);
+              kitchenOk = !!fresh && ["sent", "sent_template", "partial", "fallback_reception"].includes(fresh.kitchen_notify_status);
+            } catch (e) {
+              req.log.error({ err: e, order: order.id }, "Delivery kitchen notify threw");
+            }
           }
+          if (scheduledFor) await attemptActivationNotify(order.id, req.log);
         }
-        return reply.redirect(`/admin/livraisons?done=${kitchenOk ? "created" : "created-kitchen-failed"}`, 303);
+        const done = scheduledFor && !order.activated_at
+          ? "scheduled"
+          : kitchenOk
+            ? "created"
+            : "created-kitchen-failed";
+        return reply.redirect(`/admin/livraisons?done=${done}`, 303);
+      });
+
+      admin.post("/livraisons/:id/reschedule", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const b = (req.body ?? {}) as Record<string, string>;
+        const scheduledFor = parseDakarDateTime(String(b.scheduled_for ?? ""));
+        if (!scheduledFor) {
+          return reply.redirect("/admin/livraisons?err=date et heure d'arrivée invalides", 303);
+        }
+        if (scheduledFor.getTime() <= Date.now()) {
+          return reply.redirect("/admin/livraisons?err=l'heure d'arrivée doit être dans le futur", 303);
+        }
+        const lead = parseInt(String(b.kitchen_lead_minutes ?? "60"), 10);
+        if (![30, 60, 90].includes(lead)) {
+          return reply.redirect("/admin/livraisons?err=délai cuisine invalide", 303);
+        }
+        const kitchenNotifyAt = new Date(scheduledFor.getTime() - lead * 60_000);
+        const changed = await delivery.reprogramDeliveryOrder(id, {
+          scheduledFor,
+          kitchenNotifyAt,
+        });
+        if (!changed) {
+          return reply.redirect(
+            "/admin/livraisons?err=reprogrammation impossible après l'activation",
+            303,
+          );
+        }
+        req.log.info(
+          { order: id, by: req.adminUser, arrivalChanged: changed.arrivalChanged },
+          "Delivery order rescheduled",
+        );
+        if (changed.arrivalChanged) await attemptRescheduleNotify(id, req.log);
+        if (changed.order.activated_at) {
+          const claimed = await delivery.claimKitchenNotify(id);
+          if (claimed) await notifyKitchenForOrder(claimed, changed.token, req.log);
+          await attemptActivationNotify(id, req.log);
+        }
+        return reply.redirect("/admin/livraisons?done=reprogrammed", 303);
       });
 
       admin.post("/livraisons/:id/depart", async (req, reply) => {
@@ -767,9 +846,11 @@ ${
           return reply.redirect("/admin/livraisons?done=departed", 303);
         }
         const current = await delivery.findDeliveryOrder(id);
-        const err = current?.status === "IN_KITCHEN" && !delivery.deliveryMayDepart(current)
-          ? "départ bloqué : attendre le choix espèces ou la confirmation du paiement mobile"
-          : "commande déjà traitée — recharge la page";
+        const err = current?.status === "IN_KITCHEN" && !current.activated_at
+          ? "départ bloqué : cette livraison programmée n'est pas encore activée"
+          : current?.status === "IN_KITCHEN" && !delivery.deliveryMayDepart(current)
+            ? "départ bloqué : attendre le choix espèces ou la confirmation du paiement mobile"
+            : "commande déjà traitée — recharge la page";
         return reply.redirect(`/admin/livraisons?err=${encodeURIComponent(err)}`, 303);
       });
 
@@ -779,9 +860,11 @@ ${
         if (updated) req.log.info({ order: id, by: req.adminUser }, "Delivery order marked delivered");
         if (updated) return reply.redirect("/admin/livraisons?done=delivered", 303);
         const current = await delivery.findDeliveryOrder(id);
-        const err = current && !delivery.deliveryMayDepart(current)
-          ? "livraison bloquée : paiement non choisi ou non confirmé"
-          : "commande déjà traitée";
+        const err = current?.status === "IN_KITCHEN" && !current.activated_at
+          ? "livraison bloquée : la commande programmée n'est pas encore activée"
+          : current && !delivery.deliveryMayDepart(current)
+            ? "livraison bloquée : paiement non choisi ou non confirmé"
+            : "commande déjà traitée";
         return reply.redirect(`/admin/livraisons?err=${encodeURIComponent(err)}`, 303);
       });
 
@@ -792,8 +875,11 @@ ${
           req.log.info({ order: id, by: req.adminUser }, "Delivery cash payment selected by admin");
           notifyReception(
             `${updated.is_test ? "🧪 TEST — " : ""}💵 Espèces choisies — livraison`,
-            `Client : ${updated.client_name} (+${updated.client_phone})\n` +
-              `Montant à encaisser : ${updated.amount_xof} FCFA\nLe départ est autorisé.`,
+              `Client : ${updated.client_name} (+${updated.client_phone})\n` +
+              `Montant à encaisser : ${updated.amount_xof} FCFA\n` +
+              (updated.activated_at
+                ? `Le départ est autorisé.`
+                : `Le départ sera autorisé à l'activation cuisine.`),
             { whatsappFirst: true, preferTemplate: true },
           );
         }

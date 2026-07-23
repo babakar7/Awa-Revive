@@ -65,6 +65,28 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(test).toContain("exclue des statistiques");
   });
 
+  it("offers immediate or scheduled arrival in Dakar with a 60-minute default", () => {
+    const html = renderLivraisonForm(menu(), "");
+    expect(html).toContain(`name="delivery_mode" type="radio" value="now" checked`);
+    expect(html).toContain(`name="delivery_mode" type="radio" value="scheduled"`);
+    expect(html).toContain(`name="scheduled_for" type="datetime-local"`);
+    expect(html).toContain("Arrivée promise au client (heure de Dakar)");
+    expect(html).toContain(`<option value="60" selected>60 minutes avant`);
+    expect(html).toContain(`<option value="30">30 minutes avant`);
+    expect(html).toContain(`<option value="90">90 minutes avant`);
+  });
+
+  it("preserves scheduled fields after a validation error", () => {
+    const html = renderLivraisonForm(menu(), "", [], {
+      delivery_mode: "scheduled",
+      scheduled_for: "2026-08-04T14:30",
+      kitchen_lead_minutes: "90",
+    });
+    expect(html).toContain(`value="scheduled" checked`);
+    expect(html).toContain(`value="2026-08-04T14:30" required`);
+    expect(html).toContain(`<option value="90" selected>`);
+  });
+
   it("prefills client fields on error re-render, escaping HTML", () => {
     const html = renderLivraisonForm(menu(), "", [], {
       client_name: `A<script>x</script>`,

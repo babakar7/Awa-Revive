@@ -55,9 +55,20 @@ export interface DeliveryOrder {
   sla_minutes: number;
   ready_token_hash: string;
   created_by: string | null;
+  scheduled_for: Date | null; // promised arrival, Africa/Dakar at the edges
+  kitchen_notify_at: Date | null;
+  activated_at: Date | null;
   kitchen_notify_status: NotifyStatus;
   kitchen_notified_at: Date | null;
   kitchen_notify_attempts: number;
+  activation_notify_status: NotifyStatus;
+  activation_notified_at: Date | null;
+  activation_notify_attempts: number;
+  activation_notify_wamid: string | null;
+  reschedule_notify_status: NotifyStatus;
+  reschedule_notified_at: Date | null;
+  reschedule_notify_attempts: number;
+  reschedule_notify_wamid: string | null;
   created_notify_status: NotifyStatus; // the creation-confirmation ping
   created_notified_at: Date | null;
   created_notify_attempts: number;
@@ -95,10 +106,13 @@ export interface CreateDeliveryInput {
   sla_minutes: number;
   created_by: string | null;
   is_test: boolean;
+  scheduled_for: Date | null;
+  kitchen_notify_at: Date | null;
 }
 
-/** Insert an order (status IN_KITCHEN). Returns the row AND the cleartext token
- *  (the only moment it exists outside the client's WhatsApp — never stored). */
+/** Insert an order (status IN_KITCHEN). Future scheduled orders remain
+ * inactive until their kitchen deadline; immediate orders and scheduled orders
+ * whose deadline is already due are activated atomically at insert. */
 export async function createDeliveryOrder(
   input: CreateDeliveryInput,
 ): Promise<{ order: DeliveryOrder; token: string }> {
@@ -106,8 +120,13 @@ export async function createDeliveryOrder(
   const res = await pool.query(
     `insert into delivery_orders
        (client_name, client_phone, wix_contact_id, address, note, items_json, amount_xof,
-        sla_minutes, ready_token_hash, created_by, is_test)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        sla_minutes, ready_token_hash, created_by, is_test, scheduled_for,
+        kitchen_notify_at, activated_at, activation_notify_status)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+       case when $12::timestamptz is null then now()
+            when $13::timestamptz <= now() then $13::timestamptz
+            else null end,
+       case when $12::timestamptz is null then 'sent' else 'pending' end)
      returning *`,
     [
       input.client_name,
@@ -121,6 +140,8 @@ export async function createDeliveryOrder(
       hashReadyToken(token),
       input.created_by,
       input.is_test,
+      input.scheduled_for,
+      input.kitchen_notify_at,
     ],
   );
   return { order: res.rows[0] as DeliveryOrder, token };
@@ -156,6 +177,7 @@ export function markOutForDelivery(id: string, by: string): Promise<DeliveryOrde
           set status='OUT_FOR_DELIVERY', out_for_delivery_at=now(),
               out_for_delivery_by=$2, updated_at=now()
         where id=$1 and status='IN_KITCHEN'
+          and activated_at is not null
           and payment_status in ('CASH_DUE','PAID')
         returning *`,
       [id, by],
@@ -164,8 +186,13 @@ export function markOutForDelivery(id: string, by: string): Promise<DeliveryOrde
 }
 
 /** Whether the kitchen/admin departure action is currently allowed. */
-export function deliveryMayDepart(order: Pick<DeliveryOrder, "payment_status">): boolean {
-  return order.payment_status === "CASH_DUE" || order.payment_status === "PAID";
+export function deliveryMayDepart(
+  order: Pick<DeliveryOrder, "payment_status" | "activated_at">,
+): boolean {
+  return (
+    order.activated_at !== null &&
+    (order.payment_status === "CASH_DUE" || order.payment_status === "PAID")
+  );
 }
 
 /** Cash is considered collected when reception closes the delivered order. */
@@ -180,6 +207,7 @@ export function markDelivered(id: string, by: string): Promise<DeliveryOrder | n
               payment_ref=case when payment_status='CASH_DUE' then coalesce(payment_ref, 'cash:' || id::text) else payment_ref end,
               updated_at=now()
         where id=$1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+          and activated_at is not null
           and payment_status in ('CASH_DUE','PAID')
         returning *`,
       [id, by],
@@ -228,18 +256,96 @@ export async function markCancelled(id: string, by: string): Promise<DeliveryOrd
   }
 }
 
-/** Fresh token for an open order (invalidates the old magic link). Null if the
- *  order isn't IN_KITCHEN anymore. Returns the new cleartext token. */
+/** Manual resend: claim it and rotate the link in one UPDATE. Inactive future
+ * orders are deliberately excluded, so neither UI nor a direct POST can leak a
+ * kitchen ticket before activation. */
 export async function rotateReadyToken(id: string): Promise<string | null> {
   if (!UUID_RE.test(String(id))) return null;
   const token = newReadyToken();
   const res = await pool.query(
     `update delivery_orders
-        set ready_token_hash = $2, kitchen_notify_status = 'pending', updated_at = now()
-      where id = $1 and status = 'IN_KITCHEN' returning id`,
+        set ready_token_hash = $2, kitchen_notify_status = 'claimed',
+            kitchen_notify_attempts = kitchen_notify_attempts + 1, updated_at = now()
+      where id = $1 and status = 'IN_KITCHEN' and activated_at is not null
+      returning id`,
     [id, hashReadyToken(token)],
   );
   return (res.rowCount ?? 0) > 0 ? token : null;
+}
+
+/** Sweep-only atomic claim + token rotation. This closes the former
+ * claim-then-rotate race in which two concurrent sweeps could both send. */
+export async function claimKitchenNotifyWithFreshToken(
+  id: string,
+): Promise<{ order: DeliveryOrder; token: string } | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const token = newReadyToken();
+  const res = await pool.query(
+    `update delivery_orders
+        set ready_token_hash=$3, kitchen_notify_status='claimed',
+            kitchen_notify_attempts=kitchen_notify_attempts + 1, updated_at=now()
+      where id=$1 and status='IN_KITCHEN' and activated_at is not null
+        and kitchen_notify_attempts < $2
+        and (kitchen_notify_status in ('pending','failed')
+          or (kitchen_notify_status='claimed' and updated_at < now() - interval '2 minutes'))
+      returning *`,
+    [id, MAX_NOTIFY_ATTEMPTS, hashReadyToken(token)],
+  );
+  const order = res.rows[0] as DeliveryOrder | undefined;
+  return order ? { order, token } : null;
+}
+
+export interface ReprogramDeliveryInput {
+  scheduledFor: Date;
+  kitchenNotifyAt: Date;
+}
+
+/** Reprogram only while the old activation deadline is still in the future.
+ * Payment fields are intentionally untouched. If the new kitchen deadline is
+ * already due, the row becomes active immediately. */
+export async function reprogramDeliveryOrder(
+  id: string,
+  input: ReprogramDeliveryInput,
+): Promise<{ order: DeliveryOrder; token: string; arrivalChanged: boolean } | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const token = newReadyToken();
+  const res = await pool.query(
+    `with candidate as (
+       select * from delivery_orders
+        where id=$1 and status='IN_KITCHEN' and scheduled_for is not null
+          and activated_at is null and kitchen_notify_at > now()
+        for update
+     )
+     update delivery_orders d
+        set scheduled_for=$2, kitchen_notify_at=$3,
+            activated_at=case when $3::timestamptz <= now() then $3::timestamptz else null end,
+            ready_token_hash=$4,
+            kitchen_notify_status='pending', kitchen_notified_at=null,
+            kitchen_notify_attempts=0, alerted_at=null,
+            activation_notify_status='pending', activation_notified_at=null,
+            activation_notify_attempts=0, activation_notify_wamid=null,
+            reschedule_notify_status=case
+              when c.scheduled_for is distinct from $2::timestamptz then 'pending'
+              else d.reschedule_notify_status end,
+            reschedule_notified_at=case
+              when c.scheduled_for is distinct from $2::timestamptz then null
+              else d.reschedule_notified_at end,
+            reschedule_notify_attempts=case
+              when c.scheduled_for is distinct from $2::timestamptz then 0
+              else d.reschedule_notify_attempts end,
+            reschedule_notify_wamid=case
+              when c.scheduled_for is distinct from $2::timestamptz then null
+              else d.reschedule_notify_wamid end,
+            updated_at=now()
+       from candidate c where d.id=c.id
+     returning d.*, (c.scheduled_for is distinct from $2::timestamptz) as arrival_changed`,
+    [id, input.scheduledFor, input.kitchenNotifyAt, hashReadyToken(token)],
+  );
+  if (!res.rows[0]) return null;
+  const { arrival_changed, ...row } = res.rows[0] as DeliveryOrder & {
+    arrival_changed: boolean;
+  };
+  return { order: row as DeliveryOrder, token, arrivalChanged: arrival_changed };
 }
 
 // ---------- payment choice + provider attempts ----------
@@ -583,7 +689,7 @@ export async function claimKitchenNotify(id: string): Promise<DeliveryOrder | nu
         set kitchen_notify_status = 'claimed',
             kitchen_notify_attempts = kitchen_notify_attempts + 1,
             updated_at = now()
-      where id = $1 and status = 'IN_KITCHEN'
+      where id = $1 and status = 'IN_KITCHEN' and activated_at is not null
         and kitchen_notify_attempts < $2
         and ( kitchen_notify_status in ('pending','failed')
               or (kitchen_notify_status = 'claimed' and updated_at < now() - interval '2 minutes') )
@@ -609,7 +715,7 @@ export async function setKitchenNotifyOutcome(
 }
 
 /**
- * The two client-facing pings share one claim/outcome/pending discipline; only
+ * The client-facing pings share one claim/outcome/pending discipline; only
  * the tracking columns and the order-statuses in which each is (still) relevant
  * differ. Column names and status IN-lists come ONLY from this hardcoded
  * whitelist — never from input — so interpolating them into SQL is safe.
@@ -617,7 +723,7 @@ export async function setKitchenNotifyOutcome(
  *    confirmation); dropped if cancelled/delivered before it ever landed.
  *  - route: once OUT_FOR_DELIVERY (covers a depart→delivered within seconds).
  */
-type ClientPing = "created" | "route";
+type ClientPing = "created" | "route" | "rescheduled";
 const CLIENT_PING_COLS: Record<
   ClientPing,
   { status: string; at: string; attempts: string; wamid: string; claimIn: string; pendingIn: string }
@@ -637,6 +743,14 @@ const CLIENT_PING_COLS: Record<
     wamid: "route_notify_wamid",
     claimIn: "('OUT_FOR_DELIVERY','DELIVERED')",
     pendingIn: "('OUT_FOR_DELIVERY')",
+  },
+  rescheduled: {
+    status: "reschedule_notify_status",
+    at: "reschedule_notified_at",
+    attempts: "reschedule_notify_attempts",
+    wamid: "reschedule_notify_wamid",
+    claimIn: "('IN_KITCHEN','OUT_FOR_DELIVERY')",
+    pendingIn: "('IN_KITCHEN','OUT_FOR_DELIVERY')",
   },
 };
 
@@ -691,6 +805,7 @@ async function pendingClientPings(kind: ClientPing): Promise<string[]> {
 // Named entry points (call sites stay explicit).
 export const claimCreatedNotify = (id: string) => claimClientPing(id, "created");
 export const claimRouteNotify = (id: string) => claimClientPing(id, "route");
+export const claimRescheduleNotify = (id: string) => claimClientPing(id, "rescheduled");
 export const setCreatedNotifyOutcome = (
   id: string,
   status: NotifyStatus,
@@ -701,6 +816,11 @@ export const setRouteNotifyOutcome = (
   status: NotifyStatus,
   waMessageId: string | null = null,
 ) => setClientPingOutcome(id, "route", status, waMessageId);
+export const setRescheduleNotifyOutcome = (
+  id: string,
+  status: NotifyStatus,
+  waMessageId: string | null = null,
+) => setClientPingOutcome(id, "rescheduled", status, waMessageId);
 
 /**
  * Meta may accept free text with HTTP 200 and reject it asynchronously because
@@ -725,7 +845,8 @@ export async function markClientPingFailedByWamid(waMessageId: string): Promise<
 export async function pendingKitchenNotifies(): Promise<string[]> {
   const res = await pool.query(
     `select id from delivery_orders
-      where status = 'IN_KITCHEN' and kitchen_notify_attempts < $1
+      where status = 'IN_KITCHEN' and activated_at is not null
+        and kitchen_notify_attempts < $1
         and ( kitchen_notify_status in ('pending','failed')
               or (kitchen_notify_status = 'claimed' and updated_at < now() - interval '2 minutes') )`,
     [MAX_NOTIFY_ATTEMPTS],
@@ -737,6 +858,77 @@ export async function pendingKitchenNotifies(): Promise<string[]> {
 export const pendingCreatedNotifies = () => pendingClientPings("created");
 /** Orders whose "out for delivery" ping still needs a (re)attempt. */
 export const pendingRouteNotifies = () => pendingClientPings("route");
+/** Orders whose reprogramming update still needs a (re)attempt. */
+export const pendingRescheduleNotifies = () => pendingClientPings("rescheduled");
+
+/** Atomically activate all scheduled orders whose kitchen deadline is due.
+ * `activated_at` is the planned kitchen deadline (not sweep wall time), which
+ * keeps SLA/statistics stable across a restart. Concurrent sweeps cannot both
+ * return the same row. */
+export async function activateDueScheduledDeliveries(): Promise<DeliveryOrder[]> {
+  const res = await pool.query(
+    `update delivery_orders
+        set activated_at=kitchen_notify_at,
+            activation_notify_status='pending',
+            activation_notified_at=null,
+            activation_notify_attempts=0,
+            activation_notify_wamid=null,
+            updated_at=now()
+      where status='IN_KITCHEN' and scheduled_for is not null
+        and activated_at is null and kitchen_notify_at <= now()
+      returning *`,
+  );
+  return res.rows as DeliveryOrder[];
+}
+
+/** Durable activation reminder to reception. */
+export async function claimActivationNotify(id: string): Promise<DeliveryOrder | null> {
+  const res = await pool.query(
+    `update delivery_orders
+        set activation_notify_status='claimed',
+            activation_notify_attempts=activation_notify_attempts + 1,
+            activation_notify_wamid=null, updated_at=now()
+      where id=$1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY','DELIVERED')
+        and scheduled_for is not null
+        and activated_at is not null and activation_notify_attempts < $2
+        and (activation_notify_status in ('pending','failed')
+          or (activation_notify_status='claimed' and updated_at < now() - interval '2 minutes'))
+      returning *`,
+    [id, MAX_NOTIFY_ATTEMPTS],
+  );
+  return (res.rows[0] as DeliveryOrder) ?? null;
+}
+
+export async function setActivationNotifyOutcome(
+  id: string,
+  status: NotifyStatus,
+  waMessageId: string | null = null,
+): Promise<void> {
+  await pool.query(
+    `update delivery_orders
+        set activation_notify_status=$2,
+            activation_notified_at=case
+              when $2 in ('sent','sent_template') then now() else activation_notified_at end,
+            activation_notify_wamid=case
+              when $2 in ('sent','sent_template') then $3 else null end,
+            updated_at=now()
+      where id=$1`,
+    [id, status, waMessageId],
+  );
+}
+
+export async function pendingActivationNotifies(): Promise<string[]> {
+  const res = await pool.query(
+    `select id from delivery_orders
+      where status in ('IN_KITCHEN','OUT_FOR_DELIVERY','DELIVERED')
+        and scheduled_for is not null and activated_at is not null
+        and activation_notify_attempts < $1
+        and (activation_notify_status in ('pending','failed')
+          or (activation_notify_status='claimed' and updated_at < now() - interval '2 minutes'))`,
+    [MAX_NOTIFY_ATTEMPTS],
+  );
+  return res.rows.map((r: any) => r.id as string);
+}
 
 /** One-shot SLA alert claim: IN_KITCHEN orders past their per-order deadline
  *  (i.e. never departed in time). */
@@ -745,7 +937,8 @@ export async function claimDeliverySlaAlerts(): Promise<DeliveryOrder[]> {
     `update delivery_orders
         set alerted_at = now(), updated_at = now()
       where status = 'IN_KITCHEN' and alerted_at is null
-        and created_at < now() - make_interval(mins => sla_minutes)
+        and activated_at is not null
+        and coalesce(kitchen_notify_at, created_at) < now() - make_interval(mins => sla_minutes)
       returning *`,
   );
   return res.rows as DeliveryOrder[];
@@ -756,7 +949,10 @@ export async function claimDeliverySlaAlerts(): Promise<DeliveryOrder[]> {
 export async function listOpenDeliveryOrders(): Promise<DeliveryOrder[]> {
   const res = await pool.query(
     `select * from delivery_orders
-      where status in ('IN_KITCHEN','OUT_FOR_DELIVERY') order by created_at asc`,
+      where status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+      order by
+        case when scheduled_for is not null and activated_at is null then 0 else 1 end,
+        coalesce(scheduled_for, activated_at, created_at) asc`,
   );
   return res.rows as DeliveryOrder[];
 }
@@ -792,7 +988,7 @@ export async function recentDeliveryClients(limit = 30): Promise<RecentDeliveryC
 export interface DeliveryStats {
   openCount: number;
   lateToday: number;
-  /** Average creation → departure time over 30 days (the single prep+depart step). */
+  /** Average activation → departure time over 30 days. */
   avgPrepMinutes: number | null;
 }
 
@@ -801,8 +997,9 @@ export async function deliveryStats(): Promise<DeliveryStats> {
     `select
        count(*) filter (where status in ('IN_KITCHEN','OUT_FOR_DELIVERY')) as open_count,
        count(*) filter (where alerted_at is not null and alerted_at::date = now()::date) as late_today,
-       avg(extract(epoch from (out_for_delivery_at - created_at)) / 60.0)
-         filter (where out_for_delivery_at is not null and created_at > now() - interval '30 days') as avg_prep
+       avg(extract(epoch from (out_for_delivery_at - coalesce(kitchen_notify_at, created_at))) / 60.0)
+         filter (where out_for_delivery_at is not null
+           and coalesce(kitchen_notify_at, created_at) > now() - interval '30 days') as avg_prep
      from delivery_orders
      where is_test = false`,
   );

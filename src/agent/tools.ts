@@ -1502,7 +1502,9 @@ export async function executeTool(
           `Client : ${order.client_name} (+${order.client_phone})\n` +
             `Montant à encaisser à la livraison : ${order.amount_xof} FCFA\n` +
             `Commande : ${formatExtrasOneLine(deliveries.orderItems(order))}\n` +
-            `Le départ est maintenant autorisé.`,
+            (order.activated_at
+              ? `Le départ est maintenant autorisé.`
+              : `Le paiement est enregistré ; le départ restera bloqué jusqu'à l'activation cuisine.`),
           { whatsappFirst: true, preferTemplate: true },
         );
         return JSON.stringify({

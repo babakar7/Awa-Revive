@@ -13,25 +13,34 @@ import {
   aggregateKitchenOutcome,
   createdClientMessage,
   deliveryUpdateTemplateParams,
+  formatDakarDateTime,
   kitchenMessage,
   kitchenTemplateParams,
   magicLinkUrl,
+  rescheduledClientMessage,
   routeClientMessage,
   type ClientPingKind,
   type DeliveryOrderView,
 } from "./deliveryRules.js";
 import {
+  activateDueScheduledDeliveries,
+  claimActivationNotify,
   claimCreatedNotify,
   claimDeliverySlaAlerts,
-  claimKitchenNotify,
+  claimKitchenNotifyWithFreshToken,
+  claimRescheduleNotify,
   claimRouteNotify,
   findDeliveryOrder,
   orderItems,
+  pendingActivationNotifies,
   pendingCreatedNotifies,
   pendingKitchenNotifies,
+  pendingRescheduleNotifies,
   pendingRouteNotifies,
   rotateReadyToken,
+  setActivationNotifyOutcome,
   setCreatedNotifyOutcome,
+  setRescheduleNotifyOutcome,
   setRouteNotifyOutcome,
   setKitchenNotifyOutcome,
   type DeliveryOrder,
@@ -62,6 +71,7 @@ function viewOf(o: DeliveryOrder): DeliveryOrderView {
     items: orderItems(o),
     amount_xof: o.amount_xof,
     is_test: o.is_test,
+    scheduled_for: o.scheduled_for,
     payment_status: o.payment_status,
     payment_method: o.payment_method,
   };
@@ -232,6 +242,14 @@ const CLIENT_PING: Record<
     setOutcome: setRouteNotifyOutcome,
     label: "route-ping",
   },
+  rescheduled: {
+    message: rescheduledClientMessage,
+    template: () => config.WA_DELIVERY_UPDATE_TEMPLATE,
+    templateLang: () => config.WA_DELIVERY_UPDATE_TEMPLATE_LANG,
+    templateParams: (o) => deliveryUpdateTemplateParams("rescheduled", o),
+    setOutcome: setRescheduleNotifyOutcome,
+    label: "reschedule-update",
+  },
 };
 
 /**
@@ -299,14 +317,61 @@ export async function attemptRouteNotify(id: string, log: Log): Promise<void> {
   await sendClientPing(order, "route", log);
 }
 
+/** Claim + attempt the client update after a promised-arrival change. */
+export async function attemptRescheduleNotify(id: string, log: Log): Promise<void> {
+  const order = await claimRescheduleNotify(id);
+  if (!order) return;
+  await sendClientPing(order, "rescheduled", log);
+}
+
+/** Durable one-shot reception reminder when a future order becomes active. */
+export async function attemptActivationNotify(id: string, log: Log): Promise<void> {
+  const order = await claimActivationNotify(id);
+  if (!order) return;
+  const arrival = order.scheduled_for
+    ? formatDakarDateTime(order.scheduled_for, "fr")
+    : "horaire prévu";
+  const subject = `${order.is_test ? "🧪 TEST — " : ""}⏰ Livraison programmée à activer`;
+  const body =
+    `${order.is_test ? "Commande de test — exclue des statistiques.\n" : ""}` +
+    `La cuisine doit préparer la commande de ${order.client_name} (+${order.client_phone}).\n` +
+    `Arrivée promise : ${arrival} (heure de Dakar)\n` +
+    `Adresse : ${order.address}\n` +
+    `Commande : ${orderItems(order).map((line) => `${line.qty}× ${line.name}`).join(" + ")}\n` +
+    `Paiement : ${order.payment_status}.`;
+  try {
+    const { path, waMessageId } = await sendWhatsAppNotificationDetailed(
+      config.RECEPTION_PHONE,
+      subject,
+      body,
+      { preferTemplate: true },
+    );
+    await recordDeliveryLog(
+      config.RECEPTION_PHONE,
+      `[livraison ${order.id.slice(0, 8)} activation] ${body}`,
+      path,
+      null,
+      waMessageId,
+    );
+    await setActivationNotifyOutcome(order.id, path, waMessageId);
+  } catch (err) {
+    await recordDeliveryLog(
+      config.RECEPTION_PHONE,
+      `[livraison ${order.id.slice(0, 8)} activation] ${body}`,
+      "failed",
+      String(err).slice(0, 300),
+    );
+    await setActivationNotifyOutcome(order.id, "failed");
+    log.error({ err, order: order.id }, "Delivery activation reception reminder failed");
+  }
+}
+
 /** Claim + attempt the kitchen notification for one order id, minting a fresh
  *  token (the cleartext is never stored, so a retry rotates it). Sweep entry. */
 async function attemptKitchenNotify(id: string, log: Log): Promise<void> {
-  const order = await claimKitchenNotify(id);
-  if (!order) return;
-  const token = await rotateReadyToken(id);
-  if (!token) return; // no longer IN_KITCHEN
-  await notifyKitchenForOrder(order, token, log);
+  const claimed = await claimKitchenNotifyWithFreshToken(id);
+  if (!claimed) return;
+  await notifyKitchenForOrder(claimed.order, claimed.token, log);
 }
 
 /**
@@ -315,28 +380,43 @@ async function attemptKitchenNotify(id: string, log: Log): Promise<void> {
  * many SLA alerts were sent (for the log line).
  */
 export async function sweepDeliveries(log: Log): Promise<number> {
-  // 1. Kitchen notifications still pending/failed (e.g. crash right after create).
+  // 0. Durable activation gate. Concurrent sweeps return disjoint rows.
+  await activateDueScheduledDeliveries();
+  // 1. Kitchen notifications still pending/failed (including newly activated).
   for (const id of await pendingKitchenNotifies()) {
     await attemptKitchenNotify(id, log).catch((err) =>
       log.error({ err, order: id }, "Delivery kitchen retry failed"),
     );
   }
-  // 2. Creation-confirmation pings still pending/failed.
+  // 2. Reception reminders for newly activated scheduled orders.
+  for (const id of await pendingActivationNotifies()) {
+    await attemptActivationNotify(id, log).catch((err) =>
+      log.error({ err, order: id }, "Delivery activation reminder retry failed"),
+    );
+  }
+  // 3. Creation-confirmation pings still pending/failed.
   for (const id of await pendingCreatedNotifies()) {
     await attemptCreatedNotify(id, log).catch((err) =>
       log.error({ err, order: id }, "Delivery created-confirmation retry failed"),
     );
   }
-  // 3. "Out for delivery" pings still pending/failed.
+  // 4. Reprogramming updates still pending/failed.
+  for (const id of await pendingRescheduleNotifies()) {
+    await attemptRescheduleNotify(id, log).catch((err) =>
+      log.error({ err, order: id }, "Delivery reschedule-update retry failed"),
+    );
+  }
+  // 5. "Out for delivery" pings still pending/failed.
   for (const id of await pendingRouteNotifies()) {
     await attemptRouteNotify(id, log).catch((err) =>
       log.error({ err, order: id }, "Delivery route retry failed"),
     );
   }
-  // 4. SLA alerts (one-shot per order): never departed in time.
+  // 6. SLA alerts (one-shot per order): never departed in time.
   const late = await claimDeliverySlaAlerts();
   for (const order of late) {
-    const elapsed = Math.round((Date.now() - new Date(order.created_at).getTime()) / 60000);
+    const slaStartedAt = order.kitchen_notify_at ?? order.created_at;
+    const elapsed = Math.round((Date.now() - new Date(slaStartedAt).getTime()) / 60000);
     notifyReception(
       `${order.is_test ? "🧪 TEST — " : ""}⏰ Commande livraison en retard (+${elapsed} min)`,
       `${order.is_test ? "Commande de test — exclue des statistiques.\n" : ""}` +

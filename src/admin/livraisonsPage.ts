@@ -6,6 +6,7 @@ import {
   type DeliveryStats,
   type RecentDeliveryClient,
 } from "../domain/deliveryRepo.js";
+import { formatDakarDateTime } from "../domain/deliveryRules.js";
 
 /**
  * Body HTML for /admin/livraisons — server-rendered, self-contained escaping so
@@ -25,11 +26,13 @@ function esc(s: unknown): string {
 
 const BANNERS: Record<string, string> = {
   created: "Commande créée — cuisine notifiée, confirmation envoyée au client.",
+  scheduled: "Commande programmée — client et réception prévenus. La cuisine sera alertée à l'heure prévue.",
   "created-kitchen-failed": "Commande créée, mais l'envoi à la cuisine a échoué — utilisez « 🔁 Renvoyer ».",
   departed: "Commande partie en livraison — le client est prévenu.",
   delivered: "Commande marquée livrée.",
   cancelled: "Commande annulée.",
   renotified: "Cuisine renotifiée.",
+  reprogrammed: "Livraison reprogrammée — le nouvel horaire est enregistré.",
   cash: "Paiement en espèces enregistré — le départ est autorisé.",
 };
 
@@ -44,13 +47,34 @@ function minutesSince(d: Date | string): number {
   return Math.floor((Date.now() - new Date(d).getTime()) / 60000);
 }
 
+function isWaitingForActivation(o: DeliveryOrder): boolean {
+  return !!o.scheduled_for && !o.activated_at;
+}
+
+function dakarInputValue(value: Date | string): string {
+  const d = new Date(value);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+function arrivalCountdown(value: Date | string): string {
+  const mins = Math.ceil((new Date(value).getTime() - Date.now()) / 60000);
+  if (mins <= 0) return "activation imminente";
+  const days = Math.floor(mins / 1440);
+  const hours = Math.floor((mins % 1440) / 60);
+  const rest = mins % 60;
+  if (days > 0) return `dans ${days} j ${hours} h`;
+  if (hours > 0) return `dans ${hours} h ${rest} min`;
+  return `dans ${rest} min`;
+}
+
 /** Colored SLA badge: green <10 min, amber <SLA, red ≥SLA; distinct once departed. */
 function slaBadge(o: DeliveryOrder): string {
   if (o.status === "OUT_FOR_DELIVERY") {
     const since = o.out_for_delivery_at ? minutesSince(o.out_for_delivery_at) : 0;
     return `<span class="badge badge--green">en route (${since} min)</span>`;
   }
-  const elapsed = minutesSince(o.created_at);
+  const elapsed = minutesSince(o.kitchen_notify_at ?? o.created_at);
   const remaining = o.sla_minutes - elapsed;
   let cls: string;
   let label: string;
@@ -88,6 +112,7 @@ function actionsCell(o: DeliveryOrder): string {
   const parts: string[] = [];
   const kitchenBad = ["failed", "partial", "fallback_reception"].includes(o.kitchen_notify_status);
   if (o.status === "IN_KITCHEN") {
+    if (!o.activated_at) return "";
     if (o.payment_status === "CASH_DUE" || o.payment_status === "PAID") {
       parts.push(inlineForm(`${base}/depart`, "🛵 Partie", undefined, "ok"));
       parts.push(inlineForm(`${base}/delivered`, "✓ Livrée", undefined, "ghost"));
@@ -104,6 +129,30 @@ function actionsCell(o: DeliveryOrder): string {
     );
   }
   return parts.join(" ");
+}
+
+function scheduledActionsCell(o: DeliveryOrder): string {
+  const base = `/admin/livraisons/${o.id}`;
+  const arrival = o.scheduled_for ? dakarInputValue(o.scheduled_for) : "";
+  const lead =
+    o.scheduled_for && o.kitchen_notify_at
+      ? Math.round(
+          (new Date(o.scheduled_for).getTime() - new Date(o.kitchen_notify_at).getTime()) /
+            60000,
+        )
+      : 60;
+  return `<details class="inline">
+<summary class="act act--sm act--ghost">Reprogrammer</summary>
+<form method="post" action="${esc(base)}/reschedule" class="card col" style="margin-top:.5rem;min-width:17rem">
+  <label>Nouvelle arrivée (Dakar)<input name="scheduled_for" type="datetime-local" required value="${esc(arrival)}"></label>
+  <label>Alerter la cuisine
+    <select name="kitchen_lead_minutes">
+      ${[30, 60, 90].map((n) => `<option value="${n}"${lead === n ? " selected" : ""}>${n} min avant</option>`).join("")}
+    </select>
+  </label>
+  <button class="act act--sm" type="submit">Enregistrer</button>
+</form>
+</details> ${inlineForm(`${base}/cancel`, "✖ Annuler", "Annuler cette commande programmée ?", "danger")}`;
 }
 
 function paymentCell(o: DeliveryOrder): string {
@@ -142,6 +191,10 @@ function clientFlag(o: DeliveryOrder): string {
   const pending = `<div class="muted">notification en cours…</div>`;
   const sent = (s: string) => s === "sent" || s === "sent_template";
   const inFlight = (s: string) => s === "pending" || s === "claimed";
+  if (isWaitingForActivation(o) && !sent(o.reschedule_notify_status)) {
+    if (inFlight(o.reschedule_notify_status)) return `<div class="muted">mise à jour client en cours…</div>`;
+    return `<div class="warn-text">Nouvel horaire non envoyé</div>`;
+  }
   if (o.status === "IN_KITCHEN") {
     if (sent(o.created_notify_status)) return ok("confirmation envoyée");
     if (inFlight(o.created_notify_status)) return pending;
@@ -168,9 +221,27 @@ function openRow(o: DeliveryOrder): string {
 </tr>`;
 }
 
+function scheduledRow(o: DeliveryOrder): string {
+  const arrival = o.scheduled_for
+    ? formatDakarDateTime(o.scheduled_for, "fr")
+    : "—";
+  const kitchenAt = o.kitchen_notify_at
+    ? formatDakarDateTime(o.kitchen_notify_at, "fr")
+    : "—";
+  return `<tr>
+<td data-label="Arrivée"><b>${esc(arrival)}</b><br><span class="badge badge--violet">${esc(o.scheduled_for ? arrivalCountdown(o.scheduled_for) : "")}</span></td>
+<td data-label="Client">${o.is_test ? `<span class="badge badge--violet">🧪 Test</span><br>` : ""}<b>${esc(o.client_name)}</b><br><a href="https://wa.me/${esc(o.client_phone)}" target="_blank" rel="noreferrer" class="muted">+${esc(o.client_phone)}</a>${clientFlag(o)}</td>
+<td data-label="Commande">${esc(formatExtrasOneLine(orderItems(o)))}</td>
+<td data-label="Paiement" class="nowrap">${paymentCell(o)}</td>
+<td data-label="Cuisine" class="hide-sm"><span class="muted">${esc(kitchenAt)}</span></td>
+<td data-label="Actions">${scheduledActionsCell(o)}</td>
+</tr>`;
+}
+
 function closedRow(o: DeliveryOrder): string {
+  const prepStartedAt = o.kitchen_notify_at ?? o.created_at;
   const prep = o.out_for_delivery_at
-    ? `${minutesSince(o.created_at) - minutesSince(o.out_for_delivery_at)} min`
+    ? `${minutesSince(prepStartedAt) - minutesSince(o.out_for_delivery_at)} min`
     : "—";
   const state = o.status === "DELIVERED" ? "🛵 livrée" : "✖ annulée";
   return `<tr>
@@ -191,9 +262,14 @@ export interface BoardData {
 
 export function renderLivraisonsBoard(data: BoardData): string {
   const { open, recent, stats } = data;
+  const scheduled = open.filter(isWaitingForActivation);
+  const active = open.filter((o) => !isWaitingForActivation(o));
   const avg = stats.avgPrepMinutes === null ? "—" : `${Math.round(stats.avgPrepMinutes)} min`;
-  const openTable = open.length
-    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Délai</th><th>Client</th><th>Commande</th><th class="hide-sm">Adresse</th><th>Paiement</th><th class="hide-sm">Cuisine</th><th>Actions</th></tr></thead><tbody>${open.map(openRow).join("")}</tbody></table></div>`
+  const scheduledTable = scheduled.length
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Arrivée promise</th><th>Client</th><th>Commande</th><th>Paiement</th><th class="hide-sm">Alerte cuisine</th><th>Actions</th></tr></thead><tbody>${scheduled.map(scheduledRow).join("")}</tbody></table></div>`
+    : `<div class="empty"><b>Aucune livraison programmée</b></div>`;
+  const openTable = active.length
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Délai</th><th>Client</th><th>Commande</th><th class="hide-sm">Adresse</th><th>Paiement</th><th class="hide-sm">Cuisine</th><th>Actions</th></tr></thead><tbody>${active.map(openRow).join("")}</tbody></table></div>`
     : `<div class="empty"><b>Aucune commande en cours</b><p>Les nouvelles livraisons apparaîtront ici avec leur délai.</p></div>`;
   const recentTable = recent.length
     ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>État</th><th>Client</th><th>Commande</th><th class="hide-sm">Paiement</th><th class="hide-sm">Départ</th></tr></thead><tbody>${recent.map(closedRow).join("")}</tbody></table></div>`
@@ -201,11 +277,13 @@ export function renderLivraisonsBoard(data: BoardData): string {
   return `${data.banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Livraisons</h2><p>Suivez le délai cuisine, le choix de paiement et le départ de chaque commande.</p></div><div class="page-header-actions"><a href="/admin/livraisons/new" class="act">Nouvelle commande</a></div></header>
 <div class="stat-grid">
-  <div class="stat"><span class="muted">En cours</span><b>${stats.openCount}</b></div>
+  <div class="stat"><span class="muted">Ouvertes</span><b>${stats.openCount}</b></div>
   <div class="stat"><span class="muted">Départ moyen (30 j)</span><b>${avg}</b></div>
   <div class="stat"><span class="muted">En retard aujourd'hui</span><b>${stats.lateToday}</b></div>
 </div>
-<div class="section-header"><h2>En cours</h2><span class="badge ${open.length ? "badge--amber" : "badge--green"}">${open.length}</span></div>
+<div class="section-header"><h2>Programmées</h2><span class="badge ${scheduled.length ? "badge--violet" : "badge--green"}">${scheduled.length}</span></div>
+<div class="card">${scheduledTable}</div>
+<div class="section-header"><h2>En cours</h2><span class="badge ${active.length ? "badge--amber" : "badge--green"}">${active.length}</span></div>
 <div class="card">${openTable}</div>
 <div class="section-header"><h2>Historique récent</h2></div>
 <div class="card">${recentTable}</div>`;
@@ -239,6 +317,9 @@ export interface LivraisonPrefill {
   address?: string;
   note?: string;
   sla_minutes?: string;
+  delivery_mode?: string;
+  scheduled_for?: string;
+  kitchen_lead_minutes?: string;
   is_test?: string;
   qty?: Record<string, number>;
   choice?: Record<string, string>;
@@ -299,6 +380,11 @@ ${optionSelect}</div>`;
     ? `<input id="liv-search" type="search" placeholder="🔍 Rechercher un article…" autocomplete="off" style="width:100%">`
     : "";
   const sla = prefill.sla_minutes ?? String(config.DELIVERY_SLA_MINUTES);
+  const deliveryMode = prefill.delivery_mode === "scheduled" ? "scheduled" : "now";
+  const kitchenLead = [30, 60, 90].includes(Number(prefill.kitchen_lead_minutes))
+    ? Number(prefill.kitchen_lead_minutes)
+    : 60;
+  const scheduleMin = dakarInputValue(new Date(Date.now() + 60_000));
   const hasWixClient = !!prefill.wix_contact_id;
   return `${banner}
 <style>
@@ -325,6 +411,22 @@ ${optionSelect}</div>`;
     <label>Téléphone (WhatsApp)<input name="client_phone" type="tel" inputmode="tel" required placeholder="77 123 45 67 ou +221…" value="${esc(prefill.client_phone ?? "")}"></label>
     <label>Adresse de livraison<input name="address" required value="${esc(prefill.address ?? "")}"></label>
     <label>Note <span class="muted">(optionnel)</span><input name="note" value="${esc(prefill.note ?? "")}"></label>
+    <fieldset class="card col" style="margin:0">
+      <legend><b>Moment de la livraison</b></legend>
+      <label style="display:flex;align-items:center;gap:.55rem"><input name="delivery_mode" type="radio" value="now"${deliveryMode === "now" ? " checked" : ""} style="width:auto"> Maintenant</label>
+      <label style="display:flex;align-items:center;gap:.55rem"><input name="delivery_mode" type="radio" value="scheduled"${deliveryMode === "scheduled" ? " checked" : ""} style="width:auto"> Programmer</label>
+      <div id="liv-schedule-fields" class="col"${deliveryMode === "scheduled" ? "" : " hidden"}>
+        <label>Arrivée promise au client (heure de Dakar)
+          <input name="scheduled_for" type="datetime-local" min="${esc(scheduleMin)}" value="${esc(prefill.scheduled_for ?? "")}"${deliveryMode === "scheduled" ? " required" : ""}>
+        </label>
+        <label>Alerter la cuisine
+          <select name="kitchen_lead_minutes">
+            ${[30, 60, 90].map((n) => `<option value="${n}"${kitchenLead === n ? " selected" : ""}>${n} minutes avant l'arrivée</option>`).join("")}
+          </select>
+        </label>
+        <span class="muted">Si ce délai est déjà atteint, la commande sera activée immédiatement.</span>
+      </div>
+    </fieldset>
     <label>Alerte si pas partie après (min)<input name="sla_minutes" type="number" min="5" max="180" value="${esc(sla)}" style="width:6rem"></label>
     <label class="card" style="display:flex;align-items:flex-start;gap:.75rem;margin:0;background:var(--brand-soft)">
       <input name="is_test" type="checkbox" value="1"${prefill.is_test === "1" ? " checked" : ""} style="width:auto;margin-top:.2rem">
@@ -353,6 +455,8 @@ ${optionSelect}</div>`;
   var clientName=form&&form.querySelector('[name="client_name"]');
   var clientPhone=form&&form.querySelector('[name="client_phone"]');
   var clientAddress=form&&form.querySelector('[name="address"]');
+  var scheduleFields=document.getElementById('liv-schedule-fields');
+  var scheduleInput=form&&form.querySelector('[name="scheduled_for"]');
   var wixTimer=null,wixRequest=null;
   function hideWixResults(){wixResults.hidden=true;wixResults.replaceChildren();}
   function pickWixClient(client){
@@ -398,6 +502,15 @@ ${optionSelect}</div>`;
     wixId.value='';wixSearch.value='';wixClear.hidden=true;hideWixResults();
     wixStatus.textContent='Lien Wix retiré. Les coordonnées saisies sont conservées.';
     wixSearch.focus();
+  });
+  function syncDeliveryMode(){
+    var mode=form&&form.querySelector('[name="delivery_mode"]:checked');
+    var scheduled=!!mode&&mode.value==='scheduled';
+    if(scheduleFields)scheduleFields.hidden=!scheduled;
+    if(scheduleInput)scheduleInput.required=scheduled;
+  }
+  if(form)form.querySelectorAll('[name="delivery_mode"]').forEach(function(input){
+    input.addEventListener('change',syncDeliveryMode);
   });
   function recompute(){
     var t=0,c=0;
@@ -456,6 +569,7 @@ ${optionSelect}</div>`;
     wixId.value='';wixSearch.value='';wixClear.hidden=true;hideWixResults();
     wixStatus.textContent='Client récent sélectionné — aucune fiche Wix liée.';
   });
+  syncDeliveryMode();
   recompute();
 })();
 </script>`;

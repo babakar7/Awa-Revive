@@ -28,8 +28,8 @@ const TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
   CANCELLED: [],
 };
 
-/** Which of the two client pings a given kind is. */
-export type ClientPingKind = "created" | "route";
+/** Which client-facing delivery update is being sent. */
+export type ClientPingKind = "created" | "route" | "rescheduled";
 
 export function canTransition(from: DeliveryStatus, to: DeliveryStatus): boolean {
   return TRANSITIONS[from]?.includes(to) ?? false;
@@ -44,6 +44,7 @@ export interface DeliveryOrderView {
   items: ExtraLine[];
   amount_xof: number;
   is_test?: boolean;
+  scheduled_for?: Date | string | null;
   payment_status?: "PENDING_CHOICE" | "AWAITING_PAYMENT" | "CASH_DUE" | "PAID" | "REFUND_NEEDED";
   payment_method?: "wave" | "orange_money" | "maxit" | "cash" | null;
 }
@@ -76,6 +77,46 @@ export function normalizeDeliveryPhone(raw: string): string | null {
   if (d.length === 9 && d.startsWith("7")) d = `221${d}`; // 77xxxxxxx → 22177xxxxxxx
   if (d.length < 10 || d.length > 15) return null;
   return d;
+}
+
+// ---------- Dakar schedule ----------
+
+/** Africa/Dakar is UTC year-round. Parse a `datetime-local` value strictly as
+ * Dakar wall time, without letting the server's own timezone reinterpret it. */
+export function parseDakarDateTime(raw: string): Date | null {
+  const match = String(raw ?? "")
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const [, y, mo, d, h, mi] = match;
+  const date = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi)));
+  if (
+    date.getUTCFullYear() !== Number(y) ||
+    date.getUTCMonth() !== Number(mo) - 1 ||
+    date.getUTCDate() !== Number(d) ||
+    date.getUTCHours() !== Number(h) ||
+    date.getUTCMinutes() !== Number(mi)
+  ) {
+    return null;
+  }
+  return date;
+}
+
+export function formatDakarDateTime(
+  value: Date | string,
+  lang: string | null = "fr",
+): string {
+  const locale = lang === "en" ? "en-SN" : "fr-SN";
+  return new Intl.DateTimeFormat(locale, {
+    timeZone: "Africa/Dakar",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(value));
 }
 
 // ---------- magic-link token ----------
@@ -144,6 +185,9 @@ export function kitchenMessage(
   const lines = [
     `Client : ${o.client_name} (+${o.client_phone})`,
     `Adresse : ${o.address}`,
+    ...(o.scheduled_for
+      ? [`Arrivée promise : ${formatDakarDateTime(o.scheduled_for, "fr")} (heure de Dakar)`]
+      : []),
     "",
     formatExtrasMultiline(o.items),
     `Total : ${o.amount_xof} FCFA`,
@@ -165,18 +209,37 @@ export function createdClientMessage(lang: string | null, o: DeliveryOrderView):
   const first = firstName(o.client_name);
   const summary = formatExtrasOneLine(o.items);
   const testPrefix = o.is_test ? "🧪 TEST — " : "";
+  const scheduled = o.scheduled_for
+    ? formatDakarDateTime(o.scheduled_for, lang)
+    : null;
   if (lang === "en") {
     return (
       `${testPrefix}📝 Thanks${first ? ` ${first}` : ""}! Your Revive order is confirmed: ${summary} — ` +
-      `total ${o.amount_xof} FCFA, delivery to ${o.address}. Reply WAVE, OM, MAXIT or CASH to choose how to pay. ` +
+      `total ${o.amount_xof} FCFA, delivery to ${o.address}${scheduled ? `, expected ${scheduled} (Dakar time)` : ""}. ` +
+      `Reply WAVE, OM, MAXIT or CASH to choose how to pay. ` +
       `We'll let you know as soon as it's on its way!`
     );
   }
   return (
     `${testPrefix}📝 Merci${first ? ` ${first}` : ""} ! Votre commande Revive est bien reçue : ${summary} — ` +
-    `total ${o.amount_xof} FCFA, livraison à ${o.address}. Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton mode de paiement. ` +
+    `total ${o.amount_xof} FCFA, livraison à ${o.address}${scheduled ? `, arrivée prévue ${scheduled} (heure de Dakar)` : ""}. ` +
+    `Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton mode de paiement. ` +
     `On te prévient dès qu'elle part en livraison !`
   );
+}
+
+/** Client update after the promised arrival changes. Payment is deliberately
+ * absent: any existing choice or verified payment remains valid. */
+export function rescheduledClientMessage(lang: string | null, o: DeliveryOrderView): string {
+  const first = firstName(o.client_name);
+  const testPrefix = o.is_test ? "🧪 TEST — " : "";
+  const scheduled = o.scheduled_for
+    ? formatDakarDateTime(o.scheduled_for, lang)
+    : "";
+  if (lang === "en") {
+    return `${testPrefix}🗓️ Update${first ? ` ${first}` : ""}: your Revive delivery is now expected ${scheduled} (Dakar time).`;
+  }
+  return `${testPrefix}🗓️ Mise à jour${first ? ` ${first}` : ""} : votre livraison Revive est maintenant prévue le ${scheduled} (heure de Dakar).`;
 }
 
 /** Client "your order is out for delivery" free-text (localized). */
@@ -200,13 +263,15 @@ export function shouldFallbackDeliveryTemplate(err: unknown, templateName: strin
  * {{2}} the update text (FR, no newlines).
  */
 export function deliveryUpdateTemplateParams(
-  kind: "created" | "route",
+  kind: ClientPingKind,
   o: DeliveryOrderView,
 ): [string, string] {
   const text =
     kind === "created"
-      ? `bien reçue — total ${o.amount_xof} FCFA. Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton paiement. Commande : ${formatExtrasOneLine(o.items)}`
-      : `en route ! À tout de suite`;
+      ? `bien reçue — total ${o.amount_xof} FCFA${o.scheduled_for ? `, arrivée prévue ${formatDakarDateTime(o.scheduled_for, "fr")} (Dakar)` : ""}. Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton paiement. Commande : ${formatExtrasOneLine(o.items)}`
+      : kind === "rescheduled"
+        ? `livraison reprogrammée au ${o.scheduled_for ? formatDakarDateTime(o.scheduled_for, "fr") : "nouvel horaire"} (heure de Dakar)`
+        : `en route ! À tout de suite`;
   return [
     toTemplateParam(firstName(o.client_name) || o.client_name || "client", 60),
     toTemplateParam(`${o.is_test ? "TEST — " : ""}${text}`, 200),
@@ -221,11 +286,14 @@ export function deliveryUpdateTemplateParams(
 export function kitchenTemplateParams(
   o: DeliveryOrderView,
 ): [string, string, string, string, string] {
+  const itemText = `${formatExtrasOneLine(o.items)}${
+    o.scheduled_for ? ` · arrivée ${formatDakarDateTime(o.scheduled_for, "fr")}` : ""
+  }`;
   return [
     toTemplateParam(o.client_name, 60),
     toTemplateParam(`+${o.client_phone}`, 20),
     toTemplateParam(o.address, 90),
-    toTemplateParam(formatExtrasOneLine(o.items), 200),
+    toTemplateParam(itemText, 200),
     toTemplateParam(String(o.amount_xof), 12),
   ];
 }

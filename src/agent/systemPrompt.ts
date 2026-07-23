@@ -370,7 +370,10 @@ export function dynamicContext(args: {
       ...deliveryOrders.map(
         (d) =>
           `  • delivery_order_id=${d.id}; state=${d.payment_status}; method=${d.payment_method ?? "none"}; ` +
-          `total=${d.amount_xof} FCFA; items=${formatExtrasOneLine(extrasFromJson(d.items_json))}; address=${d.address}`,
+          `total=${d.amount_xof} FCFA; items=${formatExtrasOneLine(extrasFromJson(d.items_json))}; address=${d.address}` +
+          (d.scheduled_for
+            ? `; promised_arrival_dakar=${new Date(d.scheduled_for).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })}`
+            : ""),
       ),
       deliveryOrders.length === 1
         ? `If the client's latest message is a payment-method choice for this delivery, it applies to delivery_order_id=${deliveryOrders[0].id}: call create_delivery_payment_link now. Otherwise answer their message normally.`

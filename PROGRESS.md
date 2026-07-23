@@ -1,8 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **22 juillet 2026** — fiabilisation des alertes
-> livraison + mode commande de test (§6.26). Avant : refonte premium et UX de
+> Dernière mise à jour : **23 juillet 2026** — livraisons programmées
+> avec activation durable (§6.27). Avant : fiabilisation des alertes
+> livraison + mode commande de test (§6.26), refonte premium et UX de
 > tout l’admin (§4.41), notifications staff, livraisons bar, handoffs `wa.me`.
 > Compléments : `README.md`, `PHASE2.md`, `ORANGE-MONEY-PLAN.md` (plan OM),
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
@@ -30,8 +31,8 @@ côté serveur.
 Production : `https://resabot-production.up.railway.app` (Railway, service +
 Postgres), déployée depuis GitHub (`babakar7/Awa-Revive`, push sur main =
 déploiement). Numéro WhatsApp prod : **+221 78 953 66 76** (WABA 1738439110507790,
-phone_number_id 1175926012276896). Tests : ~287 unitaires (`npm test`, rapides,
-sans réseau) + **34 d'intégration** sur les chemins de paiement Wave + OM, la santé DB et les escalades de liaison
+phone_number_id 1175926012276896). Tests : **586 unitaires** (`npm test`, rapides,
+sans réseau) + **131 d'intégration** sur Postgres réel jetable, dont les chemins de paiement Wave + OM, les livraisons, la santé DB et les escalades de liaison
 (`npm run test:integration`, Postgres jetable via Docker, APIs externes
 mockées) — exécutés en CI GitHub Actions à chaque push.
 
@@ -2911,6 +2912,45 @@ au même rejet hors fenêtre.
   verte, dont template-first client/réception, repli `ticket_cuisine` →
   `awa_notification`, retry après échec async et exclusion statistique du mode
   test.
+
+### 6.27 Livraisons programmées et activation durable (23/07/2026)
+
+La réception peut désormais choisir « Maintenant » ou « Programmer » à la
+création d'une livraison. Pour une commande programmée, la date saisie est
+l'arrivée promise au client en heure de Dakar et l'alerte cuisine est réglable
+à 30, 60 ou 90 minutes avant (60 par défaut).
+
+- `delivery_orders` stocke `scheduled_for`, `kitchen_notify_at` et
+  `activated_at` en `timestamptz`, plus les outboxes durables du rappel
+  réception à l'activation et de l'avertissement client après reprogrammation.
+  Les anciennes commandes et les commandes immédiates gardent
+  `scheduled_for=null`.
+- Le client reçoit dès la création le panier, le total, l'adresse, l'arrivée
+  promise et les choix Wave / OM / Max It / espèces. La commande programmée
+  reste payable dans le contexte live d'Awa, mais aucun ticket cuisine ni SLA
+  ne part avant `kitchen_notify_at`.
+- Le sweep 60 s active atomiquement les commandes dues, envoie une seule fois
+  le ticket cuisine avec lien magique et rappelle la réception. Le claim et la
+  rotation du token cuisine sont maintenant une seule opération SQL : deux
+  sweeps concurrents ne peuvent plus envoyer deux tickets. Un redémarrage
+  rattrape les activations manquées depuis la base.
+- Les départs, clôtures et renvois cuisine exigent `activated_at` dans les
+  `UPDATE` SQL. Le lien public d'une commande future reste inaccessible et ses
+  48 h de validité commencent à l'activation, pas à la création.
+- `/admin/livraisons` sépare les commandes futures dans « Programmées » avec
+  arrivée, compte à rebours, paiement, alerte cuisine et actions
+  « Reprogrammer » / « Annuler ». La reprogrammation est atomique et autorisée
+  uniquement avant l'ancienne activation ; elle conserve le paiement. Seul un
+  changement d'arrivée avertit le client, sans reparler du paiement.
+- Le SLA, le délai affiché et les statistiques de préparation partent de
+  `kitchen_notify_at` pour une commande programmée et de `created_at` pour une
+  immédiate. Une arrivée future dont le délai cuisine est déjà atteint est
+  activée dès la création.
+- Validation : TypeScript, **586 tests unitaires** et **131 tests
+  d'intégration** verts. Les 34 scénarios livraison couvrent notamment le
+  paiement Awa avant activation, le redémarrage, les sweeps concurrents, la
+  reprogrammation, les gardes SQL, l'annulation payée/remboursement et la
+  régression complète des livraisons immédiates.
 
 ## 7. Runbook ops
 

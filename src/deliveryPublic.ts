@@ -113,7 +113,11 @@ export function registerDeliveryPublic(app: FastifyInstance): void {
   const load = async (token: string): Promise<DeliveryOrder | null> => {
     const order = await findDeliveryOrderByToken(token);
     if (!order) return null;
-    if (Date.now() - new Date(order.created_at).getTime() > LINK_MAX_AGE_MS) return null;
+    // Future orders have a token hash from creation but no kitchen access until
+    // activation. A week-ahead order's eventual link also expires relative to
+    // activation, not relative to when reception first entered it.
+    if (!order.activated_at) return null;
+    if (Date.now() - new Date(order.activated_at).getTime() > LINK_MAX_AGE_MS) return null;
     return order;
   };
 

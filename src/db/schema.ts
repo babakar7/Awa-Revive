@@ -697,6 +697,54 @@ create index if not exists idx_delivery_orders_created_wamid
 create index if not exists idx_delivery_orders_route_wamid
   on delivery_orders (route_notify_wamid) where route_notify_wamid is not null;
 
+-- Livraisons programmées. scheduled_for est l'heure d'ARRIVÉE promise au
+-- client (timestamptz, saisie/affichage Africa/Dakar) ; kitchen_notify_at est
+-- l'heure d'activation calculée depuis le délai cuisine choisi. Les anciennes
+-- commandes et les livraisons « maintenant » gardent les deux colonnes NULL.
+-- activated_at est la garde durable utilisée par toutes les mutations
+-- opérationnelles : une commande future ne peut ni partir, ni être clôturée,
+-- ni être renvoyée à la cuisine avant l'activation.
+alter table delivery_orders add column if not exists scheduled_for timestamptz;
+alter table delivery_orders add column if not exists kitchen_notify_at timestamptz;
+alter table delivery_orders add column if not exists activated_at timestamptz;
+update delivery_orders
+   set activated_at=created_at
+ where activated_at is null and scheduled_for is null;
+alter table delivery_orders alter column activated_at set default now();
+
+-- Rappel réception au moment de l'activation. Le default initial sent
+-- empêche tout rappel rétroactif au déploiement ; les créations programmées
+-- écrivent explicitement pending, y compris si leur activation est immédiate.
+alter table delivery_orders add column if not exists activation_notify_status text not null default 'sent';
+alter table delivery_orders add column if not exists activation_notified_at timestamptz;
+alter table delivery_orders add column if not exists activation_notify_attempts integer not null default 0;
+alter table delivery_orders add column if not exists activation_notify_wamid text;
+
+-- Avertissement client après reprogrammation. Il n'est remis à pending que
+-- lorsque l'heure d'arrivée change (un changement du seul délai cuisine reste
+-- interne), et conserve donc le paiement déjà choisi/reçu.
+alter table delivery_orders add column if not exists reschedule_notify_status text not null default 'sent';
+alter table delivery_orders add column if not exists reschedule_notified_at timestamptz;
+alter table delivery_orders add column if not exists reschedule_notify_attempts integer not null default 0;
+alter table delivery_orders add column if not exists reschedule_notify_wamid text;
+
+alter table delivery_orders drop constraint if exists delivery_orders_schedule_pair_check;
+alter table delivery_orders add constraint delivery_orders_schedule_pair_check
+  check (
+    (scheduled_for is null and kitchen_notify_at is null)
+    or
+    (scheduled_for is not null and kitchen_notify_at is not null
+      and kitchen_notify_at <= scheduled_for)
+  );
+alter table delivery_orders drop constraint if exists delivery_orders_activation_guard_check;
+alter table delivery_orders add constraint delivery_orders_activation_guard_check
+  check (status not in ('OUT_FOR_DELIVERY','DELIVERED') or activated_at is not null);
+create index if not exists idx_delivery_orders_scheduled_activation
+  on delivery_orders (kitchen_notify_at)
+  where status='IN_KITCHEN' and scheduled_for is not null and activated_at is null;
+create index if not exists idx_delivery_orders_reschedule_wamid
+  on delivery_orders (reschedule_notify_wamid) where reschedule_notify_wamid is not null;
+
 -- Chaque lien mobile possède sa propre référence fournisseur. Cela permet de
 -- reconnaître un ancien lien payé tardivement après un changement de moyen et
 -- d'éviter de confondre ce paiement avec l'essai actuellement affiché par Awa.

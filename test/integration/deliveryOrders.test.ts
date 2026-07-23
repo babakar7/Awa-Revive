@@ -109,6 +109,10 @@ function magicLinkFrom(texts: string[]): string {
   throw new Error(`no magic link in: ${JSON.stringify(texts)}`);
 }
 
+function dakarInputIn(minutes: number): string {
+  return new Date(Date.now() + minutes * 60_000).toISOString().slice(0, 16);
+}
+
 describe("delivery order creation → kitchen notify", () => {
   it("prices server-side, creates IN_KITCHEN, and WhatsApps the kitchen a magic link", async () => {
     await seedKitchenContact();
@@ -174,6 +178,287 @@ describe("delivery order creation → kitchen notify", () => {
       config.WA_RECEPTION_TEMPLATE = previousReception;
       config.WA_RECEPTION_TEMPLATE_LANG = previousLang;
     }
+  });
+});
+
+describe("scheduled deliveries", () => {
+  it("rejects a past arrival and activates immediately when the kitchen deadline is already due", async () => {
+    const past = await app.inject({
+      method: "POST",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        client_name: "Rama",
+        client_phone: "770009988",
+        address: "Almadies",
+        delivery_mode: "scheduled",
+        scheduled_for: dakarInputIn(-10),
+        kitchen_lead_minutes: "60",
+        qty_SMOOTHIE_JANT_BI: "1",
+      }).toString(),
+    });
+    expect(past.statusCode).toBe(200);
+    expect(past.body).toContain("doit être dans le futur");
+    expect((await pool.query(`select count(*)::int as n from delivery_orders`)).rows[0].n).toBe(0);
+
+    await seedKitchenContact();
+    const id = await createOrder({
+      delivery_mode: "scheduled",
+      scheduled_for: dakarInputIn(20),
+      kitchen_lead_minutes: "60",
+    });
+    const active = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+    expect(active.scheduled_for).not.toBeNull();
+    expect(active.activated_at).not.toBeNull();
+    expect(["sent", "sent_template"]).toContain(active.kitchen_notify_status);
+    expect(mock.waTextsTo("221770000099").some((text) => text.includes("/livraison/"))).toBe(true);
+  });
+
+  it("confirms payment immediately but keeps a week-ahead order away from the kitchen and SLA", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({
+      delivery_mode: "scheduled",
+      scheduled_for: dakarInputIn(7 * 24 * 60),
+      kitchen_lead_minutes: "60",
+    });
+    await waitFor(
+      async () =>
+        mock.waTextsTo("221770009988").some(
+          (text) => text.includes("arrivée prévue") && text.includes("WAVE"),
+        ),
+      "scheduled client confirmation",
+    );
+    await settle();
+
+    const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+    expect(order.scheduled_for).not.toBeNull();
+    expect(order.kitchen_notify_at).not.toBeNull();
+    expect(order.activated_at).toBeNull();
+    expect(order.payment_status).toBe("PENDING_CHOICE");
+    expect(order.kitchen_notify_status).toBe("pending");
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+
+    expect(await sweepDeliveries(noopLog)).toBe(0);
+    const afterSweep = (
+      await pool.query(`select activated_at, alerted_at from delivery_orders where id=$1`, [id])
+    ).rows[0];
+    expect(afterSweep.activated_at).toBeNull();
+    expect(afterSweep.alerted_at).toBeNull();
+
+    const board = await app.inject({
+      method: "GET",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH },
+    });
+    expect(board.body).toContain("Programmées");
+    expect(board.body).toContain("Reprogrammer");
+    expect(board.body).not.toContain(`/admin/livraisons/${id}/depart`);
+
+    const client = await clientRepo.upsertClient("221770009988");
+    const paymentChoice = JSON.parse(
+      await executeTool(client, "create_delivery_payment_link", {
+        delivery_order_id: id,
+        payment_method: "cash",
+      }),
+    );
+    expect(paymentChoice.cash_selected).toBe(true);
+    expect(
+      (await pool.query(`select payment_status from delivery_orders where id=$1`, [id])).rows[0]
+        .payment_status,
+    ).toBe("CASH_DUE");
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+  });
+
+  it("activates after restart, alerts kitchen/reception once, and resists concurrent sweeps", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({
+      delivery_mode: "scheduled",
+      scheduled_for: dakarInputIn(24 * 60),
+      kitchen_lead_minutes: "60",
+    });
+    await waitFor(
+      async () => mock.waTextsTo("221770009988").some((text) => text.includes("bien reçue")),
+      "initial scheduled confirmation",
+    );
+    await settle();
+    mock.reset();
+    await pool.query(
+      `update delivery_orders
+          set kitchen_notify_at=now() - interval '30 seconds',
+              scheduled_for=now() + interval '30 minutes',
+              activated_at=null
+        where id=$1`,
+      [id],
+    );
+
+    await Promise.all([sweepDeliveries(noopLog), sweepDeliveries(noopLog)]);
+    const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
+    expect(order.activated_at).not.toBeNull();
+    expect(["sent", "sent_template"]).toContain(order.kitchen_notify_status);
+    expect(["sent", "sent_template"]).toContain(order.activation_notify_status);
+    expect(
+      mock.waTextsTo("221770000099").filter((text) => text.includes("/livraison/")),
+    ).toHaveLength(1);
+
+    const activationLogs = await pool.query(
+      `select count(*)::int as n from notification_log
+        where source='delivery' and body like '% activation] %'`,
+    );
+    expect(activationLogs.rows[0].n).toBe(1);
+    const promisedBefore = new Date(order.scheduled_for).toISOString();
+    const blockedMove = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/reschedule`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        scheduled_for: dakarInputIn(120),
+        kitchen_lead_minutes: "60",
+      }).toString(),
+    });
+    expect(blockedMove.headers.location).toContain("err=");
+    expect(
+      new Date(
+        (
+          await pool.query(`select scheduled_for from delivery_orders where id=$1`, [id])
+        ).rows[0].scheduled_for,
+      ).toISOString(),
+    ).toBe(promisedBefore);
+    await sweepDeliveries(noopLog);
+    expect(
+      mock.waTextsTo("221770000099").filter((text) => text.includes("/livraison/")),
+    ).toHaveLength(1);
+  });
+
+  it("reprograms only before activation, preserves payment, and warns the client only for arrival changes", async () => {
+    await seedKitchenContact();
+    const firstArrival = dakarInputIn(7 * 24 * 60);
+    const secondArrival = dakarInputIn(8 * 24 * 60);
+    const id = await createOrder({
+      delivery_mode: "scheduled",
+      scheduled_for: firstArrival,
+      kitchen_lead_minutes: "60",
+    });
+    await chooseCash(id);
+    await waitFor(
+      async () => mock.waTextsTo("221770009988").some((text) => text.includes("bien reçue")),
+      "scheduled confirmation before reschedule",
+    );
+
+    const moved = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/reschedule`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        scheduled_for: secondArrival,
+        kitchen_lead_minutes: "90",
+      }).toString(),
+    });
+    expect(moved.statusCode).toBe(303);
+    expect(moved.headers.location).toContain("done=reprogrammed");
+    const afterMove = (
+      await pool.query(
+        `select scheduled_for, kitchen_notify_at, payment_status, payment_method,
+                reschedule_notify_status, activated_at
+           from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(new Date(afterMove.scheduled_for).toISOString().slice(0, 16)).toBe(
+      `${secondArrival}:00.000Z`.slice(0, 16),
+    );
+    expect(afterMove.payment_status).toBe("CASH_DUE");
+    expect(afterMove.payment_method).toBe("cash");
+    expect(afterMove.activated_at).toBeNull();
+    expect(["sent", "sent_template"]).toContain(afterMove.reschedule_notify_status);
+
+    const rescheduleCount = async () =>
+      Number(
+        (
+          await pool.query(
+            `select count(*) as n from notification_log
+              where source='delivery' and recipient_phone='221770009988'
+                and body like '%Mise à jour%'`,
+          )
+        ).rows[0].n,
+      );
+    expect(await rescheduleCount()).toBe(1);
+
+    const leadOnly = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/reschedule`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        scheduled_for: secondArrival,
+        kitchen_lead_minutes: "30",
+      }).toString(),
+    });
+    expect(leadOnly.headers.location).toContain("done=reprogrammed");
+    await sweepDeliveries(noopLog);
+    expect(await rescheduleCount()).toBe(1);
+  });
+
+  it("blocks premature departure/closure/resend and flags refund after a paid scheduled cancellation", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({
+      delivery_mode: "scheduled",
+      scheduled_for: dakarInputIn(7 * 24 * 60),
+      kitchen_lead_minutes: "60",
+    });
+    await chooseCash(id);
+    await settle();
+    mock.reset();
+
+    for (const action of ["depart", "delivered", "renotify-kitchen"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/admin/livraisons/${id}/${action}`,
+        headers: { authorization: AUTH },
+      });
+      expect(res.statusCode).toBe(303);
+      expect(res.headers.location).toContain("err=");
+    }
+    expect(
+      (await pool.query(`select status from delivery_orders where id=$1`, [id])).rows[0].status,
+    ).toBe("IN_KITCHEN");
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+
+    await pool.query(
+      `update delivery_orders
+          set payment_status='PAID', payment_method='wave', payment_ref='wave-paid', paid_at=now()
+        where id=$1`,
+      [id],
+    );
+    await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/cancel`,
+      headers: { authorization: AUTH },
+    });
+    const cancelled = (
+      await pool.query(`select status, payment_status, payment_issue from delivery_orders where id=$1`, [
+        id,
+      ])
+    ).rows[0];
+    expect(cancelled.status).toBe("CANCELLED");
+    expect(cancelled.payment_status).toBe("REFUND_NEEDED");
+    expect(cancelled.payment_issue).toBe("cancelled_after_online_payment");
+  });
+
+  it("bases preparation statistics on activation rather than week-early creation", async () => {
+    const token = newReadyToken();
+    await pool.query(
+      `insert into delivery_orders
+         (client_name, client_phone, address, items_json, amount_xof, status,
+          ready_token_hash, payment_status, payment_method, scheduled_for,
+          kitchen_notify_at, activated_at, out_for_delivery_at, delivered_at, created_at)
+       values ('Stats','221770001234','Ngor','[]'::jsonb,3000,'DELIVERED',$1,
+          'PAID','wave',now() + interval '20 minutes',now() - interval '10 minutes',
+          now() - interval '10 minutes',now(),now(),now() - interval '7 days')`,
+      [hashReadyToken(token)],
+    );
+    const stats = await deliveryStats();
+    expect(stats.avgPrepMinutes).not.toBeNull();
+    expect(stats.avgPrepMinutes!).toBeGreaterThan(9);
+    expect(stats.avgPrepMinutes!).toBeLessThan(11);
   });
 });
 
