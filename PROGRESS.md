@@ -3161,6 +3161,22 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   TypeScript, **618 tests unitaires** verts et **41 scénarios d’intégration
   livraison** verts.
 
+### 6.31 Funnel publicitaire Pack Découverte (23/07/2026)
+
+- La garantie satisfait ou remboursé après la première séance et la boisson
+  offerte choisie au comptoir sont désormais officialisées dans
+  `business-info.md`, sans prix ni nombre de séances en dur.
+- Les nouveaux prospects suivent l'ordre qualification Pilates → choix du
+  cours → créneaux réels → prénom et paiement. Les créneaux pré-paiement sont
+  présentés comme indicatifs et revérifiés après activation du pack.
+- Awa limite chaque message à une demande d'information et adapte sa courte
+  disclosure IA au besoin déjà exprimé, au lieu de répéter le menu d'accueil
+  générique.
+- La réservation post-paiement reste sûre et explicite : le client répond après
+  la confirmation d'activation, puis Awa revérifie le créneau avant
+  `book_with_membership`.
+- Validation : build TypeScript et **627 tests unitaires** verts.
+
 ## 7. Runbook ops
 
 - **Orange Money / Max It** (prod) :
