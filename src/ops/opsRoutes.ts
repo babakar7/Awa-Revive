@@ -27,6 +27,7 @@ import {
   getOpenSessionBySpot,
   listOpenSessions,
   closeSession,
+  closeEmptyOpenSessions,
 } from "../domain/serviceSessionRepo.js";
 import { getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
 import { renderOpsIcon } from "./opsIcon.js";
@@ -319,6 +320,8 @@ function buildServiceMenu(): Array<{ category: string; items: unknown[] }> {
  *  the inline page boot AND the /state endpoint the client re-fetches on load (so
  *  a stale cached page self-heals). */
 async function serviceBootData(): Promise<unknown> {
+  // Self-heal: free any table left with no open order (orphan / all-served).
+  await closeEmptyOpenSessions().catch(() => {});
   const [spots, sessions, tickets, cursor] = await Promise.all([
     listActiveSpots(),
     listOpenSessions(),

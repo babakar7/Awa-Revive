@@ -104,6 +104,31 @@ export async function openSessionAtSpot(input: {
   }
 }
 
+/**
+ * Auto-close any OPEN session left with no open kitchen ticket (served/cancelled
+ * all its orders, or an orphan from before auto-clear existed). A grace window
+ * (default 30s) protects a session that was just opened whose first ticket is
+ * still being inserted in the same request. Emits session_closed per closed row
+ * so live boards free the spot. Safe to call on every board load. Returns count.
+ */
+export async function closeEmptyOpenSessions(graceSeconds = 30): Promise<number> {
+  const res = await pool.query(
+    `update service_sessions s
+        set status = 'CLOSED', closed_at = now(), closed_by = 'auto'
+      where s.status = 'OPEN'
+        and s.opened_at < now() - make_interval(secs => $1)
+        and not exists (
+          select 1 from kitchen_tickets k
+           where k.session_id = s.id and k.status in ('NEW','PREPARING','READY'))
+      returning s.id`,
+    [Math.max(0, graceSeconds)],
+  );
+  for (const row of res.rows as Array<{ id: string }>) {
+    await recordOpsEvent(ACCUEIL_CHANNEL, "session_closed", { id: row.id });
+  }
+  return res.rowCount ?? 0;
+}
+
 export type CloseResult =
   | { ok: true }
   | { ok: false; reason: "not_open" | "open_tickets" };

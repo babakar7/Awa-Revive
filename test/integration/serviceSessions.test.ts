@@ -14,6 +14,7 @@ import {
   listOpenSessions,
   getOpenSession,
   closeSession,
+  closeEmptyOpenSessions,
 } from "../../src/domain/serviceSessionRepo.js";
 import {
   createTableTicket,
@@ -205,6 +206,25 @@ describe("close (Libérer) guard", () => {
     const s = await seat(canapeSpot);
     await closeSession(s.id, "Accueil 1");
     expect(await closeSession(s.id, "Accueil 1")).toEqual({ ok: false, reason: "not_open" });
+  });
+});
+
+describe("closeEmptyOpenSessions (self-heal orphans)", () => {
+  it("closes empty tables, keeps ticketed ones, respects the grace window", async () => {
+    const empty = await seat(canapeSpot); // no ticket → orphan
+    const busy = await seat(terrasseSpot);
+    await makeTableTicket(busy.id, busy.short_code);
+
+    // grace 0 → the empty one closes now; the ticketed one survives
+    expect(await closeEmptyOpenSessions(0)).toBe(1);
+    expect(await getOpenSessionBySpot(canapeSpot)).toBeNull();
+    expect(await getOpenSessionBySpot(terrasseSpot)).not.toBeNull();
+    expect(empty).toBeTruthy();
+
+    // grace protects a just-opened empty table (its first order may still be inserting)
+    await seat(canapeSpot);
+    expect(await closeEmptyOpenSessions(30)).toBe(0);
+    expect(await getOpenSessionBySpot(canapeSpot)).not.toBeNull();
   });
 });
 
