@@ -79,7 +79,7 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(context).toMatch(/LEAD with the 10,000/i);
     expect(context).toMatch(/never call create_plan_payment_link/i);
     expect(context).toMatch(/create_payment_link/);
-    expect(context).toMatch(/only take the 10,000 payment once the client picks one/i);
+    expect(context).toMatch(/run request_email_verification/i);
   });
 
   it("does not let a sticker or ambiguous acknowledgement decide eligibility", () => {
