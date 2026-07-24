@@ -1492,6 +1492,10 @@ alter table kitchen_tickets add column if not exists serve_claimed_at timestampt
 -- Escalade propriétaire : posé une fois quand un ticket salle PRÊT reste non pris
 -- trop longtemps (claim atomique anti double-envoi).
 alter table kitchen_tickets add column if not exists serve_escalated_at timestamptz;
+-- « À emporter » : le client est assis à un espace (sur place) mais veut sa
+-- commande dans un emballage à emporter — la cuisine doit le voir pour emballer.
+-- Distinct d'une livraison (source DELIVERY). Défaut = sur place.
+alter table kitchen_tickets add column if not exists takeaway boolean not null default false;
 create index if not exists idx_kitchen_tickets_session
   on kitchen_tickets (session_id) where session_id is not null;
 `;

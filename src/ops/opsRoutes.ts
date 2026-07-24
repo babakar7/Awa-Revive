@@ -472,6 +472,9 @@ function registerServiceRoutes(app: FastifyInstance): void {
     }
     const note = typeof b.note === "string" ? b.note.trim().slice(0, 280) || null : null;
     const clientRequestId = String(b.client_request_id ?? "").slice(0, 80) || newOpsToken();
+    // Packaging mode is a server-side boolean — the client sends a flag, never trust
+    // anything else. Default (and any non-true value) = sur place.
+    const takeaway = b.takeaway === true;
     const { ticket } = await createTableTicket({
       sessionId: session.id,
       heading: session.short_code,
@@ -481,6 +484,7 @@ function registerServiceRoutes(app: FastifyInstance): void {
       note,
       clientRequestId,
       isTest: false,
+      takeaway,
     });
     return reply.type("application/json").send({ ok: true, session_id: session.id, id: ticket.id });
   });

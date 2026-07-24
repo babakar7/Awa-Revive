@@ -164,6 +164,18 @@ describe("createTableTicket", () => {
     expect(second.ticket.id).toBe(first.ticket.id);
     expect(await ticketsForSession(s.id)).toHaveLength(1);
   });
+
+  it("carries the à-emporter flag (default false = sur place)", async () => {
+    const s = await seat(canapeSpot);
+    const away = await createTableTicket({
+      sessionId: s.id, heading: s.short_code, subheading: "Canapé", lines: LINES,
+      amountXof: 6000, note: null, clientRequestId: reqId(), isTest: false, takeaway: true,
+    });
+    expect(away.ticket.takeaway).toBe(true);
+    // Absent flag → sur place (the default), never accidentally to-go.
+    const dineIn = await makeTableTicket(s.id, s.short_code);
+    expect(dineIn.takeaway).toBe(false);
+  });
 });
 
 describe("accueil serve flow", () => {

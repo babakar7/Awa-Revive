@@ -3,6 +3,8 @@ import {
   CUISINE_APP_JS,
   CUISINE_MANIFEST,
   CUISINE_SW,
+  cuisineKitchenPage,
+  cuisinePairingPage,
 } from "../src/ops/opsCuisinePage.js";
 import {
   hashOpsToken,
@@ -12,13 +14,38 @@ import {
 } from "../src/ops/opsAuth.js";
 
 describe("cuisine PWA assets", () => {
-  it("manifest is valid JSON with a scope and two icons", () => {
+  it("manifest is valid JSON with a scope, two icons and the light Revive colors", () => {
     const m = JSON.parse(CUISINE_MANIFEST);
     expect(m.scope).toBe("/ops/cuisine/");
     expect(m.start_url).toBe("/ops/cuisine/");
     expect(m.display).toBe("standalone");
     expect(m.icons).toHaveLength(2);
     expect(m.icons.map((i: any) => i.sizes)).toContain("512x512");
+    // Light theme (not the old dark #161016/#211921).
+    expect(m.theme_color).toBe("#fbf7f2");
+    expect(m.background_color).toBe("#fbf6f0");
+  });
+
+  it("cache-bust version is identical in the app.js query and the SW cache name", () => {
+    // A mismatch (app.js?b=v3 but cache 'cuisine-v2') would serve stale JS from an
+    // un-purged cache — assert the exact same token appears in both.
+    const version = cuisineKitchenPage("{}").match(/app\.js\?b=(v\d+)/)?.[1];
+    expect(version).toBeTruthy();
+    expect(CUISINE_SW).toContain(`cuisine-${version}`);
+  });
+
+  it("SW purges only this app's caches (shared localhost origin in dev)", () => {
+    expect(CUISINE_SW).toContain("startsWith('cuisine-')");
+  });
+
+  it("pages honour prefers-reduced-motion", () => {
+    expect(cuisineKitchenPage("{}")).toContain("prefers-reduced-motion");
+    expect(cuisinePairingPage()).toContain("prefers-reduced-motion");
+  });
+
+  it("shows an à-emporter badge on takeaway tickets", () => {
+    expect(CUISINE_APP_JS).toContain("À emporter");
+    expect(CUISINE_APP_JS).toContain("t.takeaway");
   });
 
   it("app.js parses as valid JavaScript (no syntax errors in the big string)", () => {

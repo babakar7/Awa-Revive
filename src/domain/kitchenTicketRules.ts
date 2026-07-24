@@ -84,6 +84,8 @@ export interface KitchenTicketView {
   serve_by?: string | null;
   /** Source session id (TABLE tickets) — lets the accueil board group by session. */
   session_id?: string | null;
+  /** TABLE order to be packaged to-go (guest still seated). Kitchen packages it. */
+  takeaway?: boolean;
 }
 
 /** One-line items summary reused by the ticket card and the fallback WhatsApp. */

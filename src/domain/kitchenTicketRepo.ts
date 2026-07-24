@@ -41,6 +41,8 @@ export interface KitchenTicket {
   claimed_at: Date | null;
   cancel_reason: string | null;
   is_test: boolean;
+  /** TABLE order the guest wants packaged to-go (still seated at a spot). */
+  takeaway: boolean;
   ipad_ack_at: Date | null;
   fallback_due_at: Date | null;
   fallback_claimed_at: Date | null;
@@ -71,6 +73,7 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
     ready_at: t.ready_at,
     serve_by: t.serve_by,
     session_id: t.session_id,
+    takeaway: t.takeaway,
   };
 }
 
@@ -162,6 +165,8 @@ export interface TableTicketInput {
   /** Idempotency key per phone send: a replay returns the existing ticket. */
   clientRequestId: string;
   isTest: boolean;
+  /** Guest is seated but wants this order packaged to-go (absent/false = sur place). */
+  takeaway?: boolean;
 }
 
 /**
@@ -176,8 +181,8 @@ export async function createTableTicket(
   const res = await pool.query(
     `insert into kitchen_tickets
        (source, session_id, client_request_id, items_json, note, amount_xof,
-        heading, subheading, is_test)
-     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8)
+        heading, subheading, is_test, takeaway)
+     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8, $9)
      on conflict (client_request_id) where client_request_id is not null do nothing
      returning *`,
     [
@@ -189,6 +194,7 @@ export async function createTableTicket(
       input.heading,
       input.subheading,
       input.isTest,
+      input.takeaway ?? false,
     ],
   );
   const inserted = res.rows[0] as KitchenTicket | undefined;

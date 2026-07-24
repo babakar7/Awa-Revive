@@ -1,4 +1,14 @@
 import type { FastifyReply } from "fastify";
+import {
+  OPS_BASE,
+  OPS_BG_COLOR,
+  OPS_LOGO_SVG,
+  OPS_PAIR_STYLE,
+  OPS_THEME_COLOR,
+  OPS_TOKENS,
+  esc,
+  opsHead,
+} from "./opsTheme.js";
 
 /**
  * The reception PWA (service.revive.sn) — HTML shell, manifest, service worker
@@ -12,12 +22,14 @@ import type { FastifyReply } from "fastify";
  * tile per spot: tap a FREE spot to take an order there, tap an OCCUPIED one to
  * add more, serve ("Je prends" / "Servie"), or free it. No "create a table" step,
  * no codes: the spot label is the kitchen-ticket heading.
+ *
+ * Look & feel comes from the shared Revive light theme (opsTheme.ts).
  */
 
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v6";
+const ASSET_VERSION = "v10";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -33,42 +45,12 @@ export function hardenService(reply: FastifyReply): void {
   );
 }
 
-function esc(s: unknown): string {
-  return String(s ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-const HEAD = `<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#211921">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Salle">
-<link rel="manifest" href="${BASE}/manifest.webmanifest">
-<link rel="apple-touch-icon" href="${BASE}/icon-192.png">
-<link rel="icon" href="${BASE}/icon-192.png">`;
-
 // ── Pairing screen ───────────────────────────────────────────────────────────
-const PAIR_STYLE = `*{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-background:#211921;color:#fbf6f0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
-main{width:92%;max-width:24rem;text-align:center;padding:1.5rem}
-h1{font-size:1.5rem;margin:.2rem 0 .4rem}
-p{color:#c9bcc9;font-size:.95rem;margin:.2rem 0 1.4rem}
-input{width:100%;font-size:1.8rem;letter-spacing:.35em;text-align:center;text-transform:uppercase;
-padding:1rem;border-radius:14px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-weight:700}
-button{width:100%;margin-top:1rem;padding:1rem;font-size:1.15rem;font-weight:700;border:none;border-radius:14px;
-background:#7c547d;color:#fbf6f0}
-.err{color:#f6a5a5;margin-top:1rem;font-size:.9rem}`;
 
 export function servicePairingPage(error?: string): string {
-  return `<!doctype html><html lang="fr"><head>${HEAD}<title>Appairer — Salle Revive</title>
-<style>${PAIR_STYLE}</style></head><body><main>
+  return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Salle")}<title>Appairer — Salle Revive</title>
+<style>${OPS_TOKENS}${OPS_BASE}${OPS_PAIR_STYLE}</style></head><body><main>
+<span class="logo">${OPS_LOGO_SVG}</span>
 <h1>Salle Revive</h1>
 <p>Entrez le code d'appairage affiché dans l'administration (Réglages → Appareils).</p>
 <form method="post" action="${BASE}/pair" autocomplete="off">
@@ -79,103 +61,123 @@ ${error ? `<p class="err">${esc(error)}</p>` : ""}
 }
 
 // ── Board (paired device) ────────────────────────────────────────────────────
-const APP_STYLE = `*{box-sizing:border-box}
-html,body{margin:0;min-height:100%}
-body{background:#161016;color:#fbf6f0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
-padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:.6rem;
-padding:.7rem 1rem;background:#211921;border-bottom:1px solid #3a2f3a}
-header h1{font-size:1.05rem;margin:0;font-weight:700}
-#bell{background:#3a2c10;color:#f0c579;border:1px solid #5a4520;border-radius:999px;padding:.4rem .7rem;font-size:.85rem;font-weight:700;margin-right:.5rem}
-#bell[hidden]{display:none}
-.dot{width:.7rem;height:.7rem;border-radius:50%;background:#e5484d;box-shadow:0 0 0 3px rgba(229,72,77,.18)}
-.dot.on{background:#30a46c;box-shadow:0 0 0 3px rgba(48,164,108,.18)}
-.spacer{flex:1}.count{font-size:.85rem;color:#c9bcc9}
-main{padding:.8rem;display:grid;gap:.8rem;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));align-content:start}
+const APP_STYLE = `body{padding-bottom:env(safe-area-inset-bottom)}
+main{padding:.9rem;display:grid;gap:.9rem;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));align-content:start}
 /* Spot tile */
-.spot{background:#211921;border:1px solid #3a2f3a;border-radius:16px;padding:.9rem;display:flex;flex-direction:column;gap:.5rem;min-height:8rem}
-.spot.free{border-style:dashed;border-color:#4a5a4a;cursor:pointer}
-.spot.free:active{filter:brightness(1.15)}
-.spot.occupied{border-left:6px solid #e2a63a}
-.spot.ready{border-color:#30a46c;box-shadow:0 0 0 1px rgba(48,164,108,.5)}
-.spot.flash{animation:flash 1.1s ease-out}
-@keyframes flash{0%{background:#3a2f3a}100%{background:#211921}}
+.spot{background:var(--surface-raised);border:1px solid var(--border-soft);border-radius:var(--radius-lg);
+padding:1rem;display:flex;flex-direction:column;gap:.55rem;min-height:8rem;box-shadow:var(--shadow-1);
+transition:transform .15s var(--ease),background-color .2s,border-color .2s,box-shadow .2s}
+.spot.free{background:var(--cream-25);border:1.5px dashed var(--border-strong);box-shadow:none;cursor:pointer;
+width:100%;text-align:left;color:inherit;font:inherit;appearance:none;-webkit-appearance:none}
+.spot.free:active{transform:scale(.98);background:var(--plum-50)}
+.spot.occupied{border-left:6px solid var(--plum-600)}
+.spot.ready{background:var(--ok-bg);border-color:var(--ok-border);box-shadow:0 0 0 1px var(--ok-border)}
+.spot.flash{animation:arrive 1.2s var(--ease)}
 .sh{display:flex;align-items:baseline;gap:.5rem}
-.nm{font-size:1.3rem;font-weight:800}
-.cap{font-size:.82rem;color:#8a7d8a;margin-left:auto}
-.who{font-size:.92rem;color:#f0c579}
-.freehint{margin-top:auto;font-size:.95rem;color:#7fbf8f;font-weight:600}
-.tk{padding:.55rem .6rem;border:1px solid #3a2f3a;border-radius:10px;background:#1a141a}
+.sh .nm{font-family:var(--serif);font-size:1.3rem;font-weight:600;letter-spacing:-.02em}
+.cap{font-size:.8rem;color:var(--ink-500);margin-left:auto}
+.who{font-size:.92rem;color:var(--plum-600);font-weight:600}
+.freehint{margin-top:auto;font-size:.95rem;color:var(--ok-strong);font-weight:600}
+.tk{padding:.6rem .7rem;border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--surface)}
 .tk .line{display:flex;align-items:center;gap:.4rem}
-.tk .q{font-weight:800;color:#f0c579}
-.tk .st{margin-left:auto;font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:.16rem .5rem;border-radius:999px}
-.st.new{background:#3a2f3a;color:#c9bcc9}.st.preparing{background:#3a2c10;color:#f0c579}
-.st.ready{background:#123524;color:#6ee7a8}
-.tk .tnote{font-size:.82rem;color:#ffd7a8;margin-top:.2rem}
-.tk .taken{font-size:.8rem;color:#8fc3ff;margin-top:.2rem}
+.tk .q{font-weight:800;color:var(--plum-600)}
+.tk .st{margin-left:auto;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+padding:.2rem .55rem;border-radius:999px}
+.st.new{background:var(--plum-50);color:var(--plum-700)}
+.st.preparing{background:var(--warn-bg);color:var(--warn)}
+.st.ready{background:var(--ok-bg);color:var(--ok)}
+.st.ready.just-ready{animation:pop .2s var(--ease)}
+.tk .tnote{font-size:.82rem;color:var(--warn);margin-top:.25rem}
+.tk .away{display:inline-block;font-size:.75rem;font-weight:800;color:#fff;background:var(--info);
+border-radius:999px;padding:.15rem .5rem;margin-top:.3rem;letter-spacing:.02em}
+.tk .taken{font-size:.8rem;color:var(--info);margin-top:.25rem}
 .tacts{display:flex;gap:.45rem;margin-top:.5rem}
-button{font-family:inherit}
-button.act{flex:1;padding:.7rem;font-size:.98rem;font-weight:800;border:none;border-radius:10px;color:#fff}
-button.take{background:#2864b5}button.serve{background:#1a7f37}button.cancel{background:#5a2530;flex:0 0 auto;padding:.7rem .8rem}
-button.act:active{filter:brightness(.9)}button.act:disabled{opacity:.5}
+button.act{flex:1;min-height:2.75rem;padding:.75rem;font-size:.98rem;font-weight:800;border:none;border-radius:var(--radius);color:#fff}
+button.take{background:var(--info)}
+button.serve{background:var(--ok-strong)}
+button.cancel{background:none;border:1px solid var(--danger-border);color:var(--danger);flex:0 0 auto;min-width:2.75rem;padding:.75rem .85rem}
 .sacts{display:flex;gap:.45rem;margin-top:auto;padding-top:.4rem}
-button.sec{flex:1;padding:.7rem;font-size:.95rem;font-weight:700;border-radius:10px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0}
-button.add{background:#7c547d;border-color:#7c547d}
-.empty{grid-column:1/-1;text-align:center;color:#7a6d7a;margin-top:18vh;font-size:1.05rem}
+button.sec{flex:1;padding:.75rem;font-size:.95rem;font-weight:700;border-radius:var(--radius);
+border:1px solid var(--border-strong);background:var(--surface-raised);color:var(--ink-700)}
+button.add{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:18vh;font-family:var(--serif);font-size:1.2rem;font-style:italic}
+.empty button{font-family:var(--sans);font-style:normal}
+#bell{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border);border-radius:999px;
+min-height:2.75rem;padding:.45rem .9rem;font-size:.85rem;font-weight:700}
+#bell[hidden]{display:none}
 /* Overlay (order composer) */
-.ov{position:fixed;inset:0;z-index:20;background:rgba(10,7,10,.6);display:flex;align-items:flex-end;justify-content:center}
-.sheet{background:#1c151c;width:100%;max-width:34rem;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;
-padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom))}
-.sheet h2{margin:.1rem 0 .8rem;font-size:1.2rem}
-.areas{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem}
-.sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:12px;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:1rem;font-family:inherit}
+.ov{position:fixed;inset:0;z-index:20;background:rgba(33,25,33,.45);display:flex;align-items:flex-end;justify-content:center;
+animation:ov-in .2s var(--ease)}
+@keyframes ov-in{0%{opacity:0}100%{opacity:1}}
+/* Stable height + internal scroll: switching categories changes only the inner
+   list, never the sheet box, so the sheet never jumps as list size varies. */
+.sheet{position:relative;display:flex;flex-direction:column;background:var(--surface);width:100%;max-width:34rem;
+height:90vh;height:90dvh;overflow:hidden;overscroll-behavior:contain;
+border-radius:var(--radius-xl) var(--radius-xl) 0 0;box-shadow:var(--shadow-2);
+padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom));animation:sheet-up .3s var(--ease)}
+.list{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+@keyframes sheet-up{0%{transform:translateY(24px);opacity:.5}100%{transform:none;opacity:1}}
+.sheet::before{content:"";display:block;width:2.6rem;height:.3rem;border-radius:99px;background:var(--border-strong);margin:0 auto .7rem}
+.sheet h2{font-family:var(--serif);font-size:1.3rem;font-weight:600;letter-spacing:-.02em;margin:.1rem 0 .8rem}
+.modeseg{display:flex;gap:.45rem;margin:0 0 .7rem}
+.modeseg .mode{flex:1;min-height:2.75rem;padding:.7rem;border-radius:var(--radius);border:1px solid var(--border);
+background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:.95rem}
+.modeseg .mode.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.modeseg .mode.away.sel{background:var(--info);border-color:var(--info);color:#fff}
+.sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:var(--radius);border:1px solid var(--border);
+background:#fff;color:var(--ink-900);font-size:1rem;font-family:inherit}
 .sheet textarea{min-height:3rem;margin-top:.6rem}
 /* sticky search + category chips */
-.toolbar{position:sticky;top:0;z-index:3;background:#1c151c;padding:.2rem 0 .5rem}
+.toolbar{position:sticky;top:0;z-index:3;background:var(--surface);padding:.2rem 0 .5rem}
 .search{margin-bottom:.5rem}
 .chips{display:flex;gap:.4rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:.2rem;scrollbar-width:none}
 .chips::-webkit-scrollbar{display:none}
-.chip{flex:0 0 auto;padding:.5rem .85rem;border-radius:999px;background:#2c222c;border:1px solid #4a3d4a;color:#e7dbe7;font-size:.92rem;font-weight:700;white-space:nowrap}
-.chip.sel{background:#7c547d;border-color:#7c547d;color:#fff}
-.chip.cart{background:#26361f;border-color:#3f5a34;color:#bfe6ab}
-.chip.cart.sel{background:#2f7650;border-color:#2f7650;color:#fff}
-.cat{font-size:.78rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#a98fa9;margin:.8rem 0 .3rem}
-.mi{display:flex;align-items:center;gap:.6rem;padding:.6rem 0;border-bottom:1px solid #2a212a;flex-wrap:wrap}
-.mi.on{background:#241b24;border-radius:10px;padding:.6rem;margin:.2rem 0;border-bottom:0}
+.chip{flex:0 0 auto;padding:.55rem .95rem;border-radius:999px;background:var(--rose);border:1px solid transparent;
+color:var(--plum-600);font-size:.88rem;font-weight:600;white-space:nowrap}
+.chip.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.chip.cart{background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok-strong)}
+.chip.cart.sel{background:var(--ok-strong);border-color:var(--ok-strong);color:#fff}
+.cat{font-family:var(--serif);font-size:.95rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+color:var(--plum-600);border-bottom:1px solid var(--rose);padding-bottom:.35rem;margin:.9rem 0 .3rem}
+.mi{display:flex;align-items:center;gap:.6rem;padding:.6rem 0;border-bottom:1px solid var(--border-soft);flex-wrap:wrap}
+.mi.on{background:var(--plum-50);border-radius:var(--radius);padding:.6rem;margin:.2rem 0;border-bottom:0}
 .mi .nm{flex:1;min-width:8rem;font-size:1.02rem}
-.mi .nm .pr{display:block;color:#9a8d9a;font-size:.82rem;font-weight:500}
-.mi .qbadge{background:#2f7650;color:#fff;border-radius:999px;font-size:.8rem;font-weight:800;padding:.1rem .5rem;margin-left:.4rem}
+.mi .nm .pr{display:block;color:var(--ink-500);font-size:.82rem;font-weight:500}
+.mi .qbadge{background:var(--ok-strong);color:#fff;border-radius:999px;font-size:.8rem;font-weight:800;
+padding:.12rem .5rem;margin-left:.4rem;animation:pop .18s var(--ease)}
 .stepper{display:flex;align-items:center;gap:.55rem}
-.stepper button{width:2.4rem;height:2.4rem;border-radius:50%;border:1px solid #4a3d4a;background:#2c222c;color:#fbf6f0;font-size:1.4rem;font-weight:800;line-height:1}
-.stepper button.plus{background:#7c547d;border-color:#7c547d}
+.stepper button{width:2.75rem;height:2.75rem;border-radius:50%;border:1px solid var(--border-strong);
+background:#fff;color:var(--ink-900);font-size:1.35rem;font-weight:700;line-height:1}
+.stepper button.plus{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.stepper button:active{transform:scale(.88)}
 .stepper .qv{min-width:1.3rem;text-align:center;font-weight:800;font-size:1.1rem}
-.creq{margin-top:.5rem;border:1px solid #4a3d4a;border-radius:10px;padding:.5rem .6rem;background:#231b23}
-.creq.missing{border-color:#e0894a;background:#2e2012}
-.clab{font-size:.78rem;font-weight:800;color:#e7c08a;margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.04em}
-.creq.missing .clab{color:#f6a24a}
+.creq{margin-top:.5rem;border:1px solid var(--border-soft);border-radius:var(--radius);padding:.55rem .65rem;background:var(--surface-raised)}
+.creq.missing{border-color:var(--warn-border);background:var(--warn-bg)}
+.clab{font-size:.75rem;font-weight:700;color:var(--ink-500);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.05em}
+.creq.missing .clab{color:var(--warn)}
 .cpills{display:flex;gap:.45rem;flex-wrap:wrap}
-.cpill{padding:.55rem .85rem;border-radius:999px;border:1px solid #4a3d4a;background:#2c222c;color:#e7dbe7;font-weight:700;font-size:.95rem}
-.cpill.sel{background:#2f7650;border-color:#2f7650;color:#fff}
-.mi.needchoice{outline:2px solid #e0894a;outline-offset:2px;border-radius:10px}
+.cpill{padding:.55rem .9rem;border-radius:999px;border:1px solid var(--border-strong);background:#fff;color:var(--ink-700);font-weight:600;font-size:.95rem}
+.cpill.sel{background:var(--ok-strong);border-color:var(--ok-strong);color:#fff}
+.mi.needchoice{outline:2px solid var(--warn-border);outline-offset:2px;border-radius:var(--radius)}
 .mi .ln{margin-top:.5rem;font-size:.92rem;padding:.55rem}
-.mi .lnlab{font-size:.75rem;color:#8a7d8a;margin-top:.5rem}
+.mi .lnlab{font-size:.75rem;color:var(--ink-500);margin-top:.5rem}
 .wrap{width:100%}
-.nores{color:#8a7d8a;text-align:center;padding:2rem 0}
-.foot{position:sticky;bottom:0;background:#1c151c;padding:.6rem 0 .2rem;display:flex;gap:.6rem;align-items:center;border-top:1px solid #2a212a}
-.total{font-weight:800;font-size:1.05rem;white-space:nowrap}.total small{color:#8a7d8a;font-weight:500}
-.foot button.go{flex:1;padding:.9rem;border:none;border-radius:12px;background:#2f7650;color:#fff;font-weight:800;font-size:1.02rem}
+.nores{color:var(--ink-500);text-align:center;padding:2rem 0}
+.foot{position:sticky;bottom:0;background:var(--surface);padding:.6rem 0 .2rem;display:flex;gap:.6rem;align-items:center;
+border-top:1px solid var(--border-soft)}
+.total{font-weight:800;font-size:1.05rem;white-space:nowrap}
+.total small{color:var(--ink-500);font-weight:500}
+.foot button.go{flex:1;padding:.95rem;border:none;border-radius:12px;background:var(--ok-strong);color:#fff;
+font-weight:800;font-size:1.02rem;box-shadow:var(--shadow-1)}
 .foot button.go:disabled{opacity:.45}
-.close-x{position:sticky;top:0;float:right;background:none;border:none;color:#c9bcc9;font-size:1.7rem;line-height:1;z-index:4}
-.msg{color:#f6a5a5;font-size:.9rem;margin:.4rem 0}
-#offline{position:fixed;left:0;right:0;top:0;background:#7a2020;color:#fff;text-align:center;padding:.5rem;font-weight:700;transform:translateY(-100%);transition:transform .2s;z-index:30}
-#offline.show{transform:translateY(0)}
-noscript{display:block;padding:2rem;text-align:center}`;
+.close-x{position:absolute;top:.55rem;right:.6rem;background:none;border:none;color:var(--ink-500);font-size:1.7rem;line-height:1;z-index:4;min-width:2.75rem;min-height:2.75rem}
+.msg{color:var(--danger);font-size:.9rem;margin:.4rem 0}`;
 
 export function serviceBoardPage(bootJson: string): string {
-  return `<!doctype html><html lang="fr"><head>${HEAD}<title>Salle Revive</title>
-<style>${APP_STYLE}</style></head><body>
+  return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Salle")}<title>Salle Revive</title>
+<style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
-<header><span id="dot" class="dot"></span><h1>Salle</h1><span class="spacer"></span><button id="bell" hidden>🔔 Alertes</button><span class="count" id="count"></span></header>
+<header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="bell" hidden>🔔 Alertes</button><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
 <script>window.__BOOT__=${bootJson}</script>
@@ -192,8 +194,8 @@ export const SERVICE_MANIFEST = JSON.stringify({
   scope: `${BASE}/`,
   display: "standalone",
   orientation: "portrait",
-  background_color: "#161016",
-  theme_color: "#211921",
+  background_color: OPS_BG_COLOR,
+  theme_color: OPS_THEME_COLOR,
   icons: [
     { src: `${BASE}/icon-192.png`, sizes: "192x192", type: "image/png", purpose: "any" },
     { src: `${BASE}/icon-512.png`, sizes: "512x512", type: "image/png", purpose: "any maskable" },
@@ -204,7 +206,9 @@ export const SERVICE_MANIFEST = JSON.stringify({
 export const SERVICE_SW = `const CACHE='service-${ASSET_VERSION}';
 const SHELL=['${BASE}/app.js','${BASE}/manifest.webmanifest','${BASE}/icon-192.png','${BASE}/icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()));});
-self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
+// Prune only THIS app's old caches — salle and cuisine share the localhost origin
+// during dev review, so an unscoped sweep would delete the other app's cache.
+self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith('service-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
 self.addEventListener('fetch',e=>{
   const url=new URL(e.request.url);
   if(e.request.method==='GET' && SHELL.includes(url.pathname)){
@@ -274,6 +278,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
       if(l.note) d.appendChild(el('div','tnote','• '+l.note));
     });
     if(t.note) d.appendChild(el('div','tnote','📝 '+t.note));
+    if(t.takeaway) d.appendChild(el('div','away','📦 À emporter'));
     if(t.serve_by) d.appendChild(el('div','taken','🙋 Pris par '+t.serve_by));
     if(t.status==='READY'){
       var acts=el('div','tacts');
@@ -282,7 +287,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
       d.appendChild(acts);
     } else {
       var acts2=el('div','tacts');
-      var cx=el('button','act cancel','✕'); cx.title='Annuler cette commande';
+      var cx=el('button','act cancel','✕'); cx.title='Annuler cette commande'; cx.setAttribute('aria-label','Annuler cette commande');
       cx.onclick=function(){ if(!confirm('Annuler cette commande ?'))return; cx.disabled=true; post('/tickets/'+t.id+'/cancel',{reason:'annulée en salle'}).then(function(r){if(!r.ok)cx.disabled=false;}).catch(function(){cx.disabled=false;}); };
       acts2.appendChild(cx); d.appendChild(acts2);
     }
@@ -293,17 +298,21 @@ export const SERVICE_APP_JS = String.raw`(function(){
     var s=sessionForSpot(sp.id);
     var tks=s? ticketsOf(s.id) : [];
     var anyReady=tks.some(function(t){return t.status==='READY';});
-    var c=el('div','spot '+(s?'occupied':'free')+(anyReady?' ready':'')); c.dataset.spot=sp.id; if(s)c.dataset.session=s.id;
-    var h=el('div','sh'); h.appendChild(el('span','nm',sp.label)); var cap=capLabel(sp); if(cap)h.appendChild(el('span','cap',cap)); c.appendChild(h);
     if(!s){
-      c.appendChild(el('div','freehint','Toucher pour prendre la commande'));
-      c.onclick=function(){ openOrder(sp,null); };
-      return c;
+      // Free spot = a real <button>: proper press/focus semantics + VoiceOver.
+      var f=el('button','spot free'); f.type='button'; f.dataset.spot=sp.id;
+      f.setAttribute('aria-label','Prendre une commande — '+sp.label);
+      var fh=el('div','sh'); fh.appendChild(el('span','nm',sp.label)); var fcap=capLabel(sp); if(fcap)fh.appendChild(el('span','cap',fcap)); f.appendChild(fh);
+      f.appendChild(el('div','freehint','Toucher pour prendre la commande'));
+      f.onclick=function(){ openOrder(sp,null,f); };
+      return f;
     }
+    var c=el('div','spot occupied'+(anyReady?' ready':'')); c.dataset.spot=sp.id; c.dataset.session=s.id;
+    var h=el('div','sh'); h.appendChild(el('span','nm',sp.label)); var cap=capLabel(sp); if(cap)h.appendChild(el('span','cap',cap)); c.appendChild(h);
     if(s.first_name) c.appendChild(el('div','who','👤 '+s.first_name));
     tks.forEach(function(t){ c.appendChild(ticketCard(t)); });
     var sa=el('div','sacts');
-    var add=el('button','sec add','＋ Ajouter une commande'); add.onclick=function(){ openOrder(sp,s); }; sa.appendChild(add);
+    var add=el('button','sec add','＋ Ajouter une commande'); add.onclick=function(){ openOrder(sp,s,add); }; sa.appendChild(add);
     c.appendChild(sa);
     return c;
   }
@@ -326,21 +335,42 @@ export const SERVICE_APP_JS = String.raw`(function(){
   }
 
   // ---- order composer ----
-  function overlay(){ var ov=el('div','ov'); ov.onclick=function(e){ if(e.target===ov) document.body.removeChild(ov); }; return ov; }
+  function overlay(){ return el('div','ov'); }
 
   function normalize(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
 
-  function openOrder(sp,session){
+  function openOrder(sp,session,trigger){
     unlock();
     var ov=overlay(); var sh=el('div','sheet');
-    var x=el('button','close-x','×'); x.onclick=function(){document.body.removeChild(ov);}; sh.appendChild(x);
+    sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true');
+    sh.setAttribute('aria-label','Nouvelle commande — '+sp.label);
+    // Lock the board behind the sheet (no scroll bleed) and return focus on close.
+    var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
+    function returnFocus(){ var t=trigger;
+      if(!t||!t.isConnected){ var host=board.querySelector('[data-spot="'+sp.id+'"]');
+        t=host&&host.tagName==='BUTTON'?host:(host?host.querySelector('button'):null); }
+      if(t&&t.focus){ try{ t.focus(); }catch(e){} } }
+    function closeSheet(){ if(ov.parentNode) document.body.removeChild(ov); document.body.style.overflow=prevOverflow; returnFocus(); }
+    function requestClose(){ if(cartCount()>0 && !confirm('Abandonner la commande ?')) return; closeSheet(); }
+    ov.onclick=function(e){ if(e.target===ov) requestClose(); };
+    var x=el('button','close-x','×'); x.setAttribute('aria-label','Fermer la commande'); x.onclick=requestClose; sh.appendChild(x);
     sh.appendChild(el('h2','Commande — '+sp.label));
     var fn=null;
     if(!session){ fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; fn.style.marginBottom='.6rem'; sh.appendChild(fn); }
 
     var draft={};       // id -> {qty, choice, note}
-    var state={cat:'__ALL__', q:'', cartOnly:false};
+    var state={cat:'__ALL__', q:'', cartOnly:false, takeaway:false};
     var totalEl, cartChip, listEl;
+
+    // Packaging mode for THIS order (default sur place). A mixed table = two sends
+    // on the same spot; one ticket = one packaging mode keeps the kitchen unambiguous.
+    var modeseg=el('div','modeseg');
+    var mHere=el('button','mode sel'); mHere.type='button'; mHere.textContent='🍽️ Sur place';
+    var mAway=el('button','mode away'); mAway.type='button'; mAway.textContent='📦 À emporter';
+    mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false');
+    mHere.onclick=function(){ state.takeaway=false; mHere.classList.add('sel'); mAway.classList.remove('sel'); mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false'); };
+    mAway.onclick=function(){ state.takeaway=true; mAway.classList.add('sel'); mHere.classList.remove('sel'); mAway.setAttribute('aria-pressed','true'); mHere.setAttribute('aria-pressed','false'); };
+    modeseg.appendChild(mHere); modeseg.appendChild(mAway); sh.appendChild(modeseg);
 
     function cartCount(){ var n=0; Object.keys(draft).forEach(function(id){ if(draft[id].qty>0) n+=draft[id].qty; }); return n; }
     function recompute(){
@@ -364,7 +394,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
     toolbar.appendChild(chips);
     sh.appendChild(toolbar);
 
-    listEl=el('div'); sh.appendChild(listEl);
+    listEl=el('div','list'); sh.appendChild(listEl);
 
     function itemRow(it){
       var d=draft[it.id]||{qty:0,choice:'',note:''};
@@ -446,17 +476,27 @@ export const SERVICE_APP_JS = String.raw`(function(){
       var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
       if(!items.length){ msg.textContent='Ajoutez au moins un article.'; msg.style.display='block'; return; }
       go.disabled=true; msg.style.display='none';
-      var body={items:items,note:gnote.value,client_request_id:uuid()}; if(fn&&fn.value) body.first_name=fn.value;
+      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway}; if(fn&&fn.value) body.first_name=fn.value;
       post('/spots/'+sp.id+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.ok){ document.body.removeChild(ov); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
+        if(j&&j.ok){ closeSheet(); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
       }).catch(function(){ go.disabled=false; msg.textContent='Erreur réseau.'; msg.style.display='block'; });
     };
     foot.appendChild(go); sh.appendChild(foot);
     ov.appendChild(sh); document.body.appendChild(ov);
     renderList(); recompute();
+    // Land focus inside the dialog: prénom on a new session, else the search field.
+    try{ (fn||search).focus(); }catch(e){}
   }
 
-  function setOnline(on){ dot.classList.toggle('on',on); offline.classList.toggle('show',!on); }
+  // The SSE stream blips routinely (phone backgrounding, screen lock, network
+  // switch) and EventSource auto-reconnects within ~3s. Only cry "hors ligne"
+  // after the link has really been down a few seconds — and clear it instantly on
+  // reconnect — so a routine reconnect never flashes a scary banner while online.
+  var downTimer=null;
+  function setOnline(on){
+    if(on){ if(downTimer){clearTimeout(downTimer);downTimer=null;} dot.classList.add('on'); offline.classList.remove('show'); }
+    else if(!downTimer){ downTimer=setTimeout(function(){ downTimer=null; dot.classList.remove('on'); offline.classList.add('show'); },5000); }
+  }
 
   // Re-fetch the authoritative board state on load, so a stale cached page (an old
   // inline boot without spots) self-heals to the current spots/sessions/menu.
@@ -510,7 +550,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
   es.addEventListener('session_update',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); });
   es.addEventListener('session_closed',function(e){ var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
   es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; tickets.set(t.id,t); render(); });
-  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')) beep(); });
+  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ beep(); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
   es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); render(); });
 
   if('serviceWorker' in navigator){ navigator.serviceWorker.register(BASE+'/sw.js').catch(function(){}); }

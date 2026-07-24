@@ -3,10 +3,12 @@ import {
   SERVICE_APP_JS,
   SERVICE_MANIFEST,
   SERVICE_SW,
+  serviceBoardPage,
+  servicePairingPage,
 } from "../src/ops/opsServicePage.js";
 
 describe("service PWA assets", () => {
-  it("manifest is valid JSON scoped to /ops/service/ with two icons", () => {
+  it("manifest is valid JSON scoped to /ops/service/ with two icons and light colors", () => {
     const m = JSON.parse(SERVICE_MANIFEST);
     expect(m.scope).toBe("/ops/service/");
     expect(m.start_url).toBe("/ops/service/");
@@ -14,6 +16,36 @@ describe("service PWA assets", () => {
     expect(m.orientation).toBe("portrait");
     expect(m.icons).toHaveLength(2);
     expect(m.icons.map((i: any) => i.sizes)).toContain("512x512");
+    expect(m.theme_color).toBe("#fbf7f2");
+    expect(m.background_color).toBe("#fbf6f0");
+  });
+
+  it("cache-bust version is identical in the app.js query and the SW cache name", () => {
+    const version = serviceBoardPage("{}").match(/app\.js\?b=(v\d+)/)?.[1];
+    expect(version).toBeTruthy();
+    expect(SERVICE_SW).toContain(`service-${version}`);
+  });
+
+  it("SW purges only this app's caches (shared localhost origin in dev)", () => {
+    expect(SERVICE_SW).toContain("startsWith('service-')");
+  });
+
+  it("pages honour prefers-reduced-motion", () => {
+    expect(serviceBoardPage("{}")).toContain("prefers-reduced-motion");
+    expect(servicePairingPage()).toContain("prefers-reduced-motion");
+  });
+
+  it("composer sheet has dialog semantics and guards an unfinished order", () => {
+    expect(SERVICE_APP_JS).toContain("'aria-modal'");
+    expect(SERVICE_APP_JS).toContain("'dialog'");
+    expect(SERVICE_APP_JS).toContain("Abandonner la commande");
+  });
+
+  it("offers the sur place / à emporter choice and sends it in the order body", () => {
+    expect(SERVICE_APP_JS).toContain("Sur place");
+    expect(SERVICE_APP_JS).toContain("À emporter");
+    // The flag is sent to the server (which re-decides it) — never a price/total.
+    expect(SERVICE_APP_JS).toContain("takeaway:state.takeaway");
   });
 
   it("app.js parses as valid JavaScript (no syntax errors in the big string)", () => {
