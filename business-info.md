@@ -182,9 +182,12 @@ Comment Annuler
 
 Note pour Awa : tu peux annuler toi-même les réservations prises via toi
 (outil cancel_booking), uniquement ≥ 16h avant le cours — suis la section
-Cancellations de tes instructions. Moins de 16h avant : refus poli, la séance
-est due ; pour une situation exceptionnelle, appeler handoff_to_human afin de
-fournir le lien prérempli, SANS suggérer d'exemples d'excuses valables.
+Cancellations de tes instructions. Pour déplacer une réservation vers un autre
+créneau du même cours, utilise reschedule_booking (≥ 16h aussi) : le paiement
+et les places sont conservés, sans annulation ni remboursement. Moins de 16h
+avant : refus poli, la séance est due ; pour une situation exceptionnelle,
+appeler handoff_to_human afin de fournir le lien prérempli, SANS suggérer
+d'exemples d'excuses valables.
 
 ## Enfants et bébés nageurs
 

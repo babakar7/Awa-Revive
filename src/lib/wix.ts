@@ -476,6 +476,8 @@ export async function updateBookingContactDetails(args: {
  */
 export interface WixContactBooking {
   id: string;
+  /** Needed to prove a requested direct move stays within the same class. */
+  serviceId: string | null;
   serviceName: string;
   startDate: string; // ISO
   participants: number;
@@ -557,6 +559,7 @@ export async function listContactUpcomingBookings(
     if (!startDate || Number.isNaN(Date.parse(startDate)) || Date.parse(startDate) <= now) continue;
     out.push({
       id: b.id,
+      serviceId: typeof slot.serviceId === "string" ? slot.serviceId : null,
       serviceName: b?.bookedEntity?.title ?? serviceName(slot.serviceId),
       startDate,
       participants: Math.max(1, Number(b.numberOfParticipants ?? 1)),
@@ -1483,6 +1486,22 @@ export async function cancelBooking(bookingId: string): Promise<void> {
     revision,
     participantNotification: { notifyParticipants: false },
     flowControlSettings: { ignoreCancellationPolicy: true },
+  });
+}
+
+/**
+ * Move a confirmed class booking to another session of the SAME service.
+ * Payment, participant count and booking id stay intact in Wix. The caller
+ * owns the 16h, ownership, service-match and fresh-availability checks.
+ */
+export async function rescheduleBooking(bookingId: string, eventId: string): Promise<void> {
+  const revision = await getBookingRevision(bookingId);
+  await wixPost(`/_api/bookings-service/v2/bookings/${bookingId}/reschedule`, {
+    revision,
+    // For class bookings Wix requires the existing class event id, not a full
+    // appointment slot. This preserves the existing custom/offline payment.
+    slot: { eventId },
+    participantNotification: { notifyParticipants: false },
   });
 }
 

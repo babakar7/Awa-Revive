@@ -532,6 +532,27 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "reschedule_booking",
+    description:
+      "Directly move one of THIS client's confirmed bookings to a new slot of the SAME class, keeping its " +
+      "existing payment and all its places. Only allowed 16 hours or more before the CURRENT class — the " +
+      "server enforces ownership, same-class matching and fresh availability. Get booking_id from " +
+      "get_my_bookings and event_id from check_availability, after the client chose and explicitly confirmed " +
+      "the new slot. NEVER call cancel_booking or create_payment_link for this same-class move.",
+    input_schema: {
+      type: "object",
+      properties: {
+        booking_id: { type: "string", description: "booking_id from get_my_bookings" },
+        event_id: {
+          type: "string",
+          description: "New slot's choice_id from check_availability (the short slot_… value)",
+        },
+      },
+      required: ["booking_id", "event_id"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "join_waitlist",
     description:
       "Put the client on the waitlist for a FULL slot they explicitly want (offer it only after saying the slot " +
@@ -2460,6 +2481,126 @@ export async function executeTool(
               "different number. If they believe they have a booking or an abonnement, invite them to link their " +
               "account by email (request_email_verification) — otherwise just say the slot isn't booked and offer to book it."
             : undefined,
+      });
+    }
+
+    case "reschedule_booking": {
+      const bookingId = String(input.booking_id ?? "");
+      const requestedEventId = String(input.event_id ?? "");
+      if (!bookingId || !requestedEventId) return JSON.stringify({ error: "invalid_arguments" });
+
+      const cached = await repo.getCachedSlot(client.id, requestedEventId);
+      if (!cached) {
+        return JSON.stringify({
+          error: "unknown_slot",
+          message: "This new slot was not offered to the client. Re-run check_availability and let them pick a slot.",
+        });
+      }
+      const slot = (cached.slot_json as any) ?? {};
+      const newStart = typeof slot.startDate === "string" ? slot.startDate : "";
+      if (!newStart) {
+        return JSON.stringify({ error: "invalid_slot", message: "The selected slot has no usable start time. Re-run check_availability." });
+      }
+
+      // Website/counter bookings have no local payment record, but Wix can
+      // still move them directly. Re-fetch the client's Wix bookings first so
+      // a model can never move somebody else's reservation.
+      if (bookingId.startsWith("studio:")) {
+        const wixId = bookingId.slice("studio:".length);
+        const contactId = await wix.findContactIdByPhone(
+          `+${client.wa_phone.replace(/^\+/, "")}`,
+          client.name ?? undefined,
+        );
+        const theirs = contactId ? await wix.listContactUpcomingBookings(contactId) : [];
+        const source = theirs.find((b) => b.id === wixId);
+        if (!source) {
+          return JSON.stringify({
+            error: "unknown_booking",
+            message: "No such upcoming studio booking for this client. Re-run get_my_bookings.",
+          });
+        }
+        if (hoursUntil(source.startDate) < 16) {
+          return JSON.stringify({
+            error: "too_late_16h_policy",
+            hours_before_class: Math.max(0, Math.round(hoursUntil(source.startDate) * 10) / 10),
+            message: "Rescheduling refused: less than 16 hours before the current class, the session is due. If they insist on an exceptional situation, call handoff_to_human.",
+          });
+        }
+        if (!source.serviceId || source.serviceId !== cached.service_id) {
+          return JSON.stringify({
+            error: "different_class_not_reschedulable",
+            message: "Direct rescheduling only keeps the same class. Do not cancel this booking; explain that changing class uses the cancellation/new-booking flow.",
+          });
+        }
+        const fresh = await wix.isSlotStillOpen(source.serviceId, cached.event_id, newStart, source.participants);
+        if (!fresh) {
+          return JSON.stringify({
+            error: "slot_full",
+            message: "That new slot is no longer open for all their places. Re-run check_availability and offer another slot; the current booking is unchanged.",
+          });
+        }
+        await wix.rescheduleBooking(wixId, cached.event_id);
+        return JSON.stringify({
+          rescheduled: true,
+          class: source.serviceName,
+          old_slot_start_dakar: fmtDakar(source.startDate),
+          new_slot_start_dakar: fmtDakar(fresh.startDate),
+          participants: source.participants,
+          payment_preserved: true,
+          note: "The booking was moved directly in Wix. Confirm the new time; do NOT mention a refund, new payment or reception.",
+        });
+      }
+
+      const booking = await repo.findClientBooking(client.id, bookingId);
+      if (!booking || booking.status !== "BOOKED" || !booking.wix_booking_id) {
+        return JSON.stringify({ error: "unknown_booking", message: "No such upcoming confirmed booking for this client. Re-run get_my_bookings." });
+      }
+      if (hoursUntil(booking.slot_start) < 16) {
+        return JSON.stringify({
+          error: "too_late_16h_policy",
+          hours_before_class: Math.max(0, Math.round(hoursUntil(booking.slot_start) * 10) / 10),
+          message: "Rescheduling refused: less than 16 hours before the current class, the session is due. If they insist on an exceptional situation, call handoff_to_human.",
+        });
+      }
+      if (booking.service_id !== cached.service_id) {
+        return JSON.stringify({
+          error: "different_class_not_reschedulable",
+          message: "Direct rescheduling only keeps the same class. Do not cancel this booking; explain that changing class uses the cancellation/new-booking flow.",
+        });
+      }
+      const fresh = await wix.isSlotStillOpen(booking.service_id, cached.event_id, newStart, booking.participants);
+      if (!fresh) {
+        return JSON.stringify({
+          error: "slot_full",
+          message: "That new slot is no longer open for all their places. Re-run check_availability and offer another slot; the current booking is unchanged.",
+        });
+      }
+
+      await wix.rescheduleBooking(booking.wix_booking_id, cached.event_id);
+      const stored = await repo.updateBookedSlot({
+        bookingId,
+        clientId: client.id,
+        eventId: cached.event_id,
+        slotJson: fresh.raw,
+        slotStart: fresh.startDate,
+        slotEnd: fresh.endDate ?? null,
+      });
+      if (!stored) {
+        notifyReception(
+          "⚠️ Déplacement Wix à synchroniser",
+          `Awa a déplacé dans Wix la réservation ${bookingId} de ${client.name ?? "?"}, mais la mise à jour locale a échoué.\n` +
+            `Cours : ${booking.service_name}\nNouveau créneau : ${fmtDakar(fresh.startDate)}\nBooking Wix : ${booking.wix_booking_id}`,
+        );
+      }
+      return JSON.stringify({
+        rescheduled: true,
+        class: booking.service_name,
+        old_slot_start_dakar: fmtDakar(String(booking.slot_start)),
+        new_slot_start_dakar: fmtDakar(fresh.startDate),
+        participants: booking.participants,
+        payment_preserved: true,
+        local_sync_pending: !stored || undefined,
+        note: "The booking was moved directly in Wix and its payment is unchanged. Confirm the new time; do NOT mention a refund or send a payment link.",
       });
     }
 

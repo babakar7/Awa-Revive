@@ -890,6 +890,31 @@ export async function markRefundNeeded(bookingId: string): Promise<void> {
   await transition(pool, bookingId, "REFUND_NEEDED");
 }
 
+/** Persist a successful Wix direct reschedule without touching its payment. */
+export async function updateBookedSlot(args: {
+  bookingId: string;
+  clientId: string;
+  eventId: string;
+  slotJson: unknown;
+  slotStart: string;
+  slotEnd: string | null;
+}): Promise<boolean> {
+  const res = await pool.query(
+    `update pending_bookings
+        set event_id=$3, slot_json=$4, slot_start=$5, slot_end=$6, updated_at=now()
+      where id=$1 and client_id=$2 and status='BOOKED' and wix_booking_id is not null`,
+    [
+      args.bookingId,
+      args.clientId,
+      args.eventId,
+      JSON.stringify(args.slotJson),
+      args.slotStart,
+      args.slotEnd,
+    ],
+  );
+  return res.rowCount === 1;
+}
+
 /**
  * Record a membership-paid booking. Inserted directly as BOOKED: the
  * "payment" is the plan credit, redeemed and validated by Wix's checkout

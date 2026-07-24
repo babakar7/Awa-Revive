@@ -11,6 +11,30 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Correctif en cours — report direct du même cours (24 juillet 2026)
+
+Le cas Memona a exposé une règle produit erronée : pour déplacer un Aquabike
+à plus de 16 h, Awa annulait la résa Wave, mettait le remboursement en file,
+puis réclamait un second paiement. Wix propose pourtant le report natif d'une
+réservation de cours, qui conserve la réservation, le paiement et les places.
+
+- Nouvel outil `reschedule_booking` : réservation propriétaire + ancien créneau
+  ≥16 h + nouveau créneau présenté au client, encore libre, du **même cours**.
+  Il appelle `POST /_api/bookings-service/v2/bookings/{id}/reschedule` avec la
+  révision Wix et le nouvel `eventId`; aucun `cancel_booking`, aucun lien et
+  aucun remboursement.
+- Applicable aux résas Awa (Wave/OM/Max It/abonnement) et aux résas
+  comptoir/site : celles-ci sont revalidées sur la fiche Wix du numéro avant
+  mutation. Les résas Awa mettent ensuite à jour la même ligne locale en
+  conservant statut `BOOKED`, paiement, montant, participants et extras.
+- Changement de cours = hors du report direct : flux existant
+  annulation/remboursement + nouvelle réservation après accord explicite.
+  Échec d'un report Wix = ancienne résa inchangée.
+- Régression : `test/integration/rescheduleBooking.test.ts` vérifie le report
+  Wave direct, la garde 16 h et le refus inter-cours. Le remboursement déjà
+  créé pour Memona reste à traiter : elle a effectivement payé une seconde
+  réservation avant ce correctif.
+
 ## 1. Le projet en une minute
 
 **Awa** est un agent IA sur WhatsApp qui répond aux clients du studio

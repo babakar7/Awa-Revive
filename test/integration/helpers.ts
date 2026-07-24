@@ -319,6 +319,21 @@ export function makeFetchMock(): FetchMock {
       return json(200, { resources: wix.staffResources });
     }
 
+    // --- Wix booking reader (revision required by cancel/reschedule) ---
+    if (url.includes("/_api/bookings-reader/v2/extended-bookings/query")) {
+      const ids: string[] = body?.query?.filter?.id?.$in ?? [];
+      return json(200, {
+        extendedBookings: ids.map((id) => ({
+          booking: {
+            id,
+            revision: "1",
+            status: "CONFIRMED",
+            bookedEntity: { slot: { serviceId: wix.serviceId, startDate: wix.slotStart } },
+          },
+        })),
+      });
+    }
+
     // --- Wave checkout session (create payment link) ---
     if (url.includes("api.wave.com") && url.includes("/v1/checkout/sessions") && method === "POST") {
       return json(200, { id: `cos-add-${calls.length}`, wave_launch_url: "https://pay.wave.com/c/test" });
@@ -363,6 +378,10 @@ export function makeFetchMock(): FetchMock {
     // --- Wix confirm booking ---
     if (url.includes(":confirmOrDecline")) {
       return json(200, { booking: { status: "CONFIRMED" } });
+    }
+
+    if (url.includes("/_api/bookings-service/v2/bookings/") && url.endsWith("/reschedule")) {
+      return json(200, { booking: { status: "CONFIRMED", revision: "2" } });
     }
 
     // --- Wix eCommerce order required by the custom-checkout flow ---
