@@ -36,6 +36,7 @@ import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
 import { createClientPaymentSession } from "../domain/paymentSession.js";
 import * as deliveries from "../domain/deliveryRepo.js";
 import { PACK_DISCOVERY_CAMPAIGN, isCampaignReformerService } from "../domain/packDiscoveryCampaign.js";
+import { planNamesConflict } from "../domain/planNameGuard.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -335,6 +336,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         plan_id: { type: "string", description: "Plan id from list_plans" },
+        plan_name_confirm: {
+          type: "string",
+          description:
+            "The exact plan NAME from list_plans that matches plan_id — copy it verbatim. The server " +
+            "cross-checks it against the id and refuses the link if they disagree (anti-conflation guard: " +
+            "prevents billing the wrong plan when the conversation jumped between topics).",
+        },
         client_name: { type: "string", description: "Client's first name" },
         payment_method: {
           type: "string",
@@ -358,7 +366,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             "pending, the server refuses the link so the client can type the code first (they may already own a plan).",
         },
       },
-      required: ["plan_id", "client_name"],
+      required: ["plan_id", "plan_name_confirm", "client_name"],
       additionalProperties: false,
     },
   },
@@ -1901,6 +1909,22 @@ export async function executeTool(
       const plan = await wix.getPlan(planId);
       if (!plan) return JSON.stringify({ error: "unknown_plan_id", message: "Re-run list_plans and pick a plan_id from it." });
       if (config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(plan.id)) return JSON.stringify({ error: "reception_only_plan", message: "Reception activates this Pack Découverte continuation at the studio; do not sell it." });
+
+      // Anti-conflation guard: the id and the name the model confirmed must be the
+      // SAME plan. When a conversation jumps topics (e.g. Pack Découverte → Aquabike)
+      // the model can pair a stale plan_id with the intended name and bill the wrong
+      // pack. Compare on a normalized form (accent/case/punctuation-insensitive);
+      // accept either exact match or one containing the other (catalog names vary
+      // in verbosity), reject a clear divergence.
+      const planNameConfirm = String(input.plan_name_confirm ?? "").trim();
+      if (planNamesConflict(plan.name, planNameConfirm)) {
+        return JSON.stringify({
+          error: "plan_mismatch",
+          message:
+            `plan_id resolves to "${plan.name}" but you confirmed "${planNameConfirm}". These are different plans — ` +
+            `re-run list_plans and pass the plan_id AND plan_name_confirm of the SAME plan the client agreed to.`,
+        });
+      }
 
       await repo.updateClientName(client.id, clientName);
       const phone = `+${client.wa_phone.replace(/^\+/, "")}`;

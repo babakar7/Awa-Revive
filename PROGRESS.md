@@ -1684,6 +1684,45 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   - Livré seul sur `main` (branche `fix/awa-disengage`), **séparément** de la
     feature ops-cuisine-pwa (pas encore prête à merger).
 
+- **4.46 — Post-mortem conversation « Salma » (24/07) → 4 correctifs.**
+  Cliente Salma (+221771692109, entrée organique « Salam ») : elle veut payer le
+  Pack Découverte, finit **plantée sans lien**, réception jamais prévenue sur
+  WhatsApp. Analyse en DB prod (`conversations`, `notification_log`, `handoffs`)
+  + logs Railway. Quatre défauts, quatre fixes (worktree `reception-notify-hardening`) :
+  - **Fix 1 — notifs réception jetées en silence (le vrai drame).** Le handoff
+    « client planté » partait en **texte libre** ; la fenêtre 24 h de la réception
+    avec le numéro du bot est ~toujours fermée (elle *reçoit* d’Awa, n’écrit pas au
+    bot), donc Meta acceptait (200) puis **droppait en asynchrone** (131047,
+    `deliveryPing=0`) — seul l’e-mail passait. `notifyReception` passe désormais
+    **`preferTemplate: true` par défaut** ([notify.ts](src/lib/notify.ts)), ce qui
+    couvre handoff, échec technique, relais humain et tous les autres appels d’un
+    coup (le mécanisme template-first existait déjà, cf. 131047).
+  - **Fix 2 — Awa a créé un lien pour le MAUVAIS plan.** Conversation qui saute du
+    Pack Découverte à l’Aquabike → `create_plan_payment_link` appelé avec le
+    plan_id **Aquafitness 80 000 F** (le serveur validait : plan réel, prix
+    catalogue). Nouveau param **requis `plan_name_confirm`** + garde serveur
+    `planNamesConflict` ([planNameGuard.ts](src/domain/planNameGuard.ts)) : si l’id
+    et le nom confirmé divergent → `plan_mismatch`, pas de lien. Prompt : toujours
+    passer id+nom de la MÊME ligne list_plans, et ne jamais dire « j’ai envoyé un
+    lien » sans en avoir réellement envoyé un.
+  - **Fix 3 — incident actif indépendant : sweep cuisine planté chaque minute.**
+    `kitchen_tickets` (chantier livraisons) créée en prod avant l’ajout de
+    `heading/subheading` → `create table if not exists` ne les posait pas → 42703
+    en boucle. `alter table ... add column if not exists` de rattrapage
+    ([schema.ts](src/db/schema.ts)). **Livré en premier, seul.**
+  - **Fix 4 (petit) — 1 retry sur hoquet transitoire du prestataire de paiement.**
+    `withTransientRetry` ([retry.ts](src/lib/retry.ts)) autour de la création de
+    session Wave/OM ([paymentSession.ts](src/domain/paymentSession.ts)) : une
+    session est sûre à recréer (un premier essai échoué ne rend aucun lien). Évite
+    « service temporarily unavailable » → handoff immédiat. NB : si le transitoire
+    est une *lecture Wix*, le bon durcissement uniforme serait au niveau `wixGet`
+    (lectures idempotentes) — laissé en suivi, pas de retry sur `wixPost`/écritures.
+  - Tests purs : `planNameGuard`, `retry`. Le suite n’utilise **aucun `vi.mock`**
+    (tests sans réseau) → Fix 1 vérifié en prod (un handoff test doit journaliser
+    `sent_template` pour +221784644329, plus jamais `failed/131047`).
+  - **Suivi ouvert** : Salma attend depuis 14:20 (créneau repéré ven 31/07 18:15
+    Foundation) ; 2 handoffs `OPEN` — la réception doit la recontacter.
+
 ## 5. Chronologie condensée
 
 - **23/07 — Pack Découverte : friction minimale (annuler après coup > bloquer).**
