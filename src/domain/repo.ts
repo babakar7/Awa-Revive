@@ -1000,6 +1000,18 @@ export interface PlanOrder {
   payment_method: string;
   fulfilling_at: Date | null;
   reception_notified_at: Date | null;
+  campaign_code: string | null;
+  service_id: string | null;
+  service_name: string | null;
+  event_id: string | null;
+  slot_json: unknown;
+  slot_start: Date | null;
+  slot_end: Date | null;
+  wix_booking_id: string | null;
+  benefit_transaction_id: string | null;
+  linked_booking_id: string | null;
+  discovery_booking_status: string | null;
+  discovery_booking_error: string | null;
 }
 
 /**
@@ -1035,13 +1047,58 @@ export async function createDraftPlanOrder(args: {
   memberId: string | null;
   /** Chained renewal: when the new plan should start (null = immediately). */
   startsAt?: Date | null;
+  campaignCode?: string | null;
+  serviceId?: string | null;
+  serviceName?: string | null;
+  eventId?: string | null;
+  slotJson?: unknown;
+  slotStart?: string | Date | null;
+  slotEnd?: string | Date | null;
 }): Promise<PlanOrder> {
   const res = await pool.query(
-    `insert into pending_plan_orders (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, status)
-     values ($1, $2, $3, $4, $5, $6, 'DRAFT') returning *`,
-    [args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null],
+    `insert into pending_plan_orders
+       (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, campaign_code,
+        service_id, service_name, event_id, slot_json, slot_start, slot_end,
+        discovery_booking_status, status)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+             case when $7 is null then null else 'PENDING' end, 'DRAFT') returning *`,
+    [
+      args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null,
+      args.campaignCode ?? null, args.serviceId ?? null, args.serviceName ?? null, args.eventId ?? null,
+      args.slotJson === undefined ? null : JSON.stringify(args.slotJson), args.slotStart ?? null, args.slotEnd ?? null,
+    ],
   );
   return res.rows[0];
+}
+
+export async function finishDiscoveryPlanBooking(args: {
+  planOrderId: string;
+  wixBookingId: string;
+  benefitTransactionId: string | null;
+  bookingId: string;
+}): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set wix_booking_id=$2, benefit_transaction_id=$3, linked_booking_id=$4,
+            discovery_booking_status='BOOKED', discovery_booking_error=null,
+            fulfilling_at=null, updated_at=now()
+      where id=$1`,
+    [args.planOrderId, args.wixBookingId, args.benefitTransactionId, args.bookingId],
+  );
+}
+
+export async function deferDiscoveryPlanBooking(
+  planOrderId: string,
+  status: "SLOT_UNAVAILABLE" | "FAILED",
+  error: string,
+): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set discovery_booking_status=$2, discovery_booking_error=$3,
+            fulfilling_at=null, updated_at=now()
+      where id=$1`,
+    [planOrderId, status, error.slice(0, 800)],
+  );
 }
 
 export async function setPlanOrderAwaitingPayment(
@@ -1088,10 +1145,10 @@ export async function claimPlanOrderForFulfillment(id: string): Promise<PlanOrde
   const res = await pool.query(
     `update pending_plan_orders
         set fulfilling_at = now(), updated_at = now()
-      where id = $1 and status = 'PAID'
+      where id = $1
         and (
-          (member_id is not null and wix_order_id is null)
-          or (reception_notified_at is null)
+          (status = 'PAID' and ((member_id is not null and wix_order_id is null) or reception_notified_at is null))
+          or (status = 'ACTIVATED' and campaign_code is not null and discovery_booking_status = 'PENDING')
         )
         and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
       returning *`,
@@ -1123,10 +1180,9 @@ export async function stuckPaidPlanOrders(
 ): Promise<PlanOrder[]> {
   const res = await pool.query(
     `select * from pending_plan_orders
-      where status = 'PAID'
-        and (
-          (member_id is not null and wix_order_id is null)
-          or reception_notified_at is null
+      where (
+          (status = 'PAID' and ((member_id is not null and wix_order_id is null) or reception_notified_at is null))
+          or (status = 'ACTIVATED' and campaign_code is not null and discovery_booking_status = 'PENDING')
         )
         and updated_at < now() - make_interval(mins => $1)
         and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')

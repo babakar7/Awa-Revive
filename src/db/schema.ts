@@ -320,6 +320,22 @@ alter table pending_plan_orders
 alter table pending_plan_orders
   add column if not exists reception_notified_at timestamptz;
 
+-- Pack Découverte Meta campaign: étape 1 is a real one-session Wix plan.
+-- Persist the selected slot on the plan payment so the verified webhook can
+-- activate the plan then redeem it immediately against that exact class.
+alter table pending_plan_orders add column if not exists campaign_code text;
+alter table pending_plan_orders add column if not exists service_id text;
+alter table pending_plan_orders add column if not exists service_name text;
+alter table pending_plan_orders add column if not exists event_id text;
+alter table pending_plan_orders add column if not exists slot_json jsonb;
+alter table pending_plan_orders add column if not exists slot_start timestamptz;
+alter table pending_plan_orders add column if not exists slot_end timestamptz;
+alter table pending_plan_orders add column if not exists wix_booking_id text;
+alter table pending_plan_orders add column if not exists benefit_transaction_id text;
+alter table pending_plan_orders add column if not exists linked_booking_id uuid references pending_bookings(id);
+alter table pending_plan_orders add column if not exists discovery_booking_status text;
+alter table pending_plan_orders add column if not exists discovery_booking_error text;
+
 alter table pending_cafe_orders
   add column if not exists fulfilling_at timestamptz;
 -- Set when reception + client confirmations for a paid bar order are done

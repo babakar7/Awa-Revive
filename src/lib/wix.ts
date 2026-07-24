@@ -1361,6 +1361,20 @@ export async function findMemberIdByContactId(contactId: string): Promise<string
 }
 
 /**
+ * Create a Wix site member for a contact whose email was just verified by Awa.
+ * Wix sends its own welcome/set-password email; callers must make that explicit
+ * before using this path. A PENDING member can still receive an offline plan.
+ */
+export async function createMember(loginEmail: string): Promise<{ id: string; contactId: string | null }> {
+  const data = await wixPost("/members/v1/members", {
+    member: { loginEmail: loginEmail.trim().toLowerCase() },
+  });
+  const member = data?.member;
+  if (!member?.id) throw new Error(`Wix create member returned no id: ${JSON.stringify(data)}`);
+  return { id: member.id, contactId: member.contactId ?? null };
+}
+
+/**
  * Does one of this contact's active plans cover this service right now
  * (with balance left)? Returns the redeemable benefit, or null.
  */

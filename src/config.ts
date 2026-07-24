@@ -155,6 +155,9 @@ export const config = {
   NEW_CHAT_NOTIFY_GAP_HOURS: parseInt(optional("NEW_CHAT_NOTIFY_GAP_HOURS", "6"), 10),
   PACK_DISCOVERY_META_SOURCE_IDS: optional("PACK_DISCOVERY_META_SOURCE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   PACK_DISCOVERY_SERVICE_IDS: optional("PACK_DISCOVERY_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  // First 10,000 FCFA / one-session plan for Meta Pack Découverte leads. Empty
+  // leaves the existing direct-booking campaign flow in place until rollout.
+  PACK_DISCOVERY_STEP1_PLAN_ID: optional("PACK_DISCOVERY_STEP1_PLAN_ID", ""),
   PACK_DISCOVERY_CONTINUATION_PLAN_IDS: optional("PACK_DISCOVERY_CONTINUATION_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   // Guarded admin-to-client messaging. Keep false until takeover behavior has
   // been verified in production with the Meta number.

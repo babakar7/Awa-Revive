@@ -1287,10 +1287,8 @@ export async function executeTool(
         });
       }
 
-      // 4. One active link per client: expire any previous DRAFT/AWAITING_PAYMENT.
-      // Do this only AFTER an explicit payment choice, so asking the question
-      // cannot invalidate a still-usable link.
-      await repo.expireActiveBookings(client.id);
+      // 4. Keep the client name current before either the direct-class or
+      // Pack Découverte plan path below.
       await repo.updateClientName(client.id, clientName);
 
       // 4b. Re-selection: a commitment session whose agreed slot the client just
@@ -1307,6 +1305,140 @@ export async function executeTool(
         const contactId = await wix.findContactIdByPhone(`+${client.wa_phone}`, clientName || client.name || undefined);
         if (contactId && await wix.hasPastPilatesBooking(contactId)) return JSON.stringify({ error: "discovery_not_eligible", message: "Client already did Pilates at Revive; offer the normal class price." });
       }
+      // Pack Découverte Meta leads buy a REAL one-session plan for the first
+      // payment. The later webhook redeems that benefit against this exact slot
+      // so Wix shows an abonnement deduction in the participant list.
+      if (campaign && config.PACK_DISCOVERY_STEP1_PLAN_ID) {
+        if (fresh.startDate && Date.parse(fresh.startDate) > Date.now() + 7 * 24 * 60 * 60 * 1000) {
+          return JSON.stringify({
+            error: "discovery_step1_slot_too_late",
+            message:
+              "The first Pack Découverte plan is valid for seven days, so this selected class is too far away. " +
+              "Re-run check_availability and offer a Reformer slot within the next seven days.",
+          });
+        }
+
+        const step1Plan = await wix.getPlan(config.PACK_DISCOVERY_STEP1_PLAN_ID);
+        if (!step1Plan || step1Plan.priceXof !== 10_000) {
+          return JSON.stringify({
+            error: "discovery_step1_plan_unavailable",
+            message: "Pack Découverte étape 1 is not configured correctly in Wix. Hand off to reception; do not take payment.",
+          });
+        }
+        const covered = await wix.planCoveredClassNames(step1Plan.id);
+        if (covered !== null && !covered.includes(service.name)) {
+          return JSON.stringify({
+            error: "discovery_step1_not_covered",
+            message: "The étape-1 plan does not cover this class in Wix. Hand off to reception; do not take payment.",
+          });
+        }
+
+        const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
+        const contact = await wix.findContactByPhone(phone, clientName || client.name || undefined);
+        if (!contact) {
+          return JSON.stringify({
+            error: "discovery_member_verification_required",
+            message:
+              "This Pack Découverte first session must be attached to a Wix abonnement. Ask for the client's email, " +
+              "call request_email_verification, and have them type the code here before retrying this payment link.",
+          });
+        }
+
+        let memberId = await wix.findMemberIdByContactId(contact.id);
+        if (!memberId) {
+          const verified = await links.recentlyResolved(client.id);
+          if (!verified?.claimed_email) {
+            return JSON.stringify({
+              error: "discovery_member_verification_required",
+              message:
+                "This Pack Découverte first session must be attached to a Wix abonnement. Ask for the client's email, " +
+                "call request_email_verification, and have them type the code here before retrying this payment link.",
+            });
+          }
+          try {
+            const created = await wix.createMember(verified.claimed_email);
+            // Wix normally attaches the member to the proven contact by email.
+            // Do not charge if it instead created a different contact: that would
+            // leave the subscription disconnected from this WhatsApp number.
+            if (created.contactId && created.contactId !== contact.id) {
+              notifyReception(
+                "⚠️ Pack Découverte — compte Wix à vérifier",
+                `Le membre Wix créé pour ${clientName} (${phone}) est rattaché à la fiche ${created.contactId}, ` +
+                  `mais le numéro WhatsApp est sur ${contact.id}. Aucun paiement n'a été créé. Vérifier/fusionner avant de relancer.`,
+              );
+              return JSON.stringify({
+                error: "discovery_member_contact_mismatch",
+                message: "The Wix account needs a reception check before payment. Reception has been notified.",
+              });
+            }
+            memberId = created.id;
+          } catch (err) {
+            notifyReception(
+              "⚠️ Pack Découverte — création compte Wix impossible",
+              `Impossible de créer le compte membre Wix pour ${clientName} (${phone}) avant le paiement étape 1. ` +
+                `Aucun paiement n'a été créé. Erreur : ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return JSON.stringify({
+              error: "discovery_member_creation_failed",
+              message: "The Wix account could not be prepared. Reception has been notified; do not take payment yet.",
+            });
+          }
+        }
+
+        await repo.expireActivePlanOrders(client.id);
+        const planDraft = await repo.createDraftPlanOrder({
+          clientId: client.id,
+          planId: step1Plan.id,
+          planName: step1Plan.name,
+          amountXof: step1Plan.priceXof,
+          memberId,
+          campaignCode: PACK_DISCOVERY_CAMPAIGN,
+          serviceId,
+          serviceName: service.name,
+          eventId: resolvedEventId,
+          slotJson: fresh.raw,
+          slotStart: fresh.startDate,
+          slotEnd: fresh.endDate ?? null,
+        });
+        let session;
+        try {
+          session = await createClientPaymentSession({
+            method: pay.method,
+            amountXof: step1Plan.priceXof,
+            clientReference: planDraft.id,
+            name: step1Plan.name,
+          });
+        } catch (err) {
+          await repo.expireActivePlanOrders(client.id);
+          throw err;
+        }
+        await repo.setPlanOrderAwaitingPayment(
+          planDraft.id,
+          session.sessionId,
+          session.paymentLink,
+          session.expiresAt,
+          session.method,
+        );
+        return JSON.stringify({
+          payment_link: session.paymentLink,
+          payment_method: session.method,
+          payment_app: paymentMethodLabel(session.method),
+          amount_fcfa: step1Plan.priceXof,
+          class: service.name,
+          slot_start: fresh.startDate,
+          slot_start_dakar: fmtDakar(fresh.startDate),
+          expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
+          plan: step1Plan.name,
+          note:
+            "Relay only the class, the 10 000 FCFA amount, expiry, and payment link. After verified payment, " +
+            "Awa activates the Wix Pack Découverte étape 1 plan and confirms this selected class using its one session.",
+        });
+      }
+
+      // One active class-payment link per client. This is deliberately after
+      // the campaign-plan branch so an email/account issue never invalidates
+      // another usable direct-class link.
+      await repo.expireActiveBookings(client.id);
       const totalXof = campaign ? 10_000 : service.priceXof * participants;
       const draft = await repo.createDraftBooking({
         clientId: client.id,
