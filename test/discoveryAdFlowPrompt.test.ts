@@ -61,4 +61,23 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(context).toMatch(/NOT an extra charge/i);
     expect(context).toMatch(/Never present 10,000 and 30,000 as two sequential or additive/i);
   });
+
+  it("defers payment: first message pitches without a pay-now push, slot before payment", () => {
+    const context = dynamicContext({
+      clientName: null,
+      clientLanguage: "fr",
+      activeBooking: null,
+      activePlanOrder: null,
+      activeCafeOrder: null,
+      memberships: [],
+      recentRefunds: [],
+      habit: null,
+      firstContact: false,
+      packDiscoveryCampaign: true,
+    });
+
+    expect(context).toMatch(/DO NOT mention paying now or the 10,000 first-session amount yet/i);
+    expect(context).toMatch(/Lead with proposing a real slot, not payment/i);
+    expect(context).toMatch(/Only AFTER the client agrees on a slot do you move to payment/i);
+  });
 });
