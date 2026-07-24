@@ -82,6 +82,27 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(context).toMatch(/run request_email_verification/i);
   });
 
+  it("uses the short Pack Découverte copy for a new Meta-ad lead without asking eligibility", () => {
+    const context = dynamicContext({
+      clientName: null,
+      clientLanguage: "fr",
+      activeBooking: null,
+      activePlanOrder: null,
+      activeCafeOrder: null,
+      memberships: [],
+      recentRefunds: [],
+      habit: null,
+      firstContact: true,
+      packDiscoveryCampaign: true,
+      packDiscoveryMetaNewLead: true,
+    });
+
+    expect(context).toContain("La première séance de Pilates Reformer coûte 10 000 FCFA.");
+    expect(context).toContain("3 séances pour 30 000 FCFA sur 2 semaines.");
+    expect(context).toContain("Si la séance ne te convient pas, elle est remboursée.");
+    expect(context).toMatch(/Do NOT ask whether she has already done Pilates at Revive/i);
+  });
+
   it("does not let a sticker or ambiguous acknowledgement decide eligibility", () => {
     expect(systemPrompt()).toMatch(/Never interpret a sticker, emoji, reaction, acknowledgement/i);
     expect(systemPrompt()).toMatch(/explicit statement.*Pilates at Revive/i);

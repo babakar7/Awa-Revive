@@ -473,7 +473,13 @@ export async function handleInboundText(args: {
   ]);
 
   const history = await repo.lastTurnsForReplay(client.id, 30);
-  const packDiscoveryCampaign = await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
+  const packDiscoveryLead = await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
+  const packDiscoveryCampaign = packDiscoveryLead !== null;
+  // A genuine Click-to-WhatsApp Meta lead whose number has no matching Wix
+  // contact is treated as new to Revive. Keep the server-side eligibility gate
+  // intact, but do not make this lead answer an extra discovery question.
+  const packDiscoveryMetaNewLead =
+    packDiscoveryLead?.matchedBy === "meta_referral" && memberships !== null && !memberships.linked;
 
   // Unlinked-number signal: a subscriber messaging from a number that isn't on
   // their Wix fiche is invisible to Awa and could be pushed to Wave for a class
@@ -537,6 +543,7 @@ export async function handleInboundText(args: {
         firstContact: isFirstContact,
         activeCommitment,
         packDiscoveryCampaign,
+        packDiscoveryMetaNewLead,
       }),
     },
   ];

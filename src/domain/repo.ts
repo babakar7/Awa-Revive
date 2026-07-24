@@ -123,8 +123,20 @@ export async function clearAwaDisengaged(clientId: string): Promise<void> {
 export async function recordCampaignLead(args: { clientId: string; campaignKey: string; triggerMessageId: string; matchedBy: "meta_referral" | "message"; sourceId?: string; sourceType?: string; sourceUrl?: string; headline?: string; ctwaClid?: string }): Promise<void> {
   await pool.query(`insert into campaign_leads (client_id,campaign_key,trigger_message_id,matched_by,source_id,source_type,source_url,headline,ctwa_clid) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (client_id,campaign_key) do update set updated_at=now(), source_id=coalesce(campaign_leads.source_id,excluded.source_id), ctwa_clid=coalesce(campaign_leads.ctwa_clid,excluded.ctwa_clid)`, [args.clientId,args.campaignKey,args.triggerMessageId,args.matchedBy,args.sourceId ?? null,args.sourceType ?? null,args.sourceUrl ?? null,args.headline ?? null,args.ctwaClid ?? null]);
 }
-export async function activeCampaignLead(clientId: string, campaignKey: string): Promise<boolean> {
-  const r = await pool.query(`select 1 from campaign_leads l where l.client_id=$1 and l.campaign_key=$2 and l.created_at > now()-interval '14 days' and not exists (select 1 from pending_bookings b where b.client_id=l.client_id and b.campaign_code=l.campaign_key and b.status in ('PAID','BOOKED','REFUND_NEEDED'))`, [clientId,campaignKey]); return (r.rowCount ?? 0)>0;
+export async function activeCampaignLead(clientId: string, campaignKey: string): Promise<{ matchedBy: "meta_referral" | "message" } | null> {
+  const r = await pool.query(
+    `select matched_by from campaign_leads l
+      where l.client_id=$1 and l.campaign_key=$2 and l.created_at > now()-interval '14 days'
+        and not exists (
+          select 1 from pending_bookings b
+           where b.client_id=l.client_id and b.campaign_code=l.campaign_key
+             and b.status in ('PAID','BOOKED','REFUND_NEEDED')
+        )
+      limit 1`,
+    [clientId, campaignKey],
+  );
+  const matchedBy = r.rows[0]?.matched_by;
+  return matchedBy === "meta_referral" || matchedBy === "message" ? { matchedBy } : null;
 }
 
 /**
