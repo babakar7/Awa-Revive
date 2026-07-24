@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "agent:new": "scripts/agent-worktree.sh new",
+    "agent:start": "scripts/codex-agent.sh",
     "agent:ship": "scripts/agent-worktree.sh ship",
     "agent:done": "scripts/agent-worktree.sh done",
     "agent:list": "scripts/agent-worktree.sh list",

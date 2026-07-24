@@ -32,6 +32,33 @@ npm run migrate           # creates tables (idempotent; also runs at boot)
 npm run dev               # hot reload; tries the next port when PORT is occupied
 ```
 
+### Isolated Codex agents
+
+Start a new Codex task in its own branch and worktree with:
+
+```bash
+agent fix-calendar "Fix the calendar bug and add a regression test"
+```
+
+The feature label becomes branch `agent/fix-calendar`; the isolated checkout
+lives at `../resabot-worktrees/fix-calendar`, starts from `origin/main`, copies
+the hub's `.env` when available, and installs dependencies. The worktree stays
+available after Codex exits so it can be reviewed and shipped deliberately:
+
+```bash
+cd ../resabot-worktrees/fix-calendar
+npm run agent:ship
+npm run agent:done
+```
+
+Use lowercase feature labels with numbers and single hyphens only. The `agent`
+shell helper is installed in `~/.bashrc`; from a shell where it is not yet
+loaded, run `source ~/.bashrc`. The equivalent direct command is:
+
+```bash
+npm run agent:start -- fix-calendar "Fix the calendar bug and add a regression test"
+```
+
 Pour ouvrir l’admin local avec les données réelles de production :
 
 ```bash

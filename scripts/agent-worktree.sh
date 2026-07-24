@@ -24,9 +24,16 @@ BASE="$(dirname "$ROOT")/resabot-worktrees"
 
 die() { echo "error: $*" >&2; exit 1; }
 
+validate_topic() {
+  local topic="$1"
+  [[ "$topic" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || die "topic must use lowercase letters, numbers, and single hyphens (for example: fix-calendar)"
+  [ "${#topic}" -le 63 ] || die "topic must be 63 characters or fewer"
+}
+
 cmd_new() {
   local topic="${1:-}"
   [ -n "$topic" ] || die "usage: agent-worktree.sh new <topic>"
+  validate_topic "$topic"
   local dir="$BASE/$topic"
   [ -e "$dir" ] && die "worktree already exists: $dir"
   git -C "$ROOT" show-ref --quiet "refs/heads/agent/$topic" && die "branch agent/$topic already exists"
@@ -76,6 +83,7 @@ cmd_done() {
     [ "$top" != "$ROOT" ] || die "usage from the hub: agent-worktree.sh done <topic>"
     topic="$(basename "$top")"
   fi
+  validate_topic "$topic"
   local dir="$BASE/$topic"
   echo "→ removing worktree $dir…"
   git -C "$ROOT" worktree remove "$dir"        # refuses if dirty
