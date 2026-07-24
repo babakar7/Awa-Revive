@@ -38,8 +38,8 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     });
 
     expect(context).toMatch(/FIRST CONTACT/);
-    expect(context).toMatch(/AUTOMATED AI assistant/);
-    expect(context).toContain("Moi c'est Awa, l'assistante IA de Revive");
+    expect(context).toMatch(/introduce Awa as Revive's assistant/);
+    expect(context).toContain("Moi c'est Awa, l'assistante de Revive");
   });
 
   it("states the Meta-campaign pack economics without double-counting the first session", () => {

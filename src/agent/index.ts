@@ -467,10 +467,11 @@ export async function handleInboundText(args: {
   );
   // First contact = Awa has never replied to this client before (the current
   // inbound turn is already persisted at this point, so we look for a prior
-  // ASSISTANT turn, not an empty history). Drives the mandatory "I'm an AI
-  // assistant" self-introduction — see dynamicContext(): clients were being
-  // disappointed to learn only later that Awa is a bot, and on a "bonjour" the
-  // capability menu otherwise fires with no disclosure at all.
+  // ASSISTANT turn, not an empty history). Drives the "Moi c'est Awa,
+  // l'assistante de Revive" self-introduction — see dynamicContext(). Awa no
+  // longer volunteers that she is an AI (only confirms it if asked), but a
+  // "bonjour" that fires the capability menu should still open with a warm
+  // introduction rather than a bare option list.
   const isFirstContact = !history.some((t) => t.role === "assistant");
   // Tiered capability menu on vague openers (incl. returning clients), once per ~24h.
   const capabilityMenu = capabilityMenuKind({
