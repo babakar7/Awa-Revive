@@ -40,6 +40,20 @@ export function isHumanTakeoverActive(
   );
 }
 
+/**
+ * True while Awa has disengaged from a non-serious/suggestive contact and must
+ * stay silent. Mirrors isHumanTakeoverActive, but the two are distinct states:
+ * takeover = a human is replying; disengaged = nobody replies, Awa stopped.
+ */
+export function isAwaDisengaged(
+  client: Pick<Client, "awa_disengaged_until">,
+  now = Date.now(),
+): boolean {
+  return Boolean(
+    client.awa_disengaged_until && new Date(client.awa_disengaged_until).getTime() > now,
+  );
+}
+
 async function writeAudit(
   db: Pick<PoolClient, "query"> | typeof pool,
   identity: { username: string; role: AdminRole },
@@ -138,6 +152,41 @@ export async function startHumanTakeover(
   }
 }
 
+/**
+ * Manually silence Awa for a non-serious/suggestive contact from the admin
+ * conversation page — the same state Awa can set herself via the
+ * disengage_conversation tool. No team notification (silent by design); default
+ * 24h auto-release. Cleared by resumeAwa.
+ */
+export async function startAwaDisengage(
+  clientId: string,
+  identity: { username: string; role: AdminRole },
+  hours = 24,
+): Promise<boolean> {
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+    const updated = await db.query(
+      `update clients
+          set awa_disengaged_at = now(),
+              awa_disengaged_reason = 'Mis en pause manuellement (contact non sérieux)',
+              awa_disengaged_until = now() + ($2 * interval '1 hour'), updated_at = now()
+        where id = $1`,
+      [clientId, hours],
+    );
+    if ((updated.rowCount ?? 0) > 0) {
+      await writeAudit(db, identity, "conversation.disengaged", "client", clientId, { hours });
+    }
+    await db.query("commit");
+    return (updated.rowCount ?? 0) > 0;
+  } catch (error) {
+    await db.query("rollback");
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+
 export async function resumeAwa(
   clientId: string,
   identity: { username: string; role: AdminRole },
@@ -145,10 +194,14 @@ export async function resumeAwa(
   const db = await pool.connect();
   try {
     await db.query("begin");
+    // One "Rendre à Awa" lifts EITHER pause reason (human takeover or Awa's own
+    // disengagement) — clear both so the button always fully re-arms Awa.
     const updated = await db.query(
       `update clients
           set human_takeover_at = null, human_takeover_by = null,
-              human_takeover_until = null, updated_at = now()
+              human_takeover_until = null, awa_disengaged_at = null,
+              awa_disengaged_reason = null, awa_disengaged_until = null,
+              updated_at = now()
         where id = $1`,
       [clientId],
     );

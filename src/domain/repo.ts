@@ -20,6 +20,13 @@ export interface Client {
   human_takeover_until: Date | null;
   human_takeover_by: string | null;
   human_takeover_at: Date | null;
+  /**
+   * Awa self-disengaged from a non-serious/suggestive contact: she stays silent
+   * (no reply at all, no team ping) while this timestamp is in the future.
+   */
+  awa_disengaged_until: Date | null;
+  awa_disengaged_at: Date | null;
+  awa_disengaged_reason: string | null;
 }
 
 export interface PendingBooking {
@@ -51,6 +58,23 @@ export interface PendingBooking {
   wix_order_sync_error: string | null;
   /** Multi-session commitment item this attempt pays for (null = standalone). */
   commitment_item_id: string | null;
+  /** Server-owned commercial campaign marker; never model-controlled. */
+  campaign_code: string | null;
+}
+
+export interface CampaignLead {
+  id: string;
+  client_id: string;
+  campaign_key: string;
+  trigger_message_id: string | null;
+  matched_by: "meta_referral" | "message";
+  source_id: string | null;
+  source_type: string | null;
+  source_url: string | null;
+  headline: string | null;
+  ctwa_clid: string | null;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface Turn {
@@ -67,7 +91,8 @@ export async function upsertClient(waPhone: string): Promise<Client> {
      on conflict (wa_phone) do update set updated_at = now()
      returning id, wa_phone, name, language, email_prompted_at, claimed_email,
                capability_menu_at, is_test, human_takeover_until,
-               human_takeover_by, human_takeover_at`,
+               human_takeover_by, human_takeover_at, awa_disengaged_until,
+               awa_disengaged_at, awa_disengaged_reason`,
     [waPhone],
   );
   return res.rows[0];
@@ -78,6 +103,36 @@ export async function setClientTest(clientId: string, isTest: boolean): Promise<
   await pool.query(
     `update clients set is_test = $2, updated_at = now() where id = $1`,
     [clientId, isTest],
+  );
+}
+
+/**
+ * Silence Awa for a clearly non-serious/suggestive contact: she stops replying
+ * (no team notification) until the timestamp passes. Mirrors startHumanTakeover,
+ * but self-triggered by Awa (or the admin pause button) — default 24h release.
+ */
+export async function setAwaDisengaged(
+  clientId: string,
+  reason: string,
+  hours = 24,
+): Promise<void> {
+  await pool.query(
+    `update clients
+        set awa_disengaged_at = now(), awa_disengaged_reason = $2,
+            awa_disengaged_until = now() + ($3 * interval '1 hour'), updated_at = now()
+      where id = $1`,
+    [clientId, reason.slice(0, 500), hours],
+  );
+}
+
+/** Lift a disengagement so Awa resumes replying to this client. */
+export async function clearAwaDisengaged(clientId: string): Promise<void> {
+  await pool.query(
+    `update clients
+        set awa_disengaged_at = null, awa_disengaged_reason = null,
+            awa_disengaged_until = null, updated_at = now()
+      where id = $1`,
+    [clientId],
   );
 }
 
@@ -144,7 +199,8 @@ export async function findClientByPhone(candidates: string[]): Promise<Client | 
   const res = await pool.query(
     `select id, wa_phone, name, language, email_prompted_at, claimed_email,
             capability_menu_at, is_test, human_takeover_until,
-            human_takeover_by, human_takeover_at
+            human_takeover_by, human_takeover_at, awa_disengaged_until,
+            awa_disengaged_at, awa_disengaged_reason
        from clients where regexp_replace(wa_phone, '\\D', '', 'g') = any($1) limit 1`,
     [digits],
   );
@@ -171,6 +227,72 @@ export async function saveClaimedEmail(clientId: string, email: string): Promise
     `update clients set claimed_email = $2, updated_at = now() where id = $1`,
     [clientId, email],
   );
+}
+
+// ---------- campaign attribution / offers ----------
+
+export async function recordCampaignLead(args: {
+  clientId: string;
+  campaignKey: string;
+  triggerMessageId: string;
+  matchedBy: "meta_referral" | "message";
+  sourceId?: string;
+  sourceType?: string;
+  sourceUrl?: string;
+  headline?: string;
+  ctwaClid?: string;
+}): Promise<CampaignLead> {
+  const res = await pool.query(
+    `insert into campaign_leads
+       (client_id, campaign_key, trigger_message_id, matched_by, source_id, source_type, source_url, headline, ctwa_clid)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     on conflict (client_id, campaign_key) do update
+       set trigger_message_id = coalesce(campaign_leads.trigger_message_id, excluded.trigger_message_id),
+           source_id = coalesce(campaign_leads.source_id, excluded.source_id),
+           source_type = coalesce(campaign_leads.source_type, excluded.source_type),
+           source_url = coalesce(campaign_leads.source_url, excluded.source_url),
+           headline = coalesce(campaign_leads.headline, excluded.headline),
+           ctwa_clid = coalesce(campaign_leads.ctwa_clid, excluded.ctwa_clid),
+           updated_at = now()
+     returning *`,
+    [
+      args.clientId,
+      args.campaignKey,
+      args.triggerMessageId,
+      args.matchedBy,
+      args.sourceId ?? null,
+      args.sourceType ?? null,
+      args.sourceUrl ?? null,
+      args.headline ?? null,
+      args.ctwaClid ?? null,
+    ],
+  );
+  return res.rows[0] as CampaignLead;
+}
+
+/**
+ * A campaign offer remains usable for 14 days until its first payment reaches
+ * a terminal paid state. Expired links are deliberately ignored so a prospect
+ * can ask Awa for a fresh 10,000 FCFA link without losing the offer.
+ */
+export async function activeCampaignLead(
+  clientId: string,
+  campaignKey: string,
+): Promise<CampaignLead | null> {
+  const res = await pool.query(
+    `select l.*
+       from campaign_leads l
+      where l.client_id = $1 and l.campaign_key = $2
+        and l.created_at > now() - interval '14 days'
+        and not exists (
+          select 1 from pending_bookings b
+           where b.client_id = l.client_id and b.campaign_code = l.campaign_key
+             and b.status in ('PAID', 'BOOKED', 'REFUND_NEEDED')
+        )
+      limit 1`,
+    [clientId, campaignKey],
+  );
+  return (res.rows[0] as CampaignLead | undefined) ?? null;
 }
 
 export async function updateClientLanguage(clientId: string, language: string): Promise<void> {
@@ -307,6 +429,8 @@ export async function createDraftBooking(args: {
   orderNote?: string | null;
   /** Links this attempt to a multi-session commitment item (reversed FK). */
   commitmentItemId?: string | null;
+  /** Optional server-authorized campaign marker for the booked service. */
+  campaignCode?: string | null;
   /** Optional transaction client (e.g. inside the per-client commitment lock). */
   tx?: pg.Pool | pg.PoolClient;
 }): Promise<PendingBooking> {
@@ -314,8 +438,8 @@ export async function createDraftBooking(args: {
   const res = await db.query(
     `insert into pending_bookings
        (client_id, service_id, service_name, event_id, slot_json, slot_start, slot_end, amount_xof, participants,
-        extras_json, extras_amount_xof, order_note, commitment_item_id, status)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'DRAFT')
+        extras_json, extras_amount_xof, order_note, commitment_item_id, campaign_code, status)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'DRAFT')
      returning *`,
     [
       args.clientId,
@@ -331,6 +455,7 @@ export async function createDraftBooking(args: {
       args.extrasAmountXof ?? 0,
       args.orderNote ?? null,
       args.commitmentItemId ?? null,
+      args.campaignCode ?? null,
     ],
   );
   return res.rows[0];

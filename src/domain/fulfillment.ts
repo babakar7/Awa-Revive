@@ -410,7 +410,12 @@ export async function recordWixOrderForBooking(
         wixOrderId = await wix.createBookingOrder({
           wixBookingId: booking.wix_booking_id!,
           externalOrderId: booking.id,
-          serviceName: booking.service_name,
+          // The calendar booking stays on the real service; the custom order
+          // label lets reception immediately identify the 10k campaign visit.
+          serviceName:
+            booking.campaign_code === "pack_decouverte_ctwa"
+              ? "Pack Découverte — Première séance"
+              : booking.service_name,
           amountXof: booking.amount_xof,
           participants: Math.max(1, booking.participants ?? 1),
           phone,

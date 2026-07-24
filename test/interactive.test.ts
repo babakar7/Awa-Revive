@@ -158,6 +158,31 @@ describe("parseInboundMessages — interactive replies", () => {
     expect(msg).toMatchObject({ type: "text", text: "salut", interactiveId: undefined });
   });
 
+  it("keeps Click-to-WhatsApp referral metadata from Meta's first ad message", () => {
+    const [msg] = parseInboundMessages(
+      envelope({
+        from: "221771234567",
+        id: "wamid.ctwa",
+        type: "text",
+        text: { body: "Bonjour, je veux réserver le Pack Découverte" },
+        referral: {
+          source_id: "120212345678901234",
+          source_type: "ad",
+          source_url: "https://fb.me/example",
+          headline: "Découvre le Reformer",
+          ctwa_clid: "meta-click-id",
+        },
+      }),
+    );
+    expect(msg.referral).toEqual({
+      sourceId: "120212345678901234",
+      sourceType: "ad",
+      sourceUrl: "https://fb.me/example",
+      headline: "Découvre le Reformer",
+      ctwaClid: "meta-click-id",
+    });
+  });
+
   it("extracts the media id from voice notes (audio messages)", () => {
     const [msg] = parseInboundMessages(
       envelope({

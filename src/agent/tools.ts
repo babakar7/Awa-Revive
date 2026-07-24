@@ -35,6 +35,10 @@ import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
 import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
 import { createClientPaymentSession } from "../domain/paymentSession.js";
 import * as deliveries from "../domain/deliveryRepo.js";
+import {
+  PACK_DISCOVERY_CAMPAIGN,
+  isCampaignReformerService,
+} from "../domain/packDiscoveryCampaign.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -673,6 +677,31 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "disengage_conversation",
+    description:
+      "Stop engaging a contact who is clearly NOT here for the studio — sustained sexual/suggestive/romantic " +
+      "advances toward Awa, or someone plainly toying with the bot with no booking/studio intent. Do NOT use " +
+      "this for a single awkward or ambiguous line, ordinary warmth or a compliment, a complaint, or a real " +
+      "client who flirts but also has a genuine studio need (serve the need, ignore the flirtation). After you " +
+      "call it, send exactly ONE short, polite, firm closing line re-anchoring to the studio, then nothing else: " +
+      "the system automatically stops replying to this contact afterwards (auto-resumes after ~24h; reception " +
+      "can lift it). No refund/booking side effects — it only silences Awa for this contact.",
+    input_schema: {
+      type: "object",
+      properties: {
+        reason: {
+          type: "string",
+          description:
+            "A short factual French sentence for the studio's admin badge only (never sent to the client), " +
+            'e.g. "Messages à caractère suggestif, aucune intention de réservation". Keep it neutral and brief; ' +
+            "no transcript, no ids.",
+        },
+      },
+      required: ["reason"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "present_options",
     description:
       "Send the client a native WhatsApp clickable-choice message and deliver it IMMEDIATELY (this tool sends " +
@@ -1245,9 +1274,32 @@ export async function executeTool(
         await commitments.reselectItemSlot(commitmentItemId, resolvedEventId, fresh.startDate);
       }
 
-      // 5. DRAFT booking → payment session → AWAITING_PAYMENT. Class only.
-
-      const totalXof = service.priceXof * participants;
+      // 5. The Pack Découverte CTWA offer is an explicit server-side exception
+      // to the normal catalog price: one Reformer spot for 10,000 FCFA. It can
+      // never be selected by model input, groups, or a multi-session plan.
+      const campaignLead =
+        participants === 1 &&
+        !commitmentItemId &&
+        isCampaignReformerService({
+          serviceId,
+          serviceName: service.name,
+          configuredServiceIds: config.PACK_DISCOVERY_SERVICE_IDS,
+        })
+          ? await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN)
+          : null;
+      if (campaignLead) {
+        const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
+        const contactId = await wix.findContactIdByPhone(phone, clientName || client.name || undefined);
+        if (contactId && (await wix.hasPastPilatesBooking(contactId))) {
+          return JSON.stringify({
+            error: "discovery_not_eligible",
+            message:
+              "This client has already done Pilates at Revive, so the 10,000 FCFA Pack Découverte first-session offer does not apply. Offer the normal single-class price instead.",
+          });
+        }
+      }
+      const campaignCode = campaignLead ? PACK_DISCOVERY_CAMPAIGN : null;
+      const totalXof = campaignCode ? 10_000 : service.priceXof * participants;
       const draft = await repo.createDraftBooking({
         clientId: client.id,
         serviceId,
@@ -1262,6 +1314,7 @@ export async function executeTool(
         extrasAmountXof: 0,
         orderNote: null,
         commitmentItemId,
+        campaignCode,
       });
 
       let session;
@@ -1303,6 +1356,7 @@ export async function executeTool(
           service_id: serviceId,
           amount_xof: totalXof,
           participants,
+          campaign_code: campaignCode ?? undefined,
           expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
         },
       });
@@ -1315,7 +1369,10 @@ export async function executeTool(
         amount_fcfa: totalXof,
         class_total_fcfa: totalXof,
         participants,
-        price_per_person_fcfa: service.priceXof,
+        price_per_person_fcfa: campaignCode ? 10_000 : service.priceXof,
+        campaign: campaignCode
+          ? "Pack Découverte — première séance à 10 000 FCFA; réception gère les 2 séances restantes au studio."
+          : undefined,
         expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
         class: service.name,
         slot_start: fresh.startDate,
@@ -1829,7 +1886,9 @@ export async function executeTool(
     }
 
     case "list_plans": {
-      const plans = await wix.listPlans();
+      const plans = (await wix.listPlans()).filter(
+        (plan) => !config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(plan.id),
+      );
       return JSON.stringify(
         await Promise.all(
           plans.map(async (p) => {
@@ -1868,6 +1927,13 @@ export async function executeTool(
       // Price and existence come from the Wix catalog — never from the model.
       const plan = await wix.getPlan(planId);
       if (!plan) return JSON.stringify({ error: "unknown_plan_id", message: "Re-run list_plans and pick a plan_id from it." });
+      if (config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(plan.id)) {
+        return JSON.stringify({
+          error: "reception_only_plan",
+          message:
+            "This Pack Découverte continuation plan is activated and collected by reception at the studio. Do not sell it or create a link for it.",
+        });
+      }
 
       await repo.updateClientName(client.id, clientName);
       const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
@@ -3156,6 +3222,18 @@ export async function executeTool(
           "Tell the client, in their language, that reception will contact them directly HERE shortly to " +
           "handle their request — they do NOT need to do anything or send any message. Do NOT give them a " +
           "link. Only if the client explicitly asked to CALL, also give reception_whatsapp as the phone number.",
+      });
+    }
+
+    case "disengage_conversation": {
+      const reason = String(input.reason ?? "Contact non sérieux").slice(0, 500);
+      await repo.setAwaDisengaged(client.id, reason);
+      return JSON.stringify({
+        disengaged: true,
+        note:
+          "Awa will now stay silent to this contact (auto-resumes after ~24h; reception can lift it). " +
+          "Send exactly ONE short, polite, firm line in the client's language re-anchoring to Revive and " +
+          "reservations — do not reciprocate, moralize or scold — then STOP. Do not add anything else.",
       });
     }
 

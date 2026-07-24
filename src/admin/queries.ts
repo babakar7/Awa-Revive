@@ -18,6 +18,7 @@ export interface AdminClientRow {
   is_test: boolean;
   human_takeover_until: Date | null;
   human_takeover_by: string | null;
+  awa_disengaged_until: Date | null;
 }
 
 export async function listClients(search?: string): Promise<AdminClientRow[]> {
@@ -29,7 +30,7 @@ export async function listClients(search?: string): Promise<AdminClientRow[]> {
   }
   const res = await pool.query(
     `select c.id, c.wa_phone, c.name, c.language, c.claimed_email, c.is_test,
-            c.human_takeover_until, c.human_takeover_by,
+            c.human_takeover_until, c.human_takeover_by, c.awa_disengaged_until,
             m.created_at as last_message_at, m.content as last_message,
             (select count(*) from conversations cc
               where cc.client_id = c.id and cc.role in ('user','assistant'))::int as message_count
@@ -78,7 +79,7 @@ export async function listClientsPage(args: {
   const result = await pool.query(
     `with latest as (
        select c.id, c.wa_phone, c.name, c.language, c.claimed_email, c.is_test,
-              c.human_takeover_until, c.human_takeover_by,
+              c.human_takeover_until, c.human_takeover_by, c.awa_disengaged_until,
               m.created_at as last_message_at, m.content as last_message,
               (select count(*) from conversations cc
                 where cc.client_id = c.id and cc.role in ('user','assistant'))::int as message_count

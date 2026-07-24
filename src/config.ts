@@ -163,6 +163,24 @@ export const config = {
   // A message counts as a NEW conversation when the client had no activity in
   // the last N hours (so a back-and-forth within one session pings only once).
   NEW_CHAT_NOTIFY_GAP_HOURS: parseInt(optional("NEW_CHAT_NOTIFY_GAP_HOURS", "6"), 10),
+  // Click-to-WhatsApp Pack Découverte campaign. source IDs are the Meta ad IDs
+  // separated by commas; text matching remains the fallback when Meta omits a
+  // referral object. Service IDs are optional: when unset, any service whose
+  // name contains "Reformer" is eligible for the campaign's first session.
+  PACK_DISCOVERY_META_SOURCE_IDS: optional("PACK_DISCOVERY_META_SOURCE_IDS", "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+  PACK_DISCOVERY_SERVICE_IDS: optional("PACK_DISCOVERY_SERVICE_IDS", "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+  // Hidden two-credit continuation plans used only by reception at the studio.
+  // They must never be exposed by Awa's catalogue or payment-link tools.
+  PACK_DISCOVERY_CONTINUATION_PLAN_IDS: optional("PACK_DISCOVERY_CONTINUATION_PLAN_IDS", "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
   // Guarded admin-to-client messaging. Keep false until takeover behavior has
   // been verified in production with the Meta number.
   ADMIN_HUMAN_REPLY_ENABLED: optional("ADMIN_HUMAN_REPLY_ENABLED", "false") === "true",

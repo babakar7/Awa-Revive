@@ -116,6 +116,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
               text: msg.text,
               waMessageId: msg.id,
               profileName: msg.profileName,
+              referral: msg.referral,
             });
           } else if (msg.type === "interactive" && msg.text) {
             // A tapped option is a user message like any other — formatted so
@@ -125,6 +126,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
               text: `[choix cliqué] ${msg.text}${msg.interactiveId ? ` (id: ${msg.interactiveId})` : ""}`,
               waMessageId: msg.id,
               profileName: msg.profileName,
+              referral: msg.referral,
             });
           } else if (msg.type === "audio" && msg.mediaId && transcriptionEnabled()) {
             // Voice note → transcribe, then treat as a normal user message.
@@ -136,6 +138,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
                 text: `[note vocale] ${transcript}`,
                 waMessageId: msg.id,
                 profileName: msg.profileName,
+                referral: msg.referral,
               });
             } catch (err) {
               req.log.error({ err, from: msg.from }, "Voice note transcription failed");
@@ -153,6 +156,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
                 text: imageTurnText(description, msg.caption),
                 waMessageId: msg.id,
                 profileName: msg.profileName,
+                referral: msg.referral,
               });
             } catch (err) {
               req.log.error({ err, from: msg.from }, "Inbound image description failed");
@@ -170,6 +174,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
                 text: stickerTurnText(description),
                 waMessageId: msg.id,
                 profileName: msg.profileName,
+                referral: msg.referral,
               });
             } catch (err) {
               req.log.error({ err, from: msg.from }, "Inbound sticker description failed");

@@ -1655,6 +1655,37 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   enregistrées), clone chaque créneau, recalcule grille/totaux/effectifs et
   réutilise le bouton « Enregistrer » existant. Aucun nouveau endpoint ni schéma.
 
+- **4.45 — Awa se désengage d’un contact non sérieux / suggestif (24/07).**
+  Un contact (+221752208766) envoyait des messages suggestifs sans intention
+  studio ; Awa n’avait aucune règle et continuait à répondre. Nouveau mécanisme
+  **auto-déclenché par Awa**, calqué sur le relais humain (`human_takeover_until`
+  gaté dans [index.ts](src/agent/index.ts)) mais distinct : le relais = *un
+  humain répond* ; le désengagement = *personne ne répond, Awa s’arrête*.
+  - Colonnes `awa_disengaged_until/_at/_reason` sur `clients` ([schema.ts](src/db/schema.ts)).
+    `isAwaDisengaged` ([adminOperations.ts](src/domain/adminOperations.ts)) mirroir
+    de `isHumanTakeoverActive`. Auto-release ~24 h.
+  - **Gate silencieux** dans [index.ts](src/agent/index.ts) juste après le gate
+    relais humain, et dans les 3 handlers média (image/vocal/média non lu) :
+    `if (isAwaDisengaged(client)) return;` — le tour entrant reste persisté
+    (visible en admin), **aucune notification équipe** (décision produit :
+    « silencieux pour l’équipe »).
+  - **Outil `disengage_conversation`** ([tools.ts](src/agent/tools.ts)) : Awa
+    l’appelle quand un contact est clairement là pour draguer/jouer avec le bot
+    sans intention de réservation, puis envoie UNE ligne polie et ferme de
+    recentrage, et rien après. Barre HAUTE (prompt) : pas pour une phrase isolée
+    ambiguë, un compliment, ni un client qui drague MAIS a un vrai besoin (on
+    sert le besoin, on ignore la drague). Aucun scolding/moralisation.
+  - **Admin** : badge « Awa en pause » (liste + espace client), bouton **Mettre
+    en pause** (route `/disengage`, `startAwaDisengage`, 24 h) pour couper un
+    contact tout de suite sans attendre la re-détection, et **Rendre à Awa**
+    (`resumeAwa` étendu pour effacer les deux états). C’est la remédiation
+    immédiate pour +221752208766.
+  - Tests : `isAwaDisengaged` (bornes), enregistrement de l’outil.
+  - ⚠️ Build bloqué au moment de la livraison par du travail non commité d’un
+    autre agent dans [webhooks/whatsapp.ts](src/webhooks/whatsapp.ts) (champ
+    `referral` passé à `handleInboundText` sans typage) — **hors périmètre**,
+    ne pas committer ce fichier. `npm test` (unit) 100 % vert.
+
 ## 5. Chronologie condensée
 
 - **23/07 — Pack Découverte : friction minimale (annuler après coup > bloquer).**

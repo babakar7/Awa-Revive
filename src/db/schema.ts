@@ -58,6 +58,11 @@ alter table pending_bookings
 alter table pending_bookings
   add column if not exists order_note text;
 
+-- Server-owned campaign marker. It makes the custom checkout order readable
+-- in Wix for reception without changing the underlying booked service.
+alter table pending_bookings
+  add column if not exists campaign_code text;
+
 -- Fulfillment lease: set when a worker starts turning a PAID booking into a
 -- Wix booking, so a webhook retry and the reconciliation sweep can't both
 -- fulfill the same booking (double-booking). A stale lease (>2 min) is
@@ -112,6 +117,37 @@ alter table clients
 alter table clients add column if not exists human_takeover_until timestamptz;
 alter table clients add column if not exists human_takeover_by text;
 alter table clients add column if not exists human_takeover_at timestamptz;
+
+-- Awa self-disengagement from a clearly non-serious / suggestive contact.
+-- Distinct from human takeover: here NOBODY replies — Awa simply stops. She
+-- stays silent while awa_disengaged_until is in the future (automatic ~24h
+-- release so a contact is never stranded forever); the reason is shown only in
+-- the admin badge (silent to the team, no reception ping). Manual resume clears
+-- all three fields.
+alter table clients add column if not exists awa_disengaged_until timestamptz;
+alter table clients add column if not exists awa_disengaged_at timestamptz;
+alter table clients add column if not exists awa_disengaged_reason text;
+
+-- One durable attribution/offer record per client and campaign. The offer is
+-- redeemable until the first paid campaign booking; expired payment links do
+-- not burn it, so Awa can safely create a fresh link for the same cold lead.
+create table if not exists campaign_leads (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  campaign_key text not null,
+  trigger_message_id text,
+  matched_by text not null check (matched_by in ('meta_referral','message')),
+  source_id text,
+  source_type text,
+  source_url text,
+  headline text,
+  ctwa_clid text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (client_id, campaign_key)
+);
+create unique index if not exists idx_campaign_leads_message
+  on campaign_leads (trigger_message_id) where trigger_message_id is not null;
 
 create index if not exists idx_pending_bookings_client_status
   on pending_bookings (client_id, status);

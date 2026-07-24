@@ -438,7 +438,7 @@ export function registerAdmin(app: FastifyInstance): void {
         const rows = result.rows
           .map(
             (c) => `<tr>
-<td data-label="Client"><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b>${c.is_test ? ` <span class="badge badge--gray">Équipe</span>` : ""}${c.human_takeover_until && new Date(c.human_takeover_until).getTime() > Date.now() ? ` <span class="badge badge--amber">Relais humain</span>` : ""}<div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
+<td data-label="Client"><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b>${c.is_test ? ` <span class="badge badge--gray">Équipe</span>` : ""}${c.human_takeover_until && new Date(c.human_takeover_until).getTime() > Date.now() ? ` <span class="badge badge--amber">Relais humain</span>` : ""}${c.awa_disengaged_until && new Date(c.awa_disengaged_until).getTime() > Date.now() ? ` <span class="badge badge--gray">Awa en pause</span>` : ""}<div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
 <td data-label="Dernier message">${escapeHtml((c.last_message ?? "").slice(0, 110))}${(c.last_message ?? "").length > 110 ? "…" : ""}<div class="muted">${ago(c.last_message_at)} · ${c.message_count} messages</div></td>
 <td data-label="Langue" class="hide-sm"><span class="badge badge--gray">${escapeHtml(c.language ?? "—")}</span></td>
 <td data-label=""><a class="act act--ghost act--sm" href="/admin/conversations/${c.id}">Ouvrir</a></td>
@@ -500,6 +500,13 @@ ${result.pages > 1 ? `<nav class="pagination" aria-label="Pagination"><span>${re
         const identity = { username: req.adminUser ?? "?", role: req.adminRole ?? "team" };
         const updated = await adminOps.startHumanTakeover(clientId, identity, 12);
         return reply.redirect(`/admin/conversations/${clientId}?${updated ? "done=takeover" : `err=${encodeURIComponent("Client introuvable")}`}`, 303);
+      });
+
+      admin.post("/conversations/:clientId/disengage", async (req, reply) => {
+        const { clientId } = req.params as { clientId: string };
+        const identity = { username: req.adminUser ?? "?", role: req.adminRole ?? "team" };
+        const updated = await adminOps.startAwaDisengage(clientId, identity, 24);
+        return reply.redirect(`/admin/conversations/${clientId}?${updated ? "done=disengaged" : `err=${encodeURIComponent("Client introuvable")}`}`, 303);
       });
 
       admin.post("/conversations/:clientId/resume", async (req, reply) => {
