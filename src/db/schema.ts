@@ -57,6 +57,8 @@ alter table pending_bookings
   add column if not exists extras_amount_xof integer not null default 0;
 alter table pending_bookings
   add column if not exists order_note text;
+alter table pending_bookings
+  add column if not exists campaign_code text;
 
 -- Server-owned campaign marker. It makes the custom checkout order readable
 -- in Wix for reception without changing the underlying booked service.

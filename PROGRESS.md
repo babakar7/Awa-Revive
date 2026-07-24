@@ -1662,7 +1662,7 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   gaté dans [index.ts](src/agent/index.ts)) mais distinct : le relais = *un
   humain répond* ; le désengagement = *personne ne répond, Awa s’arrête*.
   - Colonnes `awa_disengaged_until/_at/_reason` sur `clients` ([schema.ts](src/db/schema.ts)).
-    `isAwaDisengaged` ([adminOperations.ts](src/domain/adminOperations.ts)) mirroir
+    `isAwaDisengaged` ([adminOperations.ts](src/domain/adminOperations.ts)) miroir
     de `isHumanTakeoverActive`. Auto-release ~24 h.
   - **Gate silencieux** dans [index.ts](src/agent/index.ts) juste après le gate
     relais humain, et dans les 3 handlers média (image/vocal/média non lu) :
@@ -1678,13 +1678,11 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   - **Admin** : badge « Awa en pause » (liste + espace client), bouton **Mettre
     en pause** (route `/disengage`, `startAwaDisengage`, 24 h) pour couper un
     contact tout de suite sans attendre la re-détection, et **Rendre à Awa**
-    (`resumeAwa` étendu pour effacer les deux états). C’est la remédiation
-    immédiate pour +221752208766.
+    (`resumeAwa` étendu pour effacer les deux états). Remédiation immédiate pour
+    +221752208766.
   - Tests : `isAwaDisengaged` (bornes), enregistrement de l’outil.
-  - ⚠️ Build bloqué au moment de la livraison par du travail non commité d’un
-    autre agent dans [webhooks/whatsapp.ts](src/webhooks/whatsapp.ts) (champ
-    `referral` passé à `handleInboundText` sans typage) — **hors périmètre**,
-    ne pas committer ce fichier. `npm test` (unit) 100 % vert.
+  - Livré seul sur `main` (branche `fix/awa-disengage`), **séparément** de la
+    feature ops-cuisine-pwa (pas encore prête à merger).
 
 ## 5. Chronologie condensée
 
@@ -3191,6 +3189,22 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   horizontal à 390 px, contrôles Livraison ≥ 44 px, focus visible), build
   TypeScript, **618 tests unitaires** verts et **41 scénarios d’intégration
   livraison** verts.
+
+### 6.31 Funnel publicitaire Pack Découverte (23/07/2026)
+
+- La garantie satisfait ou remboursé après la première séance et la boisson
+  offerte choisie au comptoir sont désormais officialisées dans
+  `business-info.md`, sans prix ni nombre de séances en dur.
+- Les nouveaux prospects suivent l'ordre qualification Pilates → choix du
+  cours → créneaux réels → prénom et paiement. Les créneaux pré-paiement sont
+  présentés comme indicatifs et revérifiés après activation du pack.
+- Awa limite chaque message à une demande d'information et adapte sa courte
+  disclosure IA au besoin déjà exprimé, au lieu de répéter le menu d'accueil
+  générique.
+- La réservation post-paiement reste sûre et explicite : le client répond après
+  la confirmation d'activation, puis Awa revérifie le créneau avant
+  `book_with_membership`.
+- Validation : build TypeScript et **627 tests unitaires** verts.
 
 ## 7. Runbook ops
 

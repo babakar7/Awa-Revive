@@ -377,6 +377,8 @@ export async function handleInboundText(args: {
   referral?: WhatsAppReferral;
 }): Promise<void> {
   const client = await repo.upsertClient(args.waPhone);
+  const campaign = isPackDiscoveryCampaignEntry({ text: args.text, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
+  if (campaign.matched && campaign.matchedBy) await repo.recordCampaignLead({ clientId: client.id, campaignKey: PACK_DISCOVERY_CAMPAIGN, triggerMessageId: args.waMessageId, matchedBy: campaign.matchedBy, sourceId: args.referral?.sourceId, sourceType: args.referral?.sourceType, sourceUrl: args.referral?.sourceUrl, headline: args.referral?.headline, ctwaClid: args.referral?.ctwaClid });
 
   // Click-to-WhatsApp attribution is normally present only on Meta's first
   // message. Persist it immediately; the preset text remains a safe fallback
