@@ -81,4 +81,9 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(context).toMatch(/create_payment_link/);
     expect(context).toMatch(/only take the 10,000 payment once the client picks one/i);
   });
+
+  it("does not let a sticker or ambiguous acknowledgement decide eligibility", () => {
+    expect(systemPrompt()).toMatch(/Never interpret a sticker, emoji, reaction, acknowledgement/i);
+    expect(systemPrompt()).toMatch(/explicit statement.*Pilates at Revive/i);
+  });
 });

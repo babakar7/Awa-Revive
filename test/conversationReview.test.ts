@@ -3,6 +3,7 @@ import {
   ACTIONABLE_OUTCOMES,
   buildDigestBody,
   buildTranscript,
+  normalizeVerdictForTranscript,
   parseVerdict,
   satisfactionRate,
   type DigestData,
@@ -49,6 +50,23 @@ describe("buildTranscript", () => {
     expect(out.length).toBeLessThanOrEqual(1000);
     expect(out).toContain("LA FIN");
     expect(out).not.toContain("x".repeat(600)); // first line truncated to 500 then sliced away
+  });
+
+  it("never splits an emoji surrogate pair while truncating", () => {
+    const out = buildTranscript([turn("user", "x".repeat(498) + "😊")], 500);
+    expect(() => JSON.stringify(out)).not.toThrow();
+    expect(out).not.toMatch(/[\uD800-\uDBFF]$/);
+  });
+});
+
+describe("normalizeVerdictForTranscript", () => {
+  it("keeps a client silence after Awa's question out of the follow-up queue", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const verdict = normalizeVerdictForTranscript(
+      { outcome: "deadend", need_category: "booking", severity: "normal", summary: "x", suggested_action: "relancer" },
+      [turn("user", "Je veux réserver"), turn("assistant", "Quel jour te conviendrait ?")],
+    );
+    expect(verdict).toMatchObject({ outcome: "dropoff", suggested_action: "" });
   });
 });
 

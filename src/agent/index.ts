@@ -21,6 +21,7 @@ import * as commitments from "../domain/commitments.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
 import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
+import { normalizeInboundText } from "../lib/inboundText.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -127,6 +128,11 @@ export function technicalFallbackMessage(clientName?: string | null): string {
     "Désolé, j'ai un souci technique 🙏🏾 Réessaie dans un instant.\n\n" +
     receptionLinkInstruction("fr", contact.url)
   );
+}
+
+/** A stale <NO_REPLY> is a model lapse, not a client-visible technical outage. */
+export function modelSilenceFallbackMessage(): string {
+  return "Pas de souci 😊 Je suis là. Dis-moi simplement ce que tu veux vérifier et je t'aide.";
 }
 
 /**
@@ -386,8 +392,9 @@ export async function handleInboundText(args: {
   profileName?: string;
   referral?: WhatsAppReferral;
 }): Promise<void> {
+  const text = normalizeInboundText(args.text);
   const client = await repo.upsertClient(args.waPhone);
-  const campaign = isPackDiscoveryCampaignEntry({ text: args.text, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
+  const campaign = isPackDiscoveryCampaignEntry({ text, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
   if (campaign.matched && campaign.matchedBy) await repo.recordCampaignLead({ clientId: client.id, campaignKey: PACK_DISCOVERY_CAMPAIGN, triggerMessageId: args.waMessageId, matchedBy: campaign.matchedBy, sourceId: args.referral?.sourceId, sourceType: args.referral?.sourceType, sourceUrl: args.referral?.sourceUrl, headline: args.referral?.headline, ctwaClid: args.referral?.ctwaClid });
 
   // Name a chat-only lead from their matching Wix fiche (fire-and-forget) so the
@@ -400,18 +407,18 @@ export async function handleInboundText(args: {
 
   // Conversation-start ping (before the incoming turn is persisted, so the gap
   // query sees only prior activity).
-  await maybeNotifyConversationStart(client, args.text, args.profileName);
+  await maybeNotifyConversationStart(client, text, args.profileName);
 
-  const lang = detectLanguage(args.text);
+  const lang = detectLanguage(text);
   if (lang) await repo.updateClientLanguage(client.id, lang);
 
-  await repo.addTurn(client.id, "user", args.text, args.waMessageId);
+  await repo.addTurn(client.id, "user", text, args.waMessageId);
 
   // Human takeover is a hard gate: keep the incoming turn, alert reception,
   // and never enter the model/tool loop. The timestamp expires automatically
   // after 12h, so normal handling resumes without a background sweep.
   if (isHumanTakeoverActive(client)) {
-    notifyHumanTakeoverInbound(client, args.text);
+    notifyHumanTakeoverInbound(client, text);
     return;
   }
 
@@ -425,7 +432,7 @@ export async function handleInboundText(args: {
   // here without the model; ms_continue falls through to the model, which re-runs
   // check_availability (the stored slot's slot_cache entry has a 2h TTL and is
   // long gone for a multi-day plan) then create_payment_link with the item id.
-  if (await maybeHandleCommitmentTap(client, args.text)) return;
+  if (await maybeHandleCommitmentTap(client, text)) return;
 
   // Blue ticks + "typing…" bubble while the agent thinks (best-effort, non-blocking).
   void sendTypingIndicator(args.waMessageId);
@@ -492,7 +499,7 @@ export async function handleInboundText(args: {
   const isFirstContact = !history.some((t) => t.role === "assistant");
   // Tiered capability menu on vague openers (incl. returning clients), once per ~24h.
   const capabilityMenu = capabilityMenuKind({
-    isVague: isVagueOpener(args.text),
+    isVague: isVagueOpener(text),
     unlinkedNeverAsked,
     hasActivePaymentLink,
     upcomingBookingsCount,
@@ -501,7 +508,7 @@ export async function handleInboundText(args: {
 
   const messages: Anthropic.MessageParam[] = buildHistoryMessages(history);
   if (messages.length === 0) {
-    messages.push({ role: "user", content: args.text });
+    messages.push({ role: "user", content: text });
   }
 
   const system: Anthropic.TextBlockParam[] = [
@@ -703,15 +710,18 @@ export async function handleInboundText(args: {
   replyOutcome = classifyReplyOutcome(replyText, interactiveSent);
   if (replyOutcome !== "deliver") replyText = null;
   if (!replyText && !interactiveSent) {
-    replyText = technicalFallbackMessage(client.name ?? args.profileName ?? null);
-    usedTechnicalFallback = true;
+    const modelSilence = loopError instanceof Error && /^model returned /.test(loopError.message);
+    replyText = modelSilence
+      ? modelSilenceFallbackMessage()
+      : technicalFallbackMessage(client.name ?? args.profileName ?? null);
+    usedTechnicalFallback = !modelSilence;
     // Boucle de résultat (§4.31) : le client vient de recevoir « souci
     // technique » — la réception DOIT le savoir (avant : un console.error que
     // personne ne lit, client planté en silence). Dédup 24h par client.
     // On y joint le motif d'erreur réel : les logs Railway ont une fenêtre
     // courte, donc le stocker dans le notification_log rend l'incident
     // diagnosticable après coup (cas Zoé Dourthe 22/07 — erreur déjà défilée).
-    void notifyTechnicalFailure(client, describeLoopFailure(loopError));
+    if (usedTechnicalFallback) void notifyTechnicalFailure(client, describeLoopFailure(loopError));
   }
 
   if (replyText) {

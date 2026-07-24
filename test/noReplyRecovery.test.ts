@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildHistoryMessages,
   classifyReplyOutcome,
+  modelSilenceFallbackMessage,
 } from "../src/agent/index.js";
 import { NO_REPLY_SENTINEL } from "../src/agent/tools.js";
 
@@ -37,5 +38,10 @@ describe("classifyReplyOutcome", () => {
   it("recovers an unexplained empty model response but delivers real text", () => {
     expect(classifyReplyOutcome("", false)).toBe("recover");
     expect(classifyReplyOutcome("Avec plaisir 😊", false)).toBe("deliver");
+  });
+
+  it("uses a calm acknowledgement when recovery itself returns NO_REPLY", () => {
+    expect(modelSilenceFallbackMessage()).not.toMatch(/souci technique/i);
+    expect(modelSilenceFallbackMessage()).toContain("Je suis là");
   });
 });

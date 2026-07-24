@@ -37,6 +37,7 @@ import { createClientPaymentSession } from "../domain/paymentSession.js";
 import * as deliveries from "../domain/deliveryRepo.js";
 import { PACK_DISCOVERY_CAMPAIGN, isCampaignReformerService } from "../domain/packDiscoveryCampaign.js";
 import { planNamesConflict } from "../domain/planNameGuard.js";
+import { resolveServiceAlias } from "../domain/serviceAlias.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -989,7 +990,7 @@ export async function executeTool(
     }
 
     case "check_availability": {
-      const serviceId = String(input.service_id ?? "");
+      let serviceId = String(input.service_id ?? "");
       const dateFrom = String(input.date_from ?? "");
       const dateTo = String(input.date_to ?? "");
       if (
@@ -1000,7 +1001,15 @@ export async function executeTool(
       ) {
         return JSON.stringify({ error: "invalid_arguments" });
       }
-      const service = await wix.getService(serviceId);
+      let service = await wix.getService(serviceId);
+      if (!service) {
+        const services = await wix.listServices();
+        const alias = resolveServiceAlias(serviceId, services);
+        if (alias) {
+          serviceId = alias;
+          service = services.find((candidate) => candidate.id === alias) ?? null;
+        }
+      }
       if (!service) return JSON.stringify({ error: "unknown_service_id" });
 
       await trackFunnel({
@@ -2048,8 +2057,11 @@ export async function executeTool(
 
     case "create_plan_payment_link": {
       const planId = String(input.plan_id ?? "");
+      const planNameConfirm = String(input.plan_name_confirm ?? "").trim();
       const clientName = String(input.client_name ?? "").slice(0, 80).trim();
-      if (!planId || !clientName) return JSON.stringify({ error: "invalid_arguments" });
+      if (!planId || !planNameConfirm || !clientName) {
+        return JSON.stringify({ error: "invalid_arguments" });
+      }
 
       // Code-before-payment: don't sell a plan while an email verification is
       // live — the client may already own a plan under another number.
@@ -2062,14 +2074,12 @@ export async function executeTool(
       const plan = await wix.getPlan(planId);
       if (!plan) return JSON.stringify({ error: "unknown_plan_id", message: "Re-run list_plans and pick a plan_id from it." });
       if (config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(plan.id)) return JSON.stringify({ error: "reception_only_plan", message: "Reception activates this Pack Découverte continuation at the studio; do not sell it." });
-
       // Anti-conflation guard: the id and the name the model confirmed must be the
       // SAME plan. When a conversation jumps topics (e.g. Pack Découverte → Aquabike)
       // the model can pair a stale plan_id with the intended name and bill the wrong
       // pack. Compare on a normalized form (accent/case/punctuation-insensitive);
       // accept either exact match or one containing the other (catalog names vary
       // in verbosity), reject a clear divergence.
-      const planNameConfirm = String(input.plan_name_confirm ?? "").trim();
       if (planNamesConflict(plan.name, planNameConfirm)) {
         return JSON.stringify({
           error: "plan_mismatch",
@@ -2873,6 +2883,10 @@ export async function executeTool(
       // Awa-paid (Wave / OM / Max It): refund is owed and already enters the
       // reception queue. The client must not be asked to repeat the request.
       await repo.markRefundNeeded(bookingId);
+      // This path returns an explicit cancellation/refund confirmation in the
+      // same turn. Mark it handled so the generic REFUND_NEEDED sweep cannot
+      // later claim that the slot was taken during payment.
+      await repo.markRefundNotified(bookingId);
       const paymentLabel = paymentMethodLabel(booking.payment_method);
       notifyReception(
         `💸 REMBOURSEMENT à faire (annulation client) — ${booking.amount_xof} FCFA`,
