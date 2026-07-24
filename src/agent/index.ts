@@ -236,6 +236,19 @@ async function maybeEnrichClientNameFromWix(client: repo.Client): Promise<void> 
   }
 }
 
+/**
+ * The WhatsApp Cloud webhook supplies the display name that is already shown
+ * in new-conversation alerts. Persist it as the immediate fallback so the
+ * linked admin conversation has the same label. It intentionally only fills
+ * an empty field: CRM, booking, and admin-supplied names remain authoritative.
+ */
+async function maybeStoreWhatsAppProfileName(client: repo.Client, profileName?: string): Promise<void> {
+  const name = profileName?.trim();
+  if (!name || (client.name && client.name.trim() !== "")) return;
+  const stored = await repo.setClientNameIfMissing(client.id, name);
+  if (stored) client.name = stored;
+}
+
 function notifyHumanTakeoverInbound(client: repo.Client, preview: string): void {
   notifyReception(
     "Nouveau message pendant un relais humain",
@@ -380,6 +393,10 @@ export async function handleInboundText(args: {
   // Name a chat-only lead from their matching Wix fiche (fire-and-forget) so the
   // admin stops showing "(sans nom)" for someone who never books.
   void maybeEnrichClientNameFromWix(client);
+
+  // The alert already receives this WhatsApp profile name. Store the same
+  // fallback before it is sent so the linked admin row is labelled identically.
+  await maybeStoreWhatsAppProfileName(client, args.profileName);
 
   // Conversation-start ping (before the incoming turn is persisted, so the gap
   // query sees only prior activity).
@@ -726,9 +743,10 @@ export async function handleInboundText(args: {
 }
 
 /** Image received but the description failed — ask kindly for text. */
-export async function handleFailedImage(waPhone: string, waMessageId: string): Promise<void> {
+export async function handleFailedImage(waPhone: string, waMessageId: string, profileName?: string): Promise<void> {
   const client = await repo.upsertClient(waPhone);
-  await maybeNotifyConversationStart(client, "[image]");
+  await maybeStoreWhatsAppProfileName(client, profileName);
+  await maybeNotifyConversationStart(client, "[image]", profileName);
   await repo.addTurn(client.id, "user", "[image reçue — lecture échouée]", waMessageId);
   if (isHumanTakeoverActive(client)) {
     notifyHumanTakeoverInbound(client, "[image reçue]");
@@ -752,8 +770,10 @@ export async function handleReaction(
   waPhone: string,
   waMessageId: string,
   emoji: string | null | undefined,
+  profileName?: string,
 ): Promise<void> {
   const client = await repo.upsertClient(waPhone);
+  await maybeStoreWhatsAppProfileName(client, profileName);
   const label = emoji ? `[réaction ${emoji}]` : "[réaction retirée]";
   await repo.addTurn(client.id, "user", label, waMessageId);
   if (isHumanTakeoverActive(client)) notifyHumanTakeoverInbound(client, label);
@@ -764,9 +784,11 @@ export async function handleUnsupportedMedia(
   waPhone: string,
   waMessageId: string,
   label = "[non-text message]",
+  profileName?: string,
 ): Promise<void> {
   const client = await repo.upsertClient(waPhone);
-  await maybeNotifyConversationStart(client, label);
+  await maybeStoreWhatsAppProfileName(client, profileName);
+  await maybeNotifyConversationStart(client, label, profileName);
   await repo.addTurn(client.id, "user", label, waMessageId);
   if (isHumanTakeoverActive(client)) {
     notifyHumanTakeoverInbound(client, label);
@@ -782,9 +804,10 @@ export async function handleUnsupportedMedia(
 }
 
 /** Voice note received but transcription failed — ask kindly for text. */
-export async function handleFailedVoiceNote(waPhone: string, waMessageId: string): Promise<void> {
+export async function handleFailedVoiceNote(waPhone: string, waMessageId: string, profileName?: string): Promise<void> {
   const client = await repo.upsertClient(waPhone);
-  await maybeNotifyConversationStart(client, "[note vocale]");
+  await maybeStoreWhatsAppProfileName(client, profileName);
+  await maybeNotifyConversationStart(client, "[note vocale]", profileName);
   await repo.addTurn(client.id, "user", "[note vocale — transcription échouée]", waMessageId);
   if (isHumanTakeoverActive(client)) {
     notifyHumanTakeoverInbound(client, "[note vocale]");

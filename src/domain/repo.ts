@@ -234,6 +234,23 @@ export async function updateClientName(clientId: string, name: string): Promise<
   );
 }
 
+/**
+ * Store a WhatsApp display name only as a fallback. Names obtained from a Wix
+ * contact, booking, or admin action are authoritative and must never be
+ * replaced by the informal profile name a person can edit in WhatsApp.
+ * Returns the name that won so callers can keep their in-memory client fresh.
+ */
+export async function setClientNameIfMissing(clientId: string, name: string): Promise<string | null> {
+  const res = await pool.query(
+    `update clients
+        set name = $2, updated_at = now()
+      where id = $1 and nullif(btrim(name), '') is null
+      returning name`,
+    [clientId, name],
+  );
+  return res.rows[0]?.name ?? null;
+}
+
 // ---------- conversations ----------
 
 export async function addTurn(

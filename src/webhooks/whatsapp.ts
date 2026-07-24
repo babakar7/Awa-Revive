@@ -140,7 +140,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
               });
             } catch (err) {
               req.log.error({ err, from: msg.from }, "Voice note transcription failed");
-              await handleFailedVoiceNote(msg.from, msg.id);
+              await handleFailedVoiceNote(msg.from, msg.id, msg.profileName);
             }
           } else if (msg.type === "image" && msg.mediaId) {
             // Image (often a Wave payment screenshot) → describe it with the
@@ -157,7 +157,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
               });
             } catch (err) {
               req.log.error({ err, from: msg.from }, "Inbound image description failed");
-              await handleFailedImage(msg.from, msg.id);
+              await handleFailedImage(msg.from, msg.id, msg.profileName);
             }
           } else if (msg.type === "sticker" && msg.mediaId) {
             // Sticker (a WebP image) → describe it in a few words so the admin
@@ -175,13 +175,13 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
             } catch (err) {
               req.log.error({ err, from: msg.from }, "Inbound sticker description failed");
               // Still readable in the admin thread, just without the description.
-              await handleUnsupportedMedia(msg.from, msg.id, "[sticker]");
+              await handleUnsupportedMedia(msg.from, msg.id, "[sticker]", msg.profileName);
             }
           } else if (msg.type === "reaction") {
             // Emoji reaction — logged for the admin thread, never replied to.
-            await handleReaction(msg.from, msg.id, msg.reactionEmoji);
+            await handleReaction(msg.from, msg.id, msg.reactionEmoji, msg.profileName);
           } else {
-            await handleUnsupportedMedia(msg.from, msg.id, unsupportedMediaLabel(msg));
+            await handleUnsupportedMedia(msg.from, msg.id, unsupportedMediaLabel(msg), msg.profileName);
           }
           // Success only: so a crash mid-handling leaves the id free for Meta retry.
           await markProcessed(dedupeId, "whatsapp");
