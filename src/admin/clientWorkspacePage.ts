@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { config } from "../config.js";
 import type { ClientWorkspace, AdminTurn, AdminQueueItem } from "./queries.js";
 import { badge, escapeHtml as esc, fmtDate, fmtFcfa } from "./helpers.js";
-import { isHumanTakeoverActive } from "../domain/adminOperations.js";
+import { isAwaDisengaged, isHumanTakeoverActive } from "../domain/adminOperations.js";
 import { resolutionForm } from "./followUpPage.js";
 
 function empty(text: string): string {
@@ -79,11 +79,14 @@ export function renderClientWorkspace(args: {
 }): string {
   const client = args.client;
   const takeover = isHumanTakeoverActive(client);
+  const disengaged = isAwaDisengaged(client);
   const requestKey = crypto.randomUUID();
   const returnPath = `/admin/conversations/${client.id}`;
-  const takeoverControls = takeover
+  // A single "Rendre à Awa" lifts either pause (resumeAwa clears both states).
+  // When neither is active, offer both taking over AND silencing a non-serious contact.
+  const takeoverControls = takeover || disengaged
     ? `<form method="post" action="${returnPath}/resume" class="inline" data-confirm="Rendre la conversation à Awa maintenant ?"><button class="act act--ghost" type="submit">Rendre à Awa</button></form>`
-    : `<form method="post" action="${returnPath}/takeover" class="inline" data-confirm="Awa sera mise en pause pour ce client pendant 12 heures maximum."><button class="act" type="submit">Prendre le relais</button></form>`;
+    : `<form method="post" action="${returnPath}/takeover" class="inline" data-confirm="Awa sera mise en pause pour ce client pendant 12 heures maximum."><button class="act" type="submit">Prendre le relais</button></form><form method="post" action="${returnPath}/disengage" class="inline" data-confirm="Awa cessera de répondre à ce contact (non sérieux) pendant 24 h maximum."><button class="act act--ghost" type="submit">Mettre en pause</button></form>`;
   let composer = "";
   if (takeover) {
     if (!config.ADMIN_HUMAN_REPLY_ENABLED) {
@@ -99,6 +102,7 @@ export function renderClientWorkspace(args: {
   return `${args.banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Espace client</span><h2>${esc(client.name ?? "(sans nom)")}</h2><p>Conversation, opérations et suivis réunis au même endroit.</p></div><div class="page-header-actions"><a class="act act--ghost" href="https://wa.me/${esc(client.wa_phone)}" target="_blank" rel="noreferrer">Ouvrir WhatsApp</a>${takeoverControls}</div></header>
 ${takeover ? `<div class="card warn takeover-banner"><b>Relais humain actif</b><span>Awa est en pause jusqu’au ${fmtDate(client.human_takeover_until)} · démarré par ${esc(client.human_takeover_by ?? "l’équipe")}</span></div>` : ""}
+${!takeover && disengaged ? `<div class="card warn takeover-banner"><b>Awa en pause — contact non sérieux</b><span>Awa ne répond plus à ce contact jusqu’au ${fmtDate(client.awa_disengaged_until)}${client.awa_disengaged_reason ? ` · ${esc(client.awa_disengaged_reason)}` : ""}</span></div>` : ""}
 ${followUps(args.workspace, client.id)}
 <div class="conversation-shell client-workspace-shell">
   <aside class="card client-summary"><div class="row between"><b>${esc(client.name ?? "(sans nom)")}</b>${client.is_test ? `<span class="badge badge--gray">Équipe</span>` : ""}</div><dl class="client-facts"><div><dt>WhatsApp</dt><dd><a href="https://wa.me/${esc(client.wa_phone)}" target="_blank" rel="noreferrer">+${esc(client.wa_phone)}</a></dd></div><div><dt>Langue</dt><dd>${esc(client.language ?? "—")}</dd></div><div><dt>Email déclaré</dt><dd>${esc(client.claimed_email ?? "—")}</dd></div><div><dt>Dernier message</dt><dd>${fmtDate(args.lastClientMessage)}</dd></div><div><dt>Client depuis</dt><dd>${fmtDate(client.created_at)}</dd></div></dl><form method="post" action="${returnPath}/toggle-test"><input type="hidden" name="value" value="${client.is_test ? "0" : "1"}"><button class="act act--ghost act--sm" type="submit">${client.is_test ? "Retirer le tag Équipe" : "Marquer Équipe/test"}</button></form></aside>

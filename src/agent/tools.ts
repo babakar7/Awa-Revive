@@ -674,6 +674,31 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "disengage_conversation",
+    description:
+      "Stop engaging a contact who is clearly NOT here for the studio — sustained sexual/suggestive/romantic " +
+      "advances toward Awa, or someone plainly toying with the bot with no booking/studio intent. Do NOT use " +
+      "this for a single awkward or ambiguous line, ordinary warmth or a compliment, a complaint, or a real " +
+      "client who flirts but also has a genuine studio need (serve the need, ignore the flirtation). After you " +
+      "call it, send exactly ONE short, polite, firm closing line re-anchoring to the studio, then nothing else: " +
+      "the system automatically stops replying to this contact afterwards (auto-resumes after ~24h; reception " +
+      "can lift it). No refund/booking side effects — it only silences Awa for this contact.",
+    input_schema: {
+      type: "object",
+      properties: {
+        reason: {
+          type: "string",
+          description:
+            "A short factual French sentence for the studio's admin badge only (never sent to the client), " +
+            'e.g. "Messages à caractère suggestif, aucune intention de réservation". Keep it neutral and brief; ' +
+            "no transcript, no ids.",
+        },
+      },
+      required: ["reason"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "present_options",
     description:
       "Send the client a native WhatsApp clickable-choice message and deliver it IMMEDIATELY (this tool sends " +
@@ -3164,6 +3189,18 @@ export async function executeTool(
           "Tell the client, in their language, that reception will contact them directly HERE shortly to " +
           "handle their request — they do NOT need to do anything or send any message. Do NOT give them a " +
           "link. Only if the client explicitly asked to CALL, also give reception_whatsapp as the phone number.",
+      });
+    }
+
+    case "disengage_conversation": {
+      const reason = String(input.reason ?? "Contact non sérieux").slice(0, 500);
+      await repo.setAwaDisengaged(client.id, reason);
+      return JSON.stringify({
+        disengaged: true,
+        note:
+          "Awa will now stay silent to this contact (auto-resumes after ~24h; reception can lift it). " +
+          "Send exactly ONE short, polite, firm line in the client's language re-anchoring to Revive and " +
+          "reservations — do not reciprocate, moralize or scold — then STOP. Do not add anything else.",
       });
     }
 

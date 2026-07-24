@@ -20,6 +20,13 @@ export interface Client {
   human_takeover_until: Date | null;
   human_takeover_by: string | null;
   human_takeover_at: Date | null;
+  /**
+   * Awa self-disengaged from a non-serious/suggestive contact: she stays silent
+   * (no reply at all, no team ping) while this timestamp is in the future.
+   */
+  awa_disengaged_until: Date | null;
+  awa_disengaged_at: Date | null;
+  awa_disengaged_reason: string | null;
 }
 
 export interface PendingBooking {
@@ -68,7 +75,8 @@ export async function upsertClient(waPhone: string): Promise<Client> {
      on conflict (wa_phone) do update set updated_at = now()
      returning id, wa_phone, name, language, email_prompted_at, claimed_email,
                capability_menu_at, is_test, human_takeover_until,
-               human_takeover_by, human_takeover_at`,
+               human_takeover_by, human_takeover_at, awa_disengaged_until,
+               awa_disengaged_at, awa_disengaged_reason`,
     [waPhone],
   );
   return res.rows[0];
@@ -79,6 +87,36 @@ export async function setClientTest(clientId: string, isTest: boolean): Promise<
   await pool.query(
     `update clients set is_test = $2, updated_at = now() where id = $1`,
     [clientId, isTest],
+  );
+}
+
+/**
+ * Silence Awa for a clearly non-serious/suggestive contact: she stops replying
+ * (no team notification) until the timestamp passes. Mirrors startHumanTakeover,
+ * but self-triggered by Awa (or the admin pause button) — default 24h release.
+ */
+export async function setAwaDisengaged(
+  clientId: string,
+  reason: string,
+  hours = 24,
+): Promise<void> {
+  await pool.query(
+    `update clients
+        set awa_disengaged_at = now(), awa_disengaged_reason = $2,
+            awa_disengaged_until = now() + ($3 * interval '1 hour'), updated_at = now()
+      where id = $1`,
+    [clientId, reason.slice(0, 500), hours],
+  );
+}
+
+/** Lift a disengagement so Awa resumes replying to this client. */
+export async function clearAwaDisengaged(clientId: string): Promise<void> {
+  await pool.query(
+    `update clients
+        set awa_disengaged_at = null, awa_disengaged_reason = null,
+            awa_disengaged_until = null, updated_at = now()
+      where id = $1`,
+    [clientId],
   );
 }
 
@@ -152,7 +190,8 @@ export async function findClientByPhone(candidates: string[]): Promise<Client | 
   const res = await pool.query(
     `select id, wa_phone, name, language, email_prompted_at, claimed_email,
             capability_menu_at, is_test, human_takeover_until,
-            human_takeover_by, human_takeover_at
+            human_takeover_by, human_takeover_at, awa_disengaged_until,
+            awa_disengaged_at, awa_disengaged_reason
        from clients where regexp_replace(wa_phone, '\\D', '', 'g') = any($1) limit 1`,
     [digits],
   );

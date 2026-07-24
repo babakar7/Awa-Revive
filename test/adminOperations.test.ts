@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanResolutionNote,
+  isAwaDisengaged,
   isHumanTakeoverActive,
   isWithinWhatsAppWindow,
   parseResolutionOutcome,
@@ -20,6 +21,13 @@ describe("admin follow-up rules", () => {
     expect(isHumanTakeoverActive({ human_takeover_until: new Date(now + 1) } as any, now)).toBe(true);
     expect(isHumanTakeoverActive({ human_takeover_until: new Date(now) } as any, now)).toBe(false);
     expect(isHumanTakeoverActive({ human_takeover_until: null } as any, now)).toBe(false);
+  });
+
+  it("silences Awa while the disengagement deadline is in the future", () => {
+    const now = new Date("2026-07-20T12:00:00Z").getTime();
+    expect(isAwaDisengaged({ awa_disengaged_until: new Date(now + 1) } as any, now)).toBe(true);
+    expect(isAwaDisengaged({ awa_disengaged_until: new Date(now) } as any, now)).toBe(false);
+    expect(isAwaDisengaged({ awa_disengaged_until: null } as any, now)).toBe(false);
   });
 
   it("opens free-text messaging only for a client message under 24 hours old", () => {

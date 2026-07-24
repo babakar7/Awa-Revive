@@ -115,6 +115,16 @@ alter table clients add column if not exists human_takeover_until timestamptz;
 alter table clients add column if not exists human_takeover_by text;
 alter table clients add column if not exists human_takeover_at timestamptz;
 
+-- Awa self-disengagement from a clearly non-serious / suggestive contact.
+-- Distinct from human takeover: here NOBODY replies — Awa simply stops. She
+-- stays silent while awa_disengaged_until is in the future (automatic ~24h
+-- release so a contact is never stranded forever); the reason is shown only in
+-- the admin badge (silent to the team, no reception ping). Manual resume clears
+-- all three fields.
+alter table clients add column if not exists awa_disengaged_until timestamptz;
+alter table clients add column if not exists awa_disengaged_at timestamptz;
+alter table clients add column if not exists awa_disengaged_reason text;
+
 create table if not exists campaign_leads (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references clients(id),

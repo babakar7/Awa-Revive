@@ -15,7 +15,7 @@ import {
   receptionWhatsAppLink,
 } from "../lib/receptionContact.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
-import { isHumanTakeoverActive } from "../domain/adminOperations.js";
+import { isAwaDisengaged, isHumanTakeoverActive } from "../domain/adminOperations.js";
 import * as deliveries from "../domain/deliveryRepo.js";
 import * as commitments from "../domain/commitments.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
@@ -398,6 +398,11 @@ export async function handleInboundText(args: {
     return;
   }
 
+  // Awa disengaged from a non-serious/suggestive contact: stay fully silent.
+  // The turn is already persisted above (visible in admin); no team ping — the
+  // studio only sees it via the admin badge (silent to team, per product call).
+  if (isAwaDisengaged(client)) return;
+
   // Multi-session commitment button taps are routed by the SERVER (deterministic,
   // "le serveur décide"): ms_later and ms_link are self-contained and answered
   // here without the model; ms_continue falls through to the model, which re-runs
@@ -728,6 +733,7 @@ export async function handleFailedImage(waPhone: string, waMessageId: string): P
     notifyHumanTakeoverInbound(client, "[image reçue]");
     return;
   }
+  if (isAwaDisengaged(client)) return;
   void sendTypingIndicator(waMessageId);
   const reply =
     "Désolée, je n'ai pas réussi à lire ton image 🙏🏾 Tu peux m'écrire ce qu'elle montre ?\n" +
@@ -765,6 +771,7 @@ export async function handleUnsupportedMedia(
     notifyHumanTakeoverInbound(client, label);
     return;
   }
+  if (isAwaDisengaged(client)) return;
   void sendTypingIndicator(waMessageId);
   const reply =
     "Je ne peux pas lire ce type de message 🙏🏾 Écris-moi (ou envoie une note vocale) et je continue à t'aider !\n" +
@@ -782,6 +789,7 @@ export async function handleFailedVoiceNote(waPhone: string, waMessageId: string
     notifyHumanTakeoverInbound(client, "[note vocale]");
     return;
   }
+  if (isAwaDisengaged(client)) return;
   void sendTypingIndicator(waMessageId);
   const reply =
     "Désolée, je n'ai pas réussi à écouter ta note vocale 🙏🏾 Tu peux me l'écrire ?\n" +
