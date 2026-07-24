@@ -3208,6 +3208,27 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
 
 ## 7. Runbook ops
 
+- **Multi-agent : un agent = un worktree** (mis en place 24/07). Plusieurs
+  agents travaillaient sur le MÊME arbre → travail non commité écrasé, `tsc`
+  cassé par des fichiers à moitié faits, `test:integration` parallèles qui se
+  tuaient (conteneur Docker à nom fixe). Nouveau système :
+  - Dossier principal `…/resabot` = **hub** épinglé sur `main`, lecture/ops
+    seulement, jamais édité (cf. CLAUDE.md § « Git — un agent = un worktree »).
+  - Chantier = worktree isolé via `npm run agent:new -- <topic>` →
+    `../resabot-worktrees/<topic>` (voisin du repo, invisible à `railway up`/`tsc`),
+    branche `agent/<topic>` sur `origin/main`, `.env` copié, `npm ci`.
+  - Livraison = `npm run agent:ship` (rebase origin/main + build + test + push
+    `HEAD:main`, retry auto sur non-FF) puis `npm run agent:done -- <topic>`.
+    Script : [scripts/agent-worktree.sh](scripts/agent-worktree.sh).
+  - `test/integration/globalSetup.ts` : conteneur nommé `resabot-integration-pg-<pid>`
+    + label `resabot-integration=1`, purge des seuls conteneurs `exited` → runs
+    parallèles coexistent. `railway up` **banni** (hors hotfix hub propre).
+  - Réconciliation 24/07 : `origin/main` avait déjà les features disengage +
+    pack-découverte (versions « propres » livrées séparément) ; `feat/ops-cuisine-pwa`
+    en avait des ré-implémentations parallèles. Merge d'`origin/main` dans la
+    branche, résolu par fichier (shape de `main` pour disengage, superset local
+    pour campaign/PWA, dédup des symboles dupliqués) ; branche poussée sur
+    `origin` (PWA **pas** encore en prod, prod reste sur le disengage de `main`).
 - **Orange Money / Max It** (prod) :
   - Env Railway : `OM_CLIENT_ID`, `OM_CLIENT_SECRET`, `OM_MERCHANT_CODE=553651`,
     `OM_API_BASE=https://api.orange-sonatel.com` (vide = Wave only).
@@ -3223,9 +3244,9 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   `npm run test:integration` si le chemin de paiement est touché — Docker
   requis, ~6 s). La CI GitHub Actions rejoue tout à chaque push ; tant que
   « Wait for CI » n'est pas activé côté Railway, elle SIGNALE mais ne bloque
-  pas. Fallback manuel :
-  `railway up --detach` (indépendant de GitHub ; ne PAS combiner avec un push
-  pour un même changement = double build). Santé : `GET /healthz` ; logs :
+  pas. `railway up --detach` existe encore mais est **banni hors hotfix** (il
+  déploie du non-commité → git prend du retard sur le live = régression au push
+  suivant ; cf. § multi-agent). Santé : `GET /healthz` ; logs :
   `railway logs`. La migration tourne au boot. (Historique : l'auto-deploy
   affichait « no project member has access to this repo » — résolu le 10/07 en
   connectant le repo au compte Railway, pas juste via l'install de la GitHub App.)
