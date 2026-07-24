@@ -57,6 +57,8 @@ alter table pending_bookings
   add column if not exists extras_amount_xof integer not null default 0;
 alter table pending_bookings
   add column if not exists order_note text;
+alter table pending_bookings
+  add column if not exists campaign_code text;
 
 -- Fulfillment lease: set when a worker starts turning a PAID booking into a
 -- Wix booking, so a webhook retry and the reconciliation sweep can't both
@@ -112,6 +114,17 @@ alter table clients
 alter table clients add column if not exists human_takeover_until timestamptz;
 alter table clients add column if not exists human_takeover_by text;
 alter table clients add column if not exists human_takeover_at timestamptz;
+
+create table if not exists campaign_leads (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  campaign_key text not null,
+  trigger_message_id text,
+  matched_by text not null check (matched_by in ('meta_referral','message')),
+  source_id text, source_type text, source_url text, headline text, ctwa_clid text,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  unique (client_id, campaign_key)
+);
 
 create index if not exists idx_pending_bookings_client_status
   on pending_bookings (client_id, status);

@@ -259,6 +259,7 @@ export function dynamicContext(args: {
   firstContact?: boolean;
   /** Active multi-session commitment (server-owned progress), or null. */
   activeCommitment?: CommitmentSnapshot | null;
+  packDiscoveryCampaign?: boolean;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -303,6 +304,7 @@ export function dynamicContext(args: {
   ];
   if (args.clientName) lines.push(`Client first name on file: ${args.clientName}`);
   if (args.clientLanguage) lines.push(`Client's last detected language: ${args.clientLanguage}`);
+  if (args.packDiscoveryCampaign) lines.push("PACK DÉCOUVERTE META CAMPAIGN: default to 10,000 FCFA for one Reformer first session; explain 3 sessions total 30,000 FCFA and reception handles the optional 20,000 FCFA continuation at the studio. Do not sell a continuation plan or offer 30,000 upfront unless asked. Follow normal availability then payment flow; the server enforces price and eligibility.");
   const paymentOrder = args.preferredPaymentMethod === "orange_money"
     ? "Payer Orange Money (pay_om), Payer Wave (pay_wave), Payer Max It (pay_maxit)"
     : args.preferredPaymentMethod === "maxit"

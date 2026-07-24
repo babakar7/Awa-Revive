@@ -461,7 +461,9 @@ export interface InboundMessage {
   reactionEmoji?: string; // the emoji of a 'reaction' message (empty = reaction removed)
   filename?: string; // original filename of a 'document' message
   profileName?: string;
+  referral?: WhatsAppReferral;
 }
+export interface WhatsAppReferral { sourceId?: string; sourceType?: string; sourceUrl?: string; headline?: string; ctwaClid?: string; }
 
 /**
  * Human-readable label stored in the conversation for message types Awa can't
@@ -560,6 +562,7 @@ export function parseInboundMessages(payload: any): InboundMessage[] {
           reactionEmoji: msg.type === "reaction" ? msg.reaction?.emoji : undefined,
           filename: msg.type === "document" ? msg.document?.filename : undefined,
           profileName: contact?.profile?.name,
+          referral: msg.referral ? { sourceId: msg.referral.source_id, sourceType: msg.referral.source_type, sourceUrl: msg.referral.source_url, headline: msg.referral.headline, ctwaClid: msg.referral.ctwa_clid } : undefined,
         });
       }
     }

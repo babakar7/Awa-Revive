@@ -35,6 +35,7 @@ import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
 import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
 import { createClientPaymentSession } from "../domain/paymentSession.js";
 import * as deliveries from "../domain/deliveryRepo.js";
+import { PACK_DISCOVERY_CAMPAIGN, isCampaignReformerService } from "../domain/packDiscoveryCampaign.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -1247,7 +1248,12 @@ export async function executeTool(
 
       // 5. DRAFT booking → payment session → AWAITING_PAYMENT. Class only.
 
-      const totalXof = service.priceXof * participants;
+      const campaign = participants === 1 && isCampaignReformerService({ serviceId, serviceName: service.name, configuredServiceIds: config.PACK_DISCOVERY_SERVICE_IDS }) && await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
+      if (campaign) {
+        const contactId = await wix.findContactIdByPhone(`+${client.wa_phone}`, clientName || client.name || undefined);
+        if (contactId && await wix.hasPastPilatesBooking(contactId)) return JSON.stringify({ error: "discovery_not_eligible", message: "Client already did Pilates at Revive; offer the normal class price." });
+      }
+      const totalXof = campaign ? 10_000 : service.priceXof * participants;
       const draft = await repo.createDraftBooking({
         clientId: client.id,
         serviceId,
@@ -1262,6 +1268,7 @@ export async function executeTool(
         extrasAmountXof: 0,
         orderNote: null,
         commitmentItemId,
+        campaignCode: campaign ? PACK_DISCOVERY_CAMPAIGN : null,
       });
 
       let session;
@@ -1829,7 +1836,7 @@ export async function executeTool(
     }
 
     case "list_plans": {
-      const plans = await wix.listPlans();
+      const plans = (await wix.listPlans()).filter((p) => !config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(p.id));
       return JSON.stringify(
         await Promise.all(
           plans.map(async (p) => {
@@ -1868,6 +1875,7 @@ export async function executeTool(
       // Price and existence come from the Wix catalog — never from the model.
       const plan = await wix.getPlan(planId);
       if (!plan) return JSON.stringify({ error: "unknown_plan_id", message: "Re-run list_plans and pick a plan_id from it." });
+      if (config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(plan.id)) return JSON.stringify({ error: "reception_only_plan", message: "Reception activates this Pack Découverte continuation at the studio; do not sell it." });
 
       await repo.updateClientName(client.id, clientName);
       const phone = `+${client.wa_phone.replace(/^\+/, "")}`;

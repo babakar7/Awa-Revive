@@ -51,6 +51,7 @@ export interface PendingBooking {
   wix_order_sync_error: string | null;
   /** Multi-session commitment item this attempt pays for (null = standalone). */
   commitment_item_id: string | null;
+  campaign_code: string | null;
 }
 
 export interface Turn {
@@ -79,6 +80,13 @@ export async function setClientTest(clientId: string, isTest: boolean): Promise<
     `update clients set is_test = $2, updated_at = now() where id = $1`,
     [clientId, isTest],
   );
+}
+
+export async function recordCampaignLead(args: { clientId: string; campaignKey: string; triggerMessageId: string; matchedBy: "meta_referral" | "message"; sourceId?: string; sourceType?: string; sourceUrl?: string; headline?: string; ctwaClid?: string }): Promise<void> {
+  await pool.query(`insert into campaign_leads (client_id,campaign_key,trigger_message_id,matched_by,source_id,source_type,source_url,headline,ctwa_clid) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (client_id,campaign_key) do update set updated_at=now(), source_id=coalesce(campaign_leads.source_id,excluded.source_id), ctwa_clid=coalesce(campaign_leads.ctwa_clid,excluded.ctwa_clid)`, [args.clientId,args.campaignKey,args.triggerMessageId,args.matchedBy,args.sourceId ?? null,args.sourceType ?? null,args.sourceUrl ?? null,args.headline ?? null,args.ctwaClid ?? null]);
+}
+export async function activeCampaignLead(clientId: string, campaignKey: string): Promise<boolean> {
+  const r = await pool.query(`select 1 from campaign_leads l where l.client_id=$1 and l.campaign_key=$2 and l.created_at > now()-interval '14 days' and not exists (select 1 from pending_bookings b where b.client_id=l.client_id and b.campaign_code=l.campaign_key and b.status in ('PAID','BOOKED','REFUND_NEEDED'))`, [clientId,campaignKey]); return (r.rowCount ?? 0)>0;
 }
 
 /**
@@ -309,13 +317,14 @@ export async function createDraftBooking(args: {
   commitmentItemId?: string | null;
   /** Optional transaction client (e.g. inside the per-client commitment lock). */
   tx?: pg.Pool | pg.PoolClient;
+  campaignCode?: string | null;
 }): Promise<PendingBooking> {
   const db = args.tx ?? pool;
   const res = await db.query(
     `insert into pending_bookings
        (client_id, service_id, service_name, event_id, slot_json, slot_start, slot_end, amount_xof, participants,
-        extras_json, extras_amount_xof, order_note, commitment_item_id, status)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'DRAFT')
+        extras_json, extras_amount_xof, order_note, commitment_item_id, campaign_code, status)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'DRAFT')
      returning *`,
     [
       args.clientId,
@@ -331,6 +340,7 @@ export async function createDraftBooking(args: {
       args.extrasAmountXof ?? 0,
       args.orderNote ?? null,
       args.commitmentItemId ?? null,
+      args.campaignCode ?? null,
     ],
   );
   return res.rows[0];

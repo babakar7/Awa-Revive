@@ -4,7 +4,7 @@ import { notifyReception, notifyNewConversation } from "../lib/notify.js";
 import * as repo from "../domain/repo.js";
 import { activeMemberships } from "../lib/membershipContext.js";
 import { shouldOfferLinking } from "../lib/linkAsk.js";
-import { sendText, sendTypingIndicator } from "../lib/whatsapp.js";
+import { sendText, sendTypingIndicator, type WhatsAppReferral } from "../lib/whatsapp.js";
 import { findContactByPhone } from "../lib/wix.js";
 import { getCafeMenu } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
@@ -20,6 +20,7 @@ import * as deliveries from "../domain/deliveryRepo.js";
 import * as commitments from "../domain/commitments.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
+import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -370,8 +371,11 @@ export async function handleInboundText(args: {
   text: string;
   waMessageId: string;
   profileName?: string;
+  referral?: WhatsAppReferral;
 }): Promise<void> {
   const client = await repo.upsertClient(args.waPhone);
+  const campaign = isPackDiscoveryCampaignEntry({ text: args.text, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
+  if (campaign.matched && campaign.matchedBy) await repo.recordCampaignLead({ clientId: client.id, campaignKey: PACK_DISCOVERY_CAMPAIGN, triggerMessageId: args.waMessageId, matchedBy: campaign.matchedBy, sourceId: args.referral?.sourceId, sourceType: args.referral?.sourceType, sourceUrl: args.referral?.sourceUrl, headline: args.referral?.headline, ctwaClid: args.referral?.ctwaClid });
 
   // Name a chat-only lead from their matching Wix fiche (fire-and-forget) so the
   // admin stops showing "(sans nom)" for someone who never books.
@@ -437,6 +441,7 @@ export async function handleInboundText(args: {
   ]);
 
   const history = await repo.lastTurnsForReplay(client.id, 30);
+  const packDiscoveryCampaign = await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
 
   // Unlinked-number signal: a subscriber messaging from a number that isn't on
   // their Wix fiche is invisible to Awa and could be pushed to Wave for a class
@@ -498,6 +503,7 @@ export async function handleInboundText(args: {
         capabilityMenu,
         firstContact: isFirstContact,
         activeCommitment,
+        packDiscoveryCampaign,
       }),
     },
   ];

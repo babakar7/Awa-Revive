@@ -116,6 +116,7 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
               text: msg.text,
               waMessageId: msg.id,
               profileName: msg.profileName,
+              referral: msg.referral,
             });
           } else if (msg.type === "interactive" && msg.text) {
             // A tapped option is a user message like any other — formatted so
