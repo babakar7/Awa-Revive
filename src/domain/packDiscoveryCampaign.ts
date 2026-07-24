@@ -11,7 +11,13 @@ export function normalizeCampaignMessage(text: string): string {
   return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("fr").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
 }
 export function isPackDiscoveryCampaignEntry(args: { text: string; referral?: WhatsAppReferral; allowedSourceIds: string[] }) {
-  if (args.referral?.sourceId && args.allowedSourceIds.includes(args.referral.sourceId)) return { matched: true, matchedBy: "meta_referral" as const };
+  // A click-to-WhatsApp ad click carries a referral.sourceId. When PACK_DISCOVERY_META_SOURCE_IDS
+  // is configured we trust only those ad ids; when it is empty (the current prod state) any ad
+  // referral counts — there is a single active campaign, and this lets the funnel fire even when
+  // the ad's prefill text is not one of the CANONICAL_MESSAGES. Log the source_id in prod, then
+  // add it to the allowlist to tighten attribution once other ads exist.
+  const sourceId = args.referral?.sourceId;
+  if (sourceId && (args.allowedSourceIds.length === 0 || args.allowedSourceIds.includes(sourceId))) return { matched: true, matchedBy: "meta_referral" as const };
   return CANONICAL_MESSAGES.has(normalizeCampaignMessage(args.text)) ? { matched: true, matchedBy: "message" as const } : { matched: false, matchedBy: null };
 }
 export function isCampaignReformerService(args: { serviceId: string; serviceName: string; configuredServiceIds: string[] }) {

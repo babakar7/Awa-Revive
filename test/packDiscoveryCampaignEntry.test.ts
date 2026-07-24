@@ -24,4 +24,27 @@ describe("Pack Découverte campaign entry matching", () => {
       isPackDiscoveryCampaignEntry({ text: "anything", referral: { sourceId: "ad_123" } as never, allowedSourceIds: ["ad_123"] }),
     ).toEqual({ matched: true, matchedBy: "meta_referral" });
   });
+
+  it("with an empty allowlist, treats any ad referral as a campaign lead (fallback)", () => {
+    expect(
+      isPackDiscoveryCampaignEntry({ text: "n'importe quoi", referral: { sourceId: "ad_999" } as never, allowedSourceIds: [] }),
+    ).toEqual({ matched: true, matchedBy: "meta_referral" });
+  });
+
+  it("with a non-empty allowlist, a referral whose sourceId is not listed falls through to the text check", () => {
+    // Unrelated text + unlisted ad id → no match at all.
+    expect(
+      isPackDiscoveryCampaignEntry({ text: "bonjour, vos horaires ?", referral: { sourceId: "ad_other" } as never, allowedSourceIds: ["ad_123"] }),
+    ).toEqual({ matched: false, matchedBy: null });
+    // Unlisted ad id but a canonical opener still matches by message.
+    expect(
+      isPackDiscoveryCampaignEntry({ text: "Bonjour ! Puis-je en savoir plus à ce sujet ?", referral: { sourceId: "ad_other" } as never, allowedSourceIds: ["ad_123"] }),
+    ).toEqual({ matched: true, matchedBy: "message" });
+  });
+
+  it("a referral without a sourceId falls through to the text check", () => {
+    expect(
+      isPackDiscoveryCampaignEntry({ text: "bonjour, vos horaires ?", referral: {} as never, allowedSourceIds: [] }),
+    ).toEqual({ matched: false, matchedBy: null });
+  });
 });

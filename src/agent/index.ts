@@ -395,6 +395,9 @@ export async function handleInboundText(args: {
   const text = normalizeInboundText(args.text);
   const client = await repo.upsertClient(args.waPhone);
   const campaign = isPackDiscoveryCampaignEntry({ text, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
+  // Log every inbound ad referral (matched or not) so the real ad source_id can be harvested
+  // from Railway logs and added to PACK_DISCOVERY_META_SOURCE_IDS to tighten attribution.
+  if (args.referral?.sourceId) console.info(`[campaign] inbound referral source_id=${args.referral.sourceId} type=${args.referral.sourceType ?? ""} headline=${JSON.stringify(args.referral.headline ?? "")} matched=${campaign.matched} by=${campaign.matchedBy ?? ""}`);
   if (campaign.matched && campaign.matchedBy) await repo.recordCampaignLead({ clientId: client.id, campaignKey: PACK_DISCOVERY_CAMPAIGN, triggerMessageId: args.waMessageId, matchedBy: campaign.matchedBy, sourceId: args.referral?.sourceId, sourceType: args.referral?.sourceType, sourceUrl: args.referral?.sourceUrl, headline: args.referral?.headline, ctwaClid: args.referral?.ctwaClid });
 
   // Name a chat-only lead from their matching Wix fiche (fire-and-forget) so the
