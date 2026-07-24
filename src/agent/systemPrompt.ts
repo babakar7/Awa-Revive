@@ -309,7 +309,7 @@ export function dynamicContext(args: {
   ];
   if (args.clientName) lines.push(`Client first name on file: ${args.clientName}`);
   if (args.clientLanguage) lines.push(`Client's last detected language: ${args.clientLanguage}`);
-  if (args.packDiscoveryCampaign) lines.push("PACK DÉCOUVERTE META CAMPAIGN: default to 10,000 FCFA for one Reformer first session; explain 3 sessions total 30,000 FCFA and reception handles the optional 20,000 FCFA continuation at the studio. Do not sell a continuation plan or offer 30,000 upfront unless asked. Follow normal availability then payment flow; the server enforces price and eligibility.");
+  if (args.packDiscoveryCampaign) lines.push("PACK DÉCOUVERTE META CAMPAIGN: present the offer clearly and WITHOUT double-counting. The pack is 3 sessions for 30,000 FCFA total, valid 2 weeks. The client pays only the first Reformer session now — 10,000 FCFA, which is the FIRST of those 3 sessions and is ALREADY part of the 30,000 total (NOT an extra charge on top). Never present 10,000 and 30,000 as two sequential or additive amounts. The remaining 2 sessions (20,000 FCFA) are arranged with reception at the studio — never sell, link, or create a payment for them yourself. Always pitch the satisfait-ou-remboursé guarantee on the first session and the free drink. Follow normal availability then payment flow; the server forces the 10,000 first-session price and enforces eligibility.");
   const paymentOrder = args.preferredPaymentMethod === "orange_money"
     ? "Payer Orange Money (pay_om), Payer Wave (pay_wave), Payer Max It (pay_maxit)"
     : args.preferredPaymentMethod === "maxit"

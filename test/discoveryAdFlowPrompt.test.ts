@@ -41,4 +41,24 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(context).toMatch(/AUTOMATED AI assistant/);
     expect(context).toContain("Moi c'est Awa, l'assistante IA de Revive");
   });
+
+  it("states the Meta-campaign pack economics without double-counting the first session", () => {
+    const context = dynamicContext({
+      clientName: null,
+      clientLanguage: "fr",
+      activeBooking: null,
+      activePlanOrder: null,
+      activeCafeOrder: null,
+      memberships: [],
+      recentRefunds: [],
+      habit: null,
+      firstContact: false,
+      packDiscoveryCampaign: true,
+    });
+
+    expect(context).toMatch(/3 sessions for 30,000 FCFA total/i);
+    expect(context).toMatch(/ALREADY part of the 30,000 total/i);
+    expect(context).toMatch(/NOT an extra charge/i);
+    expect(context).toMatch(/Never present 10,000 and 30,000 as two sequential or additive/i);
+  });
 });
