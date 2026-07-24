@@ -56,13 +56,13 @@ describe("Pack Découverte ad-lead prompt contract", () => {
       packDiscoveryCampaign: true,
     });
 
-    expect(context).toMatch(/3 sessions for 30,000 FCFA total/i);
-    expect(context).toMatch(/ALREADY part of the 30,000 total/i);
+    expect(context).toMatch(/30,000 FCFA total/i);
+    expect(context).toMatch(/ALREADY the first part/i);
     expect(context).toMatch(/NOT an extra charge/i);
     expect(context).toMatch(/Never present 10,000 and 30,000 as two sequential or additive/i);
   });
 
-  it("defers payment: first message pitches without a pay-now push, slot before payment", () => {
+  it("leads with the 10,000 first session and books it via create_payment_link, not the plan", () => {
     const context = dynamicContext({
       clientName: null,
       clientLanguage: "fr",
@@ -76,8 +76,9 @@ describe("Pack Découverte ad-lead prompt contract", () => {
       packDiscoveryCampaign: true,
     });
 
-    expect(context).toMatch(/DO NOT mention paying now or the 10,000 first-session amount yet/i);
-    expect(context).toMatch(/Lead with proposing a real slot, not payment/i);
-    expect(context).toMatch(/Only AFTER the client agrees on a slot do you move to payment/i);
+    expect(context).toMatch(/LEAD with the 10,000/i);
+    expect(context).toMatch(/never call create_plan_payment_link/i);
+    expect(context).toMatch(/create_payment_link/);
+    expect(context).toMatch(/only take the 10,000 payment once the client picks one/i);
   });
 });
