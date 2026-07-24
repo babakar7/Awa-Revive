@@ -15,7 +15,11 @@
 #   scripts/agent-worktree.sh list            # list worktrees with dirty-file counts
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ROOT = the HUB checkout, always — even when this script runs from a worktree's
+# own copy (BASH_SOURCE then lives in the worktree, so deriving ROOT from it made
+# the ship/done guards fire everywhere). --git-common-dir points to the hub's
+# .git from any worktree.
+ROOT="$(dirname "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --path-format=absolute --git-common-dir)")"
 BASE="$(dirname "$ROOT")/resabot-worktrees"
 
 die() { echo "error: $*" >&2; exit 1; }
