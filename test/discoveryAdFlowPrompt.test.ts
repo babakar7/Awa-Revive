@@ -82,6 +82,25 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(context).toMatch(/run request_email_verification/i);
   });
 
+  it("keeps the Meta offer strictly on Reformer and uses the tool price for Step or any other class", () => {
+    const context = dynamicContext({
+      clientName: null,
+      clientLanguage: "fr",
+      activeBooking: null,
+      activePlanOrder: null,
+      activeCafeOrder: null,
+      memberships: [],
+      recentRefunds: [],
+      habit: null,
+      firstContact: false,
+      packDiscoveryCampaign: true,
+    });
+
+    expect(context).toMatch(/ONLY to Pilates Reformer/i);
+    expect(context).toMatch(/non-Reformer class \(including Step\).*normal price returned by the latest class or availability tool/i);
+    expect(systemPrompt()).toMatch(/including Step, use the normal price returned by the class\/availability tool/i);
+  });
+
   it("uses the short Pack Découverte copy for a new Meta-ad lead without asking eligibility", () => {
     const context = dynamicContext({
       clientName: null,

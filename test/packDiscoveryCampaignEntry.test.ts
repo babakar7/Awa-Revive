@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPackDiscoveryCampaignEntry, normalizeCampaignMessage } from "../src/domain/packDiscoveryCampaign.js";
+import { isCampaignReformerService, isPackDiscoveryCampaignEntry, normalizeCampaignMessage } from "../src/domain/packDiscoveryCampaign.js";
 
 describe("Pack Découverte campaign entry matching", () => {
   const match = (text: string) => isPackDiscoveryCampaignEntry({ text, allowedSourceIds: [] });
@@ -25,10 +25,10 @@ describe("Pack Découverte campaign entry matching", () => {
     ).toEqual({ matched: true, matchedBy: "meta_referral" });
   });
 
-  it("with an empty allowlist, treats any ad referral as a campaign lead (fallback)", () => {
+  it("with an empty allowlist, does not treat every Meta referral as a campaign lead", () => {
     expect(
       isPackDiscoveryCampaignEntry({ text: "n'importe quoi", referral: { sourceId: "ad_999" } as never, allowedSourceIds: [] }),
-    ).toEqual({ matched: true, matchedBy: "meta_referral" });
+    ).toEqual({ matched: false, matchedBy: null });
   });
 
   it("with a non-empty allowlist, a referral whose sourceId is not listed falls through to the text check", () => {
@@ -46,5 +46,17 @@ describe("Pack Découverte campaign entry matching", () => {
     expect(
       isPackDiscoveryCampaignEntry({ text: "bonjour, vos horaires ?", referral: {} as never, allowedSourceIds: [] }),
     ).toEqual({ matched: false, matchedBy: null });
+  });
+});
+
+describe("Pack Découverte eligible services", () => {
+  it("accepts Reformer and rejects Step when no explicit service list is configured", () => {
+    expect(isCampaignReformerService({ serviceId: "reformer", serviceName: "Pilates Reformer", configuredServiceIds: [] })).toBe(true);
+    expect(isCampaignReformerService({ serviceId: "step", serviceName: "Step", configuredServiceIds: [] })).toBe(false);
+  });
+
+  it("uses the configured ID to narrow Reformer and cannot widen the offer to Step", () => {
+    expect(isCampaignReformerService({ serviceId: "reformer", serviceName: "Pilates Reformer", configuredServiceIds: ["reformer"] })).toBe(true);
+    expect(isCampaignReformerService({ serviceId: "step", serviceName: "Step", configuredServiceIds: ["step"] })).toBe(false);
   });
 });
