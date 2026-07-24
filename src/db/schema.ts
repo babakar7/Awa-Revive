@@ -1329,6 +1329,13 @@ create index if not exists idx_kitchen_tickets_open
 create index if not exists idx_kitchen_tickets_fallback_due
   on kitchen_tickets (fallback_due_at)
   where ipad_ack_at is null and fallback_claimed_at is null and fallback_due_at is not null;
+-- Rattrapage : heading/subheading (rendu figé iPad) ont été ajoutés APRÈS la
+-- première création de la table en prod ; create-table-if-not-exists ne les
+-- pose donc pas sur une table préexistante → le sweep cuisine plantait chaque
+-- minute (42703, colonne heading manquante). Ces alter idempotents rattrapent
+-- l'écart. NE PAS retirer.
+alter table kitchen_tickets add column if not exists heading text not null default '';
+alter table kitchen_tickets add column if not exists subheading text;
 
 -- Appareils appairés (iPad cuisine, téléphones accueil, propriétaire). Le token
 -- de session n'est JAMAIS stocké en clair : seul son sha256. Révocation = poser
