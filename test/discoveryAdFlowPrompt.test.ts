@@ -116,6 +116,9 @@ describe("Pack Découverte ad-lead prompt contract", () => {
       packDiscoveryMetaNewLead: true,
     });
 
+    expect(context).toContain("Always start with ‘Salut !’; never use or guess a client name");
+    expect(context).toContain("Salut ! Moi, c’est Awa 😊");
+    expect(context).not.toContain("Salut Sophie");
     expect(context).toContain("La première séance de Pilates Reformer coûte 10 000 FCFA.");
     expect(context).toContain("3 séances pour 30 000 FCFA sur 2 semaines.");
     expect(context).toContain("Si la séance ne te convient pas, elle est remboursée.");
