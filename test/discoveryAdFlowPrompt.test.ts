@@ -24,6 +24,10 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(systemPrompt()).toMatch(/at most ONE information request per client-facing message/);
   });
 
+  it("confirms that teleworking is welcome during opening hours", () => {
+    expect(systemPrompt()).toMatch(/clients peuvent télétravailler chez Revive pendant les heures\s+d'ouverture/i);
+  });
+
   it("keeps the first-contact AI disclosure mandate in dynamic context", () => {
     const context = dynamicContext({
       clientName: null,
