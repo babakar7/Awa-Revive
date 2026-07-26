@@ -6,6 +6,8 @@ import * as repo from "./repo.js";
 import { transition } from "./stateMachine.js";
 import { notifyReception } from "../lib/notify.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
+import { registerAndEnsureKey } from "./keyProvisioning.js";
+import { configuredMappingForPlan } from "./keyProvisioning.js";
 import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
@@ -20,6 +22,7 @@ import {
 import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { backfillBookingContacts } from "./bookingContactBackfill.js";
 import * as deliveries from "./deliveryRepo.js";
+import * as keyRepo from "./keyRepo.js";
 
 /**
  * Payment fulfillment — shared by Wave and Orange Money / Max It webhooks.
@@ -467,6 +470,19 @@ export async function reconcileStuckPlanOrders(log: PaymentLog): Promise<number>
   return stuck.length;
 }
 
+export async function activateCompletedInviteeRenewals(log: PaymentLog): Promise<number> {
+  const released = await keyRepo.releaseScheduledKeysAfterInviteeCompletion();
+  for (const planOrderId of released) {
+    await fulfillPlanOrder(planOrderId, log).catch((err) =>
+      log.error(
+        { err, planOrderId },
+        "Early activation of completed L'Invitée renewal failed",
+      ),
+    );
+  }
+  return released.length;
+}
+
 /** PAID cafe orders never notified (fulfilled_at null). */
 export async function reconcileStuckCafeOrders(log: PaymentLog): Promise<number> {
   const stuck = await repo.stuckPaidCafeOrders();
@@ -537,8 +553,39 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
 
   const startsAt: Date | null = order.starts_at ? new Date(order.starts_at) : null;
   const startsInFuture = startsAt !== null && startsAt.getTime() > Date.now();
+  const keyMapping = configuredMappingForPlan(order.plan_id);
+
+  // Paid future Keys live durably in Resabot until their actual activation
+  // date. A paid Wix offline order is PENDING and its start date cannot be
+  // changed; deferring creation lets a later +7-day extension shift the next
+  // Key safely without cancel/recreate.
+  if (order.status === "PAID" && keyMapping && startsInFuture) {
+    const scheduled = await repo.markPlanOrderScheduled(order.id);
+    if (!scheduled) {
+      await repo.clearPlanOrderFulfilling(order.id).catch(() => {});
+      return;
+    }
+    const currentKey = await keyRepo.activeKeyForClient({
+      clientId: order.client_id,
+      wixMemberId: order.member_id,
+    });
+    const msg = planConfirmationMessage(
+      lang,
+      order.plan_name,
+      true,
+      startsAt,
+      client?.name,
+      currentKey?.key_type === "INVITEE",
+    );
+    await sendText(client.wa_phone, msg).catch((err) =>
+      log.error({ err, planOrderId: order.id }, "Failed to send scheduled Key confirmation"),
+    );
+    await repo.addTurn(order.client_id, "assistant", msg).catch(() => undefined);
+    return;
+  }
 
   let activated = !!order.wix_order_id;
+  let activatedOrderId: string | null = order.wix_order_id;
   if (!activated && order.member_id) {
     try {
       const wixOrderId = await wix.createOfflinePlanOrder(
@@ -548,6 +595,7 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
       );
       await repo.markPlanOrderActivated(order.id, wixOrderId);
       activated = true;
+      activatedOrderId = wixOrderId;
       invalidateMembershipCache(order.client_id);
       log.info({ planOrderId: order.id, wixOrderId }, "Plan activated in Wix");
     } catch (err) {
@@ -561,6 +609,28 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
   if (activated && order.campaign_code) {
     await fulfillDiscoveryStep1Booking(order, client, lang, log);
     return;
+  }
+
+  if (activated && activatedOrderId && order.member_id && !order.campaign_code) {
+    try {
+      const contact = await wix.findContactByPhone(
+        phoneDisplay,
+        client?.name ?? undefined,
+      );
+      await registerAndEnsureKey({
+        paidOrderId: activatedOrderId,
+        planId: order.plan_id,
+        clientId: order.client_id,
+        wixContactId: contact?.id ?? null,
+        wixMemberId: order.member_id,
+        startsAt: startsAt ?? new Date(),
+        invitationCount: order.key_invitation_count,
+      });
+    } catch (err) {
+      // The paid Key is already active. Provisioning has its own retry/audit
+      // path and must never roll back or misrepresent the payment.
+      log.error({ err, planOrderId: order.id }, "Key bonus registration failed after activation");
+    }
   }
 
   // Manual path (or auto failed): notify reception once.
@@ -822,10 +892,30 @@ export function planConfirmationMessage(
   activated: boolean,
   startsAt: Date | null,
   clientName?: string | null,
+  earlyAfterInvitee = false,
 ): string {
   // Chained renewal: the plan is paid but activates on a future date.
   if (startsAt) {
     const d = startsAt.toISOString().slice(0, 10);
+    if (earlyAfterInvitee) {
+      switch (lang) {
+        case "en":
+          return (
+            `✅ Payment received — your "${planName}" Key is ready!\n\n` +
+            `It will start after your 3rd L'Invitée Reformer session, or on ${d} at the latest. Any unused L'Invitée bonus remains available until its own expiry.`
+          );
+        case "wo":
+          return (
+            `✅ Fey bi jot na — sa Clé "${planName}" pare na!\n\n` +
+            `Dina tàmbali gannaaw sa 3e séance Reformer L'Invitée, walla ci ${d} bu ëppe. Bonus L'Invitée bi des dina dox ba bés bu mu jeex.`
+          );
+        default:
+          return (
+            `✅ Paiement reçu — ta Clé "${planName}" est prête !\n\n` +
+            `Elle démarrera après ta 3e séance Reformer L'Invitée, ou au plus tard le ${d}. Ton éventuel bonus L'Invitée reste utilisable jusqu'à sa propre expiration.`
+          );
+      }
+    }
     switch (lang) {
       case "en":
         return (

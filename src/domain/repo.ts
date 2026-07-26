@@ -1041,6 +1041,8 @@ export interface PlanOrder {
   linked_booking_id: string | null;
   discovery_booking_status: string | null;
   discovery_booking_error: string | null;
+  is_key: boolean;
+  key_invitation_count: number | null;
 }
 
 /**
@@ -1083,6 +1085,8 @@ export async function createDraftPlanOrder(args: {
   slotJson?: unknown;
   slotStart?: string | Date | null;
   slotEnd?: string | Date | null;
+  isKey?: boolean;
+  keyInvitationCount?: number | null;
 }): Promise<PlanOrder> {
   const campaignCode = args.campaignCode ?? null;
   const discoveryBookingStatus: string | null =
@@ -1091,14 +1095,16 @@ export async function createDraftPlanOrder(args: {
     `insert into pending_plan_orders
        (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, campaign_code,
         service_id, service_name, event_id, slot_json, slot_start, slot_end,
-        discovery_booking_status, status)
+        discovery_booking_status, is_key, key_invitation_count, status)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-             $14, 'DRAFT') returning *`,
+             $14, $15, $16, 'DRAFT') returning *`,
     [
       args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null,
       campaignCode, args.serviceId ?? null, args.serviceName ?? null, args.eventId ?? null,
       args.slotJson === undefined ? null : JSON.stringify(args.slotJson), args.slotStart ?? null, args.slotEnd ?? null,
       discoveryBookingStatus,
+      args.isKey ?? false,
+      args.keyInvitationCount ?? null,
     ],
   );
   return res.rows[0];
@@ -1159,8 +1165,14 @@ export async function markPlanOrderActivated(
   id: string,
   wixOrderId: string,
 ): Promise<PlanOrder | null> {
-  return transitionPlanOrder(id, "ACTIVATED", ["PAID"], {
+  return transitionPlanOrder(id, "ACTIVATED", ["PAID", "SCHEDULED"], {
     wix_order_id: wixOrderId,
+    fulfilling_at: null,
+  });
+}
+
+export async function markPlanOrderScheduled(id: string): Promise<PlanOrder | null> {
+  return transitionPlanOrder(id, "SCHEDULED", ["PAID"], {
     fulfilling_at: null,
   });
 }
@@ -1181,6 +1193,7 @@ export async function claimPlanOrderForFulfillment(id: string): Promise<PlanOrde
       where id = $1
         and (
           (status = 'PAID' and ((member_id is not null and wix_order_id is null) or reception_notified_at is null))
+          or (status = 'SCHEDULED' and starts_at <= now() and member_id is not null and wix_order_id is null)
           or (status = 'ACTIVATED' and campaign_code is not null and discovery_booking_status = 'PENDING')
         )
         and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
@@ -1215,6 +1228,7 @@ export async function stuckPaidPlanOrders(
     `select * from pending_plan_orders
       where (
           (status = 'PAID' and ((member_id is not null and wix_order_id is null) or reception_notified_at is null))
+          or (status = 'SCHEDULED' and starts_at <= now() and member_id is not null and wix_order_id is null)
           or (status = 'ACTIVATED' and campaign_code is not null and discovery_booking_status = 'PENDING')
         )
         and updated_at < now() - make_interval(mins => $1)
@@ -1255,6 +1269,16 @@ export async function activeAwaitingPlanOrder(clientId: string): Promise<PlanOrd
     [clientId],
   );
   return res.rows[0] ?? null;
+}
+
+export async function hasScheduledKeyOrder(clientId: string): Promise<boolean> {
+  const result = await pool.query(
+    `select 1 from pending_plan_orders
+      where client_id=$1 and is_key and status='SCHEDULED' and starts_at > now()
+      limit 1`,
+    [clientId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // ---------- bar-only orders (menu order alongside a membership booking) ----------

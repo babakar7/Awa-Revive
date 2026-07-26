@@ -276,6 +276,13 @@ create index if not exists idx_plan_orders_client_status
 -- à l'activation (ordre PENDING jusqu'à cette date, activé automatiquement).
 alter table pending_plan_orders
   add column if not exists starts_at timestamptz;
+alter table pending_plan_orders
+  add column if not exists is_key boolean not null default false;
+alter table pending_plan_orders
+  add column if not exists key_invitation_count integer;
+create unique index if not exists idx_plan_orders_one_scheduled_key
+  on pending_plan_orders (client_id)
+  where status='SCHEDULED' and is_key;
 
 -- Bar-only Wave orders: a menu order attached to a booking the client paid
 -- with their abonnement (that flow has no payment link, so the bar can't ride
@@ -1389,4 +1396,100 @@ create table if not exists ops_events (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_ops_events_channel on ops_events (channel, id);
+
+-- Clés de la Maison. Wix remains the only ledger for Reformer/bonus session
+-- balances; this registry stores only cross-order relationships and policies
+-- Wix cannot represent (extension, invitation rights, guarantee, sync state).
+create table if not exists key_registry (
+  id uuid primary key default gen_random_uuid(),
+  paid_order_id text unique not null,
+  bonus_order_id text unique,
+  client_id uuid references clients(id),
+  wix_contact_id text,
+  wix_member_id text,
+  key_type text not null check (key_type in ('INVITEE','HABITUEE','RESIDENTE')),
+  plan_id text not null,
+  bonus_plan_id text not null,
+  starts_at timestamptz not null,
+  original_ends_at timestamptz not null,
+  effective_ends_at timestamptz not null,
+  status text not null default 'ACTIVE'
+    check (status in ('SCHEDULED','ACTIVE','ENDED','REFUNDED','CANCELLED')),
+  previous_key_id uuid references key_registry(id),
+  extension_used_at timestamptz,
+  guarantee_requested_at timestamptz,
+  guarantee_status text
+    check (guarantee_status is null or guarantee_status in ('PENDING','APPROVED','REFUSED')),
+  guarantee_detail_json jsonb not null default '{}'::jsonb,
+  bonus_status text not null default 'PENDING'
+    check (bonus_status in ('PENDING','ACTIVE','FAILED','MANUAL_REQUIRED')),
+  bonus_attempts integer not null default 0,
+  bonus_next_retry_at timestamptz,
+  bonus_claimed_at timestamptz,
+  bonus_last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists idx_key_registry_one_scheduled
+  on key_registry (coalesce(client_id::text, wix_member_id))
+  where status = 'SCHEDULED';
+create index if not exists idx_key_registry_bonus_repair
+  on key_registry (bonus_status, bonus_next_retry_at);
+create index if not exists idx_key_registry_member
+  on key_registry (wix_member_id, effective_ends_at desc);
+
+create table if not exists key_invitations (
+  id uuid primary key default gen_random_uuid(),
+  key_id uuid not null references key_registry(id),
+  ordinal integer not null check (ordinal > 0),
+  status text not null default 'GRANTED'
+    check (status in ('GRANTED','ASSIGNED','USED','VOID')),
+  friend_first_name text,
+  friend_phone text,
+  wix_invitation_order_id text unique,
+  wix_booking_id text unique,
+  assigned_at timestamptz,
+  used_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (key_id, ordinal)
+);
+
+-- Once a bonus/invitation booking is confirmed, its right is consumed even if
+-- somebody later cancels it directly in Wix. Awa therefore blocks cancellation
+-- and rescheduling from this immutable policy marker; reception alone may
+-- replace a class Revive cancelled.
+create table if not exists key_benefit_bookings (
+  wix_booking_id text primary key,
+  local_booking_id uuid references pending_bookings(id),
+  key_id uuid not null references key_registry(id),
+  invitation_id uuid references key_invitations(id),
+  kind text not null check (kind in ('BONUS','INVITATION')),
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_key_benefit_local_booking
+  on key_benefit_bookings (local_booking_id) where local_booking_id is not null;
+
+-- Usage events only (never a balance): links each normal Reformer booking to
+-- the exact paid Key order selected in Benefit Programs. Required for the
+-- L'Invitée guarantee and visit choreography.
+create table if not exists key_reformer_bookings (
+  wix_booking_id text primary key,
+  local_booking_id uuid references pending_bookings(id),
+  key_id uuid not null references key_registry(id),
+  slot_start timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_key_reformer_local_booking
+  on key_reformer_bookings (local_booking_id) where local_booking_id is not null;
+
+create table if not exists key_nudges (
+  dedup_key text primary key,
+  key_id uuid references key_registry(id),
+  client_id uuid references clients(id),
+  kind text not null,
+  outcome text not null check (outcome in ('SENT','SUPPRESSED','FAILED')),
+  detail text,
+  created_at timestamptz not null default now()
+);
 `;

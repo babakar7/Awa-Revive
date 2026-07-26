@@ -1,5 +1,7 @@
 import * as wix from "./wix.js";
+import { config } from "../config.js";
 import type { Client } from "../domain/repo.js";
+import { repairClientKeyBonuses } from "../domain/keyProvisioning.js";
 
 /**
  * Automatic membership lookup, injected into Awa's context on every message —
@@ -10,6 +12,7 @@ import type { Client } from "../domain/repo.js";
  * without a circular import.
  */
 export interface MembershipContext {
+  planId: string;
   plan: string;
   /** Class names this plan can pay for; null when Wix exposes no plan↔service links. */
   covers: string[] | null;
@@ -24,6 +27,8 @@ export interface MembershipContext {
    * hidden) counts as non-renewable, so we never wrongly push a renewal.
    */
   renewable: boolean;
+  /** Active legacy Reformer subscription: operational Founding Member rights. */
+  foundingMember: boolean;
 }
 
 /**
@@ -64,6 +69,11 @@ export async function activeMemberships(client: Client): Promise<MembershipLooku
   const hit = membershipCache.get(client.id);
   if (hit && Date.now() - hit.fetchedAt < MEMBERSHIP_CACHE_TTL_MS) return hit.result;
   try {
+    // Repair-on-touch safety net for a delayed/missed counter webhook. This is
+    // scoped to this client's registry rows and is idempotent.
+    await repairClientKeyBonuses(client.id).catch((error) =>
+      console.error("Client Key bonus repair failed:", error),
+    );
     const contactId = await wix.findContactIdByPhone(
       `+${client.wa_phone.replace(/^\+/, "")}`,
       client.name ?? undefined,
@@ -79,13 +89,15 @@ export async function activeMemberships(client: Client): Promise<MembershipLooku
     );
     const plans = await Promise.all(
       memberships.map(async (m) => ({
+        planId: m.planId,
         plan: m.planName,
         covers: await wix.planCoveredClassNames(m.planId),
         remaining: contactId
-          ? await wix.planRemainingSessions(contactId, m.planId, m.planName)
+          ? await wix.planRemainingSessions(contactId, m.planId, m.planName, m.orderId)
           : null,
         expiresAt: m.expiresAt,
         renewable: renewablePlanIds.has(m.planId),
+        foundingMember: config.LEGACY_REFORMER_PLAN_IDS.includes(m.planId),
       })),
     );
     const result: MembershipLookup = { linked: contactId !== null, plans };

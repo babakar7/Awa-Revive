@@ -3324,3 +3324,57 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
 - Résumé quotidien : `npm run summary`. Test SMTP : `npx tsx scripts/test-email.ts`.
 - Simulateur Wave local : `npm run simulate:wave` (`--bad-signature` pour le 401).
 - `business-info.md` est lu AU BOOT → redéployer/redémarrer après édition.
+## 2026-07-26 — Clés de la Maison (socle V1)
+
+- Catalogue Wix privé créé sans exposition à Awa :
+  - L'Invitée 3 séances / 21 j / 30 000 F ;
+  - L'Habituée 6 séances / 30 j / 72 000 F ;
+  - La Résidente 12 séances / 60 j / 144 000 F ;
+  - trois plans gratuits privés « Cours en plus » (1/1/2 crédits).
+- Les plans payants couvrent les cinq services Reformer ; les bonus couvrent
+  Aquabike, Mat, les deux Yoga et Step. L'Invitation gratuite existante est
+  conservée.
+- Garde catalogue `AWA_SELLABLE_PLAN_IDS` déployé avant la création des plans :
+  `public:false` n'est pas une barrière de vente pour Awa.
+- Registre local `key_registry`/`key_invitations` sans aucun solde de séances :
+  Wix reste la source de vérité. Provisionnement bonus idempotent avec retries
+  1/5/15 min, réparation au chargement, au boot et dans le sweep 60 s.
+- `eligible-pools.count` est le nombre de crédits à consommer. La sélection
+  Clés est déterministe par
+  `programDefinitionInfo.externalId=planId` +
+  `programInfo.externalId=orderId`, jamais par ordre de réponse/nom.
+- Deux outils dédiés : `book_key_bonus` (Aquabike/Yoga/Mat/Step lun–ven) et
+  `book_key_invitation` (Reformer 12h30 lun–ven). L'ordre Invitation gratuit
+  est créé paresseusement, une fois le prénom, téléphone et créneau confirmés.
+- Toute réservation bonus/invitation confirmée est immuable : Awa bloque
+  annulation et déplacement, y compris quand la réservation remonte comme
+  `studio:`. Le crédit reste consommé ; seule la réception remplace un cours
+  annulé par Revive.
+- Webhook Wix `Order Purchased` (JWT RS256) ajouté pour les ventes comptoir,
+  filtré strictement sur les trois plans payants et gated par
+  `KEYS_AUTOMATION_ENABLED`.
+- Postpone End Date implémenté pour aligner Clé + bonus lors d'une prolongation
+  de 7 jours. Comme Wix ne permet pas de déplacer le départ d'un ordre payé,
+  les prochaines Clés vivent en `SCHEDULED` dans Resabot et l'ordre Wix n'est
+  créé qu'à l'activation. La date locale suit une prolongation ; après
+  L'Invitée, la troisième séance effectivement commencée libère la prochaine
+  Clé immédiatement, sinon elle démarre à l'expiration.
+- Les droits d'invitation sont figés au moment de l'achat (avantage normal +
+  continuité), puis la commande Wix gratuite est créée paresseusement à
+  l'utilisation. L'Invitée est également limitée à un achat par membre dans
+  Wix (`maxPurchasesPerBuyer=1`) en plus du contrôle d'historique serveur.
+- Cycle V1 ajouté : J-5 L'Invitée, 24 h avant la troisième séance, J-5 membre
+  et fin des crédits Reformer. Chaque envoi est un claim durable terminal ;
+  les quatre branches restent sombres jusqu'à configuration de leurs templates
+  Meta approuvés. Garantie L'Invitée : critères mécaniques serveur, dossier et
+  handoff ; présence et remboursement restent strictement humains.
+- Les anciennes formules Reformer sont classées « Membre Fondatrice » par IDs
+  serveur (`LEGACY_REFORMER_PLAN_IDS`), jamais par interprétation du nom.
+- Le funnel Meta 10 000 F est automatiquement neutralisé quand
+  `KEYS_AUTOMATION_ENABLED=true`; les paiements Étape 1 déjà enregistrés
+  continuent néanmoins leur fulfillment historique.
+- Railway contient les mappings IDs/services avec
+  `KEYS_AUTOMATION_ENABLED=false`. Les trois plans payants restent hors
+  allowlist de vente jusqu'à la répétition générale et la configuration de la
+  clé publique du webhook.
+- Vérification : build, 681 tests unitaires et 183 tests d'intégration passent.

@@ -76,6 +76,15 @@ export async function sweepRenewalNudges(log: {
 
   const [orders, catalog] = await Promise.all([wix.listAllActiveOrders(), wix.listPlans()]);
   const renewablePlanIds = new Set(catalog.filter((p) => p.renewable).map((p) => p.id));
+  // Clés have their own J-5 lifecycle. Prevent the legacy generic renewal
+  // template from creating a duplicate message.
+  for (const planId of [
+    config.INVITEE_PLAN_ID,
+    config.HABITUEE_PLAN_ID,
+    config.RESIDENTE_PLAN_ID,
+  ]) {
+    if (planId) renewablePlanIds.delete(planId);
+  }
   const candidates = renewalNudgeCandidates(
     orders,
     new Date(),

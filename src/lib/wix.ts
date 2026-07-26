@@ -153,7 +153,8 @@ async function wixPatch(path: string, body: unknown): Promise<any> {
     const text = await res.text();
     throw new Error(`Wix ${path} failed (${res.status}): ${text}`);
   }
-  return res.json();
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
 }
 
 // ---------- services (class catalog) ----------
@@ -620,6 +621,30 @@ export async function hasPastPilatesBooking(contactId: string): Promise<boolean>
   }
 }
 
+/**
+ * Has this contact ever held a confirmed/pending booking at Revive, in any
+ * discipline. This is the eligibility rule for L'Invitée and invited friends.
+ * A Wix failure is deliberately surfaced to the caller: "unknown" must be
+ * handed to reception, never silently treated as "new".
+ */
+export async function hasAnyPastReviveBooking(contactId: string): Promise<boolean> {
+  for (let offset = 0; offset < 500; offset += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: {
+        filter: {
+          "contactDetails.contactId": contactId,
+          status: { $in: ["CONFIRMED", "PENDING"] },
+        },
+        paging: { limit: 100, offset },
+      },
+    });
+    const batch: any[] = data?.extendedBookings ?? [];
+    if (batch.some((entry) => entry?.booking?.id)) return true;
+    if (batch.length < 100) return false;
+  }
+  return false;
+}
+
 // ---------- contacts ----------
 
 /**
@@ -849,6 +874,29 @@ export async function findContactByPhone(
     console.error("Wix contact lookup failed (booking will create/match contact itself):", err);
     return null;
   }
+}
+
+export type PhoneContactResolution =
+  | { kind: "none" }
+  | { kind: "one"; contact: WixContactMatch }
+  | { kind: "ambiguous"; count: number };
+
+/**
+ * Unlike findContactByPhone(), preserves the important distinction between no
+ * contact and ambiguous duplicate contacts.
+ */
+export async function resolvePhoneContact(
+  phone: string,
+  nameHint?: string,
+): Promise<PhoneContactResolution> {
+  const contacts = await queryContactsByPhone(phone);
+  if (contacts.length === 0) return { kind: "none" };
+  const chosen = chooseContact(contacts, nameHint);
+  if (!chosen?.id) return { kind: "ambiguous", count: contacts.length };
+  return {
+    kind: "one",
+    contact: { id: String(chosen.id), fullName: wixContactFullName(chosen) },
+  };
 }
 
 export async function findContactIdByPhone(
@@ -1120,6 +1168,37 @@ export async function listAllActiveOrders(): Promise<any[]> {
   return orders;
 }
 
+export async function findPlanOrderForMember(args: {
+  planId: string;
+  memberId: string;
+  startDate: Date;
+}): Promise<string | null> {
+  for (const status of ["ACTIVE", "PENDING"]) {
+    for (let offset = 0; offset < 1000; offset += 50) {
+      const res = await fetch(
+        `${WIX_API}/pricing-plans/v2/orders?orderStatuses=${status}&limit=50&offset=${offset}`,
+        { headers: headers(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) },
+      );
+      if (!res.ok) throw new Error(`Wix orders list failed (${res.status}): ${await res.text()}`);
+      const data: any = await res.json();
+      for (const order of data?.orders ?? []) {
+        if (order?.planId !== args.planId) continue;
+        const buyerMemberId = String(order?.buyer?.memberId ?? order?.memberId ?? "");
+        if (!buyerMemberId || buyerMemberId !== args.memberId) continue;
+        const orderStart = Date.parse(String(order?.startDate ?? ""));
+        if (
+          Number.isFinite(orderStart) &&
+          Math.abs(orderStart - args.startDate.getTime()) <= 5 * 60 * 1000
+        ) {
+          return String(order.id);
+        }
+      }
+      if (!data?.pagingMetadata?.hasNext) break;
+    }
+  }
+  return null;
+}
+
 export async function listActiveMemberships(contactId: string): Promise<Membership[]> {
   const orders = await listAllActiveOrders();
   return orders
@@ -1295,6 +1374,15 @@ export async function createOfflinePlanOrder(
   return orderId;
 }
 
+export async function postponePlanOrderEndDate(
+  orderId: string,
+  newEndDate: Date,
+): Promise<void> {
+  await wixPatch(`/pricing-plans/v2/orders/${encodeURIComponent(orderId)}`, {
+    endDate: newEndDate.toISOString(),
+  });
+}
+
 /**
  * The latest future end date among a contact's active plans, or null when they
  * have none (or none with a readable future endDate). Used to chain a renewal:
@@ -1344,6 +1432,10 @@ export interface EligibleBenefit {
   benefitKey: string;
   memberId: string;
   planName: string;
+  /** Pricing Plans plan id (program definition external id). */
+  planId: string | null;
+  /** Pricing Plans order id (provisioned program external id). */
+  orderId: string | null;
   available: number;
 }
 
@@ -1378,27 +1470,58 @@ export async function createMember(loginEmail: string): Promise<{ id: string; co
  * Does one of this contact's active plans cover this service right now
  * (with balance left)? Returns the redeemable benefit, or null.
  */
-export async function findEligibleBenefit(
+export async function findEligibleBenefits(
   serviceId: string,
   contactId: string,
-): Promise<EligibleBenefit | null> {
+  count = 1,
+): Promise<EligibleBenefit[]> {
   const memberId = (await findMemberIdByContactId(contactId)) ?? contactId;
   const data = await wixPost("/benefit-programs/v1/pools/eligible-pools", {
     itemReference: { externalId: serviceId, providerAppId: WIX_BOOKINGS_APP_ID },
-    count: 1,
+    // This is the number of credits the caller intends to consume, NOT a
+    // response-page size. Asking for 20 would remove pools with <20 credits.
+    count: Math.max(1, Math.floor(count)),
     beneficiary: { identityType: "MEMBER", memberId },
     namespace: PRICING_PLANS_NAMESPACE,
   });
-  const benefit = (data?.eligibleBenefits ?? [])[0];
-  if (!benefit?.poolId || !benefit?.benefitKey) return null;
-  return {
-    poolId: benefit.poolId,
-    benefitKey: benefit.benefitKey,
-    memberId,
-    planName:
-      benefit.poolInfo?.displayName ?? benefit.benefitInfo?.displayName ?? "abonnement",
-    available: Number(benefit.poolInfo?.balance?.available ?? 0),
-  };
+  return (data?.eligibleBenefits ?? [])
+    .filter((benefit: any) => benefit?.poolId && benefit?.benefitKey)
+    .map((benefit: any) => ({
+      poolId: benefit.poolId,
+      benefitKey: benefit.benefitKey,
+      memberId,
+      planName:
+        benefit.poolInfo?.displayName ?? benefit.benefitInfo?.displayName ?? "abonnement",
+      planId: benefit.programDefinitionInfo?.externalId
+        ? String(benefit.programDefinitionInfo.externalId)
+        : null,
+      orderId: benefit.programInfo?.externalId ? String(benefit.programInfo.externalId) : null,
+      available: Number(benefit.poolInfo?.balance?.available ?? 0),
+    }));
+}
+
+/**
+ * Fail-closed selection for parallel/same-name plans. A Key flow must pass the
+ * exact order id; plan-only selection is accepted only when it is unambiguous.
+ */
+export function selectEligibleBenefit(
+  benefits: EligibleBenefit[],
+  target: { planId: string; orderId?: string | null },
+): EligibleBenefit | null {
+  const matches = benefits.filter(
+    (benefit) =>
+      benefit.planId === target.planId &&
+      (!target.orderId || benefit.orderId === target.orderId),
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export async function findEligibleBenefit(
+  serviceId: string,
+  contactId: string,
+  count = 1,
+): Promise<EligibleBenefit | null> {
+  return (await findEligibleBenefits(serviceId, contactId, count))[0] ?? null;
 }
 
 /**
@@ -1413,17 +1536,19 @@ export async function planRemainingSessions(
   contactId: string,
   planId: string,
   planName: string,
+  orderId?: string | null,
 ): Promise<number | null> {
   try {
     const services = await listServices();
     const covered = services.find((s) => s.pricingPlanIds.includes(planId));
     if (!covered) return null;
-    const benefit = await findEligibleBenefit(covered.id, contactId);
+    const benefit = selectEligibleBenefit(
+      await findEligibleBenefits(covered.id, contactId),
+      { planId, orderId },
+    );
     if (!benefit) return null;
-    // eligible-pools returns pools for the SERVICE — with several active plans
-    // the first pool may belong to another one. Only trust a name match.
-    const norm = (s: string) => s.trim().toLowerCase();
-    if (norm(benefit.planName) !== norm(planName)) return null;
+    // Name is a secondary guard only. IDs above select the actual plan.
+    if (benefit.planName.trim().toLowerCase() !== planName.trim().toLowerCase()) return null;
     return benefit.available;
   } catch (err) {
     console.error("Plan balance lookup failed (treated as unknown):", err);

@@ -39,6 +39,14 @@ import { PACK_DISCOVERY_CAMPAIGN, isCampaignReformerService } from "../domain/pa
 import { isPlanSellableByAwa } from "../domain/planSaleGuard.js";
 import { planNamesConflict } from "../domain/planNameGuard.js";
 import { resolveServiceAlias } from "../domain/serviceAlias.js";
+import * as keyRepo from "../domain/keyRepo.js";
+import {
+  dakarDateKey,
+  invitationEarnings,
+  isBonusSlotAllowed,
+  isInvitationSlotAllowed,
+  keyMappingForPlan,
+} from "../domain/keyRules.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -428,6 +436,66 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         },
       },
       required: ["service_id", "event_id", "slot_start", "client_name"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "book_key_bonus",
+    description:
+      "Book the ONE/TWO extra class benefit attached to an active Clé de la Maison. " +
+      "Only Aquabike, Yoga, Mat or Step from Monday to Friday are accepted; the server selects the exact " +
+      "linked bonus order, never another subscription. IMPORTANT: once confirmed, this bonus class cannot " +
+      "be cancelled, moved or carried over and the credit remains consumed. Tell the client this before calling.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service_id: { type: "string", description: "Class id from list_classes" },
+        event_id: { type: "string", description: "Chosen slot choice_id from check_availability" },
+        slot_start: { type: "string", description: "ISO start time of the chosen slot" },
+        client_name: { type: "string", description: "Key holder's first name" },
+      },
+      required: ["service_id", "event_id", "slot_start", "client_name"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "book_key_invitation",
+    description:
+      "Book an earned Clé invitation for a friend under the key holder's Wix account. Only Reformer at " +
+      "12:30 Monday-Friday is accepted. The friend must never have attended Revive; provide first name and " +
+      "phone for the server-side check. IMPORTANT: once confirmed, an invitation cannot be cancelled, moved " +
+      "or carried over and the right remains consumed. Tell the client this before calling.",
+    input_schema: {
+      type: "object",
+      properties: {
+        service_id: { type: "string", description: "Reformer service id from list_classes" },
+        event_id: { type: "string", description: "Chosen 12:30 slot choice_id" },
+        slot_start: { type: "string", description: "ISO start time of the chosen slot" },
+        client_name: { type: "string", description: "Key holder's first name" },
+        friend_first_name: { type: "string", description: "Invited friend's first name" },
+        friend_phone: { type: "string", description: "Invited friend's WhatsApp phone with country code" },
+      },
+      required: [
+        "service_id",
+        "event_id",
+        "slot_start",
+        "client_name",
+        "friend_first_name",
+        "friend_phone",
+      ],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "request_invitee_guarantee",
+    description:
+      "Record a request under L'Invitée's first-session guarantee and hand it to reception. " +
+      "The server checks the same-day deadline, that no second Reformer session and no bonus class " +
+      "were used. Reception still verifies actual attendance and decides/processes the refund. " +
+      "Never promise that the refund is approved or already completed.",
+    input_schema: {
+      type: "object",
+      properties: {},
       additionalProperties: false,
     },
   },
@@ -965,6 +1033,128 @@ async function escalateLinkRequest(
   );
 }
 
+async function exactBenefitWithShortRetry(args: {
+  serviceId: string;
+  contactId: string;
+  planId: string;
+  orderId: string;
+}): Promise<wix.EligibleBenefit | null> {
+  for (const delay of [0, 300, 900]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    const benefit = wix.selectEligibleBenefit(
+      await wix.findEligibleBenefits(args.serviceId, args.contactId, 1),
+      { planId: args.planId, orderId: args.orderId },
+    );
+    if (benefit) return benefit;
+  }
+  return null;
+}
+
+async function createProtectedBenefitBooking(args: {
+  client: Client;
+  serviceId: string;
+  resolvedEventId: string;
+  fresh: wix.WixSlot;
+  service: wix.WixService;
+  contact: wix.WixContactMatch;
+  bookingName: string;
+  benefit: wix.EligibleBenefit;
+  key: keyRepo.KeyRegistry;
+  kind: "BONUS" | "INVITATION";
+  invitationId?: string | null;
+}): Promise<Record<string, unknown>> {
+  const phone = `+${args.client.wa_phone.replace(/^\+/, "")}`;
+  let wixBookingId: string | null = null;
+  let redeemed = false;
+  try {
+    wixBookingId = await wix.createBookingRaw({
+      slot: args.fresh.raw,
+      name: args.bookingName,
+      phone,
+      participants: 1,
+      paymentOption: "MEMBERSHIP",
+      resolvedContact: args.contact,
+    });
+    const redemption = await wix.redeemMembershipForBooking({
+      wixBookingId,
+      serviceId: args.serviceId,
+      benefit: args.benefit,
+      count: 1,
+    });
+    redeemed = true;
+    try {
+      await wix.confirmBookingPaid(wixBookingId);
+    } catch (error) {
+      notifyReception(
+        "⚠️ Avantage Clé — réservation à confirmer",
+        `Le crédit ${args.kind} a été consommé, mais la confirmation Wix a échoué.\n` +
+          `Booking Wix : ${wixBookingId}\nClient : ${args.bookingName} (${phone})`,
+      );
+    }
+    let local: repo.PendingBooking | null = null;
+    try {
+      local = await repo.createMembershipBooking({
+        clientId: args.client.id,
+        serviceId: args.serviceId,
+        serviceName: args.service.name,
+        eventId: args.resolvedEventId,
+        slotJson: args.fresh.raw,
+        slotStart: args.fresh.startDate,
+        slotEnd: args.fresh.endDate ?? null,
+        wixBookingId,
+        benefitTransactionId: redemption.transactionId || null,
+        participants: 1,
+      });
+    } catch (error) {
+      console.error(`Protected-benefit local booking persistence failed for ${wixBookingId}:`, error);
+    }
+    await keyRepo.markProtectedBenefitBooking({
+      wixBookingId,
+      localBookingId: local?.id ?? null,
+      keyId: args.key.id,
+      invitationId: args.invitationId ?? null,
+      kind: args.kind,
+    });
+    if (args.invitationId) {
+      await keyRepo.markInvitationUsed({
+        invitationId: args.invitationId,
+        wixBookingId,
+      });
+    }
+    invalidateMembershipCache(args.client.id);
+    if (!local) {
+      notifyReception(
+        "⚠️ Avantage Clé réservé — synchro locale à réparer",
+        `La réservation Wix ${wixBookingId} et son débit ${args.kind} sont confirmés, ` +
+          `mais la ligne Resabot manque.\nClient : ${args.bookingName} (${phone})\nCours : ${args.service.name}`,
+      );
+    }
+    return {
+      booked: true,
+      booking_id: local?.id ?? `studio:${wixBookingId}`,
+      class: args.service.name,
+      slot_start: args.fresh.startDate,
+      slot_start_dakar: fmtDakar(args.fresh.startDate),
+      benefit: args.kind.toLowerCase(),
+      paid_with: redemption.membershipName,
+      cancellable: false,
+      reschedulable: false,
+      note:
+        "Confirmed. Remind the client explicitly that this bonus/invitation is final: " +
+        "it cannot be cancelled, moved or carried over and its credit remains consumed.",
+    };
+  } catch (error) {
+    if (wixBookingId && !redeemed) {
+      try {
+        await wix.declineBooking(wixBookingId);
+      } catch (cleanupError) {
+        console.error(`Could not decline protected-benefit booking ${wixBookingId}:`, cleanupError);
+      }
+    }
+    throw error;
+  }
+}
+
 /**
  * Execute one tool call. Inputs come from the model and are validated
  * server-side (SPEC §9): event_ids must match slots we actually served this
@@ -1310,7 +1500,15 @@ export async function executeTool(
 
       // 5. DRAFT booking → payment session → AWAITING_PAYMENT. Class only.
 
-      const campaign = participants === 1 && isCampaignReformerService({ serviceId, serviceName: service.name, configuredServiceIds: config.PACK_DISCOVERY_SERVICE_IDS }) && await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
+      const campaign =
+        !config.KEYS_AUTOMATION_ENABLED &&
+        participants === 1 &&
+        isCampaignReformerService({
+          serviceId,
+          serviceName: service.name,
+          configuredServiceIds: config.PACK_DISCOVERY_SERVICE_IDS,
+        }) &&
+        await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
       if (campaign) {
         const contactId = await wix.findContactIdByPhone(`+${client.wa_phone}`, clientName || client.name || undefined);
         if (contactId && await wix.hasPastPilatesBooking(contactId)) return JSON.stringify({ error: "discovery_not_eligible", message: "Client already did Pilates at Revive; offer the normal class price." });
@@ -2125,16 +2323,56 @@ export async function executeTool(
             "Pilates clients only. Do NOT sell it. Offer a normal single class (à la carte) or another plan instead.",
         });
       }
+      if (
+        config.KEYS_AUTOMATION_ENABLED &&
+        plan.id === config.INVITEE_PLAN_ID &&
+        contactId
+      ) {
+        try {
+          if (await wix.hasAnyPastReviveBooking(contactId)) {
+            return JSON.stringify({
+              error: "invitee_not_eligible",
+              message:
+                "L'Invitée est réservée aux personnes qui ne sont jamais venues chez Revive. " +
+                "Ne la vends pas ; propose L'Habituée ou La Résidente.",
+            });
+          }
+        } catch (error) {
+          console.error("L'Invitée eligibility lookup failed (allowing sale with audit):", error);
+        }
+      }
+
+      const keyMapping =
+        config.KEYS_AUTOMATION_ENABLED ? keyMappingForPlan(plan.id) : null;
+      const isKeyPlan = keyMapping !== null;
+      const currentKey = isKeyPlan
+        ? await keyRepo.activeKeyForClient({
+            clientId: client.id,
+            wixMemberId: memberId,
+          })
+        : null;
 
       // Chained renewal: when the client wants the new plan to start after the
       // current one, resolve the real end date from Wix (never from the model).
       // No active plan / no readable end date → fall back to "now" and flag it.
       let startsAt: Date | null = null;
       let startFellBack = false;
-      if (input.start === "after_current") {
+      if (currentKey) {
+        // Keys never overlap. An early renewal always starts when the current
+        // Key (including an approved extension) ends.
+        startsAt = new Date(currentKey.effective_ends_at);
+      } else if (input.start === "after_current") {
         const endIso = contactId ? await wix.latestPlanEndDate(contactId) : null;
         if (endIso) startsAt = new Date(endIso);
         else startFellBack = true;
+      }
+      if (isKeyPlan && startsAt && (await repo.hasScheduledKeyOrder(client.id))) {
+        return JSON.stringify({
+          error: "next_key_already_scheduled",
+          message:
+            "Cette cliente a déjà une prochaine Clé payée et programmée. Ne crée pas un second lien ; " +
+            "explique qu'une seule prochaine Clé peut être en attente et transmets à la réception pour tout changement.",
+        });
       }
 
       const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
@@ -2149,6 +2387,15 @@ export async function executeTool(
         amountXof: plan.priceXof,
         memberId,
         startsAt,
+        isKey: isKeyPlan,
+        keyInvitationCount: keyMapping
+          ? invitationEarnings(
+              keyMapping.type,
+              currentKey !== null,
+              currentKey !== null &&
+                Date.now() < currentKey.effective_ends_at.getTime(),
+            )
+          : null,
       });
 
       let session;
@@ -2173,7 +2420,9 @@ export async function executeTool(
       );
 
       const startNote = startsAt
-        ? ` This is a chained renewal: after payment the plan starts on ${startsAt.toISOString().slice(0, 10)} (when the current one ends) — tell the client that date.`
+        ? currentKey?.key_type === "INVITEE"
+          ? ` This is a chained Key: after payment it starts after L'Invitée's third Reformer session has happened, or on ${startsAt.toISOString().slice(0, 10)} at the latest. Tell the client both conditions; any unused L'Invitée bonus stays valid until its own expiry.`
+          : ` This is a chained renewal: after payment the plan starts on ${startsAt.toISOString().slice(0, 10)} (when the current one ends) — tell the client that date.`
         : startFellBack
           ? " The client asked to start after their current plan, but no active plan with a future end date was found, so it will start NOW — tell them that."
           : "";
@@ -2254,7 +2503,12 @@ export async function executeTool(
       const activePlans = await Promise.all(
         memberships.map(async (m) => {
           const covers = await wix.planCoveredClassNames(m.planId);
-          const remaining = await wix.planRemainingSessions(contactId, m.planId, m.planName);
+          const remaining = await wix.planRemainingSessions(
+            contactId,
+            m.planId,
+            m.planName,
+            m.orderId,
+          );
           return {
             plan: m.planName,
             expires: m.expiresAt,
@@ -2274,6 +2528,376 @@ export async function executeTool(
           "the current balance — a number can be relayed to the client as of right now; " +
           "'unknown' means say the balance is checked at booking time, NEVER guess a number.",
       });
+    }
+
+    case "request_invitee_guarantee": {
+      if (!config.KEYS_AUTOMATION_ENABLED) {
+        return JSON.stringify({
+          error: "keys_not_enabled",
+          message: "La garantie L'Invitée n'est pas encore ouverte. Transmets à la réception.",
+        });
+      }
+      const holderPhone = `+${client.wa_phone.replace(/^\+/, "")}`;
+      const contact = await wix.findContactByPhone(holderPhone, client.name || undefined);
+      if (!contact) {
+        return JSON.stringify({
+          error: "holder_account_not_found",
+          message:
+            "Le compte de la détentrice n'est pas identifiable sans ambiguïté. Transmets à la réception.",
+        });
+      }
+      const memberId = await wix.findMemberIdByContactId(contact.id);
+      const key = await keyRepo.activeKeyForClient({
+        clientId: client.id,
+        wixMemberId: memberId,
+      });
+      if (!key || key.key_type !== "INVITEE") {
+        return JSON.stringify({
+          error: "no_active_invitee_key",
+          message:
+            "Aucune Clé L'Invitée active n'est liée à cette cliente. Transmets à la réception en cas de doute.",
+        });
+      }
+      const facts = await keyRepo.inviteeGuaranteeFacts(key.id);
+      const first = facts.reformerBookings[0];
+      const now = new Date();
+      if (!first || first.slot_start.getTime() > now.getTime()) {
+        return JSON.stringify({
+          error: "first_session_not_completed",
+          message:
+            "La garantie s'exerce après la première séance. Si la cliente signale un problème particulier, transmets à la réception.",
+        });
+      }
+      if (dakarDateKey(first.slot_start) !== dakarDateKey(now)) {
+        return JSON.stringify({
+          error: "guarantee_deadline_passed",
+          first_session_date: dakarDateKey(first.slot_start),
+          message:
+            "La demande devait être faite avant la fin de la journée de la première séance. Transmets à la réception si la cliente conteste les faits.",
+        });
+      }
+      if (facts.reformerBookings.length > 1 || facts.bonusBookings > 0) {
+        return JSON.stringify({
+          error: "guarantee_already_consumed",
+          reformer_bookings: facts.reformerBookings.length,
+          bonus_bookings: facts.bonusBookings,
+          message:
+            "La garantie ne s'applique plus après une deuxième réservation Reformer ou l'utilisation du cours bonus. Transmets à la réception si la cliente conteste les faits.",
+        });
+      }
+      const detail = {
+        requestedAt: now.toISOString(),
+        firstSessionAt: first.slot_start.toISOString(),
+        firstWixBookingId: first.wix_booking_id,
+        reformerBookings: facts.reformerBookings.length,
+        bonusBookings: facts.bonusBookings,
+        attendanceNeedsReceptionCheck: true,
+      };
+      const recorded = await keyRepo.recordGuaranteeRequest(key.id, detail);
+      if (!recorded) {
+        return JSON.stringify({
+          already_recorded: true,
+          reception_notified: true,
+          message:
+            "La demande est déjà enregistrée. Dis à la cliente que la réception vérifie sa présence et la recontactera ici.",
+        });
+      }
+      const reason = `Garantie L'Invitée — vérification présence et remboursement humain (Clé ${key.id})`;
+      await repo.recordHandoff(client.id, reason);
+      notifyReception(
+        "🛡️ Demande de garantie L'Invitée",
+        `Une cliente demande la garantie après sa première séance.\n` +
+          `  Cliente : ${client.name ?? contact.fullName ?? "?"} (${holderPhone})\n` +
+          `  Clé : ${key.id}\n` +
+          `  Commande Wix : ${key.paid_order_id}\n` +
+          `  Première séance : ${first.slot_start.toISOString()}\n` +
+          `  Booking Wix : ${first.wix_booking_id}\n` +
+          `  Contrôles serveur : même journée, aucune 2e réservation Reformer, aucun bonus utilisé.\n\n` +
+          `À faire : vérifier dans Wix qu'elle a réellement participé (et non no-show), puis approuver/refuser et rembourser manuellement. Awa n'a promis aucun remboursement.`,
+      );
+      return JSON.stringify({
+        request_recorded: true,
+        reception_notified: true,
+        attendance_check_pending: true,
+        refund_completed: false,
+        message:
+          "La demande est enregistrée et transmise. Dis seulement que la réception vérifie la présence et reviendra vers la cliente ici ; ne promets ni approbation ni délai de remboursement.",
+      });
+    }
+
+    case "book_key_bonus":
+    case "book_key_invitation": {
+      if (!config.KEYS_AUTOMATION_ENABLED) {
+        return JSON.stringify({
+          error: "keys_not_enabled",
+          message: "Les Clés ne sont pas encore ouvertes. Ne promets pas la réservation ; transmets à la réception.",
+        });
+      }
+      const isInvitation = name === "book_key_invitation";
+      const serviceId = String(input.service_id ?? "");
+      const eventId = String(input.event_id ?? "");
+      const clientName = String(input.client_name ?? "").slice(0, 80).trim();
+      if (!serviceId || !eventId || !clientName) {
+        return JSON.stringify({ error: "invalid_arguments" });
+      }
+      const cached = await repo.getCachedSlot(client.id, eventId);
+      if (!cached || cached.service_id !== serviceId) {
+        return JSON.stringify({
+          error: "unknown_slot",
+          message: "Ce créneau n'a pas été proposé à cette cliente. Relance check_availability.",
+        });
+      }
+      const slot = (cached.slot_json as any) ?? {};
+      const slotStart = String(slot.startDate ?? input.slot_start ?? "");
+      const start = new Date(slotStart);
+      if (!slotStart || Number.isNaN(start.getTime()) || start.getTime() <= Date.now()) {
+        return JSON.stringify({ error: "invalid_or_past_slot" });
+      }
+      const allowedServiceIds = isInvitation
+        ? config.KEY_REFORMER_SERVICE_IDS
+        : config.KEY_BONUS_SERVICE_IDS;
+      const allowedTime = isInvitation
+        ? isInvitationSlotAllowed(start)
+        : isBonusSlotAllowed(start);
+      if (!allowedServiceIds.includes(serviceId) || !allowedTime) {
+        return JSON.stringify({
+          error: isInvitation ? "invitation_slot_not_allowed" : "bonus_slot_not_allowed",
+          message: isInvitation
+            ? "L'invitation est limitée au Reformer à 12h30, du lundi au vendredi. Ne propose aucun autre horaire."
+            : "Le cours en plus est limité à Aquabike, Yoga, Mat ou Step, du lundi au vendredi.",
+        });
+      }
+      const service = await wix.getService(serviceId);
+      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      const fresh = await wix.isSlotStillOpen(serviceId, cached.event_id, slotStart, 1);
+      if (!fresh) {
+        return JSON.stringify({
+          error: "slot_full",
+          message: "Le créneau vient de se remplir. Relance check_availability.",
+        });
+      }
+      const holderPhone = `+${client.wa_phone.replace(/^\+/, "")}`;
+      const contact = await wix.findContactByPhone(
+        holderPhone,
+        clientName || client.name || undefined,
+      );
+      if (!contact) {
+        return JSON.stringify({
+          error: "holder_account_not_found",
+          message: "Le compte de la détentrice n'est pas identifiable sans ambiguïté. Transmets à la réception.",
+        });
+      }
+      const memberId = await wix.findMemberIdByContactId(contact.id);
+      const activeKeys = await keyRepo.activeKeysForClient({
+        clientId: client.id,
+        wixMemberId: memberId,
+      });
+      if (
+        activeKeys.length === 0 ||
+        !memberId ||
+        activeKeys.some((candidate) => candidate.wix_member_id !== memberId)
+      ) {
+        return JSON.stringify({
+          error: "no_active_key",
+          message: "Aucune Clé active et liée à ce compte Wix. Transmets à la réception en cas de doute.",
+        });
+      }
+
+      if (!isInvitation) {
+        const eligibleKeys = [...activeKeys]
+          .filter(
+            (candidate) =>
+              start.getTime() < candidate.effective_ends_at.getTime() &&
+              candidate.bonus_order_id &&
+              candidate.bonus_status === "ACTIVE",
+          )
+          .sort(
+            (a, b) =>
+              a.effective_ends_at.getTime() - b.effective_ends_at.getTime(),
+          );
+        if (eligibleKeys.length === 0) {
+          return JSON.stringify({
+            error: "bonus_not_ready",
+            message:
+              "Le cours en plus n'est pas encore activé. La réparation automatique est en cours ; " +
+              "si la cliente attend, transmets à la réception.",
+          });
+        }
+        let selected:
+          | { key: keyRepo.KeyRegistry; benefit: wix.EligibleBenefit }
+          | null = null;
+        for (const candidate of eligibleKeys) {
+          const benefit = await exactBenefitWithShortRetry({
+            serviceId,
+            contactId: contact.id,
+            planId: candidate.bonus_plan_id,
+            orderId: candidate.bonus_order_id!,
+          });
+          if (benefit) {
+            selected = { key: candidate, benefit };
+            break;
+          }
+        }
+        if (!selected) {
+          return JSON.stringify({
+            error: "bonus_not_available",
+            message: "Le crédit bonus lié à cette Clé n'est pas disponible ou a déjà été utilisé.",
+          });
+        }
+        try {
+          return JSON.stringify(
+            await createProtectedBenefitBooking({
+              client,
+              serviceId,
+              resolvedEventId: cached.event_id,
+              fresh,
+              service,
+              contact,
+              bookingName: contact.fullName || clientName,
+              benefit: selected.benefit,
+              key: selected.key,
+              kind: "BONUS",
+            }),
+          );
+        } catch (error) {
+          console.error("Key bonus booking failed:", error);
+          return JSON.stringify({
+            error: "bonus_booking_failed",
+            message: "La réservation bonus n'a pas abouti. Transmets à la réception ; ne promets pas de réservation.",
+          });
+        }
+      }
+
+      const friendFirstName = String(input.friend_first_name ?? "").slice(0, 80).trim();
+      const friendDigits = String(input.friend_phone ?? "").replace(/\D/g, "");
+      const friendPhone =
+        friendDigits.length === 9 && friendDigits.startsWith("7")
+          ? `+221${friendDigits}`
+          : friendDigits
+            ? `+${friendDigits}`
+            : "";
+      if (!friendFirstName || !friendPhone) {
+        return JSON.stringify({ error: "friend_details_required" });
+      }
+      let friendResolution: wix.PhoneContactResolution;
+      try {
+        friendResolution = await wix.resolvePhoneContact(friendPhone, friendFirstName);
+      } catch (error) {
+        console.error("Invitation friend lookup failed:", error);
+        return JSON.stringify({
+          error: "friend_eligibility_unknown",
+          message: "L'éligibilité de l'amie n'a pas pu être vérifiée. Transmets à la réception.",
+        });
+      }
+      if (friendResolution.kind === "ambiguous") {
+        return JSON.stringify({
+          error: "friend_contact_ambiguous",
+          matches: friendResolution.count,
+          message: "Plusieurs fiches correspondent à ce téléphone. La réception doit vérifier avant toute réservation.",
+        });
+      }
+      if (friendResolution.kind === "one") {
+        try {
+          if (await wix.hasAnyPastReviveBooking(friendResolution.contact.id)) {
+            return JSON.stringify({
+              error: "friend_not_new",
+              message: "L'invitation est réservée à une personne qui n'est jamais venue chez Revive.",
+            });
+          }
+        } catch (error) {
+          console.error("Invitation history lookup failed:", error);
+          return JSON.stringify({
+            error: "friend_eligibility_unknown",
+            message: "L'historique de l'amie n'a pas pu être vérifié. Transmets à la réception.",
+          });
+        }
+      }
+      let invitationSelection:
+        | { key: keyRepo.KeyRegistry; invitation: keyRepo.KeyInvitation }
+        | null = null;
+      for (const candidate of [...activeKeys].sort(
+        (a, b) => a.effective_ends_at.getTime() - b.effective_ends_at.getTime(),
+      )) {
+        if (start.getTime() >= candidate.effective_ends_at.getTime()) continue;
+        const invitation = await keyRepo.availableInvitationForKey(candidate.id);
+        if (invitation) {
+          invitationSelection = { key: candidate, invitation };
+          break;
+        }
+      }
+      if (!invitationSelection) {
+        return JSON.stringify({
+          error: "no_invitation_available",
+          message:
+            "Aucune invitation active ne couvre ce créneau. Elle doit être utilisée avant l'expiration de la Clé qui l'a accordée.",
+        });
+      }
+      const assigned = await keyRepo.assignInvitation({
+        invitationId: invitationSelection.invitation.id,
+        firstName: friendFirstName,
+        phone: friendPhone,
+      });
+      if (!assigned) {
+        return JSON.stringify({
+          error: "invitation_already_assigned",
+          message: "Cette invitation est déjà attribuée. Relance la vérification ou transmets à la réception.",
+        });
+      }
+      let invitationOrderId = assigned.wix_invitation_order_id;
+      try {
+        if (!invitationOrderId) {
+          invitationOrderId = await wix.createOfflinePlanOrder(
+            config.INVITATION_PLAN_ID,
+            memberId,
+          );
+          const stored = await keyRepo.attachInvitationOrder(assigned.id, invitationOrderId);
+          invitationOrderId = stored?.wix_invitation_order_id ?? invitationOrderId;
+        }
+        const benefit = await exactBenefitWithShortRetry({
+          serviceId,
+          contactId: contact.id,
+          planId: config.INVITATION_PLAN_ID,
+          orderId: invitationOrderId,
+        });
+        if (!benefit) {
+          return JSON.stringify({
+            error: "invitation_credit_not_ready",
+            invitation_assigned: true,
+            message:
+              "L'invitation est attribuée et son crédit Wix est conservé, mais pas encore utilisable. " +
+              "Réessaie dans un instant ; ne crée pas une deuxième invitation.",
+          });
+        }
+        const result = await createProtectedBenefitBooking({
+          client,
+          serviceId,
+          resolvedEventId: cached.event_id,
+          fresh,
+          service,
+          contact,
+          bookingName: contact.fullName || clientName,
+          benefit,
+          key: invitationSelection.key,
+          kind: "INVITATION",
+          invitationId: assigned.id,
+        });
+        return JSON.stringify({
+          ...result,
+          friend_first_name: friendFirstName,
+          friend_phone: friendPhone,
+          participant_display:
+            `Invitation — ${friendFirstName} (détentrice : ${contact.fullName || clientName})`,
+        });
+      } catch (error) {
+        console.error("Key invitation booking failed:", error);
+        return JSON.stringify({
+          error: "invitation_booking_failed",
+          invitation_assigned: true,
+          message:
+            "La réservation n'a pas abouti. Le droit et l'ordre Wix existant sont conservés pour réessayer ; " +
+            "ne crée pas une deuxième invitation. Transmets à la réception si nécessaire.",
+        });
+      }
     }
 
     case "book_with_membership": {
@@ -2367,7 +2991,49 @@ export async function executeTool(
       }
       const bookingName = contact.fullName || clientName;
       await repo.updateClientName(client.id, bookingName);
-      const benefit = await wix.findEligibleBenefit(serviceId, contact.id);
+      let selectedKey: keyRepo.KeyRegistry | null = null;
+      let benefit: wix.EligibleBenefit | null = null;
+      let keySelectionRequired = false;
+      if (
+        config.KEYS_AUTOMATION_ENABLED &&
+        config.KEY_REFORMER_SERVICE_IDS.includes(serviceId)
+      ) {
+        const memberId = await wix.findMemberIdByContactId(contact.id);
+        const activeKeys = await keyRepo.activeKeysForClient({
+          clientId: client.id,
+          wixMemberId: memberId,
+        });
+        if (activeKeys.length > 0) {
+          keySelectionRequired = true;
+          if (participants !== 1) {
+            return JSON.stringify({
+              error: "key_is_personal",
+              message:
+                "Une Clé est personnelle et non transférable : réserve une seule place avec la Clé. " +
+                "Pour une amie, utilise une invitation disponible ou un paiement séparé.",
+            });
+          }
+          const benefits = await wix.findEligibleBenefits(
+            serviceId,
+            contact.id,
+            participants,
+          );
+          for (const candidate of activeKeys) {
+            const exact = wix.selectEligibleBenefit(benefits, {
+              planId: candidate.plan_id,
+              orderId: candidate.paid_order_id,
+            });
+            if (exact) {
+              selectedKey = candidate;
+              benefit = exact;
+              break;
+            }
+          }
+        }
+      }
+      if (!keySelectionRequired) {
+        benefit = await wix.findEligibleBenefit(serviceId, contact.id, participants);
+      }
       if (!benefit) {
         await trackFunnel({
           clientId: client.id,
@@ -2461,6 +3127,14 @@ export async function executeTool(
           benefitTransactionId: redemption.transactionId || null,
           participants,
         });
+        if (selectedKey) {
+          await keyRepo.recordKeyReformerBooking({
+            wixBookingId,
+            localBookingId: membershipBooking.id,
+            keyId: selectedKey.id,
+            slotStart: fresh.startDate,
+          });
+        }
         await trackFunnel({
           clientId: client.id,
           bookingId: membershipBooking.id,
@@ -2660,6 +3334,16 @@ export async function executeTool(
       // a model can never move somebody else's reservation.
       if (bookingId.startsWith("studio:")) {
         const wixId = bookingId.slice("studio:".length);
+        const protectedBenefit = await keyRepo.protectedBenefitForWixBooking(wixId);
+        if (protectedBenefit) {
+          return JSON.stringify({
+            error: "key_benefit_non_changeable",
+            benefit: protectedBenefit.kind.toLowerCase(),
+            message:
+              "Ce cours en plus ou cette invitation est définitif dès la réservation : " +
+              "il ne peut être ni déplacé, ni reporté et le crédit reste consommé.",
+          });
+        }
         const contactId = await wix.findContactIdByPhone(
           `+${client.wa_phone.replace(/^\+/, "")}`,
           client.name ?? undefined,
@@ -2707,6 +3391,17 @@ export async function executeTool(
       const booking = await repo.findClientBooking(client.id, bookingId);
       if (!booking || booking.status !== "BOOKED" || !booking.wix_booking_id) {
         return JSON.stringify({ error: "unknown_booking", message: "No such upcoming confirmed booking for this client. Re-run get_my_bookings." });
+      }
+      const protectedBenefit = await keyRepo.protectedBenefitForBooking(booking.id);
+      if (protectedBenefit) {
+        return JSON.stringify({
+          error: "key_benefit_non_changeable",
+          benefit: protectedBenefit.kind.toLowerCase(),
+          message:
+            "Ce cours en plus ou cette invitation est définitif dès la réservation : " +
+            "il ne peut être ni déplacé, ni reporté. Le crédit reste consommé. " +
+            "Si Revive a annulé le cours, transmettre à la réception pour remplacement.",
+        });
       }
       if (hoursUntil(booking.slot_start) < 16) {
         return JSON.stringify({
@@ -2768,6 +3463,15 @@ export async function executeTool(
       // link and reception gets a notification to check refund/re-credit.
       if (bookingId.startsWith("studio:")) {
         const wixId = bookingId.slice("studio:".length);
+        const protectedBenefit = await keyRepo.protectedBenefitForWixBooking(wixId);
+        if (protectedBenefit) {
+          return JSON.stringify({
+            error: "key_benefit_non_cancellable",
+            benefit: protectedBenefit.kind.toLowerCase(),
+            message:
+              "Ce cours en plus ou cette invitation ne peut être ni annulé, ni reporté et le crédit reste consommé.",
+          });
+        }
         // Ownership check server-side: the id must be among THIS client's own
         // upcoming Wix bookings (re-fetched live — never trust the model's id).
         const contactId = await wix.findContactIdByPhone(
@@ -2832,6 +3536,18 @@ export async function executeTool(
         return JSON.stringify({
           error: "unknown_booking",
           message: "No such upcoming confirmed booking for this client. Re-run get_my_bookings.",
+        });
+      }
+
+      const protectedBenefit = await keyRepo.protectedBenefitForBooking(booking.id);
+      if (protectedBenefit) {
+        return JSON.stringify({
+          error: "key_benefit_non_cancellable",
+          benefit: protectedBenefit.kind.toLowerCase(),
+          message:
+            "Ce cours en plus ou cette invitation est définitif dès la réservation : " +
+            "il ne peut être ni annulé, ni reporté et le crédit reste consommé. " +
+            "Si Revive a annulé le cours, transmettre à la réception pour remplacement.",
         });
       }
 

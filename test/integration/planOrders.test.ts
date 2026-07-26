@@ -37,6 +37,35 @@ describe("createDraftPlanOrder", () => {
     });
   });
 
+  it("keeps at most one future Key scheduled per client in Postgres", async () => {
+    const client = await seedClient();
+    const startsAt = new Date(inHours(24));
+    const first = await createDraftPlanOrder({
+      clientId: client.id,
+      planId: "key_habituee",
+      planName: "L'Habituée — Clé 6 séances",
+      amountXof: 72_000,
+      memberId: "member_key",
+      startsAt,
+      isKey: true,
+      keyInvitationCount: 2,
+    });
+    expect(first.key_invitation_count).toBe(2);
+    await pool.query(`update pending_plan_orders set status='SCHEDULED' where id=$1`, [first.id]);
+    const second = await createDraftPlanOrder({
+      clientId: client.id,
+      planId: "key_residente",
+      planName: "La Résidente — Clé 12 séances",
+      amountXof: 144_000,
+      memberId: "member_key",
+      startsAt,
+      isKey: true,
+    });
+    await expect(
+      pool.query(`update pending_plan_orders set status='SCHEDULED' where id=$1`, [second.id]),
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+
   it("creates a Pack campaign draft with its slot pending discovery booking", async () => {
     const client = await seedClient();
     const slotStart = inHours(24);

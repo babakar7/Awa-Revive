@@ -164,6 +164,33 @@ export const config = {
   // Empty is tolerated outside production for local/unit tests; production
   // refuses to boot without an allowlist.
   AWA_SELLABLE_PLAN_IDS: optional("AWA_SELLABLE_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  // Clés de la Maison. Sales are governed separately by
+  // AWA_SELLABLE_PLAN_IDS; this switch controls provisioning/lifecycle only.
+  KEYS_AUTOMATION_ENABLED: optional("KEYS_AUTOMATION_ENABLED", "false") === "true",
+  INVITEE_PLAN_ID: optional("INVITEE_PLAN_ID", ""),
+  INVITEE_BONUS_PLAN_ID: optional("INVITEE_BONUS_PLAN_ID", ""),
+  HABITUEE_PLAN_ID: optional("HABITUEE_PLAN_ID", ""),
+  HABITUEE_BONUS_PLAN_ID: optional("HABITUEE_BONUS_PLAN_ID", ""),
+  RESIDENTE_PLAN_ID: optional("RESIDENTE_PLAN_ID", ""),
+  RESIDENTE_BONUS_PLAN_ID: optional("RESIDENTE_BONUS_PLAN_ID", ""),
+  INVITATION_PLAN_ID: optional("INVITATION_PLAN_ID", ""),
+  KEY_REFORMER_SERVICE_IDS: optional("KEY_REFORMER_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  KEY_BONUS_SERVICE_IDS: optional("KEY_BONUS_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  LEGACY_REFORMER_PLAN_IDS: optional("LEGACY_REFORMER_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  INVITATION_SLOT_HOUR: parseInt(optional("INVITATION_SLOT_HOUR", "12"), 10),
+  INVITATION_SLOT_MINUTE: parseInt(optional("INVITATION_SLOT_MINUTE", "30"), 10),
+  // Clés lifecycle templates. Each feature stays dark until its exact Meta
+  // template name is configured; language codes must match Meta approval.
+  WA_KEY_INVITEE_J5_TEMPLATE: optional("WA_KEY_INVITEE_J5_TEMPLATE", ""),
+  WA_KEY_INVITEE_J5_TEMPLATE_LANG: optional("WA_KEY_INVITEE_J5_TEMPLATE_LANG", "fr"),
+  WA_KEY_THIRD_SESSION_TEMPLATE: optional("WA_KEY_THIRD_SESSION_TEMPLATE", ""),
+  WA_KEY_THIRD_SESSION_TEMPLATE_LANG: optional("WA_KEY_THIRD_SESSION_TEMPLATE_LANG", "fr"),
+  WA_KEY_MEMBER_J5_TEMPLATE: optional("WA_KEY_MEMBER_J5_TEMPLATE", ""),
+  WA_KEY_MEMBER_J5_TEMPLATE_LANG: optional("WA_KEY_MEMBER_J5_TEMPLATE_LANG", "fr"),
+  WA_KEY_FINISHED_TEMPLATE: optional("WA_KEY_FINISHED_TEMPLATE", ""),
+  WA_KEY_FINISHED_TEMPLATE_LANG: optional("WA_KEY_FINISHED_TEMPLATE_LANG", "fr"),
+  // Wix custom-app Order Purchased webhook (RS256 JWT raw body).
+  WIX_WEBHOOK_PUBLIC_KEY: optional("WIX_WEBHOOK_PUBLIC_KEY", ""),
   // Guarded admin-to-client messaging. Keep false until takeover behavior has
   // been verified in production with the Meta number.
   ADMIN_HUMAN_REPLY_ENABLED: optional("ADMIN_HUMAN_REPLY_ENABLED", "false") === "true",
@@ -194,6 +221,36 @@ export const config = {
 export function assertConfig(): void {
   if (process.env.NODE_ENV === "production" && config.AWA_SELLABLE_PLAN_IDS.length === 0) {
     missing.push("AWA_SELLABLE_PLAN_IDS");
+  }
+  if (config.KEYS_AUTOMATION_ENABLED) {
+    const keyConfig: Array<[string, unknown]> = [
+      ["INVITEE_PLAN_ID", config.INVITEE_PLAN_ID],
+      ["INVITEE_BONUS_PLAN_ID", config.INVITEE_BONUS_PLAN_ID],
+      ["HABITUEE_PLAN_ID", config.HABITUEE_PLAN_ID],
+      ["HABITUEE_BONUS_PLAN_ID", config.HABITUEE_BONUS_PLAN_ID],
+      ["RESIDENTE_PLAN_ID", config.RESIDENTE_PLAN_ID],
+      ["RESIDENTE_BONUS_PLAN_ID", config.RESIDENTE_BONUS_PLAN_ID],
+      ["INVITATION_PLAN_ID", config.INVITATION_PLAN_ID],
+      ["KEY_REFORMER_SERVICE_IDS", config.KEY_REFORMER_SERVICE_IDS.length],
+      ["KEY_BONUS_SERVICE_IDS", config.KEY_BONUS_SERVICE_IDS.length],
+      ["WIX_WEBHOOK_PUBLIC_KEY", config.WIX_WEBHOOK_PUBLIC_KEY],
+      ["WA_KEY_INVITEE_J5_TEMPLATE", config.WA_KEY_INVITEE_J5_TEMPLATE],
+      ["WA_KEY_THIRD_SESSION_TEMPLATE", config.WA_KEY_THIRD_SESSION_TEMPLATE],
+      ["WA_KEY_MEMBER_J5_TEMPLATE", config.WA_KEY_MEMBER_J5_TEMPLATE],
+      ["WA_KEY_FINISHED_TEMPLATE", config.WA_KEY_FINISHED_TEMPLATE],
+    ];
+    for (const [name, value] of keyConfig) {
+      if (!value) missing.push(name);
+    }
+    for (const [name, planId] of [
+      ["INVITEE_PLAN_ID", config.INVITEE_PLAN_ID],
+      ["HABITUEE_PLAN_ID", config.HABITUEE_PLAN_ID],
+      ["RESIDENTE_PLAN_ID", config.RESIDENTE_PLAN_ID],
+    ] as const) {
+      if (planId && !config.AWA_SELLABLE_PLAN_IDS.includes(planId)) {
+        missing.push(`AWA_SELLABLE_PLAN_IDS(${name})`);
+      }
+    }
   }
   if (missing.length > 0) {
     throw new Error(
