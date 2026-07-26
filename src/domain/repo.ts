@@ -1084,17 +1084,21 @@ export async function createDraftPlanOrder(args: {
   slotStart?: string | Date | null;
   slotEnd?: string | Date | null;
 }): Promise<PlanOrder> {
+  const campaignCode = args.campaignCode ?? null;
+  const discoveryBookingStatus: string | null =
+    campaignCode === null ? null : "PENDING";
   const res = await pool.query(
     `insert into pending_plan_orders
        (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, campaign_code,
         service_id, service_name, event_id, slot_json, slot_start, slot_end,
         discovery_booking_status, status)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-             case when $7 is null then null else 'PENDING' end, 'DRAFT') returning *`,
+             $14, 'DRAFT') returning *`,
     [
       args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null,
-      args.campaignCode ?? null, args.serviceId ?? null, args.serviceName ?? null, args.eventId ?? null,
+      campaignCode, args.serviceId ?? null, args.serviceName ?? null, args.eventId ?? null,
       args.slotJson === undefined ? null : JSON.stringify(args.slotJson), args.slotStart ?? null, args.slotEnd ?? null,
+      discoveryBookingStatus,
     ],
   );
   return res.rows[0];
