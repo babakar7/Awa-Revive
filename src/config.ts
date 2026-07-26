@@ -159,6 +159,11 @@ export const config = {
   // leaves the existing direct-booking campaign flow in place until rollout.
   PACK_DISCOVERY_STEP1_PLAN_ID: optional("PACK_DISCOVERY_STEP1_PLAN_ID", ""),
   PACK_DISCOVERY_CONTINUATION_PLAN_IDS: optional("PACK_DISCOVERY_CONTINUATION_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  // Explicit boundary for plans Awa may expose and sell. Wix `public:false`
+  // only hides a plan from the website and is not an internal-plan marker.
+  // Empty is tolerated outside production for local/unit tests; production
+  // refuses to boot without an allowlist.
+  AWA_SELLABLE_PLAN_IDS: optional("AWA_SELLABLE_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   // Guarded admin-to-client messaging. Keep false until takeover behavior has
   // been verified in production with the Meta number.
   ADMIN_HUMAN_REPLY_ENABLED: optional("ADMIN_HUMAN_REPLY_ENABLED", "false") === "true",
@@ -187,6 +192,9 @@ export const config = {
  * surface once, clearly, instead of as scattered runtime failures.
  */
 export function assertConfig(): void {
+  if (process.env.NODE_ENV === "production" && config.AWA_SELLABLE_PLAN_IDS.length === 0) {
+    missing.push("AWA_SELLABLE_PLAN_IDS");
+  }
   if (missing.length > 0) {
     throw new Error(
       `Missing required environment variables:\n  - ${missing.join("\n  - ")}\n` +

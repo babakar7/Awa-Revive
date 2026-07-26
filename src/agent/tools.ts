@@ -36,6 +36,7 @@ import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
 import { createClientPaymentSession } from "../domain/paymentSession.js";
 import * as deliveries from "../domain/deliveryRepo.js";
 import { PACK_DISCOVERY_CAMPAIGN, isCampaignReformerService } from "../domain/packDiscoveryCampaign.js";
+import { isPlanSellableByAwa } from "../domain/planSaleGuard.js";
 import { planNamesConflict } from "../domain/planNameGuard.js";
 import { resolveServiceAlias } from "../domain/serviceAlias.js";
 
@@ -2031,7 +2032,11 @@ export async function executeTool(
     }
 
     case "list_plans": {
-      const plans = (await wix.listPlans()).filter((p) => !config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(p.id));
+      const plans = (await wix.listPlans()).filter(
+        (p) =>
+          isPlanSellableByAwa(p.id, config.AWA_SELLABLE_PLAN_IDS) &&
+          !config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(p.id),
+      );
       return JSON.stringify(
         await Promise.all(
           plans.map(async (p) => {
@@ -2073,6 +2078,12 @@ export async function executeTool(
       // Price and existence come from the Wix catalog — never from the model.
       const plan = await wix.getPlan(planId);
       if (!plan) return JSON.stringify({ error: "unknown_plan_id", message: "Re-run list_plans and pick a plan_id from it." });
+      if (!isPlanSellableByAwa(plan.id, config.AWA_SELLABLE_PLAN_IDS)) {
+        return JSON.stringify({
+          error: "plan_not_sellable",
+          message: "This Wix plan is internal or not launched. Do not create a payment link; re-run list_plans.",
+        });
+      }
       if (config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(plan.id)) return JSON.stringify({ error: "reception_only_plan", message: "Reception activates this Pack Découverte continuation at the studio; do not sell it." });
       // Anti-conflation guard: the id and the name the model confirmed must be the
       // SAME plan. When a conversation jumps topics (e.g. Pack Découverte → Aquabike)
