@@ -1519,4 +1519,40 @@ create table if not exists key_nudges (
   detail text,
   created_at timestamptz not null default now()
 );
+
+-- Wix remains the source of truth for attendance. This local projection keeps
+-- the admin leaderboard fast and retains the last successful snapshot during
+-- a temporary Wix outage.
+create table if not exists wix_attendance_records (
+  attendance_id text primary key,
+  booking_id text not null,
+  wix_contact_id text,
+  client_name text,
+  client_phone text,
+  client_phone_key text,
+  service_id text,
+  service_name text,
+  event_id text,
+  session_start timestamptz,
+  status text not null,
+  number_of_attendees integer not null default 1,
+  synced_at timestamptz not null default now()
+);
+create index if not exists idx_wix_attendance_rank
+  on wix_attendance_records (status, session_start desc);
+create index if not exists idx_wix_attendance_contact
+  on wix_attendance_records (wix_contact_id);
+create index if not exists idx_wix_attendance_phone
+  on wix_attendance_records (client_phone_key);
+
+create table if not exists wix_attendance_sync_state (
+  singleton boolean primary key default true check (singleton),
+  last_started_at timestamptz,
+  last_succeeded_at timestamptz,
+  last_error text,
+  record_count integer not null default 0
+);
+insert into wix_attendance_sync_state (singleton)
+  values (true)
+  on conflict (singleton) do nothing;
 `;

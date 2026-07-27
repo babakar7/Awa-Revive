@@ -69,6 +69,7 @@ import {
   findContactIdByPhone,
   mergeContacts,
   getContactById,
+  getWixDeliveryClient,
   listAllActiveOrders,
   listServices,
   findMemberContactIds,
@@ -143,6 +144,14 @@ import * as adminOps from "../domain/adminOperations.js";
 import { renderAdminReport, renderAuditPage } from "./reportPage.js";
 import { bookingConversionDashboard } from "../domain/bookingFunnel.js";
 import { renderConversionPage } from "./conversionPage.js";
+import {
+  attendanceDetail,
+  attendanceLeaders,
+  attendanceSyncState,
+  parseAttendancePeriod,
+  syncAttendanceLeaderboard,
+} from "../domain/attendanceLeaderboard.js";
+import { renderAttendanceLeaderboard } from "./attendanceLeaderboardPage.js";
 import * as keyRepo from "../domain/keyRepo.js";
 import { extendKeySevenDays } from "../domain/keyExtension.js";
 
@@ -479,6 +488,54 @@ export function registerAdmin(app: FastifyInstance): void {
             contentWidth: "wide",
           }),
         );
+      });
+
+      // ---------- Classement des présences ----------
+      admin.get("/classement", async (req, reply) => {
+        const query = req.query as Record<string, string | undefined>;
+        const period = parseAttendancePeriod(query.period);
+        const page = Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1);
+        const search = String(query.q ?? "").trim().slice(0, 100);
+        const selectedId = String(query.client ?? "").trim();
+        const [leaders, sync, searchResults, selectedClient] = await Promise.all([
+          attendanceLeaders({ period, page }),
+          attendanceSyncState(),
+          search.length >= 2 ? searchWixDeliveryClients(search, 12).catch(() => []) : [],
+          selectedId ? getWixDeliveryClient(selectedId).catch(() => null) : null,
+        ]);
+        const detail = selectedClient
+          ? await attendanceDetail({ period, wixContactId: selectedClient.id, phone: selectedClient.phone })
+          : null;
+        reply.type("text/html").send(
+          await layout(
+            "Classement clients",
+            "/admin/classement",
+            renderAttendanceLeaderboard({
+              period,
+              leaders: leaders.rows,
+              total: leaders.total,
+              page,
+              search,
+              searchResults,
+              selectedClient,
+              detail,
+              sync,
+              notice: query.done === "refreshed" ? "Les présences Wix ont été actualisées." : undefined,
+            }),
+            { subtitle: "Séances marquées présentes", contentWidth: "wide" },
+          ),
+        );
+      });
+
+      admin.post("/classement/refresh", async (req, reply) => {
+        try {
+          const result = await syncAttendanceLeaderboard(true);
+          const done = result.ran ? "refreshed" : "refreshing";
+          return reply.redirect(`/admin/classement?done=${done}`, 303);
+        } catch (error) {
+          req.log.error({ err: error }, "Attendance leaderboard refresh failed");
+          return reply.redirect(`/admin/classement?err=${encodeURIComponent("Synchronisation Wix indisponible")}`, 303);
+        }
       });
 
       admin.get("/journal", async (req, reply) => {

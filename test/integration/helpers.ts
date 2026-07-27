@@ -55,6 +55,10 @@ export interface WixState {
   calendarEvents: any[];
   failCalendar: boolean;
   staffResources: Array<{ id: string; name: string; email?: string; phone?: string; tags?: string[] }>;
+  /** Attendance API fixture for the client leaderboard. */
+  attendanceRecords: any[];
+  /** Extended-booking fixtures keyed by Wix booking id. */
+  attendanceBookings: Record<string, any>;
 }
 
 /**
@@ -162,6 +166,8 @@ export function makeFetchMock(): FetchMock {
     calendarEvents: [],
     failCalendar: false,
     staffResources: [],
+    attendanceRecords: [],
+    attendanceBookings: {},
   };
 
   let failEmail = false;
@@ -319,17 +325,17 @@ export function makeFetchMock(): FetchMock {
       return json(200, { resources: wix.staffResources });
     }
 
+    // --- Wix attendance leaderboard ---
+    if (url.includes("/bookings/bookings-attendance/query")) {
+      return json(200, { attendances: wix.attendanceRecords, pagingMetadata: { cursors: {} } });
+    }
+
     // --- Wix booking reader (revision required by cancel/reschedule) ---
     if (url.includes("/_api/bookings-reader/v2/extended-bookings/query")) {
       const ids: string[] = body?.query?.filter?.id?.$in ?? [];
       return json(200, {
-        extendedBookings: ids.map((id) => ({
-          booking: {
-            id,
-            revision: "1",
-            status: "CONFIRMED",
-            bookedEntity: { slot: { serviceId: wix.serviceId, startDate: wix.slotStart } },
-          },
+        extendedBookings: ids.map((id) => wix.attendanceBookings[id] ?? ({
+          booking: { id, revision: "1", status: "CONFIRMED", bookedEntity: { slot: { serviceId: wix.serviceId, startDate: wix.slotStart } } },
         })),
       });
     }
@@ -340,6 +346,10 @@ export function makeFetchMock(): FetchMock {
     }
 
     // --- Wix contacts (phone → contact match; none = Wix creates its own) ---
+    if (url.includes("/contacts/v4/contacts/") && method === "GET") {
+      const id = decodeURIComponent(url.split("/contacts/").at(-1) ?? "");
+      return json(200, { contact: wix.contacts.find((contact) => contact?.id === id) ?? null });
+    }
     if (url.includes("/contacts/v4/contacts/query")) {
       return json(200, { contacts: wix.contacts });
     }
@@ -473,6 +483,8 @@ export function makeFetchMock(): FetchMock {
       wix.calendarEvents = [];
       wix.failCalendar = false;
       wix.staffResources = [];
+      wix.attendanceRecords = [];
+      wix.attendanceBookings = {};
       failEmail = false;
       waTemplateFailures.clear();
       const d = defaultOmState();

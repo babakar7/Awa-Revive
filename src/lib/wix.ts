@@ -395,6 +395,91 @@ export async function getBookingStatuses(bookingIds: string[]): Promise<Record<s
   return out;
 }
 
+// ---------- attendance leaderboard ----------
+
+export interface WixAttendanceRecord {
+  id: string;
+  bookingId: string;
+  eventId: string | null;
+  status: "ATTENDED" | "NOT_ATTENDED" | string;
+  numberOfAttendees: number;
+}
+
+export interface WixAttendanceBookingSnapshot {
+  bookingId: string;
+  contactId: string | null;
+  clientName: string | null;
+  clientPhone: string | null;
+  serviceId: string | null;
+  serviceName: string | null;
+  sessionStart: string | null;
+}
+
+/**
+ * Read every attendance entry through Wix's dedicated Attendance API. The
+ * endpoint is paged by cursor; attendance can be corrected later, so callers
+ * reconcile the complete set rather than assuming entries are immutable.
+ */
+export async function listWixAttendanceRecords(): Promise<WixAttendanceRecord[]> {
+  const records: WixAttendanceRecord[] = [];
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  for (;;) {
+    const data = await wixPost("/bookings/bookings-attendance/query", {
+      query: { cursorPaging: { limit: 100, ...(cursor ? { cursor } : {}) } },
+    });
+    const batch: any[] = Array.isArray(data?.attendances) ? data.attendances : [];
+    for (const attendance of batch) {
+      if (!attendance?.id || !attendance?.bookingId) continue;
+      records.push({
+        id: String(attendance.id),
+        bookingId: String(attendance.bookingId),
+        eventId: attendance.eventId ? String(attendance.eventId) : attendance.sessionId ? String(attendance.sessionId) : null,
+        status: String(attendance.status ?? "UNKNOWN").toUpperCase(),
+        numberOfAttendees: Math.max(0, Number(attendance.numberOfAttendees ?? 1) || 0),
+      });
+    }
+    const next = data?.pagingMetadata?.cursors?.next;
+    if (typeof next !== "string" || !next || seen.has(next)) break;
+    seen.add(next);
+    cursor = next;
+  }
+  return records;
+}
+
+/** Resolve contact, service and date for attendance rows in a single reader call. */
+export async function getWixAttendanceBookingSnapshots(
+  bookingIds: string[],
+): Promise<WixAttendanceBookingSnapshot[]> {
+  if (bookingIds.length === 0) return [];
+  const out: WixAttendanceBookingSnapshot[] = [];
+  for (let i = 0; i < bookingIds.length; i += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: { filter: { id: { $in: bookingIds.slice(i, i + 100) } } },
+    });
+    for (const entry of data?.extendedBookings ?? []) {
+      const booking = entry?.booking;
+      if (!booking?.id) continue;
+      const slot = booking?.bookedEntity?.slot ?? booking?.bookedEntity?.schedule ?? {};
+      const contact = booking?.contactDetails ?? {};
+      const name = [contact.firstName, contact.lastName]
+        .map((part) => String(part ?? "").trim())
+        .filter(Boolean)
+        .join(" ");
+      out.push({
+        bookingId: String(booking.id),
+        contactId: contact.contactId ? String(contact.contactId) : null,
+        clientName: name || null,
+        clientPhone: contact.phone ? String(contact.phone) : null,
+        serviceId: slot.serviceId ? String(slot.serviceId) : null,
+        serviceName: booking?.bookedEntity?.title ? String(booking.bookedEntity.title) : null,
+        sessionStart: slot.startDate ?? slot.firstSessionStart ?? null,
+      });
+    }
+  }
+  return out;
+}
+
 // ---------- Booking contact repair (cas « A »/Amy Ndiaye, PROGRESS §6.6bis) ----------
 
 export interface BookingContactSnapshot {
@@ -986,6 +1071,11 @@ export async function getContactById(contactId: string): Promise<any | null> {
   if (!res.ok) throw new Error(`Wix get contact failed (${res.status}): ${await res.text()}`);
   const data: any = await res.json();
   return data?.contact ?? null;
+}
+
+/** Presentation-safe lookup for admin pages selecting one Wix client by id. */
+export async function getWixDeliveryClient(contactId: string): Promise<WixDeliveryClient | null> {
+  return wixDeliveryClientFromContact(await getContactById(contactId));
 }
 
 // ---------- email-based account linking (liaison par email vérifié) ----------

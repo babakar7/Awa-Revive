@@ -29,6 +29,7 @@ import { closeOpsSseConnections } from "./ops/opsRoutes.js";
 import { closeInactiveBookingJourneys } from "./domain/bookingFunnel.js";
 import { sweepDueKeyBonuses } from "./domain/keyProvisioning.js";
 import { sweepKeyNudges } from "./domain/keyNudge.js";
+import { syncAttendanceLeaderboard } from "./domain/attendanceLeaderboard.js";
 
 async function main() {
   assertConfig();
@@ -70,6 +71,13 @@ async function main() {
   startOmTokenKeepAlive();
 
   const app = buildServer();
+
+  // Attendance is a read-only Wix projection for the admin leaderboard. Do
+  // not delay boot on a long historical import; the durable cache is filled in
+  // the background and every later run is capped to once per hour.
+  void syncAttendanceLeaderboard().catch((err) =>
+    app.log.warn({ err }, "Initial Wix attendance sync failed"),
+  );
 
   // Periodic TTL sweep: AWAITING_PAYMENT past link_expires_at → EXPIRED.
   const sweeper = setInterval(async () => {
@@ -173,6 +181,12 @@ async function main() {
       if (nudged > 0) app.log.info({ nudged }, "Key lifecycle nudges sent");
     } catch (err) {
       app.log.error({ err }, "Key lifecycle nudge sweep failed");
+    }
+    try {
+      const synced = await syncAttendanceLeaderboard();
+      if (synced.ran) app.log.info({ attendanceRecords: synced.recordCount }, "Wix attendance synced");
+    } catch (err) {
+      app.log.warn({ err }, "Wix attendance sync failed");
     }
     try {
       // Story Instagram du soir : image des cours de demain envoyée au gérant
