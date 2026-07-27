@@ -110,6 +110,7 @@ const MAX_DESC = 200;
 const MAX_RECIPE_FIELD = 5_000;
 const MAX_OPTION_LABEL = 40;
 const MAX_OPTION_CHOICES = 200;
+export const MAX_MENU_OPTION_RESPONSES = 12;
 
 export function isRecipeComplete(
   item: Pick<MenuItemView, "recipe_ingredients" | "recipe_steps" | "no_recipe_needed">,
@@ -118,8 +119,30 @@ export function isRecipeComplete(
   return Boolean(item.recipe_ingredients?.trim() && item.recipe_steps?.trim());
 }
 
+function submittedOptionChoices(body: Record<string, unknown>): string[] | { error: string } {
+  const indexed = Object.entries(body)
+    .flatMap(([key, value]) => {
+      const match = key.match(/^option_choices\[(\d+)\]$/);
+      return match ? [{ index: Number(match[1]), value }] : [];
+    })
+    .sort((a, b) => a.index - b.index);
+
+  // New forms submit one indexed field per visible row. If none are present,
+  // keep accepting the former pipe-separated field used by older clients.
+  const rawValues = indexed.length ? indexed.map((entry) => entry.value) : [body.option_choices];
+  const choices = rawValues
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .flatMap((value) => String(value ?? "").split("|"))
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (choices.length > MAX_MENU_OPTION_RESPONSES)
+    return { error: `ajoutez au maximum ${MAX_MENU_OPTION_RESPONSES} réponses proposées.` };
+  return choices;
+}
+
 /** Pure: validate/normalize the admin form. */
-export function parseMenuItemForm(body: Record<string, string>): MenuItemInput | { error: string } {
+export function parseMenuItemForm(body: Record<string, unknown>): MenuItemInput | { error: string } {
   const name = String(body.name ?? "").trim();
   if (!name) return { error: "le nom de l'article est requis." };
   if (name.length > MAX_NAME) return { error: `nom trop long (max ${MAX_NAME}).` };
@@ -146,14 +169,18 @@ export function parseMenuItemForm(body: Record<string, string>): MenuItemInput |
 
   const optionLabel = String(body.option_label ?? "").trim();
   if (optionLabel.length > MAX_OPTION_LABEL)
-    return { error: `libellé du choix trop long (max ${MAX_OPTION_LABEL}).` };
-  // Normalize the pipe-separated list (trim, drop empties) so what's stored is
-  // exactly what the order form and validation compare against.
-  const optionChoices = parseOptionChoices(body.option_choices).join(" | ");
+    return { error: `intitulé du choix trop long (${MAX_OPTION_LABEL} caractères maximum).` };
+  const submittedChoices = submittedOptionChoices(body);
+  if ("error" in submittedChoices) return submittedChoices;
+  // Keep the existing canonical DB representation so public-menu, delivery and
+  // WhatsApp consumers remain unchanged.
+  const optionChoices = submittedChoices.join(" | ");
   if (optionChoices.length > MAX_OPTION_CHOICES)
-    return { error: `liste des options trop longue (max ${MAX_OPTION_CHOICES}).` };
+    return {
+      error: `réponses proposées trop longues (${MAX_OPTION_CHOICES} caractères maximum au total).`,
+    };
   if (optionChoices && !optionLabel)
-    return { error: "indique un libellé de choix (ex. « Boisson ») pour les options." };
+    return { error: "indiquez un intitulé du choix dès qu’une réponse est proposée." };
 
   return {
     name,

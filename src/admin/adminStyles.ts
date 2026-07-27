@@ -286,6 +286,21 @@ form.inline{display:inline}
 .menu-editor-heading p{margin:.25rem 0 0}
 .menu-form-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(150px,.5fr);gap:1rem}
 .menu-form-grid .menu-description{grid-column:1/-1}
+.choice-editor{grid-column:1/-1;display:grid;gap:1rem;padding:1rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--cream-25)}
+.choice-editor-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}
+.choice-editor-heading h3{margin:0;font-size:1.02rem}
+.choice-editor-heading p{margin:.3rem 0 0;max-width:68ch}
+.choice-label{max-width:620px}
+.choice-responses{display:grid;gap:.75rem}
+.choice-responses-heading{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
+.choice-responses-heading .field-help{margin-top:.15rem}
+.choice-response-list{display:grid;gap:.6rem}
+.choice-response-row{display:grid;grid-template-columns:2rem minmax(0,1fr) auto;align-items:center;gap:.65rem}
+.choice-response-row input{width:100%;margin:0}
+.choice-response-number{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border-radius:999px;background:var(--plum-100);color:var(--brand-strong);font-size:.82rem;font-weight:750}
+.choice-remove{min-width:100px}
+.choice-response-actions{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+.choice-response-actions .field-help{margin:0}
 .menu-form-grid .menu-favourite{grid-column:1/-1;display:flex;align-items:center;gap:.5rem;padding:.7rem .75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--cream-25)}
 .menu-form-grid .menu-favourite input{flex:0 0 auto;margin:0}
 .recipe-editor{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
@@ -418,6 +433,12 @@ details>summary{cursor:pointer}
   .statement-summary>div:last-child,.finance-total{align-items:flex-start;text-align:left}
   .menu-stats,.menu-filters,.menu-form-grid,.recipe-editor{grid-template-columns:1fr}
   .menu-search,.menu-filter-actions,.menu-form-grid .menu-description,.menu-form-grid .menu-favourite,.recipe-editor .menu-editor-heading{grid-column:1}
+  .choice-editor{grid-column:1;padding:.85rem}
+  .choice-responses-heading{align-items:flex-start;flex-direction:column}
+  .choice-response-row{grid-template-columns:2rem minmax(0,1fr)}
+  .choice-response-row .choice-remove{grid-column:2;width:100%;min-height:42px}
+  .choice-response-actions{align-items:stretch;flex-direction:column}
+  .choice-response-actions .act{width:100%;min-height:46px}
   .menu-danger-zone{align-items:stretch;flex-direction:column}
 }
 @media(prefers-reduced-motion:reduce){

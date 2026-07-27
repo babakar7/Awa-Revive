@@ -180,6 +180,36 @@ describe("admin recipe workflow", () => {
     expect(getCafeMenu().promptText).not.toContain("Presser puis allonger");
   });
 
+  it("stores indexed customer responses canonically and renders them as separate rows", async () => {
+    const created = await post("/admin/menu/items", {
+      name: "Latte Maison",
+      price_xof: "2500",
+      category: "BOISSONS CHAUDES",
+      option_label: " Type de lait ",
+      "option_choices[0]": " Entier ",
+      "option_choices[1]": "",
+      "option_choices[2]": " Avoine ",
+    });
+    expect(created.statusCode).toBe(303);
+
+    const stored = (await listMenuItems()).find((row) => row.id === "LATTE_MAISON");
+    expect(stored).toMatchObject({
+      option_label: "Type de lait",
+      option_choices: "Entier | Avoine",
+    });
+
+    const detail = await app.inject({
+      method: "GET",
+      url: created.headers.location!,
+      headers: { authorization: AUTH },
+    });
+    expect(detail.body).toContain('name="option_choices[0]"');
+    expect(detail.body).toContain('value="Entier"');
+    expect(detail.body).toContain('name="option_choices[1]"');
+    expect(detail.body).toContain('value="Avoine"');
+    expect(detail.body).toContain("2 réponses enregistrées");
+  });
+
   it("supports recipe filters and redirects the legacy inline edit URL", async () => {
     const missing = await app.inject({
       method: "GET",

@@ -104,14 +104,17 @@ function scheduledEditor(o: DeliveryOrder): string {
             60000,
         )
       : 60;
+  const presetLead = [30, 60, 90].includes(lead);
   return `<form method="post" action="${esc(base)}/reschedule" class="delivery-secondary-form">
   <b>Reprogrammer</b>
   <label>Nouvelle arrivée (Dakar)<input name="scheduled_for" type="datetime-local" required value="${esc(arrival)}"></label>
   <label>Alerter la cuisine
     <select name="kitchen_lead_minutes">
       ${[30, 60, 90].map((n) => `<option value="${n}"${lead === n ? " selected" : ""}>${n} min avant</option>`).join("")}
+      <option value="custom"${presetLead ? "" : " selected"}>Autre délai…</option>
     </select>
   </label>
+  <label>Délai personnalisé <span class="muted">(1 à 90 min avant)</span><input name="kitchen_lead_custom" type="number" min="1" max="90" step="1" inputmode="numeric" value="${presetLead ? "" : esc(lead)}" placeholder="Ex. 45"></label>
   <button class="act act--sm act--ghost" type="submit">Enregistrer le nouvel horaire</button>
 </form>`;
 }
@@ -529,6 +532,7 @@ export interface LivraisonPrefill {
   delivery_mode?: string;
   scheduled_for?: string;
   kitchen_lead_minutes?: string;
+  kitchen_lead_custom?: string;
   is_test?: string;
   qty?: Record<string, number>;
   choice?: Record<string, string>;
@@ -552,6 +556,7 @@ export function renderLivraisonForm(
     "recipient_phone",
     "articles",
     "scheduled_for",
+    "kitchen_lead_minutes",
   ];
   const firstError = errorOrder.find((name) => errors[name]);
   const fieldError = (name: string) =>
@@ -616,9 +621,12 @@ ${optionSelect}</div>`;
     : "";
   const sla = prefill.sla_minutes ?? String(config.DELIVERY_SLA_MINUTES);
   const deliveryMode = prefill.delivery_mode === "scheduled" ? "scheduled" : "now";
-  const kitchenLead = [30, 60, 90].includes(Number(prefill.kitchen_lead_minutes))
-    ? Number(prefill.kitchen_lead_minutes)
-    : 60;
+  const submittedLead = String(prefill.kitchen_lead_minutes ?? "60");
+  const presetLead = [30, 60, 90].includes(Number(submittedLead));
+  const kitchenLead = presetLead ? Number(submittedLead) : "custom";
+  const customKitchenLead =
+    prefill.kitchen_lead_custom ??
+    (submittedLead !== "custom" && !presetLead ? submittedLead : "");
   const scheduleMin = dakarInputValue(new Date(Date.now() + 60_000));
   const hasWixClient = !!prefill.wix_contact_id;
   const hasRecipient = !!(prefill.recipient_name || prefill.recipient_phone);
@@ -700,7 +708,12 @@ ${optionSelect}</div>`;
         <label>Alerter la cuisine
           <select name="kitchen_lead_minutes">
             ${[30, 60, 90].map((n) => `<option value="${n}"${kitchenLead === n ? " selected" : ""}>${n} minutes avant l'arrivée</option>`).join("")}
+            <option value="custom"${kitchenLead === "custom" ? " selected" : ""}>Autre délai à renseigner manuellement…</option>
           </select>
+        </label>
+        <label>Délai personnalisé <span class="muted">(1 à 90 minutes avant l’arrivée)</span>
+          <input name="kitchen_lead_custom" type="number" min="1" max="90" step="1" inputmode="numeric" value="${esc(customKitchenLead)}" placeholder="Ex. 45"${fieldState("kitchen_lead_minutes")}>
+          ${fieldError("kitchen_lead_minutes")}
         </label>
         <span class="muted">Si ce délai est déjà atteint, la commande sera activée immédiatement.</span>
       </div>

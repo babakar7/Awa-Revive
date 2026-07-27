@@ -280,6 +280,46 @@ describe("delivery order creation → kitchen notify", () => {
 });
 
 describe("scheduled deliveries", () => {
+  it("accepts a manual kitchen lead between 1 and 90 minutes", async () => {
+    const id = await createOrder({
+      delivery_mode: "scheduled",
+      scheduled_for: dakarInputIn(24 * 60),
+      kitchen_lead_minutes: "custom",
+      kitchen_lead_custom: "45",
+    });
+    const row = (
+      await pool.query(
+        `select scheduled_for, kitchen_notify_at from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(
+      Math.round(
+        (new Date(row.scheduled_for).getTime() - new Date(row.kitchen_notify_at).getTime()) /
+          60_000,
+      ),
+    ).toBe(45);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        client_name: "Rama",
+        client_phone: "770009988",
+        address: "Almadies",
+        delivery_mode: "scheduled",
+        scheduled_for: dakarInputIn(24 * 60),
+        kitchen_lead_minutes: "custom",
+        kitchen_lead_custom: "91",
+        qty_SMOOTHIE_JANT_BI: "1",
+      }).toString(),
+    });
+    expect(invalid.statusCode).toBe(200);
+    expect(invalid.body).toContain("entre 1 et 90 minutes");
+    expect(invalid.body).toContain('value="91"');
+  });
+
   it("rejects a past arrival and activates immediately when the kitchen deadline is already due", async () => {
     const past = await app.inject({
       method: "POST",
@@ -491,6 +531,30 @@ describe("scheduled deliveries", () => {
       }).toString(),
     });
     expect(leadOnly.headers.location).toContain("done=reprogrammed");
+    const customLead = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/reschedule`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        scheduled_for: secondArrival,
+        kitchen_lead_minutes: "custom",
+        kitchen_lead_custom: "45",
+      }).toString(),
+    });
+    expect(customLead.headers.location).toContain("done=reprogrammed");
+    const timing = (
+      await pool.query(
+        `select scheduled_for, kitchen_notify_at from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(
+      Math.round(
+        (new Date(timing.scheduled_for).getTime() -
+          new Date(timing.kitchen_notify_at).getTime()) /
+          60_000,
+      ),
+    ).toBe(45);
     await sweepDeliveries(noopLog);
     expect(await rescheduleCount()).toBe(1);
   });

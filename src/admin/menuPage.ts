@@ -1,4 +1,10 @@
-import { isRecipeComplete, type CategoryView, type MenuItemView } from "../domain/cafeMenuRepo.js";
+import {
+  isRecipeComplete,
+  MAX_MENU_OPTION_RESPONSES,
+  type CategoryView,
+  type MenuItemView,
+} from "../domain/cafeMenuRepo.js";
+import { parseOptionChoices } from "../lib/cafeMenu.js";
 
 /** Server-rendered menu catalogue and internal recipe editor. */
 
@@ -240,6 +246,69 @@ function recipeState(item: MenuItemView | null): string {
   return recipeBadge(item);
 }
 
+function optionResponseRow(value: string, index: number): string {
+  const number = index + 1;
+  return `<div class="choice-response-row" data-choice-row>
+  <span class="choice-response-number" aria-hidden="true">${number}</span>
+  <label class="visually-hidden" for="option-choice-${index}">Réponse proposée ${number}</label>
+  <input id="option-choice-${index}" name="option_choices[${index}]" maxlength="200" value="${esc(value)}" placeholder="Ex. Lait d’avoine" autocomplete="off">
+  <button class="act act--sm act--ghost choice-remove" type="button" aria-label="Supprimer la réponse ${number}">Supprimer</button>
+</div>`;
+}
+
+const MENU_OPTION_EDITOR_SCRIPT = `<script>
+(function(){
+  var editor=document.querySelector('[data-choice-editor]');
+  if(!editor)return;
+  var rows=editor.querySelector('[data-choice-rows]');
+  var add=editor.querySelector('[data-choice-add]');
+  var count=editor.querySelector('[data-choice-count]');
+  var max=${MAX_MENU_OPTION_RESPONSES};
+  function rowHtml(){
+    var row=document.createElement('div');
+    row.className='choice-response-row';
+    row.setAttribute('data-choice-row','');
+    row.innerHTML='<span class="choice-response-number" aria-hidden="true"></span><label class="visually-hidden"></label><input maxlength="200" placeholder="Ex. Lait d’avoine" autocomplete="off"><button class="act act--sm act--ghost choice-remove" type="button">Supprimer</button>';
+    return row;
+  }
+  function update(){
+    var all=[].slice.call(rows.querySelectorAll('[data-choice-row]'));
+    var saved=0;
+    all.forEach(function(row,index){
+      var number=index+1;
+      var input=row.querySelector('input');
+      var label=row.querySelector('label');
+      var remove=row.querySelector('button');
+      var id='option-choice-'+index;
+      row.querySelector('.choice-response-number').textContent=number;
+      input.id=id;input.name='option_choices['+index+']';
+      label.htmlFor=id;label.textContent='Réponse proposée '+number;
+      remove.setAttribute('aria-label','Supprimer la réponse '+number);
+      if(input.value.trim())saved++;
+    });
+    count.textContent=saved+' réponse'+(saved===1?'':'s')+' enregistrée'+(saved===1?'':'s');
+    add.disabled=all.length>=max;
+    add.setAttribute('aria-disabled',add.disabled?'true':'false');
+  }
+  add.addEventListener('click',function(){
+    if(rows.querySelectorAll('[data-choice-row]').length>=max)return;
+    var row=rowHtml();rows.appendChild(row);update();row.querySelector('input').focus();
+  });
+  rows.addEventListener('click',function(event){
+    var button=event.target.closest('.choice-remove');
+    if(!button)return;
+    var all=rows.querySelectorAll('[data-choice-row]');
+    var row=button.closest('[data-choice-row]');
+    if(all.length===1){row.querySelector('input').value='';row.querySelector('input').focus();}
+    else row.remove();
+    update();
+  });
+  rows.addEventListener('input',update);
+  editor.closest('form').addEventListener('submit',update);
+  update();
+})();
+</script>`;
+
 export function renderMenuItemForm(opts: {
   item: MenuItemView | null;
   categories: string[];
@@ -254,7 +323,8 @@ export function renderMenuItemForm(opts: {
   const ingredients = esc(item?.recipe_ingredients);
   const steps = esc(item?.recipe_steps);
   const optionLabel = esc(item?.option_label);
-  const optionChoices = esc(item?.option_choices);
+  const optionChoices = parseOptionChoices(item?.option_choices);
+  const optionRows = optionChoices.length ? optionChoices : [""];
   const favourite = item?.favourite ? " checked" : "";
   const noRecipeNeeded = item?.no_recipe_needed ? " checked" : "";
 
@@ -277,8 +347,17 @@ export function renderMenuItemForm(opts: {
           .join("")
       }</select></label>
       <label class="menu-description">Description commerciale<span class="field-help">Courte présentation visible par Awa et les clients.</span><textarea name="description" rows="3" maxlength="200" placeholder="Goût, ingrédients principaux ou bénéfice client…">${description}</textarea></label>
-      <label>Choix — libellé<span class="field-help">Laissez vide si l’article n’a pas de choix. Ex. « Boisson », « Lait ».</span><input name="option_label" maxlength="40" value="${optionLabel}" placeholder="Boisson"></label>
-      <label>Choix — options<span class="field-help">Séparez les options par une barre «&nbsp;|&nbsp;». Ex. « Jus d’orange | Boisson chaude ». À la commande, le choix devient obligatoire.</span><input name="option_choices" maxlength="200" value="${optionChoices}" placeholder="Jus d’orange | Boisson chaude"></label>
+      <section class="choice-editor" data-choice-editor aria-labelledby="choice-editor-title">
+        <div class="choice-editor-heading">
+          <div><h3 id="choice-editor-title">Choix demandé au client (facultatif)</h3><p class="field-help">Exemple : demandez « Type de lait » et proposez « Lait entier » ou « Lait d’avoine ». À la commande, le client devra choisir une réponse.</p></div>
+        </div>
+        <label class="choice-label">Intitulé du choix<span class="field-help">Une courte question, par exemple « Type de lait » ou « Boisson incluse ».</span><input name="option_label" maxlength="40" value="${optionLabel}" placeholder="Type de lait"></label>
+        <div class="choice-responses">
+          <div class="choice-responses-heading"><div><b>Réponses proposées</b><span class="field-help">Une réponse par ligne, dans l’ordre présenté au client.</span></div><span class="badge badge--gray" data-choice-count aria-live="polite">${optionChoices.length} réponse${optionChoices.length === 1 ? "" : "s"} enregistrée${optionChoices.length === 1 ? "" : "s"}</span></div>
+          <div class="choice-response-list" data-choice-rows>${optionRows.map(optionResponseRow).join("")}</div>
+          <div class="choice-response-actions"><button class="act act--ghost" type="button" data-choice-add>Ajouter une réponse</button><span class="field-help">${MAX_MENU_OPTION_RESPONSES} réponses maximum.</span></div>
+        </div>
+      </section>
       <label class="menu-favourite"><input type="checkbox" name="favourite"${favourite}> Incontournable proposé sur WhatsApp</label>
     </div>
   </section>
@@ -290,7 +369,8 @@ export function renderMenuItemForm(opts: {
   </section>
   <div class="actionbar"><button class="act" type="submit">${creating ? "Créer l’article" : "Enregistrer les modifications"}</button><a class="act act--ghost" href="/admin/menu">Retour au menu</a></div>
 </form>
-${item ? `<div class="card menu-danger-zone"><div><b>${item.enabled ? "Retirer cet article" : "Remettre cet article au menu"}</b><p class="muted">La recette et l’historique sont conservés.</p></div><form class="inline" method="post" action="/admin/menu/items/${query(item.id)}/toggle"${item.enabled ? ` data-confirm="Retirer « ${esc(item.name)} » du menu ? L’article pourra être restauré plus tard."` : ""}><button class="act ${item.enabled ? "act--danger" : "act--ok"}" type="submit">${item.enabled ? "Retirer du menu" : "Remettre au menu"}</button></form></div>` : ""}`;
+${item ? `<div class="card menu-danger-zone"><div><b>${item.enabled ? "Retirer cet article" : "Remettre cet article au menu"}</b><p class="muted">La recette et l’historique sont conservés.</p></div><form class="inline" method="post" action="/admin/menu/items/${query(item.id)}/toggle"${item.enabled ? ` data-confirm="Retirer « ${esc(item.name)} » du menu ? L’article pourra être restauré plus tard."` : ""}><button class="act ${item.enabled ? "act--danger" : "act--ok"}" type="submit">${item.enabled ? "Retirer du menu" : "Remettre au menu"}</button></form></div>` : ""}
+${MENU_OPTION_EDITOR_SCRIPT}`;
 }
 
 /** Category manager: add + per-row rename / delete (delete disabled when used). */

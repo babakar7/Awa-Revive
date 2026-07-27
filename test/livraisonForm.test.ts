@@ -80,6 +80,8 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(html).toContain(`<option value="60" selected>60 minutes avant`);
     expect(html).toContain(`<option value="30">30 minutes avant`);
     expect(html).toContain(`<option value="90">90 minutes avant`);
+    expect(html).toContain(`<option value="custom">Autre délai à renseigner manuellement`);
+    expect(html).toContain(`name="kitchen_lead_custom" type="number" min="1" max="90"`);
   });
 
   it("preserves scheduled fields after a validation error", () => {
@@ -91,6 +93,17 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(html).toContain(`value="scheduled" checked`);
     expect(html).toContain(`value="2026-08-04T14:30" required`);
     expect(html).toContain(`<option value="90" selected>`);
+  });
+
+  it("preserves a manually entered kitchen lead after a validation error", () => {
+    const html = renderLivraisonForm(menu(), "", [], {
+      delivery_mode: "scheduled",
+      scheduled_for: "2026-08-04T14:30",
+      kitchen_lead_minutes: "custom",
+      kitchen_lead_custom: "45",
+    });
+    expect(html).toContain(`<option value="custom" selected>`);
+    expect(html).toContain(`name="kitchen_lead_custom" type="number" min="1" max="90" step="1" inputmode="numeric" value="45"`);
   });
 
   it("prefills client fields on error re-render, escaping HTML", () => {

@@ -167,6 +167,13 @@ function parseDeliveryRecipientFields(
   return { recipientName, recipientPhone };
 }
 
+function parseKitchenLeadMinutes(body: Record<string, string>): number | null {
+  const selected = String(body.kitchen_lead_minutes ?? "60");
+  const raw = selected === "custom" ? body.kitchen_lead_custom : selected;
+  const minutes = Number(String(raw ?? "").trim());
+  return Number.isInteger(minutes) && minutes >= 1 && minutes <= 90 ? minutes : null;
+}
+
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
 async function activePlansByContact(): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
@@ -866,6 +873,7 @@ ${
             delivery_mode: b.delivery_mode,
             scheduled_for: b.scheduled_for,
             kitchen_lead_minutes: b.kitchen_lead_minutes,
+            kitchen_lead_custom: b.kitchen_lead_custom,
             is_test: b.is_test,
             qty,
             choice,
@@ -886,11 +894,17 @@ ${
           );
         }
         const deliveryMode = b.delivery_mode === "scheduled" ? "scheduled" : "now";
-        const leadRaw = parseInt(String(b.kitchen_lead_minutes ?? "60"), 10);
-        const kitchenLead = [30, 60, 90].includes(leadRaw) ? leadRaw : 60;
         let scheduledFor: Date | null = null;
         let kitchenNotifyAt: Date | null = null;
+        let kitchenLead: number | null = null;
         if (deliveryMode === "scheduled") {
+          kitchenLead = parseKitchenLeadMinutes(b);
+          if (kitchenLead === null) {
+            return backErr(
+              "Le délai cuisine doit être un nombre entier entre 1 et 90 minutes.",
+              "kitchen_lead_minutes",
+            );
+          }
           scheduledFor = parseDakarDateTime(String(b.scheduled_for ?? ""));
           if (!scheduledFor) {
             return backErr("La date et l’heure d’arrivée sont invalides.", "scheduled_for");
@@ -1052,9 +1066,12 @@ ${
         if (scheduledFor.getTime() <= Date.now()) {
           return reply.redirect("/admin/livraisons?err=l'heure d'arrivée doit être dans le futur", 303);
         }
-        const lead = parseInt(String(b.kitchen_lead_minutes ?? "60"), 10);
-        if (![30, 60, 90].includes(lead)) {
-          return reply.redirect("/admin/livraisons?err=délai cuisine invalide", 303);
+        const lead = parseKitchenLeadMinutes(b);
+        if (lead === null) {
+          return reply.redirect(
+            "/admin/livraisons?err=délai cuisine invalide (1 à 90 minutes)",
+            303,
+          );
         }
         const kitchenNotifyAt = new Date(scheduledFor.getTime() - lead * 60_000);
         const changed = await delivery.reprogramDeliveryOrder(id, {

@@ -387,12 +387,53 @@ describe("parseMenuItemForm", () => {
       option_choices: "Jus d'orange | Boisson chaude",
     });
   });
-  it("defaults option fields to null when no choices are given", () => {
-    expect(parseMenuItemForm(base)).toMatchObject({ option_label: null, option_choices: null });
+  it("normalizes indexed responses in numeric order and ignores blank rows", () => {
+    const r = parseMenuItemForm({
+      ...base,
+      option_label: " Type de lait ",
+      "option_choices[2]": " Avoine ",
+      "option_choices[0]": " Entier ",
+      "option_choices[1]": "   ",
+    });
+    expect(r).toMatchObject({
+      option_label: "Type de lait",
+      option_choices: "Entier | Avoine",
+    });
   });
-  it("rejects choices without a label", () => {
-    expect(parseMenuItemForm({ ...base, option_choices: "A | B" })).toEqual({
-      error: expect.stringContaining("libellé"),
+  it("defaults option fields to null when no choices are given", () => {
+    expect(parseMenuItemForm({ ...base, option_label: "Sans réponses", "option_choices[0]": " " }))
+      .toMatchObject({ option_label: null, option_choices: null });
+  });
+  it("requires an option title when at least one indexed response is present", () => {
+    expect(parseMenuItemForm({ ...base, "option_choices[0]": "A" })).toEqual({
+      error: "indiquez un intitulé du choix dès qu’une réponse est proposée.",
+    });
+  });
+  it("explicitly rejects more than 12 responses", () => {
+    const responses = Object.fromEntries(
+      Array.from({ length: 13 }, (_, index) => [`option_choices[${index}]`, `Réponse ${index + 1}`]),
+    );
+    expect(parseMenuItemForm({ ...base, option_label: "Boisson", ...responses })).toEqual({
+      error: "ajoutez au maximum 12 réponses proposées.",
+    });
+    expect(
+      parseMenuItemForm({
+        ...base,
+        option_label: "Boisson",
+        option_choices: Array.from({ length: 13 }, (_, index) => `R${index + 1}`).join(" | "),
+      }),
+    ).toEqual({ error: "ajoutez au maximum 12 réponses proposées." });
+  });
+  it("retains compatibility with legacy pipe-separated submissions", () => {
+    expect(
+      parseMenuItemForm({
+        ...base,
+        option_label: " Boisson incluse ",
+        option_choices: " Jus d'orange | | Boisson chaude ",
+      }),
+    ).toMatchObject({
+      option_label: "Boisson incluse",
+      option_choices: "Jus d'orange | Boisson chaude",
     });
   });
 });
