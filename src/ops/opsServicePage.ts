@@ -29,7 +29,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v11";
+const ASSET_VERSION = "v12";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -564,6 +564,14 @@ export const SERVICE_APP_JS = String.raw`(function(){
   es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; tickets.set(t.id,t); render(); });
   es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ beep(); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
   es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); render(); });
+
+  // Keep the reception screen awake while the board is open. Wake Lock drops when
+  // the page hides, so re-acquire on visibility return; a no-op where unsupported.
+  var wakeLock=null;
+  function keepAwake(){ if(!('wakeLock' in navigator)||document.visibilityState!=='visible') return;
+    navigator.wakeLock.request('screen').then(function(w){ wakeLock=w; }).catch(function(){}); }
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') keepAwake(); });
+  keepAwake();
 
   if('serviceWorker' in navigator){ navigator.serviceWorker.register(BASE+'/sw.js').catch(function(){}); }
 })();`;
