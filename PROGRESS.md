@@ -3414,3 +3414,16 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   `AWA_SELLABLE_PLAN_IDS`, `KEYS_AUTOMATION_ENABLED=false`.
 - Vérification locale : build TypeScript, 693 tests unitaires et suite
   d'intégration PostgreSQL complète verts.
+
+## 2026-07-27 — Une seule relance de conversion L’Invitée
+
+- Les relances J-5 et 24 h avant la troisième séance deviennent deux branches
+  alternatives : pré-3e si la séance est déjà réservée, J-5 sinon.
+- Les deux chemins partagent le claim durable
+  `INVITEE_CONVERSION:<key_id>` : une cliente ne reçoit jamais les deux, y
+  compris si elle réserve sa troisième séance après avoir reçu la relance J-5.
+- Les deux templates Meta restent distincts (variables différentes), mais un
+  seul peut être consommé par Clé. L’automatisation reste sombre tant que
+  `KEYS_AUTOMATION_ENABLED=false`.
+- Vérification : build TypeScript, 694 tests unitaires et les 7 scénarios
+  d’intégration du registre Clés verts.

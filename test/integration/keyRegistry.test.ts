@@ -224,6 +224,39 @@ describe("Clés registry", () => {
     });
   });
 
+  it("allows only one L'Invitée conversion message across J-5 and pre-third-session", async () => {
+    const client = await seedClient();
+    const key = await keys.upsertKey({
+      paidOrderId: "invitee-conversion-nudge",
+      clientId: client.id,
+      mapping: { ...mapping, type: "INVITEE" },
+      startsAt: new Date(inHours(-1)),
+      endsAt: new Date(inHours(21 * 24)),
+      status: "ACTIVE",
+    });
+    const sharedClaim = {
+      dedupKey: `INVITEE_CONVERSION:${key.id}`,
+      keyId: key.id,
+      clientId: client.id,
+    };
+
+    // Whichever branch arrives first owns the one lifetime conversion send.
+    await expect(keys.claimKeyNudge(sharedClaim)).resolves.toBe(true);
+    await expect(keys.claimKeyNudge(sharedClaim)).resolves.toBe(false);
+
+    const row = await pool.query(
+      `select kind, outcome, detail from key_nudges where dedup_key=$1`,
+      [sharedClaim.dedupKey],
+    );
+    expect(row.rows).toEqual([
+      {
+        kind: "INVITEE_CONVERSION",
+        outcome: "FAILED",
+        detail: "claimed",
+      },
+    ]);
+  });
+
   it("releases a paid next Key only after L'Invitée's third session has started", async () => {
     const client = await seedClient();
     const invitee = await keys.upsertKey({

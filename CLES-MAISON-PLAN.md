@@ -116,6 +116,23 @@ Message :
 > l’activer automatiquement. Si cette commande avait été annulée avant ton
 > essai, je peux transmettre ta demande à la réception pour vérification.
 
+## Relance L’Invitée : une seule conversion
+
+Les rappels J-5 et 24 h avant la troisième séance sont deux branches
+alternatives, jamais deux messages pour la même Clé :
+
+- si la troisième séance est déjà réservée, envoyer uniquement la relance 24 h
+  avant cette séance ;
+- si aucune troisième séance n’est réservée à J-5, envoyer uniquement la
+  relance J-5 ;
+- dès que l’une des deux branches a envoyé ou tenté son message, l’autre est
+  définitivement supprimée pour cette Clé, même si la troisième séance est
+  réservée ensuite.
+
+Les deux templates Meta restent nécessaires parce que leurs contextes et leurs
+variables diffèrent, mais ils partagent un claim durable unique
+`INVITEE_CONVERSION:<key_id>`.
+
 ## Relance Fondatrices à J-5
 
 Une seule relance est claimée par commande Wix legacy, avec issue durable

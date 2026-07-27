@@ -12,6 +12,16 @@ export type KeyNudgeKind =
   | "MEMBER_J5"
   | "REFORMER_FINISHED";
 
+/**
+ * L'Invitée has two alternative conversion moments, but only one client
+ * message per Key: 24 h before the third session when it is already booked,
+ * otherwise J-5 as the fallback. Both branches deliberately compete for this
+ * same durable claim.
+ */
+export function inviteeConversionDedupKey(keyId: string): string {
+  return `INVITEE_CONVERSION:${keyId}`;
+}
+
 export function isCalendarDaysBefore(date: Date, now: Date, days: number): boolean {
   return dakarDateKey(new Date(date.getTime() - days * 86_400_000)) === dakarDateKey(now);
 }
@@ -133,7 +143,7 @@ export async function sweepKeyNudges(log: {
         `${dateLabel(key.effective_ends_at)}.`;
       if (
         await sendClaimed({
-          dedupKey: `INVITEE_J5:${key.id}`,
+          dedupKey: inviteeConversionDedupKey(key.id),
           keyId: key.id,
           clientId: key.client_id!,
           phone: key.wa_phone,
@@ -157,7 +167,7 @@ export async function sweepKeyNudges(log: {
           `[relance avant 3e séance] Ta troisième séance est prévue le ${dateTimeLabel(third)}.`;
         if (
           await sendClaimed({
-            dedupKey: `INVITEE_THIRD_24H:${key.id}`,
+            dedupKey: inviteeConversionDedupKey(key.id),
             keyId: key.id,
             clientId: key.client_id!,
             phone: key.wa_phone,
