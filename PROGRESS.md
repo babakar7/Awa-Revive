@@ -3427,3 +3427,17 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   `KEYS_AUTOMATION_ENABLED=false`.
 - Vérification : build TypeScript, 694 tests unitaires et les 7 scénarios
   d’intégration du registre Clés verts.
+
+## 2026-07-27 — Authentification du relais Wix des achats comptoir
+
+- L'app Wix utilise un handler backend `wixPricingPlans_onOrderPurchased` puis
+  relaie l'événement à Railway ; ce flux n'est pas le webhook natif JWT de Wix.
+- `/webhooks/wix` accepte désormais ce JSON uniquement avec
+  `X-Wix-Webhook-Secret`, comparé en temps constant à
+  `WIX_WEBHOOK_SHARED_SECRET` (minimum opérationnel : 32 caractères).
+- L'App Instance ID reste un identifiant public et n'est jamais utilisé comme
+  preuve d'authenticité. Le support JWT RS256/PEM reste disponible en fallback.
+- Le payload structuré conserve l'ID d'événement Wix pour la déduplication et
+  le même traitement métier que les ventes comptoir natives.
+- L'automatisation Clés reste désactivée jusqu'à la répétition générale.
+- Vérification locale : build TypeScript et 710 tests unitaires verts.

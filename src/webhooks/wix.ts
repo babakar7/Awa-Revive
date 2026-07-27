@@ -7,30 +7,47 @@ import {
   keyPurchaseContinuityDecision,
   resolveContinuitySource,
 } from "../domain/keyContinuity.js";
-import { verifyAndNormalizeWixWebhook } from "../lib/wixWebhook.js";
+import {
+  normalizeWixWebhookEvent,
+  verifyAndNormalizeWixWebhook,
+  verifyWixSharedSecret,
+  type WixWebhookEvent,
+} from "../lib/wixWebhook.js";
 import { notifyReception } from "../lib/notify.js";
 import * as wix from "../lib/wix.js";
 
-function orderFromEvent(event: ReturnType<typeof verifyAndNormalizeWixWebhook>): any {
+function orderFromEvent(event: WixWebhookEvent): any {
   return event.actionEvent?.body?.order ?? null;
 }
 
 export function registerWixWebhook(app: FastifyInstance): void {
   app.post("/webhooks/wix", async (req: FastifyRequest, reply) => {
-    if (!config.WIX_WEBHOOK_PUBLIC_KEY) {
-      req.log.warn("Wix webhook received but WIX_WEBHOOK_PUBLIC_KEY is unset");
+    if (!config.WIX_WEBHOOK_SHARED_SECRET && !config.WIX_WEBHOOK_PUBLIC_KEY) {
+      req.log.warn("Wix webhook received but no authentication method is configured");
       return reply.code(503).send("Wix webhook not configured");
     }
-    const raw = (req as any).rawBody as Buffer | undefined;
-    const token =
-      raw?.toString("utf8") ??
-      (typeof req.body === "string" ? req.body : "");
-    let event;
+    let event: WixWebhookEvent;
     try {
-      event = verifyAndNormalizeWixWebhook(token, config.WIX_WEBHOOK_PUBLIC_KEY);
+      if (req.body && typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
+        const header = req.headers["x-wix-webhook-secret"];
+        const providedSecret = typeof header === "string" ? header : "";
+        if (!verifyWixSharedSecret(providedSecret, config.WIX_WEBHOOK_SHARED_SECRET)) {
+          throw new Error("invalid Wix shared secret");
+        }
+        event = normalizeWixWebhookEvent(req.body);
+      } else {
+        if (!config.WIX_WEBHOOK_PUBLIC_KEY) {
+          throw new Error("native Wix webhook public key is not configured");
+        }
+        const raw = (req as any).rawBody as Buffer | undefined;
+        const token =
+          raw?.toString("utf8") ??
+          (typeof req.body === "string" ? req.body : "");
+        event = verifyAndNormalizeWixWebhook(token, config.WIX_WEBHOOK_PUBLIC_KEY);
+      }
     } catch (error) {
-      req.log.warn({ err: error }, "Wix webhook signature rejected");
-      return reply.code(401).send("Invalid signature");
+      req.log.warn({ err: error }, "Wix webhook authentication rejected");
+      return reply.code(401).send("Invalid authentication");
     }
     try {
       if (!config.KEYS_AUTOMATION_ENABLED) return reply.code(200).send("OK");

@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   decodeWixPublicKey,
+  normalizeWixWebhookEvent,
   verifyAndNormalizeWixWebhook,
+  verifyWixSharedSecret,
 } from "../src/lib/wixWebhook.js";
 
 const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
@@ -46,5 +48,32 @@ describe("Wix webhook JWT", () => {
     expect(() => verifyAndNormalizeWixWebhook(sign({ data: event }), otherPem)).toThrow(
       "invalid Wix webhook signature",
     );
+  });
+});
+
+describe("Wix in-site webhook forwarder", () => {
+  it("compares the shared secret without accepting missing or partial values", () => {
+    const secret = "5f5226ff9613f6ed43cce1cedd7bd40a6406aca52aac841169e65ae116921f29";
+    expect(verifyWixSharedSecret(secret, secret)).toBe(true);
+    expect(verifyWixSharedSecret("", secret)).toBe(false);
+    expect(verifyWixSharedSecret(secret.slice(0, -1), secret)).toBe(false);
+    expect(verifyWixSharedSecret(`${secret.slice(0, -1)}0`, secret)).toBe(false);
+  });
+
+  it("normalizes the structured payload sent by the Wix backend event handler", () => {
+    const structured = {
+      ...event,
+      eventTime: "2026-07-27T13:00:00.000Z",
+      actionEvent: {
+        body: {
+          order: {
+            _id: "order-1",
+            planId: "plan-1",
+            buyer: { memberId: "member-1", contactId: "contact-1" },
+          },
+        },
+      },
+    };
+    expect(normalizeWixWebhookEvent(structured)).toEqual(structured);
   });
 });

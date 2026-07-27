@@ -196,7 +196,9 @@ export const config = {
   // from WA_RENEWAL_TEMPLATE because closed legacy plans must not be renewed.
   WA_LEGACY_KEY_CONVERSION_TEMPLATE: optional("WA_LEGACY_KEY_CONVERSION_TEMPLATE", ""),
   WA_LEGACY_KEY_CONVERSION_TEMPLATE_LANG: optional("WA_LEGACY_KEY_CONVERSION_TEMPLATE_LANG", "fr"),
-  // Wix custom-app Order Purchased webhook (RS256 JWT raw body).
+  // Wix in-site backend forwards Order Purchased as JSON over HTTPS with this
+  // shared secret. Native Wix RS256 JWTs remain supported as a fallback.
+  WIX_WEBHOOK_SHARED_SECRET: optional("WIX_WEBHOOK_SHARED_SECRET", ""),
   WIX_WEBHOOK_PUBLIC_KEY: optional("WIX_WEBHOOK_PUBLIC_KEY", ""),
   // Guarded admin-to-client messaging. Keep false until takeover behavior has
   // been verified in production with the Meta number.
@@ -242,7 +244,10 @@ export function assertConfig(): void {
       ["KEY_BONUS_SERVICE_IDS", config.KEY_BONUS_SERVICE_IDS.length],
       ["LEGACY_REFORMER_PLAN_IDS", config.LEGACY_REFORMER_PLAN_IDS.length],
       ["INVITEE_HISTORY_PLAN_IDS", config.INVITEE_HISTORY_PLAN_IDS.length],
-      ["WIX_WEBHOOK_PUBLIC_KEY", config.WIX_WEBHOOK_PUBLIC_KEY],
+      [
+        "WIX_WEBHOOK_AUTH",
+        config.WIX_WEBHOOK_SHARED_SECRET.length >= 32 || Boolean(config.WIX_WEBHOOK_PUBLIC_KEY),
+      ],
       ["WA_KEY_INVITEE_J5_TEMPLATE", config.WA_KEY_INVITEE_J5_TEMPLATE],
       ["WA_KEY_THIRD_SESSION_TEMPLATE", config.WA_KEY_THIRD_SESSION_TEMPLATE],
       ["WA_KEY_MEMBER_J5_TEMPLATE", config.WA_KEY_MEMBER_J5_TEMPLATE],
