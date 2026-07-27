@@ -59,6 +59,8 @@ export interface WixState {
   attendanceRecords: any[];
   /** Extended-booking fixtures keyed by Wix booking id. */
   attendanceBookings: Record<string, any>;
+  /** Confirmed historical booking fixtures used by the leaderboard total. */
+  confirmedBookings: any[];
 }
 
 /**
@@ -168,6 +170,7 @@ export function makeFetchMock(): FetchMock {
     staffResources: [],
     attendanceRecords: [],
     attendanceBookings: {},
+    confirmedBookings: [],
   };
 
   let failEmail = false;
@@ -333,6 +336,9 @@ export function makeFetchMock(): FetchMock {
     // --- Wix booking reader (revision required by cancel/reschedule) ---
     if (url.includes("/_api/bookings-reader/v2/extended-bookings/query")) {
       const ids: string[] = body?.query?.filter?.id?.$in ?? [];
+      if (ids.length === 0 && body?.query?.filter?.status?.$eq === "CONFIRMED") {
+        return json(200, { extendedBookings: wix.confirmedBookings });
+      }
       return json(200, {
         extendedBookings: ids.map((id) => wix.attendanceBookings[id] ?? ({
           booking: { id, revision: "1", status: "CONFIRMED", bookedEntity: { slot: { serviceId: wix.serviceId, startDate: wix.slotStart } } },
@@ -485,6 +491,7 @@ export function makeFetchMock(): FetchMock {
       wix.staffResources = [];
       wix.attendanceRecords = [];
       wix.attendanceBookings = {};
+      wix.confirmedBookings = [];
       failEmail = false;
       waTemplateFailures.clear();
       const d = defaultOmState();

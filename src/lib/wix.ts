@@ -415,6 +415,25 @@ export interface WixAttendanceBookingSnapshot {
   sessionStart: string | null;
 }
 
+function attendanceSnapshotFromBooking(booking: any): WixAttendanceBookingSnapshot | null {
+  if (!booking?.id) return null;
+  const slot = booking?.bookedEntity?.slot ?? booking?.bookedEntity?.schedule ?? {};
+  const contact = booking?.contactDetails ?? {};
+  const name = [contact.firstName, contact.lastName]
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return {
+    bookingId: String(booking.id),
+    contactId: contact.contactId ? String(contact.contactId) : null,
+    clientName: name || null,
+    clientPhone: contact.phone ? String(contact.phone) : null,
+    serviceId: slot.serviceId ? String(slot.serviceId) : null,
+    serviceName: booking?.bookedEntity?.title ? String(booking.bookedEntity.title) : null,
+    sessionStart: slot.startDate ?? slot.firstSessionStart ?? null,
+  };
+}
+
 /**
  * Read every attendance entry through Wix's dedicated Attendance API. The
  * endpoint is paged by cursor; attendance can be corrected later, so callers
@@ -458,24 +477,33 @@ export async function getWixAttendanceBookingSnapshots(
       query: { filter: { id: { $in: bookingIds.slice(i, i + 100) } } },
     });
     for (const entry of data?.extendedBookings ?? []) {
-      const booking = entry?.booking;
-      if (!booking?.id) continue;
-      const slot = booking?.bookedEntity?.slot ?? booking?.bookedEntity?.schedule ?? {};
-      const contact = booking?.contactDetails ?? {};
-      const name = [contact.firstName, contact.lastName]
-        .map((part) => String(part ?? "").trim())
-        .filter(Boolean)
-        .join(" ");
-      out.push({
-        bookingId: String(booking.id),
-        contactId: contact.contactId ? String(contact.contactId) : null,
-        clientName: name || null,
-        clientPhone: contact.phone ? String(contact.phone) : null,
-        serviceId: slot.serviceId ? String(slot.serviceId) : null,
-        serviceName: booking?.bookedEntity?.title ? String(booking.bookedEntity.title) : null,
-        sessionStart: slot.startDate ?? slot.firstSessionStart ?? null,
-      });
+      const snapshot = attendanceSnapshotFromBooking(entry?.booking);
+      if (snapshot) out.push(snapshot);
     }
+  }
+  return out;
+}
+
+/**
+ * Every confirmed Wix booking, including historical classes that reception
+ * did not explicitly mark ATTENDED. Bookings Reader's date filter is not
+ * reliable for old sessions, so the past/future cut stays in our database.
+ */
+export async function listWixConfirmedBookingSnapshots(): Promise<WixAttendanceBookingSnapshot[]> {
+  const out: WixAttendanceBookingSnapshot[] = [];
+  for (let offset = 0;; offset += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: {
+        filter: { status: { $eq: "CONFIRMED" } },
+        paging: { limit: 100, offset },
+      },
+    });
+    const batch: any[] = Array.isArray(data?.extendedBookings) ? data.extendedBookings : [];
+    for (const entry of batch) {
+      const snapshot = attendanceSnapshotFromBooking(entry?.booking);
+      if (snapshot) out.push(snapshot);
+    }
+    if (batch.length < 100) break;
   }
   return out;
 }

@@ -30,7 +30,7 @@ function podium(rows: AttendanceLeader[]): string {
     return `<article class="leaderboard-podium-card leaderboard-podium-card--${index + 1}">
       <span class="leaderboard-medal" aria-hidden="true">${medals[index]}</span>
       <b>${escapeHtml(row.client_name)}</b>
-      <strong>${row.attended_count}</strong><span>séance${row.attended_count > 1 ? "s" : ""} suivie${row.attended_count > 1 ? "s" : ""}</span>
+      <strong>${row.session_count}</strong><span>séance${row.session_count > 1 ? "s" : ""} confirmée${row.session_count > 1 ? "s" : ""}</span>
     </article>`;
   }).join("")}</section>`;
 }
@@ -39,7 +39,7 @@ function leaderRows(rows: AttendanceLeader[], startRank: number): string {
   return rows.map((row, index) => `<tr>
     <td data-label="Rang"><b>#${startRank + index}</b></td>
     <td data-label="Client"><b>${escapeHtml(row.client_name)}</b>${row.client_phone ? `<div class="muted">+${escapeHtml(row.client_phone)}</div>` : ""}${row.duplicate_profiles > 1 ? `<div><span class="badge badge--amber">${row.duplicate_profiles} fiches Wix</span></div>` : ""}</td>
-    <td data-label="Séances"><b>${row.attended_count}</b></td>
+    <td data-label="Séances"><b>${row.session_count}</b><div class="muted">${row.marked_attended_count} pointée${row.marked_attended_count > 1 ? "s" : ""} présente${row.marked_attended_count > 1 ? "s" : ""}</div></td>
     <td data-label="Dernière séance" class="hide-sm">${fmtDate(row.last_attended_at)}</td>
   </tr>`).join("");
 }
@@ -49,10 +49,11 @@ function detailCard(client: WixDeliveryClient, detail: AttendanceDetail): string
     ? `<ul class="leaderboard-breakdown">${detail.by_service.map((item) => `<li><span>${escapeHtml(item.service_name)}</span><b>${item.attended_count}</b></li>`).join("")}</ul>`
     : `<p class="muted">Aucune séance marquée présente.</p>`;
   const sessions = detail.sessions.length
-    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Cours</th><th>Date</th></tr></thead><tbody>${detail.sessions.map((session) => `<tr><td data-label="Cours">${escapeHtml(session.service_name)}</td><td data-label="Date">${fmtDate(session.session_start)}</td></tr>`).join("")}</tbody></table></div>`
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Cours</th><th>Date</th><th>Pointage Wix</th></tr></thead><tbody>${detail.sessions.map((session) => `<tr><td data-label="Cours">${escapeHtml(session.service_name)}</td><td data-label="Date">${fmtDate(session.session_start)}</td><td data-label="Pointage Wix">${session.marked_attended ? `<span class="badge badge--green">Présente</span>` : `<span class="badge badge--amber">Non pointée</span>`}</td></tr>`).join("")}</tbody></table></div>`
     : "";
   return `<section class="card leaderboard-detail" id="client">
-    <div class="section-header"><div><span class="eyebrow">Fiche cliente</span><h2>${escapeHtml(clientLabel(client))}</h2><p>${client.phone ? `+${escapeHtml(client.phone)}` : escapeHtml(client.email ?? "")}</p></div><div class="leaderboard-total"><b>${detail.attended_count}</b><span>séance${detail.attended_count > 1 ? "s" : ""} suivie${detail.attended_count > 1 ? "s" : ""}</span></div></div>
+    <div class="section-header"><div><span class="eyebrow">Fiche cliente</span><h2>${escapeHtml(clientLabel(client))}</h2><p>${client.phone ? `+${escapeHtml(client.phone)}` : escapeHtml(client.email ?? "")}</p></div><div class="leaderboard-total"><b>${detail.session_count}</b><span>séance${detail.session_count > 1 ? "s" : ""} confirmée${detail.session_count > 1 ? "s" : ""}</span></div></div>
+    <p class="leaderboard-breakdown-note"><b>${detail.marked_attended_count}</b> pointée${detail.marked_attended_count > 1 ? "s" : ""} présente${detail.marked_attended_count > 1 ? "s" : ""} dans Wix · <b>${detail.session_count - detail.marked_attended_count}</b> confirmée${detail.session_count - detail.marked_attended_count > 1 ? "s" : ""} sans pointage.</p>
     <div class="leaderboard-detail-grid"><div><h3>Par cours</h3>${services}</div><div><h3>Dernières séances</h3>${sessions || `<p class="muted">Aucune séance pour cette période.</p>`}</div></div>
   </section>`;
 }
@@ -79,7 +80,7 @@ export function renderAttendanceLeaderboard(args: {
     : "";
   const pages = Math.max(1, Math.ceil(total / 50));
   const pager = pages > 1 ? `<nav class="pagination" aria-label="Pagination du classement"><span>${page > 1 ? `<a class="act act--ghost act--sm" href="/admin/classement?${query(period, { page: String(page - 1) })}">Précédent</a>` : ""}</span><span>Page <b>${page}</b> sur ${pages}</span><span>${page < pages ? `<a class="act act--ghost act--sm" href="/admin/classement?${query(period, { page: String(page + 1) })}">Suivant</a>` : ""}</span></nav>` : "";
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Présences</span><h2>Classement clients</h2><p>Classement basé uniquement sur les séances marquées présentes dans Wix.</p></div><form method="post" action="/admin/classement/refresh"><button class="act act--ghost" type="submit">Actualiser Wix</button></form></header>
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Présences</span><h2>Classement clients</h2><p>Classement basé sur les séances passées et confirmées dans Wix. Le pointage « présente » reste affiché séparément.</p></div><form method="post" action="/admin/classement/refresh"><button class="act act--ghost" type="submit">Actualiser Wix</button></form></header>
   ${notice ? `<div class="card success">${escapeHtml(notice)}</div>` : ""}
   ${sync.last_error ? `<div class="card warn">⚠️ La dernière synchronisation Wix a échoué. ${escapeHtml(syncText)} Le dernier classement disponible reste affiché.</div>` : `<p class="muted leaderboard-sync">${escapeHtml(syncText)}</p>`}
   <nav class="filters" aria-label="Période du classement">${filters}</nav>
@@ -87,5 +88,5 @@ export function renderAttendanceLeaderboard(args: {
   ${searchBlock}
   ${selectedClient && detail ? detailCard(selectedClient, detail) : ""}
   ${podium(leaders)}
-  <section class="card"><div class="section-header"><div><span class="eyebrow">${total} cliente${total > 1 ? "s" : ""}</span><h2>Classement</h2></div></div>${leaders.length ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Rang</th><th>Client</th><th>Séances suivies</th><th class="hide-sm">Dernière séance</th></tr></thead><tbody>${leaderRows(leaders, (page - 1) * 50 + 1)}</tbody></table></div>${pager}` : `<div class="empty"><b>Aucune présence synchronisée</b><p>Les séances marquées présentes dans Wix apparaîtront ici après la synchronisation.</p></div>`}</section>`;
+  <section class="card"><div class="section-header"><div><span class="eyebrow">${total} cliente${total > 1 ? "s" : ""}</span><h2>Classement</h2><p class="muted">Grand total : séances passées confirmées. Sous chaque total : celles que Wix indique aussi comme présentes.</p></div></div>${leaders.length ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Rang</th><th>Client</th><th>Séances confirmées</th><th class="hide-sm">Dernière séance</th></tr></thead><tbody>${leaderRows(leaders, (page - 1) * 50 + 1)}</tbody></table></div>${pager}` : `<div class="empty"><b>Aucune séance synchronisée</b><p>Les séances confirmées dans Wix apparaîtront ici après la synchronisation.</p></div>`}</section>`;
 }

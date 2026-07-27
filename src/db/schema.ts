@@ -1545,6 +1545,27 @@ create index if not exists idx_wix_attendance_contact
 create index if not exists idx_wix_attendance_phone
   on wix_attendance_records (client_phone_key);
 
+-- The leaderboard's main total is past, non-cancelled confirmed bookings.
+-- Attendance marks remain alongside it as an audit/breakdown, since older
+-- sessions were not consistently marked ATTENDED in Wix.
+create table if not exists wix_confirmed_booking_records (
+  booking_id text primary key,
+  wix_contact_id text,
+  client_name text,
+  client_phone text,
+  client_phone_key text,
+  service_id text,
+  service_name text,
+  session_start timestamptz,
+  synced_at timestamptz not null default now()
+);
+create index if not exists idx_wix_confirmed_booking_rank
+  on wix_confirmed_booking_records (session_start desc);
+create index if not exists idx_wix_confirmed_booking_contact
+  on wix_confirmed_booking_records (wix_contact_id);
+create index if not exists idx_wix_confirmed_booking_phone
+  on wix_confirmed_booking_records (client_phone_key);
+
 create table if not exists wix_attendance_sync_state (
   singleton boolean primary key default true check (singleton),
   last_started_at timestamptz,

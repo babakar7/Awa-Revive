@@ -55,7 +55,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await truncateAll();
-  await pool.query(`delete from wix_attendance_records; delete from wix_attendance_sync_state; insert into wix_attendance_sync_state (singleton) values (true);`);
+  await pool.query(`delete from wix_attendance_records; delete from wix_confirmed_booking_records; delete from wix_attendance_sync_state; insert into wix_attendance_sync_state (singleton) values (true);`);
   mock.reset();
 });
 
@@ -75,19 +75,21 @@ describe("client attendance leaderboard", () => {
       b2: booking({ id: "b2", contactId: "c2", firstName: "Awa", phone: "+221771112233", service: "Yoga", start: older }),
       b3: booking({ id: "b3", contactId: "c3", firstName: "Maya", phone: "+221772223344", service: "Pilates", start: past }),
       b4: booking({ id: "b4", contactId: "c4", firstName: "Future", phone: "+221773334455", service: "Pilates", start: future }),
+      b5: booking({ id: "b5", contactId: "c1", firstName: "Awa", phone: "+221771112233", service: "Pilates", start: past }),
     };
+    mock.wix.confirmedBookings = ["b1", "b2", "b3", "b4", "b5"].map((id) => mock.wix.attendanceBookings[id]);
 
     await syncAttendanceLeaderboard(true);
 
     const all = await attendanceLeaders({ period: "all" });
-    expect(all.total).toBe(1);
-    expect(all.rows[0]).toMatchObject({ client_name: "Awa", attended_count: 2, duplicate_profiles: 2 });
+    const awa = all.rows.find((row) => row.client_name === "Awa");
+    expect(awa).toMatchObject({ client_name: "Awa", session_count: 3, marked_attended_count: 2, duplicate_profiles: 2 });
     const recent = await attendanceLeaders({ period: "30" });
-    expect(recent.rows[0].attended_count).toBe(1);
+    expect(recent.rows.find((row) => row.client_name === "Awa")?.session_count).toBe(2);
     const detail = await attendanceDetail({ period: "all", wixContactId: "c1", phone: "+221771112233" });
-    expect(detail.attended_count).toBe(2);
+    expect(detail).toMatchObject({ session_count: 3, marked_attended_count: 2 });
     expect(detail.by_service).toEqual(expect.arrayContaining([
-      expect.objectContaining({ service_name: "Pilates", attended_count: 1 }),
+      expect.objectContaining({ service_name: "Pilates", attended_count: 2 }),
       expect.objectContaining({ service_name: "Yoga", attended_count: 1 }),
     ]));
   });
@@ -98,6 +100,7 @@ describe("client attendance leaderboard", () => {
     mock.wix.attendanceBookings = {
       b1: booking({ id: "b1", contactId: "c1", firstName: "Awa", phone: "+221771112233", service: "Pilates", start: past }),
     };
+    mock.wix.confirmedBookings = [mock.wix.attendanceBookings.b1];
     mock.wix.contacts = [
       { id: "c1", info: { name: { first: "Awa", last: "Ndiaye" }, phones: { items: [{ phone: "+221771112233", primary: true }] } }, primaryInfo: { phone: "+221771112233" } },
       { id: "c0", info: { name: { first: "Soxna", last: "Ba" }, phones: { items: [{ phone: "+221779998877", primary: true }] } }, primaryInfo: { phone: "+221779998877" } },
