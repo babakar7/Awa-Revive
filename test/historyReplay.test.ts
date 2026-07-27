@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildHistoryMessages } from "../src/agent/index.js";
+import {
+  buildHistoryMessages,
+  turnsAfterConversationGap,
+} from "../src/agent/index.js";
 
 // The agent replays past turns — including 'tool' turns (Awa's own actions) —
 // into the alternating user/assistant messages the Messages API requires.
@@ -75,5 +78,34 @@ describe("buildHistoryMessages", () => {
 
   it("returns an empty array for empty history (caller supplies the current message)", () => {
     expect(buildHistoryMessages([])).toEqual([]);
+  });
+});
+
+describe("turnsAfterConversationGap", () => {
+  it("drops an unrelated old intent after a long silence", () => {
+    const turns = [
+      {
+        role: "assistant",
+        content: "Ton lien pour le cours de Pilates a expiré.",
+        created_at: new Date("2026-07-12T12:00:00Z"),
+      },
+      {
+        role: "user",
+        content: "Par Wave",
+        created_at: new Date("2026-07-27T16:05:00Z"),
+      },
+    ];
+
+    expect(turnsAfterConversationGap(turns)).toEqual([turns[1]]);
+  });
+
+  it("keeps a continuous conversation, including tool turns", () => {
+    const turns = [
+      { role: "user", content: "u1", created_at: new Date("2026-07-27T10:00:00Z") },
+      { role: "tool", content: "t1", created_at: new Date("2026-07-27T10:05:00Z") },
+      { role: "assistant", content: "a1", created_at: new Date("2026-07-27T10:06:00Z") },
+    ];
+
+    expect(turnsAfterConversationGap(turns)).toEqual(turns);
   });
 });

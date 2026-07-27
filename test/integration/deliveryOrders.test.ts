@@ -12,6 +12,7 @@ import {
   recentDeliveryClients,
 } from "../../src/domain/deliveryRepo.js";
 import * as clientRepo from "../../src/domain/repo.js";
+import { handleInboundText } from "../../src/agent/index.js";
 import { executeTool } from "../../src/agent/tools.js";
 import { markLogFailedByWamid, recordDeliveryLog } from "../../src/domain/notificationRepo.js";
 import { hashReadyToken, newReadyToken } from "../../src/domain/deliveryRules.js";
@@ -826,6 +827,50 @@ describe("delivery payment handover to Awa", () => {
     expect(routeText).toBeDefined();
     expect(routeText).not.toContain("6000");
     expect(routeText).not.toContain("paiement");
+  });
+
+  it("routes a terse Wave reply to the live delivery despite a stale class conversation", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+    await settle();
+    const client = await clientRepo.upsertClient("221770009988");
+    await pool.query(`update clients set name='Soxna' where id=$1`, [client.id]);
+    await pool.query(
+      `insert into conversations (client_id, role, content, created_at)
+       values ($1, 'assistant', $2, now() - interval '15 days')`,
+      [
+        client.id,
+        "Ton lien pour le cours de Pilates a expiré. Tu veux que je t'en renvoie un ?",
+      ],
+    );
+
+    await handleInboundText({
+      waPhone: client.wa_phone,
+      text: "Par Wave",
+      waMessageId: "wamid.delivery-wave-reply",
+      profileName: "Soxna",
+    });
+    await settle();
+
+    const order = (
+      await pool.query(`select payment_status, payment_method from delivery_orders where id=$1`, [id])
+    ).rows[0];
+    expect(order).toEqual({ payment_status: "AWAITING_PAYMENT", payment_method: "wave" });
+    const replies = mock.waTextsTo(client.wa_phone);
+    expect(replies.at(-1)).toContain("payer la livraison");
+    expect(replies.at(-1)).toContain("https://pay.wave.com/c/test");
+    expect(replies.at(-1)).not.toMatch(/cours|Pilates/i);
+
+    const toolTurn = (
+      await pool.query(
+        `select content from conversations
+          where client_id=$1 and role='tool'
+          order by created_at desc limit 1`,
+        [client.id],
+      )
+    ).rows[0]?.content;
+    expect(toolTurn).toContain("create_delivery_payment_link");
+    expect(toolTurn).toContain(id);
   });
 
   it("uses the verified Orange Money callback for a Max It delivery payment", async () => {

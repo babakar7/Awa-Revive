@@ -77,6 +77,7 @@ const REPLY_MAX_TOKENS_RETRY = 4096;
 // (see the history loop). Enough to carry a verification status or the key
 // ids of a result, without replaying a full class list byte for byte.
 const TOOL_REPLAY_MAXLEN = 700;
+const HISTORY_CONTEXT_GAP_HOURS = 24;
 
 // A past present_options result is replayed in conversation history. On a later
 // turn, the model can occasionally carry the old "reply <NO_REPLY>" instruction
@@ -170,6 +171,117 @@ export function buildHistoryMessages(
     messages.push({ role, content });
   }
   return messages;
+}
+
+/**
+ * Keep only the current conversation window when replaying turns to the model.
+ * Long-silent threads often resume for an unrelated need; carrying the final
+ * intent from weeks ago can then outweigh the live server context.
+ *
+ * The complete history remains stored and is still used for first-contact
+ * detection. This only limits what is replayed into the next model call.
+ */
+export function turnsAfterConversationGap<T extends { created_at: Date | string }>(
+  turns: readonly T[],
+  gapHours = HISTORY_CONTEXT_GAP_HOURS,
+): T[] {
+  if (turns.length < 2) return [...turns];
+  const gapMs = gapHours * 3_600_000;
+  let start = 0;
+  for (let i = 1; i < turns.length; i++) {
+    const previous = new Date(turns[i - 1].created_at).getTime();
+    const current = new Date(turns[i].created_at).getTime();
+    if (Number.isFinite(previous) && Number.isFinite(current) && current - previous >= gapMs) {
+      start = i;
+    }
+  }
+  return turns.slice(start);
+}
+
+export type DeliveryReplyPaymentMethod = "wave" | "orange_money" | "maxit" | "cash";
+
+/**
+ * Recognize only self-contained payment-method replies. Deliberately reject
+ * longer requests ("je veux payer mon cours par Wave"): this server shortcut
+ * exists for the terse answer requested by the delivery confirmation, not for
+ * interpreting general payment intent.
+ */
+export function deliveryPaymentMethodFromReply(
+  text: string,
+): DeliveryReplyPaymentMethod | null {
+  const normalized = text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’']/g, " ")
+    .replace(/[.,!?;:()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const aliases: Record<DeliveryReplyPaymentMethod, ReadonlySet<string>> = {
+    wave: new Set([
+      "wave",
+      "par wave",
+      "avec wave",
+      "payer wave",
+      "paiement wave",
+      "paiement par wave",
+      "wave svp",
+      "par wave svp",
+      "wave merci",
+    ]),
+    orange_money: new Set([
+      "om",
+      "orange money",
+      "par om",
+      "par orange money",
+      "avec om",
+      "avec orange money",
+      "payer om",
+      "payer orange money",
+      "paiement om",
+      "paiement orange money",
+      "om svp",
+      "orange money svp",
+    ]),
+    maxit: new Set([
+      "maxit",
+      "max it",
+      "par maxit",
+      "par max it",
+      "avec maxit",
+      "avec max it",
+      "payer maxit",
+      "payer max it",
+      "paiement maxit",
+      "paiement max it",
+      "maxit svp",
+      "max it svp",
+    ]),
+    cash: new Set([
+      "cash",
+      "especes",
+      "en especes",
+      "par cash",
+      "par especes",
+      "avec cash",
+      "avec especes",
+      "payer cash",
+      "payer en especes",
+      "paiement cash",
+      "paiement en especes",
+      "especes svp",
+      "cash svp",
+    ]),
+  };
+
+  for (const [method, values] of Object.entries(aliases) as [
+    DeliveryReplyPaymentMethod,
+    ReadonlySet<string>,
+  ][]) {
+    if (values.has(normalized)) return method;
+  }
+  return null;
 }
 
 const TECH_FAILURE_HANDOFF_PREFIX = "Échec technique — le client a reçu le message d'erreur";
@@ -385,6 +497,109 @@ async function maybeHandleCommitmentTap(
   return false; // ms_continue → let the model run availability + link
 }
 
+function formatFcfa(amount: number): string {
+  return Math.round(amount).toLocaleString("fr-FR").replace(/\u202f/g, " ");
+}
+
+function deliveryPaymentReplyText(
+  client: repo.Client,
+  result: Record<string, unknown>,
+): string | null {
+  const amount = Number(result.amount_fcfa);
+  const amountText = Number.isFinite(amount) ? formatFcfa(amount) : null;
+  const english = client.language === "en";
+
+  if (result.cash_selected === true && amountText) {
+    return english
+      ? `Noted: ${amountText} FCFA in cash will be handed to the delivery person on arrival. 🙏🏾`
+      : `C'est noté : ${amountText} FCFA en espèces seront à remettre au livreur à la livraison. 🙏🏾`;
+  }
+
+  const link = typeof result.payment_link === "string" ? result.payment_link : "";
+  const app = typeof result.payment_app === "string" ? result.payment_app : "";
+  const expires = Number(result.expires_in_minutes);
+  if (!link || !app || !amountText) return null;
+  const expiryText = Number.isFinite(expires) ? Math.max(1, Math.round(expires)) : null;
+  return english
+    ? `Here is your ${app} link to pay for the delivery 👇🏾\n${link}\n\nAmount: ${amountText} FCFA${expiryText ? ` — valid for ${expiryText} min` : ""}. Confirmation is automatic after payment.`
+    : `Voici ton lien ${app} pour payer la livraison 👇🏾\n${link}\n\nMontant : ${amountText} FCFA${expiryText ? ` — valable ${expiryText} min` : ""}. La confirmation est automatique après paiement.`;
+}
+
+/**
+ * Route the short answer requested by the delivery confirmation without asking
+ * the language model to infer which product should be paid. The route is
+ * intentionally narrow:
+ *  - exactly one open delivery is waiting for a payment choice;
+ *  - no class, plan, café order, or multi-session plan is concurrently active;
+ *  - the entire inbound message is just a supported payment method.
+ */
+async function maybeHandleDeliveryPaymentReply(args: {
+  client: repo.Client;
+  text: string;
+  deliveryOrders: deliveries.DeliveryOrder[];
+  hasCompetingPaymentContext: boolean;
+}): Promise<boolean> {
+  if (args.hasCompetingPaymentContext) return false;
+  const method = deliveryPaymentMethodFromReply(args.text);
+  if (!method) return false;
+  const payable = args.deliveryOrders.filter(
+    (order) => order.payment_status === "PENDING_CHOICE",
+  );
+  if (payable.length !== 1) return false;
+
+  const input = {
+    delivery_order_id: payable[0].id,
+    payment_method: method,
+  };
+  let resultText: string;
+  try {
+    resultText = await executeTool(args.client, "create_delivery_payment_link", input);
+  } catch (err) {
+    console.error("Deterministic delivery payment routing failed:", err);
+    await repo.addTurn(
+      args.client.id,
+      "tool",
+      `create_delivery_payment_link(${JSON.stringify(input)}) -> ${JSON.stringify({
+        error: "tool_failed",
+        message: describeLoopFailure(err),
+      })}`,
+    );
+    const fallback = technicalFallbackMessage(args.client.name);
+    await sendText(args.client.wa_phone, fallback);
+    await repo.addTurn(args.client.id, "assistant", fallback);
+    void notifyTechnicalFailure(args.client, `paiement livraison — ${describeLoopFailure(err)}`);
+    return true;
+  }
+
+  await repo.addTurn(
+    args.client.id,
+    "tool",
+    `create_delivery_payment_link(${JSON.stringify(input)}) -> ${resultText.slice(0, 2000)}`,
+  );
+  let result: Record<string, unknown>;
+  try {
+    result = JSON.parse(resultText) as Record<string, unknown>;
+  } catch {
+    result = {};
+  }
+  const reply = deliveryPaymentReplyText(args.client, result);
+  if (!reply) {
+    console.error("Deterministic delivery payment routing returned no usable confirmation:", result);
+    const fallback = technicalFallbackMessage(args.client.name);
+    await sendText(args.client.wa_phone, fallback);
+    await repo.addTurn(args.client.id, "assistant", fallback);
+    void notifyTechnicalFailure(
+      args.client,
+      `paiement livraison — résultat inattendu ${resultText.slice(0, 180)}`,
+    );
+    return true;
+  }
+
+  await sendText(args.client.wa_phone, reply);
+  await repo.addTurn(args.client.id, "assistant", reply);
+  return true;
+}
+
 export async function handleInboundText(args: {
   waPhone: string;
   text: string;
@@ -472,7 +687,27 @@ export async function handleInboundText(args: {
     commitments.activeCommitmentSnapshot(client.id),
   ]);
 
+  // The delivery confirmation explicitly asks for a terse method reply. Resolve
+  // that exact reply server-side so an unrelated old booking conversation can
+  // never turn it into a class payment link (prod incident 27/07).
+  if (
+    await maybeHandleDeliveryPaymentReply({
+      client,
+      text,
+      deliveryOrders,
+      hasCompetingPaymentContext: !!(
+        activeBooking ||
+        activePlanOrder ||
+        activeCafeOrder ||
+        activeCommitment
+      ),
+    })
+  ) {
+    return;
+  }
+
   const history = await repo.lastTurnsForReplay(client.id, 30);
+  const currentConversationHistory = turnsAfterConversationGap(history);
   const packDiscoveryLead = await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
   // Once the Keys launch, new and returning discovery leads go through
   // L'Invitée. Existing paid step-1 orders remain fulfillable from their own
@@ -522,7 +757,7 @@ export async function handleInboundText(args: {
     capabilityMenuAt: client.capability_menu_at,
   });
 
-  const messages: Anthropic.MessageParam[] = buildHistoryMessages(history);
+  const messages: Anthropic.MessageParam[] = buildHistoryMessages(currentConversationHistory);
   if (messages.length === 0) {
     messages.push({ role: "user", content: text });
   }
