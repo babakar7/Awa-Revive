@@ -1496,6 +1496,9 @@ alter table kitchen_tickets add column if not exists serve_escalated_at timestam
 -- commande dans un emballage à emporter — la cuisine doit le voir pour emballer.
 -- Distinct d'une livraison (source DELIVERY). Défaut = sur place.
 alter table kitchen_tickets add column if not exists takeaway boolean not null default false;
+-- « Urgent » : l'accueil peut escalader une commande salle à tout moment (client
+-- qui s'impatiente) → elle remonte en tête de l'écran cuisine. NULL = normal.
+alter table kitchen_tickets add column if not exists urgent_at timestamptz;
 create index if not exists idx_kitchen_tickets_session
   on kitchen_tickets (session_id) where session_id is not null;
 `;

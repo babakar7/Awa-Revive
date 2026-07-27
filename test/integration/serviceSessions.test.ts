@@ -22,6 +22,8 @@ import {
   claimTableServe,
   serveTableTicket,
   cancelTableTicket,
+  setTicketUrgent,
+  kitchenTicketView,
   ticketsForSession,
   listOpenKitchenTickets,
   claimStaleServeEscalations,
@@ -175,6 +177,26 @@ describe("createTableTicket", () => {
     // Absent flag → sur place (the default), never accidentally to-go.
     const dineIn = await makeTableTicket(s.id, s.short_code);
     expect(dineIn.takeaway).toBe(false);
+  });
+
+  it("accueil can flag then clear urgency (view exposes it, sorts to the top)", async () => {
+    const s = await seat(canapeSpot);
+    const t = await makeTableTicket(s.id, s.short_code);
+    expect(kitchenTicketView(t).urgent).toBe(false);
+    const on = await setTicketUrgent(t.id, true, "Fatou");
+    expect(on?.urgent_at).not.toBeNull();
+    expect(kitchenTicketView(on!).urgent).toBe(true);
+    const off = await setTicketUrgent(t.id, false, "Fatou");
+    expect(off?.urgent_at).toBeNull();
+    expect(kitchenTicketView(off!).urgent).toBe(false);
+  });
+
+  it("urgency can't be set on a completed ticket", async () => {
+    const s = await seat(canapeSpot);
+    const t = await makeTableTicket(s.id, s.short_code);
+    await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
+    await serveTableTicket(t.id, "Fatou"); // → COMPLETED, leaves the board
+    expect(await setTicketUrgent(t.id, true, "Fatou")).toBeNull();
   });
 });
 

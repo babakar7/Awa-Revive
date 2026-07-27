@@ -29,7 +29,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v10";
+const ASSET_VERSION = "v11";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -90,6 +90,11 @@ padding:.2rem .55rem;border-radius:999px}
 .tk .tnote{font-size:.82rem;color:var(--warn);margin-top:.25rem}
 .tk .away{display:inline-block;font-size:.75rem;font-weight:800;color:#fff;background:var(--info);
 border-radius:999px;padding:.15rem .5rem;margin-top:.3rem;letter-spacing:.02em}
+.tk.urgent{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-bg)}
+.tk .urg{display:inline-block;font-size:.75rem;font-weight:800;color:#fff;background:var(--danger);
+border-radius:999px;padding:.15rem .5rem;margin-top:.3rem;letter-spacing:.02em}
+button.act.urg{flex:1;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border)}
+button.act.urg.on{background:var(--danger);color:#fff;border-color:var(--danger)}
 .tk .taken{font-size:.8rem;color:var(--info);margin-top:.25rem}
 .tacts{display:flex;gap:.45rem;margin-top:.5rem}
 button.act{flex:1;min-height:2.75rem;padding:.75rem;font-size:.98rem;font-weight:800;border:none;border-radius:var(--radius);color:#fff}
@@ -269,7 +274,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
   function post(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
 
   function ticketCard(t){
-    var d=el('div','tk'); d.dataset.id=t.id;
+    var d=el('div','tk'+(t.urgent?' urgent':'')); d.dataset.id=t.id;
     (t.items||[]).forEach(function(l,i){ var ln=el('div','line');
       ln.appendChild(el('span','q',l.qty+'×'));
       ln.appendChild(document.createTextNode(' '+l.name+(l.choice?' ('+l.choice+')':'')));
@@ -279,6 +284,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
     });
     if(t.note) d.appendChild(el('div','tnote','📝 '+t.note));
     if(t.takeaway) d.appendChild(el('div','away','📦 À emporter'));
+    if(t.urgent) d.appendChild(el('div','urg','⚡ Urgent'));
     if(t.serve_by) d.appendChild(el('div','taken','🙋 Pris par '+t.serve_by));
     if(t.status==='READY'){
       var acts=el('div','tacts');
@@ -287,6 +293,12 @@ export const SERVICE_APP_JS = String.raw`(function(){
       d.appendChild(acts);
     } else {
       var acts2=el('div','tacts');
+      // Escalate an impatient client's order — bubbles to the top of the kitchen
+      // screen and is announced there. Toggles on/off.
+      var ug=el('button','act urg'+(t.urgent?' on':''), t.urgent?'⚡ Urgent ✓':'⚡ Urgent');
+      ug.setAttribute('aria-pressed', t.urgent?'true':'false');
+      ug.onclick=function(){ ug.disabled=true; post('/tickets/'+t.id+'/urgent',{urgent:!t.urgent}).then(function(r){if(!r.ok)ug.disabled=false;}).catch(function(){ug.disabled=false;}); };
+      acts2.appendChild(ug);
       var cx=el('button','act cancel','✕'); cx.title='Annuler cette commande'; cx.setAttribute('aria-label','Annuler cette commande');
       cx.onclick=function(){ if(!confirm('Annuler cette commande ?'))return; cx.disabled=true; post('/tickets/'+t.id+'/cancel',{reason:'annulée en salle'}).then(function(r){if(!r.ok)cx.disabled=false;}).catch(function(){cx.disabled=false;}); };
       acts2.appendChild(cx); d.appendChild(acts2);

@@ -86,6 +86,8 @@ export interface KitchenTicketView {
   session_id?: string | null;
   /** TABLE order to be packaged to-go (guest still seated). Kitchen packages it. */
   takeaway?: boolean;
+  /** Accueil escalated this order as urgent → bubbles to the top of the KDS. */
+  urgent?: boolean;
 }
 
 /** One-line items summary reused by the ticket card and the fallback WhatsApp. */

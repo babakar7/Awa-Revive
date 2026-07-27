@@ -43,6 +43,8 @@ export interface KitchenTicket {
   is_test: boolean;
   /** TABLE order the guest wants packaged to-go (still seated at a spot). */
   takeaway: boolean;
+  /** Set when the accueil escalates a TABLE order as urgent (NULL = normal). */
+  urgent_at: Date | null;
   ipad_ack_at: Date | null;
   fallback_due_at: Date | null;
   fallback_claimed_at: Date | null;
@@ -74,6 +76,7 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
     serve_by: t.serve_by,
     session_id: t.session_id,
     takeaway: t.takeaway,
+    urgent: t.urgent_at != null,
   };
 }
 
@@ -230,6 +233,26 @@ export async function claimTableServe(id: string, by: string | null): Promise<Ki
       where id = $1 and source = 'TABLE' and status = 'READY' and serve_by is null
       returning *`,
     [id, by],
+  );
+  const ticket = (res.rows[0] as KitchenTicket) ?? null;
+  if (ticket) await emitTicket("ticket_update", ticket);
+  return ticket;
+}
+
+/**
+ * Accueil escalates (or de-escalates) an on-site order as urgent — a client who
+ * has waited too long / is getting impatient. Sets/clears `urgent_at`; the kitchen
+ * board sorts urgent tickets to the top and announces them. Only affects an OPEN
+ * TABLE ticket. Idempotent. Emits ticket_update (fan-out to both boards).
+ */
+export async function setTicketUrgent(id: string, urgent: boolean, _by: string | null): Promise<KitchenTicket | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update kitchen_tickets
+        set urgent_at = ${urgent ? "now()" : "null"}, updated_at = now()
+      where id = $1 and source = 'TABLE' and status in ('NEW','PREPARING','READY')
+      returning *`,
+    [id],
   );
   const ticket = (res.rows[0] as KitchenTicket) ?? null;
   if (ticket) await emitTicket("ticket_update", ticket);

@@ -17,6 +17,7 @@ import {
   claimTableServe,
   serveTableTicket,
   cancelTableTicket,
+  setTicketUrgent,
   ticketsForSession,
 } from "../domain/kitchenTicketRepo.js";
 import { onOpsEvent, opsEventsSince, latestOpsEventId, type OpsEvent } from "../domain/opsEvents.js";
@@ -519,6 +520,16 @@ function registerServiceRoutes(app: FastifyInstance): void {
     const reason = typeof (req.body as any)?.reason === "string" ? (req.body as any).reason.slice(0, 200) : null;
     const t = await cancelTableTicket((req.params as any).id, reason);
     if (t) await autoCloseIfEmpty(t.session_id, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  // Accueil escalates / de-escalates an order as urgent (impatient client). The
+  // flag is a server-side boolean; the kitchen board re-sorts + announces it.
+  app.post(`${SERVICE_BASE}/tickets/:id/urgent`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const urgent = (req.body as any)?.urgent === true;
+    const t = await setTicketUrgent((req.params as any).id, urgent, device.label);
     return reply.type("application/json").send({ ok: !!t });
   });
 

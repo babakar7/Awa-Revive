@@ -48,6 +48,15 @@ describe("cuisine PWA assets", () => {
     expect(CUISINE_APP_JS).toContain("t.takeaway");
   });
 
+  it("bubbles urgent tickets to the top and announces the board by voice", () => {
+    // Urgent-first sort + strong badge.
+    expect(CUISINE_APP_JS).toContain("y.urgent");
+    expect(CUISINE_APP_JS).toContain("URGENT");
+    // Spoken alerts (Web Speech API) + a persisted mute toggle.
+    expect(CUISINE_APP_JS).toContain("speechSynthesis");
+    expect(CUISINE_APP_JS).toContain("cuisine.sound");
+  });
+
   it("app.js parses as valid JavaScript (no syntax errors in the big string)", () => {
     // new Function only parses (doesn't run), so undefined browser globals are fine.
     expect(() => new Function(CUISINE_APP_JS)).not.toThrow();

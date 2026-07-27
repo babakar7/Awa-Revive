@@ -48,6 +48,11 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("takeaway:state.takeaway");
   });
 
+  it("lets the accueil flag an order urgent", () => {
+    expect(SERVICE_APP_JS).toContain("Urgent");
+    expect(SERVICE_APP_JS).toContain("/urgent");
+  });
+
   it("app.js parses as valid JavaScript (no syntax errors in the big string)", () => {
     expect(() => new Function(SERVICE_APP_JS)).not.toThrow();
   });

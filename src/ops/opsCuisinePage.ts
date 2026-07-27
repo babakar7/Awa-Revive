@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v7";
+const ASSET_VERSION = "v9";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -64,6 +64,7 @@ border-radius:var(--radius-lg);padding:1rem 1.1rem;display:flex;flex-direction:c
 .card.src-delivery{border-left-color:var(--info)}
 .card.test{border-left-color:var(--danger)}
 .card.ready{background:var(--ok-bg);border-color:var(--ok-border);box-shadow:0 0 0 1px var(--ok-border)}
+.card.urgent{border-color:var(--danger);border-left-color:var(--danger);box-shadow:0 0 0 3px var(--danger-bg)}
 .card.flash{animation:arrive 1.2s var(--ease)}
 .top{display:flex;align-items:center;gap:.5rem}
 .badge{font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
@@ -71,6 +72,7 @@ padding:.22rem .6rem;border-radius:999px;background:var(--info-bg);color:var(--i
 .badge.table{background:var(--rose);color:var(--plum-700)}
 .badge.test{background:var(--danger-bg);color:var(--danger)}
 .badge.away{background:var(--info);color:#fff}
+.badge.urgent{background:var(--danger);color:#fff;animation:pulse 1.2s ease-in-out infinite}
 .age{margin-left:auto;font-size:1.5rem;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.01em;color:var(--ok-strong)}
 .age.warn{color:var(--warn)}
 .age.late{color:var(--danger);animation:pulse 1.2s ease-in-out infinite}
@@ -92,13 +94,16 @@ button.act{flex:1;padding:.9rem;font-size:1.05rem;font-weight:800;border:none;bo
 button.prep{background:var(--plum-600)}
 button.ready{background:var(--ok-strong)}
 #clock{font-variant-numeric:tabular-nums;font-weight:600;font-size:.95rem;color:var(--ink-500)}
+.sndbtn{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
+min-height:2.5rem;padding:.3rem .7rem;font-size:1rem;font-weight:700}
+.sndbtn.off{background:var(--cream-100);color:var(--ink-500);border-color:var(--border)}
 .empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:20vh;font-family:var(--serif);font-size:1.3rem;font-style:italic}`;
 
 export function cuisineKitchenPage(bootJson: string): string {
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Cuisine")}<title>Cuisine Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Cuisine</h1><span id="clock"></span><span class="spacer"></span>
-<span class="count" id="count"></span></header>
+<button id="snd" class="sndbtn" aria-label="Activer/couper le son">🔊</button><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <div id="offline">Hors ligne — reconnexion…</div>
 <noscript>Activez JavaScript pour afficher les tickets cuisine.</noscript>
@@ -158,15 +163,43 @@ export const CUISINE_APP_JS = String.raw`(function(){
   var offline=document.getElementById('offline');
   var clockEl=document.getElementById('clock');
 
-  // ---- audio (unlocked on first user gesture; iOS requirement) ----
+  // ---- sound & voice (unlocked on first user gesture; iOS requirement) ----
+  // Cooks can't always watch the screen, so the board speaks (Web Speech API,
+  // OS voices, no network). A header 🔊/🔇 toggle (persisted) mutes bip + voix.
+  var sndBtn=document.getElementById('snd');
+  var muted=false; try{ muted=localStorage.getItem('cuisine.sound')==='off'; }catch(e){}
+  function paintSnd(){ if(sndBtn){ sndBtn.textContent=muted?'🔇':'🔊'; sndBtn.classList.toggle('off',muted); } }
+  paintSnd();
+  // Voices load asynchronously — grab them now and whenever the browser fires
+  // voiceschanged, so the first real announcement isn't spoken into the void.
+  var voices=[];
+  function loadVoices(){ if(!window.speechSynthesis) return; try{ voices=speechSynthesis.getVoices()||[]; }catch(e){} }
+  if(window.speechSynthesis){ loadVoices(); try{ speechSynthesis.onvoiceschanged=loadVoices; }catch(e){} }
+  function frVoice(){ for(var i=0;i<voices.length;i++){ if(((voices[i].lang||'').toLowerCase()).indexOf('fr')===0) return voices[i]; } return null; }
   var actx=null;
-  function unlock(){ if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(actx&&actx.state==='suspended'){ actx.resume(); } }
+  function unlock(){ if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(actx&&actx.state==='suspended'){ actx.resume(); }
+    // Warm speech on the gesture: resume any paused queue + ensure voices are loaded.
+    if(window.speechSynthesis){ try{ speechSynthesis.resume(); loadVoices(); }catch(e){} } }
   document.addEventListener('touchstart',unlock,{once:false});
   document.addEventListener('click',unlock,{once:false});
-  function beep(){ if(!actx) return; try{ var o=actx.createOscillator(),g=actx.createGain();
+  // Toggling the sound ON speaks a confirmation — a direct user gesture is the most
+  // reliable way to prove TTS works (and it primes it for the SSE-driven alerts).
+  if(sndBtn) sndBtn.onclick=function(){ muted=!muted; try{ localStorage.setItem('cuisine.sound',muted?'off':'on'); }catch(e){} paintSnd();
+    if(muted){ try{ speechSynthesis.cancel(); }catch(e){} } else { unlock(); speak('Son activé',false); } };
+  function beep(){ if(muted||!actx) return; try{ var o=actx.createOscillator(),g=actx.createGain();
     o.type='sine'; o.frequency.value=880; g.gain.value=.001; o.connect(g); g.connect(actx.destination);
     var t=actx.currentTime; g.gain.exponentialRampToValueAtTime(.25,t+.02); g.gain.exponentialRampToValueAtTime(.001,t+.5);
     o.start(t); o.stop(t+.5);}catch(e){} }
+  function speak(text,urgent){ if(muted||!text||!window.speechSynthesis) return; try{
+    speechSynthesis.resume();                        // Chrome pauses the queue at times
+    if(urgent) speechSynthesis.cancel();             // an urgence jumps the queue
+    var u=new SpeechSynthesisUtterance(text); u.lang='fr-FR'; var v=frVoice(); if(v) u.voice=v;
+    if(urgent){ u.rate=1.05; u.pitch=1.1; }
+    speechSynthesis.speak(u); }catch(e){} }
+  function ticketSpeech(t,urgent){ var w=t.heading||'';
+    if(urgent) return 'Commande urgente'+(w?', '+w:'');
+    if(t.source!=='TABLE') return 'Nouvelle livraison';
+    return 'Nouvelle commande'+(t.takeaway?' à emporter':'')+(w?', '+w:''); }
 
   // Prep timer (MM:SS): counts up while the kitchen prepares, colored by urgency
   // (green < 5 min, amber 5–10, red pulsing ≥ 10), and FREEZES when the ticket is
@@ -181,9 +214,11 @@ export const CUISINE_APP_JS = String.raw`(function(){
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
 
   function card(t){
-    var c=el('div','card src-'+(t.source==='TABLE'?'table':'delivery')+(t.status==='READY'?' ready':'')+(t.is_test?' test':''));
+    var c=el('div','card src-'+(t.source==='TABLE'?'table':'delivery')+(t.status==='READY'?' ready':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
     c.dataset.id=t.id;
     var top=el('div','top');
+    // Urgent escalation stands out first, then the fulfilment-mode badge.
+    if(t.urgent) top.appendChild(el('span','badge urgent','⚡ URGENT'));
     // One fulfilment-mode badge per ticket: Sur place / À emporter / Livraison.
     var b;
     if(t.source!=='TABLE') b=el('span','badge','🛵 Livraison');
@@ -219,7 +254,11 @@ export const CUISINE_APP_JS = String.raw`(function(){
   }
 
   function render(){
-    var list=Array.from(model.values()).sort(function(x,y){return new Date(x.created_at)-new Date(y.created_at);});
+    // Urgents first (accueil-escalated), then oldest-first within each group.
+    var list=Array.from(model.values()).sort(function(x,y){
+      var u=(y.urgent?1:0)-(x.urgent?1:0);
+      return u || (new Date(x.created_at)-new Date(y.created_at));
+    });
     board.textContent='';
     if(!list.length){ board.appendChild(el('p','empty','Aucun ticket en cours ✅')); }
     else list.forEach(function(t){ board.appendChild(card(t)); });
@@ -257,8 +296,8 @@ export const CUISINE_APP_JS = String.raw`(function(){
   var es=new EventSource(BASE+'/events?since='+cursor);
   es.onopen=function(){setOnline(true);};
   es.onerror=function(){setOnline(false);};
-  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
-  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(becameReady){ var pill=board.querySelector('[data-id="'+t.id+'"] .pill.ready'); if(pill)pill.classList.add('just-ready'); } });
+  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); speak(ticketSpeech(t,false),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
+  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(ticketSpeech(t,true),true); } });
   es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); });
 
   if('serviceWorker' in navigator){ navigator.serviceWorker.register(BASE+'/sw.js').catch(function(){}); }
