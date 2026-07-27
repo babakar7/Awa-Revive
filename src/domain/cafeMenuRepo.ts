@@ -4,8 +4,10 @@ import { pool } from "../db/index.js";
 import {
   type CafeMenuRow,
   FAVOURITE_SEED_IDS,
+  type MenuOptionGroup,
   parseCafeMenu,
   parseOptionChoices,
+  parseOptionGroups,
   setCafeMenu,
   slugifyMenuId,
 } from "../lib/cafeMenu.js";
@@ -29,6 +31,7 @@ export interface MenuItemView {
   no_recipe_needed: boolean;
   option_label: string | null;
   option_choices: string | null;
+  option_groups?: unknown;
   favourite: boolean;
   enabled: boolean;
   sort_order: number;
@@ -36,15 +39,17 @@ export interface MenuItemView {
 }
 
 function rowToSnapshot(r: MenuItemView): CafeMenuRow {
-  const optionChoices = parseOptionChoices(r.option_choices);
+  const optionGroups = parseOptionGroups(r.option_groups, r.option_label, r.option_choices);
+  const firstGroup = optionGroups[0];
   return {
     id: r.id,
     name: r.name,
     priceXof: r.price_xof,
     category: r.category,
     description: r.description ?? undefined,
-    optionLabel: r.option_label?.trim() || undefined,
-    optionChoices: optionChoices.length ? optionChoices : undefined,
+    optionLabel: firstGroup?.label,
+    optionChoices: firstGroup?.choices,
+    optionGroups: optionGroups.length ? optionGroups : undefined,
     favourite: r.favourite,
     enabled: r.enabled,
     sortOrder: r.sort_order,
@@ -52,7 +57,7 @@ function rowToSnapshot(r: MenuItemView): CafeMenuRow {
 }
 
 const ITEM_COLUMNS = `id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
-            no_recipe_needed, option_label, option_choices, favourite, enabled, sort_order, updated_at`;
+            no_recipe_needed, option_label, option_choices, option_groups, favourite, enabled, sort_order, updated_at`;
 
 export async function listMenuItems(): Promise<MenuItemView[]> {
   const res = await pool.query(
@@ -71,13 +76,14 @@ export interface PublicMenuItem {
   description: string | null;
   option_label: string | null;
   option_choices: string | null;
+  option_groups?: unknown;
   favourite: boolean;
   sort_order: number;
 }
 
 export async function listPublicMenuItems(): Promise<PublicMenuItem[]> {
   const res = await pool.query(
-    `select id, name, price_xof, category, description, option_label, option_choices, favourite, sort_order
+    `select id, name, price_xof, category, description, option_label, option_choices, option_groups, favourite, sort_order
        from cafe_menu_items where enabled order by sort_order, name`,
   );
   return res.rows as PublicMenuItem[];
@@ -101,6 +107,7 @@ export interface MenuItemInput {
   no_recipe_needed: boolean;
   option_label: string | null;
   option_choices: string | null;
+  option_groups?: MenuOptionGroup[];
   favourite: boolean;
 }
 
@@ -111,6 +118,7 @@ const MAX_RECIPE_FIELD = 5_000;
 const MAX_OPTION_LABEL = 40;
 const MAX_OPTION_CHOICES = 200;
 export const MAX_MENU_OPTION_RESPONSES = 12;
+export const MAX_MENU_OPTION_GROUPS = 6;
 
 export function isRecipeComplete(
   item: Pick<MenuItemView, "recipe_ingredients" | "recipe_steps" | "no_recipe_needed">,
@@ -141,6 +149,79 @@ function submittedOptionChoices(body: Record<string, unknown>): string[] | { err
   return choices;
 }
 
+function submittedOptionGroups(
+  body: Record<string, unknown>,
+): MenuOptionGroup[] | { error: string } {
+  const groupIndexes = new Set<number>();
+  for (const key of Object.keys(body)) {
+    const match = key.match(
+      /^option_groups\[(\d+)\](?:\[label\]|\[choices\]\[\d+\])$/,
+    );
+    if (match) groupIndexes.add(Number(match[1]));
+  }
+
+  if (groupIndexes.size) {
+    const groups: MenuOptionGroup[] = [];
+    for (const groupIndex of [...groupIndexes].sort((a, b) => a - b)) {
+      const label = String(body[`option_groups[${groupIndex}][label]`] ?? "").trim();
+      const choiceEntries = Object.entries(body)
+        .flatMap(([key, value]) => {
+          const match = key.match(
+            new RegExp(`^option_groups\\[${groupIndex}\\]\\[choices\\]\\[(\\d+)\\]$`),
+          );
+          return match ? [{ index: Number(match[1]), value }] : [];
+        })
+        .sort((a, b) => a.index - b.index);
+      const choices = choiceEntries
+        .flatMap((entry) => (Array.isArray(entry.value) ? entry.value : [entry.value]))
+        .flatMap((value) => String(value ?? "").split("|"))
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+      if (!label && !choices.length) continue;
+      if (!label)
+        return {
+          error: `indiquez l’intitulé du choix ${groups.length + 1} dès qu’une réponse est proposée.`,
+        };
+      if (!choices.length)
+        return { error: `ajoutez au moins une réponse pour « ${label} ».` };
+      if (label.length > MAX_OPTION_LABEL)
+        return {
+          error: `intitulé « ${label} » trop long (${MAX_OPTION_LABEL} caractères maximum).`,
+        };
+      if (choices.length > MAX_MENU_OPTION_RESPONSES)
+        return {
+          error: `ajoutez au maximum ${MAX_MENU_OPTION_RESPONSES} réponses pour « ${label} ».`,
+        };
+      if (choices.join(" | ").length > MAX_OPTION_CHOICES)
+        return {
+          error: `réponses de « ${label} » trop longues (${MAX_OPTION_CHOICES} caractères maximum au total).`,
+        };
+      groups.push({ label, choices });
+    }
+    if (groups.length > MAX_MENU_OPTION_GROUPS)
+      return { error: `ajoutez au maximum ${MAX_MENU_OPTION_GROUPS} types de choix.` };
+    const normalizedLabels = groups.map((group) => group.label.toLocaleLowerCase("fr-FR"));
+    if (new Set(normalizedLabels).size !== normalizedLabels.length)
+      return { error: "chaque type de choix doit avoir un intitulé différent." };
+    return groups;
+  }
+
+  // Legacy editor/API: one label plus pipe-separated or indexed responses.
+  const label = String(body.option_label ?? "").trim();
+  const choices = submittedOptionChoices(body);
+  if ("error" in choices) return choices;
+  if (label.length > MAX_OPTION_LABEL)
+    return { error: `intitulé du choix trop long (${MAX_OPTION_LABEL} caractères maximum).` };
+  if (choices.join(" | ").length > MAX_OPTION_CHOICES)
+    return {
+      error: `réponses proposées trop longues (${MAX_OPTION_CHOICES} caractères maximum au total).`,
+    };
+  if (choices.length && !label)
+    return { error: "indiquez un intitulé du choix dès qu’une réponse est proposée." };
+  return label && choices.length ? [{ label, choices }] : [];
+}
+
 /** Pure: validate/normalize the admin form. */
 export function parseMenuItemForm(body: Record<string, unknown>): MenuItemInput | { error: string } {
   const name = String(body.name ?? "").trim();
@@ -167,20 +248,9 @@ export function parseMenuItemForm(body: Record<string, unknown>): MenuItemInput 
   if (recipeSteps.length > MAX_RECIPE_FIELD)
     return { error: `préparation trop longue (max ${MAX_RECIPE_FIELD} caractères).` };
 
-  const optionLabel = String(body.option_label ?? "").trim();
-  if (optionLabel.length > MAX_OPTION_LABEL)
-    return { error: `intitulé du choix trop long (${MAX_OPTION_LABEL} caractères maximum).` };
-  const submittedChoices = submittedOptionChoices(body);
-  if ("error" in submittedChoices) return submittedChoices;
-  // Keep the existing canonical DB representation so public-menu, delivery and
-  // WhatsApp consumers remain unchanged.
-  const optionChoices = submittedChoices.join(" | ");
-  if (optionChoices.length > MAX_OPTION_CHOICES)
-    return {
-      error: `réponses proposées trop longues (${MAX_OPTION_CHOICES} caractères maximum au total).`,
-    };
-  if (optionChoices && !optionLabel)
-    return { error: "indiquez un intitulé du choix dès qu’une réponse est proposée." };
+  const optionGroups = submittedOptionGroups(body);
+  if ("error" in optionGroups) return optionGroups;
+  const firstGroup = optionGroups[0];
 
   return {
     name,
@@ -191,8 +261,9 @@ export function parseMenuItemForm(body: Record<string, unknown>): MenuItemInput 
     recipe_steps: recipeSteps || null,
     no_recipe_needed:
       body.no_recipe_needed === "on" || body.no_recipe_needed === "true" || body.no_recipe_needed === "1",
-    option_label: optionChoices ? optionLabel : null,
-    option_choices: optionChoices || null,
+    option_label: firstGroup?.label ?? null,
+    option_choices: firstGroup?.choices.join(" | ") ?? null,
+    option_groups: optionGroups,
     favourite: body.favourite === "on" || body.favourite === "true" || body.favourite === "1",
   };
 }
@@ -209,8 +280,8 @@ export async function createMenuItem(input: MenuItemInput): Promise<{ id: string
   await pool.query(
     `insert into cafe_menu_items
        (id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
-        no_recipe_needed, option_label, option_choices, favourite, sort_order)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        no_recipe_needed, option_label, option_choices, option_groups, favourite, sort_order)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)`,
     [
       id,
       input.name,
@@ -222,6 +293,10 @@ export async function createMenuItem(input: MenuItemInput): Promise<{ id: string
       input.no_recipe_needed,
       input.option_label,
       input.option_choices,
+      JSON.stringify(
+        input.option_groups ??
+          parseOptionGroups(null, input.option_label, input.option_choices),
+      ),
       input.favourite,
       sortOrder,
     ],
@@ -234,7 +309,7 @@ export async function updateMenuItem(id: string, input: MenuItemInput): Promise<
     `update cafe_menu_items set
        name = $2, price_xof = $3, category = $4, description = $5,
        recipe_ingredients = $6, recipe_steps = $7, no_recipe_needed = $8, option_label = $9,
-       option_choices = $10, favourite = $11, updated_at = now()
+       option_choices = $10, option_groups = $11::jsonb, favourite = $12, updated_at = now()
      where id = $1`,
     [
       id,
@@ -247,6 +322,10 @@ export async function updateMenuItem(id: string, input: MenuItemInput): Promise<
       input.no_recipe_needed,
       input.option_label,
       input.option_choices,
+      JSON.stringify(
+        input.option_groups ??
+          parseOptionGroups(null, input.option_label, input.option_choices),
+      ),
       input.favourite,
     ],
   );

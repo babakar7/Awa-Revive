@@ -290,6 +290,10 @@ form.inline{display:inline}
 .choice-editor-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}
 .choice-editor-heading h3{margin:0;font-size:1.02rem}
 .choice-editor-heading p{margin:.3rem 0 0;max-width:68ch}
+.choice-groups{display:grid;gap:.9rem}
+.choice-group{display:grid;gap:.85rem;padding:1rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-raised)}
+.choice-group-heading{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding-bottom:.65rem;border-bottom:1px solid var(--border-soft)}
+.choice-group-heading h4{margin:0;font-size:.95rem}
 .choice-label{max-width:620px}
 .choice-responses{display:grid;gap:.75rem}
 .choice-responses-heading{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
@@ -299,8 +303,8 @@ form.inline{display:inline}
 .choice-response-row input{width:100%;margin:0}
 .choice-response-number{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border-radius:999px;background:var(--plum-100);color:var(--brand-strong);font-size:.82rem;font-weight:750}
 .choice-remove{min-width:100px}
-.choice-response-actions{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
-.choice-response-actions .field-help{margin:0}
+.choice-response-actions,.choice-group-actions{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+.choice-response-actions .field-help,.choice-group-actions .field-help{margin:0}
 .menu-form-grid .menu-favourite{grid-column:1/-1;display:flex;align-items:center;gap:.5rem;padding:.7rem .75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--cream-25)}
 .menu-form-grid .menu-favourite input{flex:0 0 auto;margin:0}
 .recipe-editor{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
@@ -434,11 +438,13 @@ details>summary{cursor:pointer}
   .menu-stats,.menu-filters,.menu-form-grid,.recipe-editor{grid-template-columns:1fr}
   .menu-search,.menu-filter-actions,.menu-form-grid .menu-description,.menu-form-grid .menu-favourite,.recipe-editor .menu-editor-heading{grid-column:1}
   .choice-editor{grid-column:1;padding:.85rem}
-  .choice-responses-heading{align-items:flex-start;flex-direction:column}
+  .choice-editor-heading,.choice-group-heading,.choice-responses-heading{align-items:flex-start;flex-direction:column}
+  .choice-group{padding:.8rem}
+  .choice-group-remove{width:100%;min-height:42px}
   .choice-response-row{grid-template-columns:2rem minmax(0,1fr)}
   .choice-response-row .choice-remove{grid-column:2;width:100%;min-height:42px}
-  .choice-response-actions{align-items:stretch;flex-direction:column}
-  .choice-response-actions .act{width:100%;min-height:46px}
+  .choice-response-actions,.choice-group-actions{align-items:stretch;flex-direction:column}
+  .choice-response-actions .act,.choice-group-actions .act{width:100%;min-height:46px}
   .menu-danger-zone{align-items:stretch;flex-direction:column}
 }
 @media(prefers-reduced-motion:reduce){

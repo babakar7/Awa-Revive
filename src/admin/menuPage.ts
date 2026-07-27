@@ -1,10 +1,11 @@
 import {
   isRecipeComplete,
+  MAX_MENU_OPTION_GROUPS,
   MAX_MENU_OPTION_RESPONSES,
   type CategoryView,
   type MenuItemView,
 } from "../domain/cafeMenuRepo.js";
-import { parseOptionChoices } from "../lib/cafeMenu.js";
+import { parseOptionGroups, type MenuOptionGroup } from "../lib/cafeMenu.js";
 
 /** Server-rendered menu catalogue and internal recipe editor. */
 
@@ -246,24 +247,41 @@ function recipeState(item: MenuItemView | null): string {
   return recipeBadge(item);
 }
 
-function optionResponseRow(value: string, index: number): string {
+function optionResponseRow(value: string, groupIndex: number, index: number): string {
   const number = index + 1;
   return `<div class="choice-response-row" data-choice-row>
   <span class="choice-response-number" aria-hidden="true">${number}</span>
-  <label class="visually-hidden" for="option-choice-${index}">Réponse proposée ${number}</label>
-  <input id="option-choice-${index}" name="option_choices[${index}]" maxlength="200" value="${esc(value)}" placeholder="Ex. Lait d’avoine" autocomplete="off">
+  <label class="visually-hidden" for="option-group-${groupIndex}-choice-${index}">Réponse proposée ${number}</label>
+  <input id="option-group-${groupIndex}-choice-${index}" name="option_groups[${groupIndex}][choices][${index}]" maxlength="200" value="${esc(value)}" placeholder="Ex. Lait d’avoine" autocomplete="off">
   <button class="act act--sm act--ghost choice-remove" type="button" aria-label="Supprimer la réponse ${number}">Supprimer</button>
 </div>`;
+}
+
+function optionGroupEditor(group: MenuOptionGroup, groupIndex: number): string {
+  const rows = group.choices.length ? group.choices : [""];
+  return `<section class="choice-group" data-choice-group>
+  <div class="choice-group-heading">
+    <h4 data-choice-group-title>Type de choix ${groupIndex + 1}</h4>
+    <button class="act act--sm act--ghost choice-group-remove" type="button" aria-label="Supprimer le type de choix ${groupIndex + 1}">Supprimer ce type</button>
+  </div>
+  <label class="choice-label">Intitulé du choix<span class="field-help">Par exemple « Type de lait » ou « Type de fromage ».</span><input data-choice-label name="option_groups[${groupIndex}][label]" maxlength="40" value="${esc(group.label)}" placeholder="Type de lait" autocomplete="off"></label>
+  <div class="choice-responses">
+    <div class="choice-responses-heading"><div><b>Réponses proposées</b><span class="field-help">Une réponse par ligne, dans l’ordre présenté au client.</span></div><span class="badge badge--gray" data-choice-count aria-live="polite">${group.choices.length} réponse${group.choices.length === 1 ? "" : "s"} enregistrée${group.choices.length === 1 ? "" : "s"}</span></div>
+    <div class="choice-response-list" data-choice-rows>${rows.map((value, index) => optionResponseRow(value, groupIndex, index)).join("")}</div>
+    <div class="choice-response-actions"><button class="act act--ghost" type="button" data-choice-add>Ajouter une réponse</button><span class="field-help">${MAX_MENU_OPTION_RESPONSES} réponses maximum.</span></div>
+  </div>
+</section>`;
 }
 
 const MENU_OPTION_EDITOR_SCRIPT = `<script>
 (function(){
   var editor=document.querySelector('[data-choice-editor]');
   if(!editor)return;
-  var rows=editor.querySelector('[data-choice-rows]');
-  var add=editor.querySelector('[data-choice-add]');
-  var count=editor.querySelector('[data-choice-count]');
-  var max=${MAX_MENU_OPTION_RESPONSES};
+  var groups=editor.querySelector('[data-choice-groups]');
+  var addGroup=editor.querySelector('[data-choice-group-add]');
+  var groupCount=editor.querySelector('[data-choice-group-count]');
+  var maxResponses=${MAX_MENU_OPTION_RESPONSES};
+  var maxGroups=${MAX_MENU_OPTION_GROUPS};
   function rowHtml(){
     var row=document.createElement('div');
     row.className='choice-response-row';
@@ -271,39 +289,81 @@ const MENU_OPTION_EDITOR_SCRIPT = `<script>
     row.innerHTML='<span class="choice-response-number" aria-hidden="true"></span><label class="visually-hidden"></label><input maxlength="200" placeholder="Ex. Lait d’avoine" autocomplete="off"><button class="act act--sm act--ghost choice-remove" type="button">Supprimer</button>';
     return row;
   }
-  function update(){
-    var all=[].slice.call(rows.querySelectorAll('[data-choice-row]'));
-    var saved=0;
-    all.forEach(function(row,index){
-      var number=index+1;
-      var input=row.querySelector('input');
-      var label=row.querySelector('label');
-      var remove=row.querySelector('button');
-      var id='option-choice-'+index;
-      row.querySelector('.choice-response-number').textContent=number;
-      input.id=id;input.name='option_choices['+index+']';
-      label.htmlFor=id;label.textContent='Réponse proposée '+number;
-      remove.setAttribute('aria-label','Supprimer la réponse '+number);
-      if(input.value.trim())saved++;
-    });
-    count.textContent=saved+' réponse'+(saved===1?'':'s')+' enregistrée'+(saved===1?'':'s');
-    add.disabled=all.length>=max;
-    add.setAttribute('aria-disabled',add.disabled?'true':'false');
+  function groupHtml(){
+    var group=document.createElement('section');
+    group.className='choice-group';group.setAttribute('data-choice-group','');
+    group.innerHTML='<div class="choice-group-heading"><h4 data-choice-group-title></h4><button class="act act--sm act--ghost choice-group-remove" type="button">Supprimer ce type</button></div><label class="choice-label">Intitulé du choix<span class="field-help">Par exemple « Type de lait » ou « Type de fromage ».</span><input data-choice-label maxlength="40" placeholder="Type de lait" autocomplete="off"></label><div class="choice-responses"><div class="choice-responses-heading"><div><b>Réponses proposées</b><span class="field-help">Une réponse par ligne, dans l’ordre présenté au client.</span></div><span class="badge badge--gray" data-choice-count aria-live="polite"></span></div><div class="choice-response-list" data-choice-rows></div><div class="choice-response-actions"><button class="act act--ghost" type="button" data-choice-add>Ajouter une réponse</button><span class="field-help">${MAX_MENU_OPTION_RESPONSES} réponses maximum.</span></div></div>';
+    group.querySelector('[data-choice-rows]').appendChild(rowHtml());
+    return group;
   }
-  add.addEventListener('click',function(){
-    if(rows.querySelectorAll('[data-choice-row]').length>=max)return;
-    var row=rowHtml();rows.appendChild(row);update();row.querySelector('input').focus();
+  function update(){
+    var allGroups=[].slice.call(groups.querySelectorAll('[data-choice-group]'));
+    var savedGroups=0;
+    allGroups.forEach(function(group,groupIndex){
+      var title=group.querySelector('[data-choice-group-title]');
+      var labelInput=group.querySelector('[data-choice-label]');
+      var removeGroup=group.querySelector('.choice-group-remove');
+      title.textContent='Type de choix '+(groupIndex+1);
+      labelInput.name='option_groups['+groupIndex+'][label]';
+      removeGroup.setAttribute('aria-label','Supprimer le type de choix '+(groupIndex+1));
+      var rows=group.querySelector('[data-choice-rows]');
+      var all=[].slice.call(rows.querySelectorAll('[data-choice-row]'));
+      var saved=0;
+      all.forEach(function(row,index){
+        var number=index+1;
+        var input=row.querySelector('input');
+        var label=row.querySelector('label');
+        var remove=row.querySelector('.choice-remove');
+        var id='option-group-'+groupIndex+'-choice-'+index;
+        row.querySelector('.choice-response-number').textContent=number;
+        input.id=id;input.name='option_groups['+groupIndex+'][choices]['+index+']';
+        label.htmlFor=id;label.textContent='Réponse proposée '+number;
+        remove.setAttribute('aria-label','Supprimer la réponse '+number+' du type '+(groupIndex+1));
+        if(input.value.trim())saved++;
+      });
+      group.querySelector('[data-choice-count]').textContent=saved+' réponse'+(saved===1?'':'s')+' enregistrée'+(saved===1?'':'s');
+      var add=group.querySelector('[data-choice-add]');
+      add.disabled=all.length>=maxResponses;
+      add.setAttribute('aria-disabled',add.disabled?'true':'false');
+      if(labelInput.value.trim()||saved)savedGroups++;
+    });
+    groupCount.textContent=savedGroups+' type'+(savedGroups===1?'':'s')+' de choix enregistré'+(savedGroups===1?'':'s');
+    addGroup.disabled=allGroups.length>=maxGroups;
+    addGroup.setAttribute('aria-disabled',addGroup.disabled?'true':'false');
+  }
+  addGroup.addEventListener('click',function(){
+    if(groups.querySelectorAll('[data-choice-group]').length>=maxGroups)return;
+    var group=groupHtml();groups.appendChild(group);update();group.querySelector('[data-choice-label]').focus();
   });
-  rows.addEventListener('click',function(event){
+  groups.addEventListener('click',function(event){
+    var add=event.target.closest('[data-choice-add]');
+    if(add){
+      var rows=add.closest('[data-choice-group]').querySelector('[data-choice-rows]');
+      if(rows.querySelectorAll('[data-choice-row]').length>=maxResponses)return;
+      var newRow=rowHtml();rows.appendChild(newRow);update();newRow.querySelector('input').focus();return;
+    }
     var button=event.target.closest('.choice-remove');
-    if(!button)return;
-    var all=rows.querySelectorAll('[data-choice-row]');
-    var row=button.closest('[data-choice-row]');
-    if(all.length===1){row.querySelector('input').value='';row.querySelector('input').focus();}
-    else row.remove();
-    update();
+    if(button){
+      var row=button.closest('[data-choice-row]');
+      var rows=row.closest('[data-choice-rows]');
+      var all=rows.querySelectorAll('[data-choice-row]');
+      if(all.length===1){row.querySelector('input').value='';row.querySelector('input').focus();}
+      else row.remove();
+      update();return;
+    }
+    var removeGroup=event.target.closest('.choice-group-remove');
+    if(removeGroup){
+      var group=removeGroup.closest('[data-choice-group]');
+      var allGroups=groups.querySelectorAll('[data-choice-group]');
+      if(allGroups.length===1){
+        group.querySelector('[data-choice-label]').value='';
+        group.querySelectorAll('[data-choice-row]').forEach(function(row,index){if(index)row.remove();else row.querySelector('input').value='';});
+        group.querySelector('[data-choice-label]').focus();
+      }else{group.remove();groups.querySelector('[data-choice-group] [data-choice-label]').focus();}
+      update();
+    }
   });
-  rows.addEventListener('input',update);
+  groups.addEventListener('input',update);
   editor.closest('form').addEventListener('submit',update);
   update();
 })();
@@ -322,9 +382,14 @@ export function renderMenuItemForm(opts: {
   const description = esc(item?.description);
   const ingredients = esc(item?.recipe_ingredients);
   const steps = esc(item?.recipe_steps);
-  const optionLabel = esc(item?.option_label);
-  const optionChoices = parseOptionChoices(item?.option_choices);
-  const optionRows = optionChoices.length ? optionChoices : [""];
+  const configuredGroups = parseOptionGroups(
+    item?.option_groups,
+    item?.option_label,
+    item?.option_choices,
+  );
+  const optionGroups = configuredGroups.length
+    ? configuredGroups
+    : [{ label: "", choices: [] }];
   const favourite = item?.favourite ? " checked" : "";
   const noRecipeNeeded = item?.no_recipe_needed ? " checked" : "";
 
@@ -349,14 +414,11 @@ export function renderMenuItemForm(opts: {
       <label class="menu-description">Description commerciale<span class="field-help">Courte présentation visible par Awa et les clients.</span><textarea name="description" rows="3" maxlength="200" placeholder="Goût, ingrédients principaux ou bénéfice client…">${description}</textarea></label>
       <section class="choice-editor" data-choice-editor aria-labelledby="choice-editor-title">
         <div class="choice-editor-heading">
-          <div><h3 id="choice-editor-title">Choix demandé au client (facultatif)</h3><p class="field-help">Exemple : demandez « Type de lait » et proposez « Lait entier » ou « Lait d’avoine ». À la commande, le client devra choisir une réponse.</p></div>
+          <div><h3 id="choice-editor-title">Choix demandés au client (facultatif)</h3><p class="field-help">Ajoutez plusieurs questions indépendantes si nécessaire. Exemple : « Type de lait » (entier, avoine) puis « Type de fromage » (chèvre, emmental).</p></div>
+          <span class="badge badge--gray" data-choice-group-count aria-live="polite">${configuredGroups.length} type${configuredGroups.length === 1 ? "" : "s"} de choix enregistré${configuredGroups.length === 1 ? "" : "s"}</span>
         </div>
-        <label class="choice-label">Intitulé du choix<span class="field-help">Une courte question, par exemple « Type de lait » ou « Boisson incluse ».</span><input name="option_label" maxlength="40" value="${optionLabel}" placeholder="Type de lait"></label>
-        <div class="choice-responses">
-          <div class="choice-responses-heading"><div><b>Réponses proposées</b><span class="field-help">Une réponse par ligne, dans l’ordre présenté au client.</span></div><span class="badge badge--gray" data-choice-count aria-live="polite">${optionChoices.length} réponse${optionChoices.length === 1 ? "" : "s"} enregistrée${optionChoices.length === 1 ? "" : "s"}</span></div>
-          <div class="choice-response-list" data-choice-rows>${optionRows.map(optionResponseRow).join("")}</div>
-          <div class="choice-response-actions"><button class="act act--ghost" type="button" data-choice-add>Ajouter une réponse</button><span class="field-help">${MAX_MENU_OPTION_RESPONSES} réponses maximum.</span></div>
-        </div>
+        <div class="choice-groups" data-choice-groups>${optionGroups.map(optionGroupEditor).join("")}</div>
+        <div class="choice-group-actions"><button class="act act--ghost" type="button" data-choice-group-add>Ajouter un type de choix</button><span class="field-help">${MAX_MENU_OPTION_GROUPS} types maximum par article.</span></div>
       </section>
       <label class="menu-favourite"><input type="checkbox" name="favourite"${favourite}> Incontournable proposé sur WhatsApp</label>
     </div>

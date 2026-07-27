@@ -1016,6 +1016,10 @@ alter table cafe_menu_items add column if not exists recipe_steps text;
 -- article sans choix. À la saisie d'une commande le choix devient obligatoire.
 alter table cafe_menu_items add column if not exists option_label text;
 alter table cafe_menu_items add column if not exists option_choices text;
+-- Plusieurs questions indépendantes par article, conservées dans l'ordre.
+-- Les deux colonnes historiques ci-dessus restent le miroir du premier groupe
+-- pour les anciens consommateurs et formulaires.
+alter table cafe_menu_items add column if not exists option_groups jsonb not null default '[]'::jsonb;
 -- Backfill one-shot des choix déjà documentés dans cafe-menu.md (guardé sur
 -- null → ne réécrit pas un choix édité ensuite via /admin/menu).
 update cafe_menu_items set option_label = 'Boisson',

@@ -1049,17 +1049,17 @@ describe("item with a built-in choice", () => {
   // to avoid leaking the option into other suites sharing this DB.
   afterAll(async () => {
     await pool.query(
-      `update cafe_menu_items set option_label=null, option_choices=null where id='BRUNCH_MYKONOS'`,
+      `update cafe_menu_items set option_label=null, option_choices=null, option_groups='[]'::jsonb where id='BRUNCH_MYKONOS'`,
     );
   });
   async function giveBrunchAChoice(): Promise<void> {
     await pool.query(
-      `update cafe_menu_items set option_label='Boisson', option_choices=$1 where id='BRUNCH_MYKONOS'`,
+      `update cafe_menu_items set option_label='Boisson', option_choices=$1, option_groups='[]'::jsonb where id='BRUNCH_MYKONOS'`,
       ["Jus d'orange | Boisson chaude"],
     );
     await refreshCafeMenu();
   }
-  async function postBrunch(choice?: string) {
+  async function postBrunch(choice?: string, secondChoice?: string) {
     const fields: Record<string, string> = {
       client_name: "Rama",
       client_phone: "770009988",
@@ -1068,6 +1068,7 @@ describe("item with a built-in choice", () => {
       qty_BRUNCH_MYKONOS: "1",
     };
     if (choice !== undefined) fields.choice_BRUNCH_MYKONOS = choice;
+    if (secondChoice !== undefined) fields.choice_BRUNCH_MYKONOS__1 = secondChoice;
     return app.inject({
       method: "POST",
       url: "/admin/livraisons",
@@ -1084,7 +1085,7 @@ describe("item with a built-in choice", () => {
     // submitted form in place so the receptionist does not lose quantities.
     expect(res.statusCode).toBe(200);
     expect(res.headers.location).toBeUndefined();
-    expect(res.body).toContain("choisis une option");
+    expect(res.body).toContain("choisis une réponse");
     expect(res.body).toContain(`name="qty_BRUNCH_MYKONOS" value="1"`);
     expect((await pool.query(`select count(*)::int as n from delivery_orders`)).rows[0].n).toBe(0);
   });
@@ -1102,6 +1103,42 @@ describe("item with a built-in choice", () => {
 
     const kitchenText = mock.waTextsTo("221770000099").join("\n");
     expect(kitchenText).toContain("Brunch Mykonos (Jus d'orange)");
+  });
+
+  it("requires, stores and displays every configured choice type", async () => {
+    await seedKitchenContact();
+    await pool.query(
+      `update cafe_menu_items
+          set option_label='Lait',
+              option_choices='Entier | Avoine',
+              option_groups=$1::jsonb
+        where id='BRUNCH_MYKONOS'`,
+      [
+        JSON.stringify([
+          { label: "Type de lait", choices: ["Entier", "Avoine"] },
+          { label: "Type de fromage", choices: ["Chèvre", "Emmental"] },
+        ]),
+      ],
+    );
+    await refreshCafeMenu();
+
+    const missing = await postBrunch("Avoine");
+    expect(missing.statusCode).toBe(200);
+    expect(missing.body).toContain("Type de fromage");
+
+    const res = await postBrunch("Avoine", "Chèvre");
+    expect(res.statusCode).toBe(303);
+    const order = (
+      await pool.query(`select * from delivery_orders order by created_at desc limit 1`)
+    ).rows[0];
+    expect(order.items_json[0].selections).toEqual([
+      { label: "Type de lait", value: "Avoine" },
+      { label: "Type de fromage", value: "Chèvre" },
+    ]);
+    const kitchenText = mock.waTextsTo("221770000099").join("\n");
+    expect(kitchenText).toContain(
+      "Type de lait : Avoine · Type de fromage : Chèvre",
+    );
   });
 });
 

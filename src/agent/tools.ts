@@ -529,6 +529,28 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             properties: {
               item_id: { type: "string", description: "Menu item id exactly as listed in <cafe_menu>" },
               qty: { type: "integer", minimum: 1, maximum: 10 },
+              selections: {
+                type: "array",
+                minItems: 1,
+                maxItems: 6,
+                description:
+                  "One answer for each required choice shown on this menu item, in the same order.",
+                items: {
+                  type: "object",
+                  properties: {
+                    label: {
+                      type: "string",
+                      description: "Choice label copied exactly from <cafe_menu> (for example Type de lait).",
+                    },
+                    value: {
+                      type: "string",
+                      description: "Selected response copied exactly from the brackets for that label.",
+                    },
+                  },
+                  required: ["label", "value"],
+                  additionalProperties: false,
+                },
+              },
             },
             required: ["item_id", "qty"],
             additionalProperties: false,
@@ -2039,7 +2061,7 @@ export async function executeTool(
       }
 
       // Prices come from cafe-menu.md, never from the model.
-      const resolved = computeExtras(getCafeMenu().items, input.extras);
+      const resolved = computeExtras(getCafeMenu().items, input.extras, { requireChoices: true });
       if (!resolved.ok) {
         return JSON.stringify({
           error: resolved.error,

@@ -7,6 +7,16 @@
  * server-side from the in-memory snapshot (computeExtras).
  */
 
+export interface MenuOptionGroup {
+  label: string;
+  choices: string[];
+}
+
+export interface MenuOptionSelection {
+  label: string;
+  value: string;
+}
+
 export interface CafeMenuItem {
   id: string;
   name: string;
@@ -17,6 +27,8 @@ export interface CafeMenuItem {
   optionLabel?: string;
   /** The choices the client picks from (e.g. ["Jus d'orange", "Boisson chaude"]). */
   optionChoices?: string[];
+  /** Every independent choice requested for this item, in display order. */
+  optionGroups?: MenuOptionGroup[];
 }
 
 /** Parse the pipe-separated option_choices column into a clean list. */
@@ -26,6 +38,50 @@ export function parseOptionChoices(raw: string | null | undefined): string[] {
     .map((c) => c.trim())
     .filter(Boolean)
     .slice(0, 12);
+}
+
+/** Parse the JSONB multi-choice column, falling back to the legacy first group. */
+export function parseOptionGroups(
+  raw: unknown,
+  legacyLabel?: string | null,
+  legacyChoices?: string | null,
+): MenuOptionGroup[] {
+  let value = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      value = [];
+    }
+  }
+  const groups = Array.isArray(value)
+    ? value
+        .map((group) => ({
+          label: String(group?.label ?? "").trim().slice(0, 40),
+          choices: Array.isArray(group?.choices)
+            ? group.choices
+                .map((choice: unknown) => String(choice ?? "").trim())
+                .filter(Boolean)
+                .slice(0, 12)
+            : [],
+        }))
+        .filter((group) => group.label && group.choices.length)
+        .slice(0, 6)
+    : [];
+  if (groups.length) return groups;
+  const choices = parseOptionChoices(legacyChoices);
+  const label = String(legacyLabel ?? "").trim().slice(0, 40);
+  return label && choices.length ? [{ label, choices }] : [];
+}
+
+/** Canonical groups for a snapshot item, including old in-memory fixtures. */
+export function menuOptionGroups(
+  item: Pick<CafeMenuItem, "optionGroups" | "optionLabel" | "optionChoices">,
+): MenuOptionGroup[] {
+  if (item.optionGroups?.length) return item.optionGroups;
+  return item.optionLabel && item.optionChoices?.length
+    ? [{ label: item.optionLabel, choices: item.optionChoices }]
+    : [];
 }
 
 /** A menu row as stored in DB (snapshot input). */
@@ -43,6 +99,8 @@ export interface ExtraLine {
   lineTotalXof: number;
   /** The picked option for an item with a choice (e.g. "Jus d'orange"). */
   choice?: string;
+  /** All independently selected options, in the article's configured order. */
+  selections?: MenuOptionSelection[];
 }
 
 export interface CafeMenu {
@@ -57,7 +115,11 @@ const MENU_DISABLED_TEXT =
 
 /** The exact prompt line format so the model sees the ids to pass to tools. */
 function itemPromptLine(item: CafeMenuItem): string {
-  return `- id: ${item.id} — ${item.name} — ${item.priceXof} FCFA${item.description ? ` — ${item.description}` : ""}`;
+  const groups = menuOptionGroups(item);
+  const choices = groups.length
+    ? ` — choix requis: ${groups.map((group) => `${group.label} [${group.choices.join(", ")}]`).join("; ")}`
+    : "";
+  return `- id: ${item.id} — ${item.name} — ${item.priceXof} FCFA${item.description ? ` — ${item.description}` : ""}${choices}`;
 }
 
 /**
@@ -166,6 +228,7 @@ export function setCafeMenu(rows: CafeMenuRow[]): void {
       description: r.description,
       optionLabel: r.optionLabel,
       optionChoices: r.optionChoices,
+      optionGroups: r.optionGroups,
     });
   }
   snapshot = { items, promptText: buildPromptText(rows) };
@@ -234,11 +297,8 @@ export type ExtrasResult =
  * Resolve the model-provided extras (item ids + quantities) against the menu.
  * Rejects rather than clamps, so the model corrects itself explicitly.
  *
- * An entry may carry a `choice` for an item that has options (e.g. the Brunch
- * Mykonos drink). A provided choice is validated against the item's option list
- * and frozen onto the line. With `requireChoices` (the admin delivery form), an
- * option-item with no choice is rejected; without it (the bot, which records
- * the choice in order_note) a missing choice is simply left off the line.
+ * An entry may carry `selections` for every independent option group. The old
+ * single `choice` field remains accepted as the first group's value.
  */
 export function computeExtras(
   items: Map<string, CafeMenuItem>,
@@ -266,23 +326,40 @@ export function computeExtras(
       unitPriceXof: item.priceXof,
       lineTotalXof: item.priceXof * qty,
     };
-    const options = item.optionChoices ?? [];
-    if (options.length > 0) {
-      const choice = String((entry as any)?.choice ?? "").trim();
-      if (choice) {
-        if (!options.includes(choice))
+    const groups = menuOptionGroups(item);
+    if (groups.length > 0) {
+      const submitted = Array.isArray((entry as any)?.selections)
+        ? (entry as any).selections
+        : [];
+      const selections: MenuOptionSelection[] = [];
+      for (const [groupIndex, group] of groups.entries()) {
+        const row = submitted.find(
+          (selection: any) =>
+            Number(selection?.group_index) === groupIndex ||
+            String(selection?.label ?? "").trim() === group.label,
+        );
+        const value = String(
+          row?.value ?? (groupIndex === 0 ? (entry as any)?.choice ?? "" : ""),
+        ).trim();
+        if (value) {
+          if (!group.choices.includes(value))
+            return {
+              ok: false,
+              error: "invalid_extras",
+              message: `« ${value} » n'est pas une réponse valide pour « ${group.label} » sur ${item.name} (${group.choices.join(", ")}).`,
+            };
+          selections.push({ label: group.label, value });
+        } else if (opts.requireChoices) {
           return {
             ok: false,
             error: "invalid_extras",
-            message: `« ${choice} » n'est pas un choix valide pour ${item.name} (${options.join(", ")}).`,
+            message: `choisis une réponse pour « ${group.label} » sur ${item.name} : ${group.choices.join(", ")}.`,
           };
-        line.choice = choice;
-      } else if (opts.requireChoices) {
-        return {
-          ok: false,
-          error: "invalid_extras",
-          message: `choisis une option (${item.optionLabel ?? "choix"}) pour ${item.name} : ${options.join(", ")}.`,
-        };
+        }
+      }
+      if (selections.length) {
+        line.selections = selections;
+        line.choice = selections[0].value;
       }
     }
     lines.push(line);
@@ -298,8 +375,10 @@ export function computeExtras(
   return { ok: true, lines, totalXof: lines.reduce((sum, l) => sum + l.lineTotalXof, 0) };
 }
 
-/** ` (Jus d'orange)` when the line carries a chosen option, else "". */
+/** Chosen options for client/staff summaries, with labels when several exist. */
 function choiceSuffix(l: ExtraLine): string {
+  if ((l.selections?.length ?? 0) > 1)
+    return ` (${l.selections!.map((selection) => `${selection.label} : ${selection.value}`).join(" · ")})`;
   return l.choice ? ` (${l.choice})` : "";
 }
 
@@ -321,5 +400,23 @@ export function extrasFromJson(value: unknown): ExtraLine[] {
       (l): l is ExtraLine =>
         typeof l?.name === "string" && Number.isInteger(l?.qty) && Number.isInteger(l?.lineTotalXof),
     )
-    .map((l) => (typeof l.choice === "string" && l.choice ? l : { ...l, choice: undefined }));
+    .map((l) => {
+      const selections = Array.isArray(l.selections)
+        ? l.selections
+            .map((selection) => ({
+              label: String(selection?.label ?? "").trim(),
+              value: String(selection?.value ?? "").trim(),
+            }))
+            .filter((selection) => selection.label && selection.value)
+        : [];
+      const choice =
+        typeof l.choice === "string" && l.choice
+          ? l.choice
+          : selections[0]?.value;
+      return {
+        ...l,
+        choice: choice || undefined,
+        selections: selections.length ? selections : undefined,
+      };
+    });
 }

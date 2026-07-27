@@ -110,6 +110,27 @@ describe("parseDeliveryQtyFields", () => {
       ],
     });
   });
+  it("collects every independent choice field in group order", () => {
+    expect(
+      parseDeliveryQtyFields({
+        qty_BRUNCH: "1",
+        choice_BRUNCH: "Avoine",
+        choice_BRUNCH__1: "Chèvre",
+      }),
+    ).toEqual({
+      entries: [
+        {
+          item_id: "BRUNCH",
+          qty: 1,
+          choice: "Avoine",
+          selections: [
+            { group_index: 0, value: "Avoine" },
+            { group_index: 1, value: "Chèvre" },
+          ],
+        },
+      ],
+    });
+  });
 });
 
 describe("Dakar delivery schedule", () => {

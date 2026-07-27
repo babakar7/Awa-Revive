@@ -13,6 +13,10 @@ function menu(): Map<string, CafeMenuItem> {
     category: "Matcha",
     optionLabel: "Lait",
     optionChoices: ["Entier", "Avoine"],
+    optionGroups: [
+      { label: "Lait", choices: ["Entier", "Avoine"] },
+      { label: "Fromage", choices: ["Chèvre", "Emmental"] },
+    ],
   });
   return m;
 }
@@ -33,9 +37,14 @@ describe("renderLivraisonForm — stepper & UX", () => {
   });
 
   it("reveals the option select and opens the category when prefilled with a qty", () => {
-    const html = renderLivraisonForm(menu(), "", [], { qty: { MATCHA: 2 }, choice: { MATCHA: "Avoine" } });
+    const html = renderLivraisonForm(menu(), "", [], {
+      qty: { MATCHA: 2 },
+      choice: { MATCHA: "Avoine", MATCHA__1: "Chèvre" },
+    });
     expect(html).toContain(`<input type="hidden" name="qty_MATCHA" value="2"`);
     expect(html).toContain(`<option value="Avoine" selected>`);
+    expect(html).toContain(`name="choice_MATCHA__1"`);
+    expect(html).toContain(`<option value="Chèvre" selected>`);
     expect(html).not.toMatch(/name="choice_MATCHA"[^>]*display:none/);
     expect(html).toContain(`<details class="card liv-cat" open>`);
   });
