@@ -3458,3 +3458,27 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
 - Régression dédiée : production simulée avec automation active, catalogue Awa
   fermé et templates vides ; les mappings de provisionnement manquants restent
   refusés.
+
+## 2026-07-27 — Répétition générale masquée des trois Clés
+
+- Architecture webhook finale (remplace le relais Wix CLI décrit plus haut) :
+  webhook natif Pricing Plans `Order Purchased` directement vers
+  `/webhooks/wix`, JWT RS256 vérifié avec `WIX_WEBHOOK_PUBLIC_KEY`. Les anciennes
+  apps Wix de relais ont été désinstallées.
+- Répétition exécutée avec le seul membre `Baba Test`, automation ouverte
+  temporairement, trois IDs de Clés toujours absents de
+  `AWA_SELLABLE_PLAN_IDS` et cinq templates Meta toujours vides.
+- Résultats :
+  - L'Invitée : Clé active, bonus exact actif, 21 jours, 0 invitation ;
+  - L'Habituée : Clé active, bonus exact actif, 30 jours, 0 invitation ;
+  - La Résidente : Clé active, bonus exact actif, 60 jours, 1 droit
+    d'invitation.
+- Pour chaque achat, le registre a conservé le bon couple
+  `plan_id`/`bonus_plan_id` et une seule commande bonus. Les premières
+  livraisons payantes ont été traitées mais la connexion Wix a expiré vers
+  1,5 s (`499`) ; les retries Wix ont reçu `200` et la déduplication a empêché
+  tout doublon. Aucun log applicatif d'erreur Clé/webhook pendant la fenêtre.
+- Nettoyage vérifié : six commandes Wix (trois payantes + trois bonus)
+  `CANCELED`, trois lignes de registre `CANCELLED`, droit Résidente inutilisé
+  `VOID`. `KEYS_AUTOMATION_ENABLED=false`, catalogue Awa toujours fermé,
+  `/healthz` OK.
