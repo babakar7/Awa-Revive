@@ -153,8 +153,12 @@ export async function syncAttendanceLeaderboard(force = false): Promise<{
       ?.locked;
     if (!locked) return { ran: false, recordCount: 0 };
     const current = (await db.query(`select * from wix_attendance_sync_state where singleton=true`)).rows[0] as AttendanceSyncState;
+    const hasConfirmedBookingCache = (
+      await db.query(`select exists(select 1 from wix_confirmed_booking_records) as exists`)
+    ).rows[0]?.exists;
     if (
       !force &&
+      hasConfirmedBookingCache &&
       current?.last_succeeded_at &&
       Date.now() - new Date(current.last_succeeded_at).getTime() < STALE_AFTER_MS
     ) {
