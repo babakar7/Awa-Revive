@@ -15,6 +15,7 @@ import { expireStaleDeliveryPaymentAttempts } from "./domain/deliveryRepo.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import {
   reconcileStuckPlanOrders,
+  activateCompletedInviteeRenewals,
   reconcileStuckCafeOrders,
   reconcileUnnotifiedRefunds,
   reconcileMissingWixOrders,
@@ -27,6 +28,9 @@ import { listenOnAvailablePort } from "./lib/listen.js";
 import { buildServer } from "./server.js";
 import { closeOpsSseConnections } from "./ops/opsRoutes.js";
 import { closeInactiveBookingJourneys } from "./domain/bookingFunnel.js";
+import { sweepDueKeyBonuses } from "./domain/keyProvisioning.js";
+import { sweepKeyNudges } from "./domain/keyNudge.js";
+import { syncAttendanceLeaderboard } from "./domain/attendanceLeaderboard.js";
 
 async function main() {
   assertConfig();
@@ -58,10 +62,23 @@ async function main() {
   // Before buildServer()/listen so no webhook ever sees an empty menu.
   await initCafeMenu();
 
+  // Boot repair for paid Keys whose free bonus was delayed by Wix or a prior
+  // process restart. The same idempotent repair also runs in the minute sweep.
+  await sweepDueKeyBonuses().catch((err) =>
+    console.error("Initial Key bonus repair failed:", err),
+  );
+
   // Warm OM OAuth so the first client payment is not blocked by Sonatel token latency.
   startOmTokenKeepAlive();
 
   const app = buildServer();
+
+  // Attendance is a read-only Wix projection for the admin leaderboard. Do
+  // not delay boot on a long historical import; the durable cache is filled in
+  // the background and every later run is capped to once per hour.
+  void syncAttendanceLeaderboard().catch((err) =>
+    app.log.warn({ err }, "Initial Wix attendance sync failed"),
+  );
 
   // Periodic TTL sweep: AWAITING_PAYMENT past link_expires_at → EXPIRED.
   const sweeper = setInterval(async () => {
@@ -76,6 +93,10 @@ async function main() {
       // One-shot "want a fresh link?" follow-up for links that just expired.
       await nudgeExpiredLinks(app.log);
       // Recover paid-but-unfulfilled work (crash between PAID and Wix / notify).
+      const earlyKeys = await activateCompletedInviteeRenewals(app.log);
+      if (earlyKeys > 0) {
+        app.log.info({ earlyKeys }, "Activated next Keys after completed L'Invitée");
+      }
       const reconciled =
         (await reconcileStuckBookings(app.log)) +
         (await reconcileStuckPlanOrders(app.log)) +
@@ -87,6 +108,8 @@ async function main() {
       }
       const refunds = await reconcileUnnotifiedRefunds(app.log);
       if (refunds > 0) app.log.info({ refunds }, "Re-notified REFUND_NEEDED rows");
+      const keyBonuses = await sweepDueKeyBonuses();
+      if (keyBonuses > 0) app.log.info({ keyBonuses }, "Repaired missing Key bonuses");
       // OM lost-callback poller via transaction search: ABANDONNED (13/07 probe) —
       // list API never returns metadata.order, so we cannot join to pending rows.
       // Filet = webhook + verify-by-lookup only; ops recoup manually if needed.
@@ -159,6 +182,20 @@ async function main() {
       if (nudged > 0) app.log.info({ nudged }, "Renewal nudges sent");
     } catch (err) {
       app.log.error({ err }, "Renewal-nudge sweep failed");
+    }
+    try {
+      // Lifecycle des Clés. No-op until the corresponding approved Meta
+      // templates are configured; durable claims prevent duplicate sends.
+      const nudged = await sweepKeyNudges(app.log);
+      if (nudged > 0) app.log.info({ nudged }, "Key lifecycle nudges sent");
+    } catch (err) {
+      app.log.error({ err }, "Key lifecycle nudge sweep failed");
+    }
+    try {
+      const synced = await syncAttendanceLeaderboard();
+      if (synced.ran) app.log.info({ attendanceRecords: synced.recordCount }, "Wix attendance synced");
+    } catch (err) {
+      app.log.warn({ err }, "Wix attendance sync failed");
     }
     try {
       // Story Instagram du soir : image des cours de demain envoyée au gérant

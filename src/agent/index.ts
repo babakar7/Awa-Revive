@@ -20,10 +20,8 @@ import * as deliveries from "../domain/deliveryRepo.js";
 import * as commitments from "../domain/commitments.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
-import {
-  PACK_DISCOVERY_CAMPAIGN,
-  isPackDiscoveryCampaignEntry,
-} from "../domain/packDiscoveryCampaign.js";
+import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
+import { normalizeInboundText } from "../lib/inboundText.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -79,6 +77,7 @@ const REPLY_MAX_TOKENS_RETRY = 4096;
 // (see the history loop). Enough to carry a verification status or the key
 // ids of a result, without replaying a full class list byte for byte.
 const TOOL_REPLAY_MAXLEN = 700;
+const HISTORY_CONTEXT_GAP_HOURS = 24;
 
 // A past present_options result is replayed in conversation history. On a later
 // turn, the model can occasionally carry the old "reply <NO_REPLY>" instruction
@@ -132,6 +131,11 @@ export function technicalFallbackMessage(clientName?: string | null): string {
   );
 }
 
+/** A stale <NO_REPLY> is a model lapse, not a client-visible technical outage. */
+export function modelSilenceFallbackMessage(): string {
+  return "Pas de souci 😊 Je suis là. Dis-moi simplement ce que tu veux vérifier et je t'aide.";
+}
+
 /**
  * Turn stored conversation turns into the alternating user/assistant messages
  * the Messages API requires.
@@ -167,6 +171,117 @@ export function buildHistoryMessages(
     messages.push({ role, content });
   }
   return messages;
+}
+
+/**
+ * Keep only the current conversation window when replaying turns to the model.
+ * Long-silent threads often resume for an unrelated need; carrying the final
+ * intent from weeks ago can then outweigh the live server context.
+ *
+ * The complete history remains stored and is still used for first-contact
+ * detection. This only limits what is replayed into the next model call.
+ */
+export function turnsAfterConversationGap<T extends { created_at: Date | string }>(
+  turns: readonly T[],
+  gapHours = HISTORY_CONTEXT_GAP_HOURS,
+): T[] {
+  if (turns.length < 2) return [...turns];
+  const gapMs = gapHours * 3_600_000;
+  let start = 0;
+  for (let i = 1; i < turns.length; i++) {
+    const previous = new Date(turns[i - 1].created_at).getTime();
+    const current = new Date(turns[i].created_at).getTime();
+    if (Number.isFinite(previous) && Number.isFinite(current) && current - previous >= gapMs) {
+      start = i;
+    }
+  }
+  return turns.slice(start);
+}
+
+export type DeliveryReplyPaymentMethod = "wave" | "orange_money" | "maxit" | "cash";
+
+/**
+ * Recognize only self-contained payment-method replies. Deliberately reject
+ * longer requests ("je veux payer mon cours par Wave"): this server shortcut
+ * exists for the terse answer requested by the delivery confirmation, not for
+ * interpreting general payment intent.
+ */
+export function deliveryPaymentMethodFromReply(
+  text: string,
+): DeliveryReplyPaymentMethod | null {
+  const normalized = text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’']/g, " ")
+    .replace(/[.,!?;:()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const aliases: Record<DeliveryReplyPaymentMethod, ReadonlySet<string>> = {
+    wave: new Set([
+      "wave",
+      "par wave",
+      "avec wave",
+      "payer wave",
+      "paiement wave",
+      "paiement par wave",
+      "wave svp",
+      "par wave svp",
+      "wave merci",
+    ]),
+    orange_money: new Set([
+      "om",
+      "orange money",
+      "par om",
+      "par orange money",
+      "avec om",
+      "avec orange money",
+      "payer om",
+      "payer orange money",
+      "paiement om",
+      "paiement orange money",
+      "om svp",
+      "orange money svp",
+    ]),
+    maxit: new Set([
+      "maxit",
+      "max it",
+      "par maxit",
+      "par max it",
+      "avec maxit",
+      "avec max it",
+      "payer maxit",
+      "payer max it",
+      "paiement maxit",
+      "paiement max it",
+      "maxit svp",
+      "max it svp",
+    ]),
+    cash: new Set([
+      "cash",
+      "especes",
+      "en especes",
+      "par cash",
+      "par especes",
+      "avec cash",
+      "avec especes",
+      "payer cash",
+      "payer en especes",
+      "paiement cash",
+      "paiement en especes",
+      "especes svp",
+      "cash svp",
+    ]),
+  };
+
+  for (const [method, values] of Object.entries(aliases) as [
+    DeliveryReplyPaymentMethod,
+    ReadonlySet<string>,
+  ][]) {
+    if (values.has(normalized)) return method;
+  }
+  return null;
 }
 
 const TECH_FAILURE_HANDOFF_PREFIX = "Échec technique — le client a reçu le message d'erreur";
@@ -237,6 +352,19 @@ async function maybeEnrichClientNameFromWix(client: repo.Client): Promise<void> 
   } catch (err) {
     console.error("maybeEnrichClientNameFromWix failed (non-blocking):", err);
   }
+}
+
+/**
+ * The WhatsApp Cloud webhook supplies the display name that is already shown
+ * in new-conversation alerts. Persist it as the immediate fallback so the
+ * linked admin conversation has the same label. It intentionally only fills
+ * an empty field: CRM, booking, and admin-supplied names remain authoritative.
+ */
+async function maybeStoreWhatsAppProfileName(client: repo.Client, profileName?: string): Promise<void> {
+  const name = profileName?.trim();
+  if (!name || (client.name && client.name.trim() !== "")) return;
+  const stored = await repo.setClientNameIfMissing(client.id, name);
+  if (stored) client.name = stored;
 }
 
 function notifyHumanTakeoverInbound(client: repo.Client, preview: string): void {
@@ -369,6 +497,109 @@ async function maybeHandleCommitmentTap(
   return false; // ms_continue → let the model run availability + link
 }
 
+function formatFcfa(amount: number): string {
+  return Math.round(amount).toLocaleString("fr-FR").replace(/\u202f/g, " ");
+}
+
+function deliveryPaymentReplyText(
+  client: repo.Client,
+  result: Record<string, unknown>,
+): string | null {
+  const amount = Number(result.amount_fcfa);
+  const amountText = Number.isFinite(amount) ? formatFcfa(amount) : null;
+  const english = client.language === "en";
+
+  if (result.cash_selected === true && amountText) {
+    return english
+      ? `Noted: ${amountText} FCFA in cash will be handed to the delivery person on arrival. 🙏🏾`
+      : `C'est noté : ${amountText} FCFA en espèces seront à remettre au livreur à la livraison. 🙏🏾`;
+  }
+
+  const link = typeof result.payment_link === "string" ? result.payment_link : "";
+  const app = typeof result.payment_app === "string" ? result.payment_app : "";
+  const expires = Number(result.expires_in_minutes);
+  if (!link || !app || !amountText) return null;
+  const expiryText = Number.isFinite(expires) ? Math.max(1, Math.round(expires)) : null;
+  return english
+    ? `Here is your ${app} link to pay for the delivery 👇🏾\n${link}\n\nAmount: ${amountText} FCFA${expiryText ? ` — valid for ${expiryText} min` : ""}. Confirmation is automatic after payment.`
+    : `Voici ton lien ${app} pour payer la livraison 👇🏾\n${link}\n\nMontant : ${amountText} FCFA${expiryText ? ` — valable ${expiryText} min` : ""}. La confirmation est automatique après paiement.`;
+}
+
+/**
+ * Route the short answer requested by the delivery confirmation without asking
+ * the language model to infer which product should be paid. The route is
+ * intentionally narrow:
+ *  - exactly one open delivery is waiting for a payment choice;
+ *  - no class, plan, café order, or multi-session plan is concurrently active;
+ *  - the entire inbound message is just a supported payment method.
+ */
+async function maybeHandleDeliveryPaymentReply(args: {
+  client: repo.Client;
+  text: string;
+  deliveryOrders: deliveries.DeliveryOrder[];
+  hasCompetingPaymentContext: boolean;
+}): Promise<boolean> {
+  if (args.hasCompetingPaymentContext) return false;
+  const method = deliveryPaymentMethodFromReply(args.text);
+  if (!method) return false;
+  const payable = args.deliveryOrders.filter(
+    (order) => order.payment_status === "PENDING_CHOICE",
+  );
+  if (payable.length !== 1) return false;
+
+  const input = {
+    delivery_order_id: payable[0].id,
+    payment_method: method,
+  };
+  let resultText: string;
+  try {
+    resultText = await executeTool(args.client, "create_delivery_payment_link", input);
+  } catch (err) {
+    console.error("Deterministic delivery payment routing failed:", err);
+    await repo.addTurn(
+      args.client.id,
+      "tool",
+      `create_delivery_payment_link(${JSON.stringify(input)}) -> ${JSON.stringify({
+        error: "tool_failed",
+        message: describeLoopFailure(err),
+      })}`,
+    );
+    const fallback = technicalFallbackMessage(args.client.name);
+    await sendText(args.client.wa_phone, fallback);
+    await repo.addTurn(args.client.id, "assistant", fallback);
+    void notifyTechnicalFailure(args.client, `paiement livraison — ${describeLoopFailure(err)}`);
+    return true;
+  }
+
+  await repo.addTurn(
+    args.client.id,
+    "tool",
+    `create_delivery_payment_link(${JSON.stringify(input)}) -> ${resultText.slice(0, 2000)}`,
+  );
+  let result: Record<string, unknown>;
+  try {
+    result = JSON.parse(resultText) as Record<string, unknown>;
+  } catch {
+    result = {};
+  }
+  const reply = deliveryPaymentReplyText(args.client, result);
+  if (!reply) {
+    console.error("Deterministic delivery payment routing returned no usable confirmation:", result);
+    const fallback = technicalFallbackMessage(args.client.name);
+    await sendText(args.client.wa_phone, fallback);
+    await repo.addTurn(args.client.id, "assistant", fallback);
+    void notifyTechnicalFailure(
+      args.client,
+      `paiement livraison — résultat inattendu ${resultText.slice(0, 180)}`,
+    );
+    return true;
+  }
+
+  await sendText(args.client.wa_phone, reply);
+  await repo.addTurn(args.client.id, "assistant", reply);
+  return true;
+}
+
 export async function handleInboundText(args: {
   waPhone: string;
   text: string;
@@ -376,50 +607,36 @@ export async function handleInboundText(args: {
   profileName?: string;
   referral?: WhatsAppReferral;
 }): Promise<void> {
+  const text = normalizeInboundText(args.text);
   const client = await repo.upsertClient(args.waPhone);
-  const campaign = isPackDiscoveryCampaignEntry({ text: args.text, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
+  const campaign = isPackDiscoveryCampaignEntry({ text, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
+  // Log every inbound ad referral (matched or not) so the real ad source_id can be harvested
+  // from Railway logs and added to PACK_DISCOVERY_META_SOURCE_IDS to tighten attribution.
+  if (args.referral?.sourceId) console.info(`[campaign] inbound referral source_id=${args.referral.sourceId} type=${args.referral.sourceType ?? ""} headline=${JSON.stringify(args.referral.headline ?? "")} matched=${campaign.matched} by=${campaign.matchedBy ?? ""}`);
   if (campaign.matched && campaign.matchedBy) await repo.recordCampaignLead({ clientId: client.id, campaignKey: PACK_DISCOVERY_CAMPAIGN, triggerMessageId: args.waMessageId, matchedBy: campaign.matchedBy, sourceId: args.referral?.sourceId, sourceType: args.referral?.sourceType, sourceUrl: args.referral?.sourceUrl, headline: args.referral?.headline, ctwaClid: args.referral?.ctwaClid });
-
-  // Click-to-WhatsApp attribution is normally present only on Meta's first
-  // message. Persist it immediately; the preset text remains a safe fallback
-  // when Meta omits that object or the ad was forwarded into WhatsApp.
-  const campaignEntry = isPackDiscoveryCampaignEntry({
-    text: args.text,
-    referral: args.referral,
-    allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS,
-  });
-  if (campaignEntry.matched && campaignEntry.matchedBy) {
-    await repo.recordCampaignLead({
-      clientId: client.id,
-      campaignKey: PACK_DISCOVERY_CAMPAIGN,
-      triggerMessageId: args.waMessageId,
-      matchedBy: campaignEntry.matchedBy,
-      sourceId: args.referral?.sourceId,
-      sourceType: args.referral?.sourceType,
-      sourceUrl: args.referral?.sourceUrl,
-      headline: args.referral?.headline,
-      ctwaClid: args.referral?.ctwaClid,
-    });
-  }
 
   // Name a chat-only lead from their matching Wix fiche (fire-and-forget) so the
   // admin stops showing "(sans nom)" for someone who never books.
   void maybeEnrichClientNameFromWix(client);
 
+  // The alert already receives this WhatsApp profile name. Store the same
+  // fallback before it is sent so the linked admin row is labelled identically.
+  await maybeStoreWhatsAppProfileName(client, args.profileName);
+
   // Conversation-start ping (before the incoming turn is persisted, so the gap
   // query sees only prior activity).
-  await maybeNotifyConversationStart(client, args.text, args.profileName);
+  await maybeNotifyConversationStart(client, text, args.profileName);
 
-  const lang = detectLanguage(args.text);
+  const lang = detectLanguage(text);
   if (lang) await repo.updateClientLanguage(client.id, lang);
 
-  await repo.addTurn(client.id, "user", args.text, args.waMessageId);
+  await repo.addTurn(client.id, "user", text, args.waMessageId);
 
   // Human takeover is a hard gate: keep the incoming turn, alert reception,
   // and never enter the model/tool loop. The timestamp expires automatically
   // after 12h, so normal handling resumes without a background sweep.
   if (isHumanTakeoverActive(client)) {
-    notifyHumanTakeoverInbound(client, args.text);
+    notifyHumanTakeoverInbound(client, text);
     return;
   }
 
@@ -433,7 +650,7 @@ export async function handleInboundText(args: {
   // here without the model; ms_continue falls through to the model, which re-runs
   // check_availability (the stored slot's slot_cache entry has a 2h TTL and is
   // long gone for a multi-day plan) then create_payment_link with the item id.
-  if (await maybeHandleCommitmentTap(client, args.text)) return;
+  if (await maybeHandleCommitmentTap(client, text)) return;
 
   // Blue ticks + "typing…" bubble while the agent thinks (best-effort, non-blocking).
   void sendTypingIndicator(args.waMessageId);
@@ -470,8 +687,41 @@ export async function handleInboundText(args: {
     commitments.activeCommitmentSnapshot(client.id),
   ]);
 
+  // The delivery confirmation explicitly asks for a terse method reply. Resolve
+  // that exact reply server-side so an unrelated old booking conversation can
+  // never turn it into a class payment link (prod incident 27/07).
+  if (
+    await maybeHandleDeliveryPaymentReply({
+      client,
+      text,
+      deliveryOrders,
+      hasCompetingPaymentContext: !!(
+        activeBooking ||
+        activePlanOrder ||
+        activeCafeOrder ||
+        activeCommitment
+      ),
+    })
+  ) {
+    return;
+  }
+
   const history = await repo.lastTurnsForReplay(client.id, 30);
-  const packDiscoveryCampaign = await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
+  const currentConversationHistory = turnsAfterConversationGap(history);
+  const packDiscoveryLead = await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
+  // Once the Keys launch, new and returning discovery leads go through
+  // L'Invitée. Existing paid step-1 orders remain fulfillable from their own
+  // stored rows, but an old campaign marker cannot create a fresh 10k link.
+  const packDiscoveryCampaign =
+    !config.KEYS_AUTOMATION_ENABLED && packDiscoveryLead !== null;
+  // A genuine Click-to-WhatsApp Meta lead whose number has no matching Wix
+  // contact is treated as new to Revive. Keep the server-side eligibility gate
+  // intact, but do not make this lead answer an extra discovery question.
+  const packDiscoveryMetaNewLead =
+    packDiscoveryCampaign &&
+    packDiscoveryLead?.matchedBy === "meta_referral" &&
+    memberships !== null &&
+    !memberships.linked;
 
   // Unlinked-number signal: a subscriber messaging from a number that isn't on
   // their Wix fiche is invisible to Awa and could be pushed to Wave for a class
@@ -492,23 +742,24 @@ export async function handleInboundText(args: {
   );
   // First contact = Awa has never replied to this client before (the current
   // inbound turn is already persisted at this point, so we look for a prior
-  // ASSISTANT turn, not an empty history). Drives the mandatory "I'm an AI
-  // assistant" self-introduction — see dynamicContext(): clients were being
-  // disappointed to learn only later that Awa is a bot, and on a "bonjour" the
-  // capability menu otherwise fires with no disclosure at all.
+  // ASSISTANT turn, not an empty history). Drives the "Moi c'est Awa,
+  // l'assistante de Revive" self-introduction — see dynamicContext(). Awa no
+  // longer volunteers that she is an AI (only confirms it if asked), but a
+  // "bonjour" that fires the capability menu should still open with a warm
+  // introduction rather than a bare option list.
   const isFirstContact = !history.some((t) => t.role === "assistant");
   // Tiered capability menu on vague openers (incl. returning clients), once per ~24h.
   const capabilityMenu = capabilityMenuKind({
-    isVague: isVagueOpener(args.text),
+    isVague: isVagueOpener(text),
     unlinkedNeverAsked,
     hasActivePaymentLink,
     upcomingBookingsCount,
     capabilityMenuAt: client.capability_menu_at,
   });
 
-  const messages: Anthropic.MessageParam[] = buildHistoryMessages(history);
+  const messages: Anthropic.MessageParam[] = buildHistoryMessages(currentConversationHistory);
   if (messages.length === 0) {
-    messages.push({ role: "user", content: args.text });
+    messages.push({ role: "user", content: text });
   }
 
   const system: Anthropic.TextBlockParam[] = [
@@ -533,7 +784,8 @@ export async function handleInboundText(args: {
         capabilityMenu,
         firstContact: isFirstContact,
         activeCommitment,
-        packDiscoveryCampaign: !!packDiscoveryCampaign,
+        packDiscoveryCampaign,
+        packDiscoveryMetaNewLead,
       }),
     },
   ];
@@ -710,15 +962,18 @@ export async function handleInboundText(args: {
   replyOutcome = classifyReplyOutcome(replyText, interactiveSent);
   if (replyOutcome !== "deliver") replyText = null;
   if (!replyText && !interactiveSent) {
-    replyText = technicalFallbackMessage(client.name ?? args.profileName ?? null);
-    usedTechnicalFallback = true;
+    const modelSilence = loopError instanceof Error && /^model returned /.test(loopError.message);
+    replyText = modelSilence
+      ? modelSilenceFallbackMessage()
+      : technicalFallbackMessage(client.name ?? args.profileName ?? null);
+    usedTechnicalFallback = !modelSilence;
     // Boucle de résultat (§4.31) : le client vient de recevoir « souci
     // technique » — la réception DOIT le savoir (avant : un console.error que
     // personne ne lit, client planté en silence). Dédup 24h par client.
     // On y joint le motif d'erreur réel : les logs Railway ont une fenêtre
     // courte, donc le stocker dans le notification_log rend l'incident
     // diagnosticable après coup (cas Zoé Dourthe 22/07 — erreur déjà défilée).
-    void notifyTechnicalFailure(client, describeLoopFailure(loopError));
+    if (usedTechnicalFallback) void notifyTechnicalFailure(client, describeLoopFailure(loopError));
   }
 
   if (replyText) {
@@ -750,9 +1005,10 @@ export async function handleInboundText(args: {
 }
 
 /** Image received but the description failed — ask kindly for text. */
-export async function handleFailedImage(waPhone: string, waMessageId: string): Promise<void> {
+export async function handleFailedImage(waPhone: string, waMessageId: string, profileName?: string): Promise<void> {
   const client = await repo.upsertClient(waPhone);
-  await maybeNotifyConversationStart(client, "[image]");
+  await maybeStoreWhatsAppProfileName(client, profileName);
+  await maybeNotifyConversationStart(client, "[image]", profileName);
   await repo.addTurn(client.id, "user", "[image reçue — lecture échouée]", waMessageId);
   if (isHumanTakeoverActive(client)) {
     notifyHumanTakeoverInbound(client, "[image reçue]");
@@ -776,8 +1032,10 @@ export async function handleReaction(
   waPhone: string,
   waMessageId: string,
   emoji: string | null | undefined,
+  profileName?: string,
 ): Promise<void> {
   const client = await repo.upsertClient(waPhone);
+  await maybeStoreWhatsAppProfileName(client, profileName);
   const label = emoji ? `[réaction ${emoji}]` : "[réaction retirée]";
   await repo.addTurn(client.id, "user", label, waMessageId);
   if (isHumanTakeoverActive(client)) notifyHumanTakeoverInbound(client, label);
@@ -788,9 +1046,11 @@ export async function handleUnsupportedMedia(
   waPhone: string,
   waMessageId: string,
   label = "[non-text message]",
+  profileName?: string,
 ): Promise<void> {
   const client = await repo.upsertClient(waPhone);
-  await maybeNotifyConversationStart(client, label);
+  await maybeStoreWhatsAppProfileName(client, profileName);
+  await maybeNotifyConversationStart(client, label, profileName);
   await repo.addTurn(client.id, "user", label, waMessageId);
   if (isHumanTakeoverActive(client)) {
     notifyHumanTakeoverInbound(client, label);
@@ -806,9 +1066,10 @@ export async function handleUnsupportedMedia(
 }
 
 /** Voice note received but transcription failed — ask kindly for text. */
-export async function handleFailedVoiceNote(waPhone: string, waMessageId: string): Promise<void> {
+export async function handleFailedVoiceNote(waPhone: string, waMessageId: string, profileName?: string): Promise<void> {
   const client = await repo.upsertClient(waPhone);
-  await maybeNotifyConversationStart(client, "[note vocale]");
+  await maybeStoreWhatsAppProfileName(client, profileName);
+  await maybeNotifyConversationStart(client, "[note vocale]", profileName);
   await repo.addTurn(client.id, "user", "[note vocale — transcription échouée]", waMessageId);
   if (isHumanTakeoverActive(client)) {
     notifyHumanTakeoverInbound(client, "[note vocale]");

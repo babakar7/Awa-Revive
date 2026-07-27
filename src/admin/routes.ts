@@ -69,6 +69,7 @@ import {
   findContactIdByPhone,
   mergeContacts,
   getContactById,
+  getWixDeliveryClient,
   listAllActiveOrders,
   listServices,
   findMemberContactIds,
@@ -143,6 +144,16 @@ import * as adminOps from "../domain/adminOperations.js";
 import { renderAdminReport, renderAuditPage } from "./reportPage.js";
 import { bookingConversionDashboard } from "../domain/bookingFunnel.js";
 import { renderConversionPage } from "./conversionPage.js";
+import {
+  attendanceDetail,
+  attendanceLeaders,
+  attendanceSyncState,
+  parseAttendancePeriod,
+  syncAttendanceLeaderboard,
+} from "../domain/attendanceLeaderboard.js";
+import { renderAttendanceLeaderboard } from "./attendanceLeaderboardPage.js";
+import * as keyRepo from "../domain/keyRepo.js";
+import { extendKeySevenDays } from "../domain/keyExtension.js";
 
 export { escapeHtml } from "./helpers.js";
 
@@ -163,6 +174,13 @@ function parseDeliveryRecipientFields(
   const recipientPhone = normalizeDeliveryPhone(recipientPhoneRaw);
   if (!recipientPhone) return { error: "numéro du contact de remise invalide" };
   return { recipientName, recipientPhone };
+}
+
+function parseKitchenLeadMinutes(body: Record<string, string>): number | null {
+  const selected = String(body.kitchen_lead_minutes ?? "60");
+  const raw = selected === "custom" ? body.kitchen_lead_custom : selected;
+  const minutes = Number(String(raw ?? "").trim());
+  return Number.isInteger(minutes) && minutes >= 1 && minutes <= 90 ? minutes : null;
 }
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
@@ -305,6 +323,96 @@ export function registerAdmin(app: FastifyInstance): void {
           .send(await layout("À tester", "/admin/tests", renderTestChecklist(pendingLinks), { subtitle: "Checklist de recette", contentWidth: "standard" }));
       });
 
+      // ---------- Clés de la Maison (réception = registre) ----------
+      admin.get("/cles", async (req, reply) => {
+        const rows = await keyRepo.listKeysForAdmin();
+        const query = (req.query ?? {}) as Record<string, string>;
+        const banner =
+          query.done === "extended"
+            ? `<div class="flash success">Clé et cours en plus prolongés de 7 jours.</div>`
+            : query.err
+              ? `<div class="flash error">${escapeHtml(query.err)}</div>`
+              : "";
+        const cards = rows.length
+          ? rows
+              .map((key) => {
+                const canExtend =
+                  key.status === "ACTIVE" &&
+                  key.key_type !== "INVITEE" &&
+                  !key.extension_used_at &&
+                  new Date(key.effective_ends_at).getTime() > Date.now();
+                return `<article class="card">
+                  <div class="row"><div><h3>${escapeHtml(key.client_name || key.wix_contact_id || "Cliente Wix")}</h3>
+                  <p>${escapeHtml(key.key_type)} · fin ${fmtDate(key.effective_ends_at)}</p></div>
+                  ${badge(key.status)}</div>
+                  <p><small>Commande Clé : ${escapeHtml(key.paid_order_id)}<br>
+                  Cours en plus : ${escapeHtml(key.bonus_order_id || "activation en attente")}</small></p>
+                  ${
+                    canExtend
+                      ? `<form method="post" action="/admin/cles/${key.id}/extend">
+                          <button class="act" type="submit">Prolonger de 7 jours</button>
+                          <small>Le serveur vérifie le solde Reformer en direct dans Wix.</small>
+                        </form>`
+                      : `<small>${key.extension_used_at ? "Prolongation déjà utilisée." : "Prolongation indisponible."}</small>`
+                  }
+                </article>`;
+              })
+              .join("")
+          : `<div class="empty-state"><h3>Aucune Clé enregistrée</h3><p>Les activations apparaîtront ici.</p></div>`;
+        return reply
+          .type("text/html")
+          .send(
+            await layout(
+              "Clés",
+              "/admin/cles",
+              `${banner}<section class="grid">${cards}</section>`,
+              { subtitle: "Registre réception", contentWidth: "wide" },
+            ),
+          );
+      });
+
+      admin.post("/cles/:id/extend", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const key = await keyRepo.getKeyById(id);
+        if (!key || !key.wix_contact_id || key.key_type === "INVITEE") {
+          return reply.redirect("/admin/cles?err=Cl%C3%A9+non+prolongeable", 303);
+        }
+        const plans = await listAllActiveOrders();
+        const rawOrder = plans.find((order: any) => order?.id === key.paid_order_id);
+        const planName = String(rawOrder?.planName ?? "");
+        if (!planName) {
+          return reply.redirect("/admin/cles?err=Commande+Wix+active+introuvable", 303);
+        }
+        const remaining = await import("../lib/wix.js").then((module) =>
+          module.planRemainingSessions(
+            key.wix_contact_id!,
+            key.plan_id,
+            planName,
+            key.paid_order_id,
+          ),
+        );
+        if (remaining === null) {
+          return reply.redirect("/admin/cles?err=Solde+Wix+illisible", 303);
+        }
+        try {
+          const result = await extendKeySevenDays({
+            keyId: key.id,
+            remainingReformerSessions: remaining,
+          });
+          if (!result.extended) {
+            return reply.redirect(
+              `/admin/cles?err=${encodeURIComponent(result.reason || "Prolongation refusée")}`,
+              303,
+            );
+          }
+          req.log.info({ keyId: key.id, by: req.adminUser }, "Key extended seven days");
+          return reply.redirect("/admin/cles?done=extended", 303);
+        } catch (error) {
+          req.log.error({ err: error, keyId: key.id }, "Key extension failed");
+          return reply.redirect("/admin/cles?err=Erreur+Wix%3A+v%C3%A9rifier+le+registre", 303);
+        }
+      });
+
       // ---------- À faire (inbox) ----------
       admin.get("/", async (req, reply) => {
         const [actions, s, badges, openReviews, openHandoffs, openDeliveries] = await Promise.all([
@@ -380,6 +488,54 @@ export function registerAdmin(app: FastifyInstance): void {
             contentWidth: "wide",
           }),
         );
+      });
+
+      // ---------- Classement des présences ----------
+      admin.get("/classement", async (req, reply) => {
+        const query = req.query as Record<string, string | undefined>;
+        const period = parseAttendancePeriod(query.period);
+        const page = Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1);
+        const search = String(query.q ?? "").trim().slice(0, 100);
+        const selectedId = String(query.client ?? "").trim();
+        const [leaders, sync, searchResults, selectedClient] = await Promise.all([
+          attendanceLeaders({ period, page }),
+          attendanceSyncState(),
+          search.length >= 2 ? searchWixDeliveryClients(search, 12).catch(() => []) : [],
+          selectedId ? getWixDeliveryClient(selectedId).catch(() => null) : null,
+        ]);
+        const detail = selectedClient
+          ? await attendanceDetail({ period, wixContactId: selectedClient.id, phone: selectedClient.phone })
+          : null;
+        reply.type("text/html").send(
+          await layout(
+            "Classement clients",
+            "/admin/classement",
+            renderAttendanceLeaderboard({
+              period,
+              leaders: leaders.rows,
+              total: leaders.total,
+              page,
+              search,
+              searchResults,
+              selectedClient,
+              detail,
+              sync,
+              notice: query.done === "refreshed" ? "Les présences Wix ont été actualisées." : undefined,
+            }),
+            { subtitle: "Séances marquées présentes", contentWidth: "wide" },
+          ),
+        );
+      });
+
+      admin.post("/classement/refresh", async (req, reply) => {
+        try {
+          const result = await syncAttendanceLeaderboard(true);
+          const done = result.ran ? "refreshed" : "refreshing";
+          return reply.redirect(`/admin/classement?done=${done}`, 303);
+        } catch (error) {
+          req.log.error({ err: error }, "Attendance leaderboard refresh failed");
+          return reply.redirect(`/admin/classement?err=${encodeURIComponent("Synchronisation Wix indisponible")}`, 303);
+        }
       });
 
       admin.get("/journal", async (req, reply) => {
@@ -774,6 +930,7 @@ ${
             delivery_mode: b.delivery_mode,
             scheduled_for: b.scheduled_for,
             kitchen_lead_minutes: b.kitchen_lead_minutes,
+            kitchen_lead_custom: b.kitchen_lead_custom,
             is_test: b.is_test,
             qty,
             choice,
@@ -794,11 +951,17 @@ ${
           );
         }
         const deliveryMode = b.delivery_mode === "scheduled" ? "scheduled" : "now";
-        const leadRaw = parseInt(String(b.kitchen_lead_minutes ?? "60"), 10);
-        const kitchenLead = [30, 60, 90].includes(leadRaw) ? leadRaw : 60;
         let scheduledFor: Date | null = null;
         let kitchenNotifyAt: Date | null = null;
+        let kitchenLead: number | null = null;
         if (deliveryMode === "scheduled") {
+          kitchenLead = parseKitchenLeadMinutes(b);
+          if (kitchenLead === null) {
+            return backErr(
+              "Le délai cuisine doit être un nombre entier entre 1 et 90 minutes.",
+              "kitchen_lead_minutes",
+            );
+          }
           scheduledFor = parseDakarDateTime(String(b.scheduled_for ?? ""));
           if (!scheduledFor) {
             return backErr("La date et l’heure d’arrivée sont invalides.", "scheduled_for");
@@ -960,9 +1123,12 @@ ${
         if (scheduledFor.getTime() <= Date.now()) {
           return reply.redirect("/admin/livraisons?err=l'heure d'arrivée doit être dans le futur", 303);
         }
-        const lead = parseInt(String(b.kitchen_lead_minutes ?? "60"), 10);
-        if (![30, 60, 90].includes(lead)) {
-          return reply.redirect("/admin/livraisons?err=délai cuisine invalide", 303);
+        const lead = parseKitchenLeadMinutes(b);
+        if (lead === null) {
+          return reply.redirect(
+            "/admin/livraisons?err=délai cuisine invalide (1 à 90 minutes)",
+            303,
+          );
         }
         const kitchenNotifyAt = new Date(scheduledFor.getTime() - lead * 60_000);
         const changed = await delivery.reprogramDeliveryOrder(id, {

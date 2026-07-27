@@ -111,6 +111,72 @@ describe("menu admin rendering", () => {
     expect(html).toContain("Nouvel article");
   });
 
+  it("renders saved customer-choice responses as separate escaped rows with a live count", () => {
+    const html = renderMenuItemForm({
+      item: item({
+        option_label: "Type de lait",
+        option_choices: 'Entier | Avoine <script>alert("x")</script>',
+      }),
+      categories: ["SMOOTHIES"],
+      banner: "",
+    });
+    expect(html).toContain("Choix demandés au client (facultatif)");
+    expect(html).toContain("Intitulé du choix");
+    expect(html).toContain("Réponses proposées");
+    expect(html).toContain('name="option_groups[0][choices][0]"');
+    expect(html).toContain('value="Entier"');
+    expect(html).toContain('name="option_groups[0][choices][1]"');
+    expect(html).toContain('value="Avoine &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"');
+    expect(html).toContain("2 réponses enregistrées");
+    expect(html).not.toContain('<script>alert("x")</script>');
+  });
+
+  it("renders one usable empty response row for a new item", () => {
+    const html = renderMenuItemForm({ item: null, categories: ["SMOOTHIES"], banner: "" });
+    expect(html).toContain('name="option_groups[0][label]"');
+    expect(html).toContain('name="option_groups[0][choices][0]"');
+    expect(html).toContain('value=""');
+    expect(html).toContain("0 réponses enregistrées");
+    expect(html).toContain(">Ajouter une réponse</button>");
+    expect(html).toContain('aria-label="Supprimer la réponse 1"');
+  });
+
+  it("ships accessible add/remove, numbering, count and 12-response limit behavior", () => {
+    const html = renderMenuItemForm({ item: null, categories: ["SMOOTHIES"], banner: "" });
+    expect(html).toContain('data-choice-count aria-live="polite"');
+    expect(html).toContain("Réponse proposée '+number");
+    expect(html).toContain("Supprimer la réponse '+number");
+    expect(html).toContain("addGroup.addEventListener('click'");
+    expect(html).toContain("groups.addEventListener('click'");
+    expect(html).toContain("groups.addEventListener('input'");
+    expect(html).toContain("var maxResponses=12");
+    expect(html).toContain("var maxGroups=6");
+    expect(html).toContain("12 réponses maximum");
+    expect(html).toContain("add.disabled=all.length>=maxResponses");
+    expect(html).toContain("Ajouter un type de choix");
+    expect(html).toContain("Supprimer ce type");
+  });
+
+  it("renders several independent saved choice types in order", () => {
+    const html = renderMenuItemForm({
+      item: item({
+        option_groups: [
+          { label: "Type de lait", choices: ["Entier", "Avoine"] },
+          { label: "Type de fromage", choices: ["Chèvre", "Emmental"] },
+        ],
+      }),
+      categories: ["SMOOTHIES"],
+      banner: "",
+    });
+    expect(html).toContain('name="option_groups[0][label]"');
+    expect(html).toContain('value="Type de lait"');
+    expect(html).toContain('name="option_groups[1][label]"');
+    expect(html).toContain('value="Type de fromage"');
+    expect(html).toContain('name="option_groups[1][choices][1]"');
+    expect(html).toContain('value="Emmental"');
+    expect(html).toContain("2 types de choix enregistrés");
+  });
+
   it("category is a pure dropdown of managed categories (no free-text/datalist)", () => {
     const html = renderMenuItemForm({
       item: item({ category: "BOISSONS CHAUDES" }),

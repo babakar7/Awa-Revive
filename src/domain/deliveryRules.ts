@@ -179,22 +179,55 @@ export function magicLinkUrl(baseUrl: string, token: string): string {
 
 /**
  * Collect the `qty_<ID>` fields of the create form into computeExtras entries,
- * pairing each with its `choice_<ID>` field (the picked option for items that
- * have one). Only quantities ≥ 1 are kept (zeros are the untouched default for
+ * pairing each with its `choice_<ID>` / `choice_<ID>__<group>` fields. Only
+ * quantities ≥ 1 are kept (zeros are the untouched default for
  * every menu row); an empty basket is rejected here, BEFORE computeExtras (which
  * also validates the choice and rejects unknown ids / qty > 10). Pure.
  */
 export function parseDeliveryQtyFields(
   body: Record<string, string>,
-): { entries: { item_id: string; qty: number; choice?: string }[] } | { error: string } {
-  const entries: { item_id: string; qty: number; choice?: string }[] = [];
+): {
+  entries: {
+    item_id: string;
+    qty: number;
+    choice?: string;
+    selections?: { group_index: number; value: string }[];
+  }[];
+} | { error: string } {
+  const entries: {
+    item_id: string;
+    qty: number;
+    choice?: string;
+    selections?: { group_index: number; value: string }[];
+  }[] = [];
   for (const [key, val] of Object.entries(body)) {
     if (!key.startsWith("qty_")) continue;
     const qty = parseInt(String(val ?? "").trim(), 10);
     if (!Number.isFinite(qty) || qty <= 0) continue;
     const item_id = key.slice(4);
     const choice = String(body[`choice_${item_id}`] ?? "").trim();
-    entries.push(choice ? { item_id, qty, choice } : { item_id, qty });
+    const selections = Object.entries(body)
+      .flatMap(([choiceKey, value]) => {
+        if (choiceKey === `choice_${item_id}`)
+          return String(value).trim()
+            ? [{ group_index: 0, value: String(value).trim() }]
+            : [];
+        const match = choiceKey.match(
+          new RegExp(`^choice_${item_id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}__(\\d+)$`),
+        );
+        return match && String(value).trim()
+          ? [{ group_index: Number(match[1]), value: String(value).trim() }]
+          : [];
+      })
+      .sort((a, b) => a.group_index - b.group_index);
+    entries.push({
+      item_id,
+      qty,
+      ...(choice ? { choice } : {}),
+      ...(selections.some((selection) => selection.group_index > 0)
+        ? { selections }
+        : {}),
+    });
   }
   if (entries.length === 0) return { error: "sélectionne au moins un article." };
   return { entries };

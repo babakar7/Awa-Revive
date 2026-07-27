@@ -68,6 +68,11 @@ export interface ReviewTurn {
   created_at: Date;
 }
 
+/** Truncate by Unicode code point so a lone half-emoji can never reach an API. */
+export function truncateUnicode(value: string, maxChars: number): string {
+  return Array.from(value).slice(0, maxChars).join("");
+}
+
 // ---------- classificateur ----------
 
 const REVIEW_TOOL: Anthropic.Tool = {
@@ -124,10 +129,22 @@ Otherwise normal. When unsure between two outcomes, pick the one that gets a hum
 
 /** Rend le transcript compact envoyé au classificateur (pur, testé). */
 export function buildTranscript(turns: ReviewTurn[], maxChars = 6000): string {
-  const lines = turns.map((t) => `${t.role}: ${t.content}`.slice(0, 500));
+  const lines = turns.map((t) => truncateUnicode(`${t.role}: ${t.content}`, 500));
   let out = lines.join("\n");
-  if (out.length > maxChars) out = out.slice(-maxChars);
+  if (Array.from(out).length > maxChars) out = Array.from(out).slice(-maxChars).join("");
   return out;
+}
+
+/** A silent client after a reasonable final question is a dropoff, not a queue item. */
+export function normalizeVerdictForTranscript(
+  verdict: ReviewVerdict,
+  turns: ReviewTurn[],
+): ReviewVerdict {
+  const lastHumanFacing = [...turns].reverse().find((turn) => turn.role === "user" || turn.role === "assistant");
+  if (verdict.outcome === "deadend" && lastHumanFacing?.role === "assistant" && /\?/.test(lastHumanFacing.content)) {
+    return { ...verdict, outcome: "dropoff", suggested_action: "" };
+  }
+  return verdict;
 }
 
 /** Valide/normalise la sortie du tool (pur, testé) — jamais de valeur inventée. */
@@ -142,8 +159,8 @@ export function parseVerdict(input: unknown): ReviewVerdict | null {
       ? (category as ReviewVerdict["need_category"])
       : "other",
     severity: v?.severity === "severe" ? "severe" : "normal",
-    summary: String(v?.summary ?? "").slice(0, 500),
-    suggested_action: String(v?.suggested_action ?? "").slice(0, 500),
+    summary: truncateUnicode(String(v?.summary ?? ""), 500),
+    suggested_action: truncateUnicode(String(v?.suggested_action ?? ""), 500),
   };
 }
 
@@ -258,7 +275,8 @@ export async function runReviewSweep(): Promise<number> {
     try {
       const turns = await reviewTurns(pending.client_id);
       if (turns.length === 0) continue;
-      const verdict = await classifyConversation(turns);
+      const rawVerdict = await classifyConversation(turns);
+      const verdict = rawVerdict ? normalizeVerdictForTranscript(rawVerdict, turns) : null;
       if (!verdict) continue;
       const id = await saveReview(pending, verdict);
       reviewed++;

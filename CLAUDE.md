@@ -38,45 +38,38 @@ Bookings**, paiement d'abord via **Wave** (mobile money) ou décompte d'un
 - **Avant tout push : `npm run build && npm test`** (tests purs, sans réseau).
   Intégration : `npm run test:integration` (Postgres jetable Docker).
 - **Déploiement : auto-deploy** — `git push` sur `main` (`babakar7/Awa-Revive`)
-  rebuild et redéploie sur Railway. Fallback manuel : `railway up --detach` (ne
-  PAS combiner avec un push pour le même changement = double build). Santé :
-  `GET /healthz`. Détails ops : PROGRESS.md §7.
+  rebuild et redéploie sur Railway. Santé : `GET /healthz`. Détails ops :
+  PROGRESS.md §7. (`railway up` est **banni** hors hotfix — cf. section Git.)
 - Prod : `https://resabot-production.up.railway.app`. Numéro Awa : +221 78 953 66 76.
 - Après un changement produit non trivial, **mets à jour PROGRESS.md** (décision,
   piège, chronologie) — c'est ce qui permet à la session suivante de reprendre.
 
-## Git & push — PLUSIEURS AGENTS travaillent en parallèle sur le MÊME dossier
+## Git — UN AGENT = UN WORKTREE (plusieurs agents en parallèle)
 
-Le dossier de travail est partagé : à tout moment il peut contenir des
-changements non commités d'un autre agent. `railway up` déploie tout le dossier,
-mais git ne suit que ce qui est commité — d'où un risque : **si un agent pousse
-un commit qui n'inclut pas les fichiers modifiés d'un autre agent, le prochain
-auto-deploy rebuild depuis git et fait DISPARAÎTRE ce travail de la prod.**
-Règles pour éviter ça :
+Plusieurs agents (sessions Claude Code, kilo, humains) travaillent sur ce repo
+en même temps. Pour qu'ils ne se marchent JAMAIS dessus, chacun travaille dans
+son **propre git worktree** — un checkout isolé, sa branche, son `node_modules`,
+son `.env`. Fini l'arbre partagé et les commits qui s'écrasent. Outillage :
+[scripts/agent-worktree.sh](scripts/agent-worktree.sh) (alias `npm run agent:*`).
 
-- **Ne commite QUE ton propre travail.** Stage les fichiers que TU as modifiés,
-  un par un (`git add <fichier>`), **jamais `git add -A` / `git add .`** — ça
-  embarquerait le travail en cours d'un autre agent (potentiellement à moitié
-  fait) sous ton commit. En cas de doute sur la paternité d'un fichier, laisse-le.
-- **Pousse après chaque update majeure** (une feature ou un fix cohérent, buildé
-  et testé), pas à la fin d'une longue série. Plus tôt tu commites+pousses ton
-  travail, moins il risque d'être écrasé par le push d'un autre agent. Un
-  `git push` = un auto-deploy : groupe donc un ensemble cohérent, pas chaque
-  micro-edit.
-- **Préfère `git push` à `railway up`** pour livrer : le push met git ET la prod
-  d'accord. `railway up` déploie sans commiter → git prend du retard sur le live
-  (c'est ce retard qui crée le risque ci-dessus). Réserve `railway up` aux tests
-  rapides que tu comptes commiter juste après.
-- **⚠️ Piège auto-deploy** : un push rebuild TOUT l'arbre depuis git. Donc si
-  l'arbre contient déjà du non-commité d'un autre agent (typiquement après des
-  `railway up`), un push « mes fichiers seulement » **régresse la prod** en
-  effaçant ce travail non commité pourtant live. Dans cet état, deux choix : soit
-  chacun a commité au fur et à mesure (idéal, pas de non-commité qui traîne),
-  soit il faut **un commit de réconciliation de tout l'arbre** (exception au
-  « chacun son travail ») avant de repartir proprement. La prévention = livrer
-  par `git push`, pas `railway up`, pour ne jamais laisser de non-commité live.
-- **`main` est la branche de déploiement** : `origin/main` doit toujours refléter
-  ce qui tourne en prod. Avant de pousser, `npm run build && npm test` doivent
-  passer (idéalement laisser la CI verte, cf. PROGRESS.md §7).
-- Si tu vois des fichiers modifiés que tu n'as pas touchés, **ne les commite pas
-  et ne les révoque pas** : c'est le travail d'un autre agent. Signale-le plutôt.
+- **Le dossier principal `…/resabot` est le HUB : lecture/ops seulement.** Il
+  reste épinglé sur `main` et sert à coordonner, lancer la CLI Railway, requêter
+  la DB, créer des worktrees. **N'y édite JAMAIS de fichier produit.** Si tu le
+  trouves sale (hors doc/plan non suivis), arrête-toi et signale-le.
+- **Démarrer un chantier :** `npm run agent:new -- <topic>`. Ça crée
+  `../resabot-worktrees/<topic>` (dossier voisin, invisible pour `railway up` et
+  `tsc`) sur une branche `agent/<topic>` partie d'`origin/main`, copie le `.env`,
+  fait `npm ci`. Tu bosses là. Dans TON worktree tout est à toi : `git add -A` OK.
+- **Livrer :** commite, puis `npm run agent:ship` — rebase sur `origin/main`,
+  `build` + `test`, puis `git push origin HEAD:main` (retry auto si un autre a
+  poussé entre-temps) → auto-deploy Railway. Pas de PR. Ajoute `-- --full` pour
+  inclure `test:integration` (obligatoire si tu touches au flux paiement).
+  Ensuite `npm run agent:done -- <topic>` retire le worktree et sa branche.
+- **Pousse par unité cohérente** (une feature/un fix buildé+testé), tôt et
+  souvent — un `git push` = un auto-deploy.
+- **`railway up` est banni.** Seule exception : hotfix depuis le hub propre sur
+  `main`, et même là commite+pousse d'abord et laisse l'auto-deploy faire, sauf
+  prod à terre. `railway up` déploie du non-commité → git prend du retard sur le
+  live, ce qui régressait la prod au push suivant (l'incident qu'on élimine).
+- **`origin/main` == prod, toujours.** `build` + `test` verts avant tout ship
+  (idéalement CI verte, cf. PROGRESS.md §7).

@@ -180,6 +180,46 @@ describe("admin recipe workflow", () => {
     expect(getCafeMenu().promptText).not.toContain("Presser puis allonger");
   });
 
+  it("stores several indexed choice types and renders every response separately", async () => {
+    const created = await post("/admin/menu/items", {
+      name: "Latte Maison",
+      price_xof: "2500",
+      category: "BOISSONS CHAUDES",
+      "option_groups[0][label]": " Type de lait ",
+      "option_groups[0][choices][0]": " Entier ",
+      "option_groups[0][choices][1]": "",
+      "option_groups[0][choices][2]": " Avoine ",
+      "option_groups[1][label]": " Type de fromage ",
+      "option_groups[1][choices][0]": " Chèvre ",
+      "option_groups[1][choices][1]": " Emmental ",
+    });
+    expect(created.statusCode).toBe(303);
+
+    const stored = (await listMenuItems()).find((row) => row.id === "LATTE_MAISON");
+    expect(stored).toMatchObject({
+      option_label: "Type de lait",
+      option_choices: "Entier | Avoine",
+      option_groups: [
+        { label: "Type de lait", choices: ["Entier", "Avoine"] },
+        { label: "Type de fromage", choices: ["Chèvre", "Emmental"] },
+      ],
+    });
+
+    const detail = await app.inject({
+      method: "GET",
+      url: created.headers.location!,
+      headers: { authorization: AUTH },
+    });
+    expect(detail.body).toContain('name="option_groups[0][choices][0]"');
+    expect(detail.body).toContain('value="Entier"');
+    expect(detail.body).toContain('name="option_groups[0][choices][1]"');
+    expect(detail.body).toContain('value="Avoine"');
+    expect(detail.body).toContain('name="option_groups[1][label]"');
+    expect(detail.body).toContain('value="Type de fromage"');
+    expect(detail.body).toContain('value="Emmental"');
+    expect(detail.body).toContain("2 réponses enregistrées");
+  });
+
   it("supports recipe filters and redirects the legacy inline edit URL", async () => {
     const missing = await app.inject({
       method: "GET",

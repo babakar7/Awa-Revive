@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { config } from "./config.js";
-import { parseOptionChoices } from "./lib/cafeMenu.js";
+import { parseOptionGroups } from "./lib/cafeMenu.js";
 import { renderMenuOgImage } from "./lib/menuOgImage.js";
 import {
   categoryNames,
@@ -166,10 +166,16 @@ function itemHtml(item: PublicMenuItem): string {
   const desc = item.description?.trim()
     ? `<p class="desc">${esc(item.description.trim())}</p>`
     : "";
-  const choices = parseOptionChoices(item.option_choices);
-  const opts = choices.length
-    ? `<p class="opts">${esc(item.option_label?.trim() || "Au choix")} : ${choices.map(esc).join(" · ")}</p>`
-    : "";
+  const opts = parseOptionGroups(
+    item.option_groups,
+    item.option_label,
+    item.option_choices,
+  )
+    .map(
+      (group) =>
+        `<p class="opts">${esc(group.label)} : ${group.choices.map(esc).join(" · ")}</p>`,
+    )
+    .join("");
   return `<article class="item"><div class="line"><span class="name">${esc(item.name)}${fav}</span><span class="dots"></span><span class="price">${esc(price(item.price_xof))}</span></div>${desc}${opts}</article>`;
 }
 

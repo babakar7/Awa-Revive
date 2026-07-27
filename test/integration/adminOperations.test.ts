@@ -42,6 +42,35 @@ const post = (url: string, fields: Record<string, string>) => app.inject({
 });
 
 describe("shared follow-up and human takeover", () => {
+  it("stores a WhatsApp profile name for the admin conversation without replacing an existing name", async () => {
+    const unnamed = (await pool.query(
+      `insert into clients (wa_phone, name, human_takeover_until)
+       values ($1, null, now() + interval '1 hour') returning id, wa_phone`,
+      ["221771234568"],
+    )).rows[0];
+
+    await handleInboundText({
+      waPhone: unnamed.wa_phone,
+      text: "Bonjour",
+      waMessageId: "wamid.profile-name",
+      profileName: "  Fatou Ndiaye  ",
+    });
+
+    expect((await pool.query(`select name from clients where id=$1`, [unnamed.id])).rows[0].name).toBe("Fatou Ndiaye");
+    const conversations = await app.inject({ method: "GET", url: "/admin/conversations", headers: { authorization: AUTH } });
+    expect(conversations.body).toContain("Fatou Ndiaye");
+
+    const named = await seedClient({ wa_phone: "221771234569", name: "Fiche Wix" });
+    await pool.query(`update clients set human_takeover_until = now() + interval '1 hour' where id=$1`, [named.id]);
+    await handleInboundText({
+      waPhone: named.wa_phone,
+      text: "Bonjour",
+      waMessageId: "wamid.profile-name-existing",
+      profileName: "Nom WhatsApp",
+    });
+    expect((await pool.query(`select name from clients where id=$1`, [named.id])).rows[0].name).toBe("Fiche Wix");
+  });
+
   it("resolves with an outcome, pauses Awa, sends idempotently, then resumes", async () => {
     const client = await seedClient({ wa_phone: "221771234567", name: "Maya" });
     await pool.query(

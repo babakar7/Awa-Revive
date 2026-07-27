@@ -55,6 +55,12 @@ export interface WixState {
   calendarEvents: any[];
   failCalendar: boolean;
   staffResources: Array<{ id: string; name: string; email?: string; phone?: string; tags?: string[] }>;
+  /** Attendance API fixture for the client leaderboard. */
+  attendanceRecords: any[];
+  /** Extended-booking fixtures keyed by Wix booking id. */
+  attendanceBookings: Record<string, any>;
+  /** Confirmed historical booking fixtures used by the leaderboard total. */
+  confirmedBookings: any[];
 }
 
 /**
@@ -162,6 +168,9 @@ export function makeFetchMock(): FetchMock {
     calendarEvents: [],
     failCalendar: false,
     staffResources: [],
+    attendanceRecords: [],
+    attendanceBookings: {},
+    confirmedBookings: [],
   };
 
   let failEmail = false;
@@ -319,12 +328,34 @@ export function makeFetchMock(): FetchMock {
       return json(200, { resources: wix.staffResources });
     }
 
+    // --- Wix attendance leaderboard ---
+    if (url.includes("/bookings/bookings-attendance/query")) {
+      return json(200, { attendances: wix.attendanceRecords, pagingMetadata: { cursors: {} } });
+    }
+
+    // --- Wix booking reader (revision required by cancel/reschedule) ---
+    if (url.includes("/_api/bookings-reader/v2/extended-bookings/query")) {
+      const ids: string[] = body?.query?.filter?.id?.$in ?? [];
+      if (ids.length === 0 && body?.query?.filter?.status?.$eq === "CONFIRMED") {
+        return json(200, { extendedBookings: wix.confirmedBookings });
+      }
+      return json(200, {
+        extendedBookings: ids.map((id) => wix.attendanceBookings[id] ?? ({
+          booking: { id, revision: "1", status: "CONFIRMED", bookedEntity: { slot: { serviceId: wix.serviceId, startDate: wix.slotStart } } },
+        })),
+      });
+    }
+
     // --- Wave checkout session (create payment link) ---
     if (url.includes("api.wave.com") && url.includes("/v1/checkout/sessions") && method === "POST") {
       return json(200, { id: `cos-add-${calls.length}`, wave_launch_url: "https://pay.wave.com/c/test" });
     }
 
     // --- Wix contacts (phone → contact match; none = Wix creates its own) ---
+    if (url.includes("/contacts/v4/contacts/") && method === "GET") {
+      const id = decodeURIComponent(url.split("/contacts/").at(-1) ?? "");
+      return json(200, { contact: wix.contacts.find((contact) => contact?.id === id) ?? null });
+    }
     if (url.includes("/contacts/v4/contacts/query")) {
       return json(200, { contacts: wix.contacts });
     }
@@ -363,6 +394,10 @@ export function makeFetchMock(): FetchMock {
     // --- Wix confirm booking ---
     if (url.includes(":confirmOrDecline")) {
       return json(200, { booking: { status: "CONFIRMED" } });
+    }
+
+    if (url.includes("/_api/bookings-service/v2/bookings/") && url.endsWith("/reschedule")) {
+      return json(200, { booking: { status: "CONFIRMED", revision: "2" } });
     }
 
     // --- Wix eCommerce order required by the custom-checkout flow ---
@@ -454,6 +489,9 @@ export function makeFetchMock(): FetchMock {
       wix.calendarEvents = [];
       wix.failCalendar = false;
       wix.staffResources = [];
+      wix.attendanceRecords = [];
+      wix.attendanceBookings = {};
+      wix.confirmedBookings = [];
       failEmail = false;
       waTemplateFailures.clear();
       const d = defaultOmState();

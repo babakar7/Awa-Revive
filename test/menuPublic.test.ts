@@ -70,6 +70,24 @@ describe("renderPublicMenuPage", () => {
     expect(html).toContain("Lait : Entier · Avoine");
   });
 
+  it("renders every configured choice type", () => {
+    const html = renderPublicMenuPage(
+      groupPublicMenu(
+        [
+          item({
+            option_groups: [
+              { label: "Lait", choices: ["Entier", "Avoine"] },
+              { label: "Fromage", choices: ["Chèvre", "Emmental"] },
+            ],
+          }),
+        ],
+        ["Cafés"],
+      ),
+    );
+    expect(html).toContain("Lait : Entier · Avoine");
+    expect(html).toContain("Fromage : Chèvre · Emmental");
+  });
+
   it("shows the ★ Incontournable badge only for favourites", () => {
     const fav = renderPublicMenuPage(groupPublicMenu([item({ favourite: true })], ["Cafés"]));
     const plain = renderPublicMenuPage(groupPublicMenu([item()], ["Cafés"]));

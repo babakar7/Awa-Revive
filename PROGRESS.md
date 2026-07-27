@@ -11,6 +11,30 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Correctif en cours — report direct du même cours (24 juillet 2026)
+
+Le cas Memona a exposé une règle produit erronée : pour déplacer un Aquabike
+à plus de 16 h, Awa annulait la résa Wave, mettait le remboursement en file,
+puis réclamait un second paiement. Wix propose pourtant le report natif d'une
+réservation de cours, qui conserve la réservation, le paiement et les places.
+
+- Nouvel outil `reschedule_booking` : réservation propriétaire + ancien créneau
+  ≥16 h + nouveau créneau présenté au client, encore libre, du **même cours**.
+  Il appelle `POST /_api/bookings-service/v2/bookings/{id}/reschedule` avec la
+  révision Wix et le nouvel `eventId`; aucun `cancel_booking`, aucun lien et
+  aucun remboursement.
+- Applicable aux résas Awa (Wave/OM/Max It/abonnement) et aux résas
+  comptoir/site : celles-ci sont revalidées sur la fiche Wix du numéro avant
+  mutation. Les résas Awa mettent ensuite à jour la même ligne locale en
+  conservant statut `BOOKED`, paiement, montant, participants et extras.
+- Changement de cours = hors du report direct : flux existant
+  annulation/remboursement + nouvelle réservation après accord explicite.
+  Échec d'un report Wix = ancienne résa inchangée.
+- Régression : `test/integration/rescheduleBooking.test.ts` vérifie le report
+  Wave direct, la garde 16 h et le refus inter-cours. Le remboursement déjà
+  créé pour Memona reste à traiter : elle a effectivement payé une seconde
+  réservation avant ce correctif.
+
 ## 1. Le projet en une minute
 
 **Awa** est un agent IA sur WhatsApp qui répond aux clients du studio
@@ -1684,6 +1708,45 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   - Livré seul sur `main` (branche `fix/awa-disengage`), **séparément** de la
     feature ops-cuisine-pwa (pas encore prête à merger).
 
+- **4.46 — Post-mortem conversation « Salma » (24/07) → 4 correctifs.**
+  Cliente Salma (+221771692109, entrée organique « Salam ») : elle veut payer le
+  Pack Découverte, finit **plantée sans lien**, réception jamais prévenue sur
+  WhatsApp. Analyse en DB prod (`conversations`, `notification_log`, `handoffs`)
+  + logs Railway. Quatre défauts, quatre fixes (worktree `reception-notify-hardening`) :
+  - **Fix 1 — notifs réception jetées en silence (le vrai drame).** Le handoff
+    « client planté » partait en **texte libre** ; la fenêtre 24 h de la réception
+    avec le numéro du bot est ~toujours fermée (elle *reçoit* d’Awa, n’écrit pas au
+    bot), donc Meta acceptait (200) puis **droppait en asynchrone** (131047,
+    `deliveryPing=0`) — seul l’e-mail passait. `notifyReception` passe désormais
+    **`preferTemplate: true` par défaut** ([notify.ts](src/lib/notify.ts)), ce qui
+    couvre handoff, échec technique, relais humain et tous les autres appels d’un
+    coup (le mécanisme template-first existait déjà, cf. 131047).
+  - **Fix 2 — Awa a créé un lien pour le MAUVAIS plan.** Conversation qui saute du
+    Pack Découverte à l’Aquabike → `create_plan_payment_link` appelé avec le
+    plan_id **Aquafitness 80 000 F** (le serveur validait : plan réel, prix
+    catalogue). Nouveau param **requis `plan_name_confirm`** + garde serveur
+    `planNamesConflict` ([planNameGuard.ts](src/domain/planNameGuard.ts)) : si l’id
+    et le nom confirmé divergent → `plan_mismatch`, pas de lien. Prompt : toujours
+    passer id+nom de la MÊME ligne list_plans, et ne jamais dire « j’ai envoyé un
+    lien » sans en avoir réellement envoyé un.
+  - **Fix 3 — incident actif indépendant : sweep cuisine planté chaque minute.**
+    `kitchen_tickets` (chantier livraisons) créée en prod avant l’ajout de
+    `heading/subheading` → `create table if not exists` ne les posait pas → 42703
+    en boucle. `alter table ... add column if not exists` de rattrapage
+    ([schema.ts](src/db/schema.ts)). **Livré en premier, seul.**
+  - **Fix 4 (petit) — 1 retry sur hoquet transitoire du prestataire de paiement.**
+    `withTransientRetry` ([retry.ts](src/lib/retry.ts)) autour de la création de
+    session Wave/OM ([paymentSession.ts](src/domain/paymentSession.ts)) : une
+    session est sûre à recréer (un premier essai échoué ne rend aucun lien). Évite
+    « service temporarily unavailable » → handoff immédiat. NB : si le transitoire
+    est une *lecture Wix*, le bon durcissement uniforme serait au niveau `wixGet`
+    (lectures idempotentes) — laissé en suivi, pas de retry sur `wixPost`/écritures.
+  - Tests purs : `planNameGuard`, `retry`. Le suite n’utilise **aucun `vi.mock`**
+    (tests sans réseau) → Fix 1 vérifié en prod (un handoff test doit journaliser
+    `sent_template` pour +221784644329, plus jamais `failed/131047`).
+  - **Suivi ouvert** : Salma attend depuis 14:20 (créneau repéré ven 31/07 18:15
+    Foundation) ; 2 handoffs `OPEN` — la réception doit la recontacter.
+
 ## 5. Chronologie condensée
 
 - **23/07 — Pack Découverte : friction minimale (annuler après coup > bloquer).**
@@ -3208,6 +3271,27 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
 
 ## 7. Runbook ops
 
+- **Multi-agent : un agent = un worktree** (mis en place 24/07). Plusieurs
+  agents travaillaient sur le MÊME arbre → travail non commité écrasé, `tsc`
+  cassé par des fichiers à moitié faits, `test:integration` parallèles qui se
+  tuaient (conteneur Docker à nom fixe). Nouveau système :
+  - Dossier principal `…/resabot` = **hub** épinglé sur `main`, lecture/ops
+    seulement, jamais édité (cf. CLAUDE.md § « Git — un agent = un worktree »).
+  - Chantier = worktree isolé via `npm run agent:new -- <topic>` →
+    `../resabot-worktrees/<topic>` (voisin du repo, invisible à `railway up`/`tsc`),
+    branche `agent/<topic>` sur `origin/main`, `.env` copié, `npm ci`.
+  - Livraison = `npm run agent:ship` (rebase origin/main + build + test + push
+    `HEAD:main`, retry auto sur non-FF) puis `npm run agent:done -- <topic>`.
+    Script : [scripts/agent-worktree.sh](scripts/agent-worktree.sh).
+  - `test/integration/globalSetup.ts` : conteneur nommé `resabot-integration-pg-<pid>`
+    + label `resabot-integration=1`, purge des seuls conteneurs `exited` → runs
+    parallèles coexistent. `railway up` **banni** (hors hotfix hub propre).
+  - Réconciliation 24/07 : `origin/main` avait déjà les features disengage +
+    pack-découverte (versions « propres » livrées séparément) ; `feat/ops-cuisine-pwa`
+    en avait des ré-implémentations parallèles. Merge d'`origin/main` dans la
+    branche, résolu par fichier (shape de `main` pour disengage, superset local
+    pour campaign/PWA, dédup des symboles dupliqués) ; branche poussée sur
+    `origin` (PWA **pas** encore en prod, prod reste sur le disengage de `main`).
 - **Orange Money / Max It** (prod) :
   - Env Railway : `OM_CLIENT_ID`, `OM_CLIENT_SECRET`, `OM_MERCHANT_CODE=553651`,
     `OM_API_BASE=https://api.orange-sonatel.com` (vide = Wave only).
@@ -3223,9 +3307,9 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   `npm run test:integration` si le chemin de paiement est touché — Docker
   requis, ~6 s). La CI GitHub Actions rejoue tout à chaque push ; tant que
   « Wait for CI » n'est pas activé côté Railway, elle SIGNALE mais ne bloque
-  pas. Fallback manuel :
-  `railway up --detach` (indépendant de GitHub ; ne PAS combiner avec un push
-  pour un même changement = double build). Santé : `GET /healthz` ; logs :
+  pas. `railway up --detach` existe encore mais est **banni hors hotfix** (il
+  déploie du non-commité → git prend du retard sur le live = régression au push
+  suivant ; cf. § multi-agent). Santé : `GET /healthz` ; logs :
   `railway logs`. La migration tourne au boot. (Historique : l'auto-deploy
   affichait « no project member has access to this repo » — résolu le 10/07 en
   connectant le repo au compte Railway, pas juste via l'install de la GitHub App.)
@@ -3240,3 +3324,161 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
 - Résumé quotidien : `npm run summary`. Test SMTP : `npx tsx scripts/test-email.ts`.
 - Simulateur Wave local : `npm run simulate:wave` (`--bad-signature` pour le 401).
 - `business-info.md` est lu AU BOOT → redéployer/redémarrer après édition.
+## 2026-07-26 — Clés de la Maison (socle V1)
+
+- Catalogue Wix privé créé sans exposition à Awa :
+  - L'Invitée 3 séances / 21 j / 30 000 F ;
+  - L'Habituée 6 séances / 30 j / 72 000 F ;
+  - La Résidente 12 séances / 60 j / 144 000 F ;
+  - trois plans gratuits privés « Cours en plus » (1/1/2 crédits).
+- Les plans payants couvrent les cinq services Reformer ; les bonus couvrent
+  Aquabike, Mat, les deux Yoga et Step. L'Invitation gratuite existante est
+  conservée.
+- Garde catalogue `AWA_SELLABLE_PLAN_IDS` déployé avant la création des plans :
+  `public:false` n'est pas une barrière de vente pour Awa.
+- Registre local `key_registry`/`key_invitations` sans aucun solde de séances :
+  Wix reste la source de vérité. Provisionnement bonus idempotent avec retries
+  1/5/15 min, réparation au chargement, au boot et dans le sweep 60 s.
+- `eligible-pools.count` est le nombre de crédits à consommer. La sélection
+  Clés est déterministe par
+  `programDefinitionInfo.externalId=planId` +
+  `programInfo.externalId=orderId`, jamais par ordre de réponse/nom.
+- Deux outils dédiés : `book_key_bonus` (Aquabike/Yoga/Mat/Step lun–ven) et
+  `book_key_invitation` (Reformer 12h30 lun–ven). L'ordre Invitation gratuit
+  est créé paresseusement, une fois le prénom, téléphone et créneau confirmés.
+- Toute réservation bonus/invitation confirmée est immuable : Awa bloque
+  annulation et déplacement, y compris quand la réservation remonte comme
+  `studio:`. Le crédit reste consommé ; seule la réception remplace un cours
+  annulé par Revive.
+- Webhook Wix `Order Purchased` (JWT RS256) ajouté pour les ventes comptoir,
+  filtré strictement sur les trois plans payants et gated par
+  `KEYS_AUTOMATION_ENABLED`.
+- Postpone End Date implémenté pour aligner Clé + bonus lors d'une prolongation
+  de 7 jours. Comme Wix ne permet pas de déplacer le départ d'un ordre payé,
+  les prochaines Clés vivent en `SCHEDULED` dans Resabot et l'ordre Wix n'est
+  créé qu'à l'activation. La date locale suit une prolongation ; après
+  L'Invitée, la troisième séance effectivement commencée libère la prochaine
+  Clé immédiatement, sinon elle démarre à l'expiration.
+- Les droits d'invitation sont figés au moment de l'achat (avantage normal +
+  continuité), puis la commande Wix gratuite est créée paresseusement à
+  l'utilisation. L'Invitée est également limitée à un achat par membre dans
+  Wix (`maxPurchasesPerBuyer=1`) en plus du contrôle d'historique serveur.
+- Cycle V1 ajouté : J-5 L'Invitée, 24 h avant la troisième séance, J-5 membre
+  et fin des crédits Reformer. Chaque envoi est un claim durable terminal ;
+  les quatre branches restent sombres jusqu'à configuration de leurs templates
+  Meta approuvés. Garantie L'Invitée : critères mécaniques serveur, dossier et
+  handoff ; présence et remboursement restent strictement humains.
+- Les anciennes formules Reformer sont classées « Membre Fondatrice » par IDs
+  serveur (`LEGACY_REFORMER_PLAN_IDS`), jamais par interprétation du nom.
+- Le funnel Meta 10 000 F est automatiquement neutralisé quand
+  `KEYS_AUTOMATION_ENABLED=true`; les paiements Étape 1 déjà enregistrés
+  continuent néanmoins leur fulfillment historique.
+- Railway contient les mappings IDs/services avec
+  `KEYS_AUTOMATION_ENABLED=false`. Les trois plans payants restent hors
+  allowlist de vente jusqu'à la répétition générale et la configuration de la
+  clé publique du webhook.
+- Vérification : build, 681 tests unitaires et 183 tests d'intégration passent.
+
+## 2026-07-27 — Continuité legacy des Clés
+
+- Le catalogue live a été partitionné par couverture Wix, pas par nom :
+  dix plans legacy couvrant le Reformer (purs, Carnet 10, quatre mixtes et
+  Pilates 360 2×/3×). Aquafitness, Mat et Natation restent hors du périmètre.
+- La source de continuité est résolue à la date du paiement vérifié : Clé active
+  d'abord, sinon legacy Reformer couvrant la date, échéance la plus tardive en
+  cas de chevauchement. Un abonnement hors Reformer ne peut plus repousser le
+  démarrage d'une Clé.
+- `paid_at` et les champs `continuity_source_*` sont persistés dans
+  `pending_plan_orders` et `key_registry`. Les droits ne sont plus figés à la
+  création du lien : paiement Awa et webhook comptoir appellent la même décision
+  pure et produisent les mêmes invitations/dates.
+- Bonus de continuité Fondatrice : +1 invitation si le paiement précède
+  l'échéance legacy. Résidente conserve son invitation normale, donc deux au
+  total ; Habituée en reçoit une.
+- Un solde legacy nul ou illisible garde l'échéance sûre mais alerte la
+  réception afin d'avancer éventuellement la date. Une Clé comptoir déjà
+  démarrée trop tôt est conservée et signalée, jamais annulée automatiquement.
+- Relance dédiée à J-5 (`WA_LEGACY_KEY_CONVERSION_TEMPLATE`) avec claim
+  `sent/suppressed/failed` terminal. Quand l'automatisation Clés est active,
+  les legacy sortent du rappel générique de renouvellement.
+- Unicité L'Invitée renforcée : toute réservation Revive ou toute commande Wix,
+  quel que soit son statut, sur le Pack complet ou L'Invitée bloque
+  l'activation automatique. Une panne Wix autorise la vente mais produit un
+  audit ; une contestation ouvre un handoff réception.
+- Les droits Fondatrice restent eux-mêmes gated par
+  `KEYS_AUTOMATION_ENABLED`; aucun changement client avant la bascule.
+- Probe réversible Wix V3 validé en live sur Pilates 360 privé :
+  `buyable=true → false`, relecture, puis restauration vérifiée à `true` ;
+  `visibility=PRIVATE` est restée inchangée et le plan n'a jamais été archivé.
+- Configuration constatée avant livraison : Clés absentes de
+  `AWA_SELLABLE_PLAN_IDS`, `KEYS_AUTOMATION_ENABLED=false`.
+- Vérification locale : build TypeScript, 693 tests unitaires et suite
+  d'intégration PostgreSQL complète verts.
+
+## 2026-07-27 — Une seule relance de conversion L’Invitée
+
+- Les relances J-5 et 24 h avant la troisième séance deviennent deux branches
+  alternatives : pré-3e si la séance est déjà réservée, J-5 sinon.
+- Les deux chemins partagent le claim durable
+  `INVITEE_CONVERSION:<key_id>` : une cliente ne reçoit jamais les deux, y
+  compris si elle réserve sa troisième séance après avoir reçu la relance J-5.
+- Les deux templates Meta restent distincts (variables différentes), mais un
+  seul peut être consommé par Clé. L’automatisation reste sombre tant que
+  `KEYS_AUTOMATION_ENABLED=false`.
+- Vérification : build TypeScript, 694 tests unitaires et les 7 scénarios
+  d’intégration du registre Clés verts.
+
+## 2026-07-27 — Authentification du relais Wix des achats comptoir
+
+- L'app Wix utilise un handler backend `wixPricingPlans_onOrderPurchased` puis
+  relaie l'événement à Railway ; ce flux n'est pas le webhook natif JWT de Wix.
+- `/webhooks/wix` accepte désormais ce JSON uniquement avec
+  `X-Wix-Webhook-Secret`, comparé en temps constant à
+  `WIX_WEBHOOK_SHARED_SECRET` (minimum opérationnel : 32 caractères).
+- L'App Instance ID reste un identifiant public et n'est jamais utilisé comme
+  preuve d'authenticité. Le support JWT RS256/PEM reste disponible en fallback.
+- Le payload structuré conserve l'ID d'événement Wix pour la déduplication et
+  le même traitement métier que les ventes comptoir natives.
+- L'automatisation Clés reste désactivée jusqu'à la répétition générale.
+- Vérification locale : build TypeScript et 710 tests unitaires verts.
+
+## 2026-07-27 — Garde de répétition masquée des Clés
+
+- Le préflight `KEYS_AUTOMATION_ENABLED` ne couple plus le provisionnement
+  comptoir/webhook à l'ouverture commerciale dans `AWA_SELLABLE_PLAN_IDS`.
+  Les trois Clés peuvent donc rester invisibles et invendables par Awa pendant
+  la répétition générale, tandis qu'une commande Wix de test déclenche bien son
+  bonus.
+- Les cinq templates Meta ne sont plus des prérequis de boot de
+  l'automatisation. Chaque branche de relance reste sombre individuellement
+  tant que son nom de template est vide, conformément au comportement déjà
+  implémenté dans `keyNudge` et `renewalNudge`.
+- Les mappings Clé/bonus, les services, le périmètre legacy, l'historique
+  Invitée et une méthode d'authentification webhook restent obligatoires.
+- Régression dédiée : production simulée avec automation active, catalogue Awa
+  fermé et templates vides ; les mappings de provisionnement manquants restent
+  refusés.
+
+## 2026-07-27 — Répétition générale masquée des trois Clés
+
+- Architecture webhook finale (remplace le relais Wix CLI décrit plus haut) :
+  webhook natif Pricing Plans `Order Purchased` directement vers
+  `/webhooks/wix`, JWT RS256 vérifié avec `WIX_WEBHOOK_PUBLIC_KEY`. Les anciennes
+  apps Wix de relais ont été désinstallées.
+- Répétition exécutée avec le seul membre `Baba Test`, automation ouverte
+  temporairement, trois IDs de Clés toujours absents de
+  `AWA_SELLABLE_PLAN_IDS` et cinq templates Meta toujours vides.
+- Résultats :
+  - L'Invitée : Clé active, bonus exact actif, 21 jours, 0 invitation ;
+  - L'Habituée : Clé active, bonus exact actif, 30 jours, 0 invitation ;
+  - La Résidente : Clé active, bonus exact actif, 60 jours, 1 droit
+    d'invitation.
+- Pour chaque achat, le registre a conservé le bon couple
+  `plan_id`/`bonus_plan_id` et une seule commande bonus. Les premières
+  livraisons payantes ont été traitées mais la connexion Wix a expiré vers
+  1,5 s (`499`) ; les retries Wix ont reçu `200` et la déduplication a empêché
+  tout doublon. Aucun log applicatif d'erreur Clé/webhook pendant la fenêtre.
+- Nettoyage vérifié : six commandes Wix (trois payantes + trois bonus)
+  `CANCELED`, trois lignes de registre `CANCELLED`, droit Résidente inutilisé
+  `VOID`. `KEYS_AUTOMATION_ENABLED=false`, catalogue Awa toujours fermé,
+  `/healthz` OK.

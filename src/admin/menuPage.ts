@@ -1,4 +1,11 @@
-import { isRecipeComplete, type CategoryView, type MenuItemView } from "../domain/cafeMenuRepo.js";
+import {
+  isRecipeComplete,
+  MAX_MENU_OPTION_GROUPS,
+  MAX_MENU_OPTION_RESPONSES,
+  type CategoryView,
+  type MenuItemView,
+} from "../domain/cafeMenuRepo.js";
+import { parseOptionGroups, type MenuOptionGroup } from "../lib/cafeMenu.js";
 
 /** Server-rendered menu catalogue and internal recipe editor. */
 
@@ -240,6 +247,128 @@ function recipeState(item: MenuItemView | null): string {
   return recipeBadge(item);
 }
 
+function optionResponseRow(value: string, groupIndex: number, index: number): string {
+  const number = index + 1;
+  return `<div class="choice-response-row" data-choice-row>
+  <span class="choice-response-number" aria-hidden="true">${number}</span>
+  <label class="visually-hidden" for="option-group-${groupIndex}-choice-${index}">Réponse proposée ${number}</label>
+  <input id="option-group-${groupIndex}-choice-${index}" name="option_groups[${groupIndex}][choices][${index}]" maxlength="200" value="${esc(value)}" placeholder="Ex. Lait d’avoine" autocomplete="off">
+  <button class="act act--sm act--ghost choice-remove" type="button" aria-label="Supprimer la réponse ${number}">Supprimer</button>
+</div>`;
+}
+
+function optionGroupEditor(group: MenuOptionGroup, groupIndex: number): string {
+  const rows = group.choices.length ? group.choices : [""];
+  return `<section class="choice-group" data-choice-group>
+  <div class="choice-group-heading">
+    <h4 data-choice-group-title>Type de choix ${groupIndex + 1}</h4>
+    <button class="act act--sm act--ghost choice-group-remove" type="button" aria-label="Supprimer le type de choix ${groupIndex + 1}">Supprimer ce type</button>
+  </div>
+  <label class="choice-label">Intitulé du choix<span class="field-help">Par exemple « Type de lait » ou « Type de fromage ».</span><input data-choice-label name="option_groups[${groupIndex}][label]" maxlength="40" value="${esc(group.label)}" placeholder="Type de lait" autocomplete="off"></label>
+  <div class="choice-responses">
+    <div class="choice-responses-heading"><div><b>Réponses proposées</b><span class="field-help">Une réponse par ligne, dans l’ordre présenté au client.</span></div><span class="badge badge--gray" data-choice-count aria-live="polite">${group.choices.length} réponse${group.choices.length === 1 ? "" : "s"} enregistrée${group.choices.length === 1 ? "" : "s"}</span></div>
+    <div class="choice-response-list" data-choice-rows>${rows.map((value, index) => optionResponseRow(value, groupIndex, index)).join("")}</div>
+    <div class="choice-response-actions"><button class="act act--ghost" type="button" data-choice-add>Ajouter une réponse</button><span class="field-help">${MAX_MENU_OPTION_RESPONSES} réponses maximum.</span></div>
+  </div>
+</section>`;
+}
+
+const MENU_OPTION_EDITOR_SCRIPT = `<script>
+(function(){
+  var editor=document.querySelector('[data-choice-editor]');
+  if(!editor)return;
+  var groups=editor.querySelector('[data-choice-groups]');
+  var addGroup=editor.querySelector('[data-choice-group-add]');
+  var groupCount=editor.querySelector('[data-choice-group-count]');
+  var maxResponses=${MAX_MENU_OPTION_RESPONSES};
+  var maxGroups=${MAX_MENU_OPTION_GROUPS};
+  function rowHtml(){
+    var row=document.createElement('div');
+    row.className='choice-response-row';
+    row.setAttribute('data-choice-row','');
+    row.innerHTML='<span class="choice-response-number" aria-hidden="true"></span><label class="visually-hidden"></label><input maxlength="200" placeholder="Ex. Lait d’avoine" autocomplete="off"><button class="act act--sm act--ghost choice-remove" type="button">Supprimer</button>';
+    return row;
+  }
+  function groupHtml(){
+    var group=document.createElement('section');
+    group.className='choice-group';group.setAttribute('data-choice-group','');
+    group.innerHTML='<div class="choice-group-heading"><h4 data-choice-group-title></h4><button class="act act--sm act--ghost choice-group-remove" type="button">Supprimer ce type</button></div><label class="choice-label">Intitulé du choix<span class="field-help">Par exemple « Type de lait » ou « Type de fromage ».</span><input data-choice-label maxlength="40" placeholder="Type de lait" autocomplete="off"></label><div class="choice-responses"><div class="choice-responses-heading"><div><b>Réponses proposées</b><span class="field-help">Une réponse par ligne, dans l’ordre présenté au client.</span></div><span class="badge badge--gray" data-choice-count aria-live="polite"></span></div><div class="choice-response-list" data-choice-rows></div><div class="choice-response-actions"><button class="act act--ghost" type="button" data-choice-add>Ajouter une réponse</button><span class="field-help">${MAX_MENU_OPTION_RESPONSES} réponses maximum.</span></div></div>';
+    group.querySelector('[data-choice-rows]').appendChild(rowHtml());
+    return group;
+  }
+  function update(){
+    var allGroups=[].slice.call(groups.querySelectorAll('[data-choice-group]'));
+    var savedGroups=0;
+    allGroups.forEach(function(group,groupIndex){
+      var title=group.querySelector('[data-choice-group-title]');
+      var labelInput=group.querySelector('[data-choice-label]');
+      var removeGroup=group.querySelector('.choice-group-remove');
+      title.textContent='Type de choix '+(groupIndex+1);
+      labelInput.name='option_groups['+groupIndex+'][label]';
+      removeGroup.setAttribute('aria-label','Supprimer le type de choix '+(groupIndex+1));
+      var rows=group.querySelector('[data-choice-rows]');
+      var all=[].slice.call(rows.querySelectorAll('[data-choice-row]'));
+      var saved=0;
+      all.forEach(function(row,index){
+        var number=index+1;
+        var input=row.querySelector('input');
+        var label=row.querySelector('label');
+        var remove=row.querySelector('.choice-remove');
+        var id='option-group-'+groupIndex+'-choice-'+index;
+        row.querySelector('.choice-response-number').textContent=number;
+        input.id=id;input.name='option_groups['+groupIndex+'][choices]['+index+']';
+        label.htmlFor=id;label.textContent='Réponse proposée '+number;
+        remove.setAttribute('aria-label','Supprimer la réponse '+number+' du type '+(groupIndex+1));
+        if(input.value.trim())saved++;
+      });
+      group.querySelector('[data-choice-count]').textContent=saved+' réponse'+(saved===1?'':'s')+' enregistrée'+(saved===1?'':'s');
+      var add=group.querySelector('[data-choice-add]');
+      add.disabled=all.length>=maxResponses;
+      add.setAttribute('aria-disabled',add.disabled?'true':'false');
+      if(labelInput.value.trim()||saved)savedGroups++;
+    });
+    groupCount.textContent=savedGroups+' type'+(savedGroups===1?'':'s')+' de choix enregistré'+(savedGroups===1?'':'s');
+    addGroup.disabled=allGroups.length>=maxGroups;
+    addGroup.setAttribute('aria-disabled',addGroup.disabled?'true':'false');
+  }
+  addGroup.addEventListener('click',function(){
+    if(groups.querySelectorAll('[data-choice-group]').length>=maxGroups)return;
+    var group=groupHtml();groups.appendChild(group);update();group.querySelector('[data-choice-label]').focus();
+  });
+  groups.addEventListener('click',function(event){
+    var add=event.target.closest('[data-choice-add]');
+    if(add){
+      var rows=add.closest('[data-choice-group]').querySelector('[data-choice-rows]');
+      if(rows.querySelectorAll('[data-choice-row]').length>=maxResponses)return;
+      var newRow=rowHtml();rows.appendChild(newRow);update();newRow.querySelector('input').focus();return;
+    }
+    var button=event.target.closest('.choice-remove');
+    if(button){
+      var row=button.closest('[data-choice-row]');
+      var rows=row.closest('[data-choice-rows]');
+      var all=rows.querySelectorAll('[data-choice-row]');
+      if(all.length===1){row.querySelector('input').value='';row.querySelector('input').focus();}
+      else row.remove();
+      update();return;
+    }
+    var removeGroup=event.target.closest('.choice-group-remove');
+    if(removeGroup){
+      var group=removeGroup.closest('[data-choice-group]');
+      var allGroups=groups.querySelectorAll('[data-choice-group]');
+      if(allGroups.length===1){
+        group.querySelector('[data-choice-label]').value='';
+        group.querySelectorAll('[data-choice-row]').forEach(function(row,index){if(index)row.remove();else row.querySelector('input').value='';});
+        group.querySelector('[data-choice-label]').focus();
+      }else{group.remove();groups.querySelector('[data-choice-group] [data-choice-label]').focus();}
+      update();
+    }
+  });
+  groups.addEventListener('input',update);
+  editor.closest('form').addEventListener('submit',update);
+  update();
+})();
+</script>`;
+
 export function renderMenuItemForm(opts: {
   item: MenuItemView | null;
   categories: string[];
@@ -253,8 +382,14 @@ export function renderMenuItemForm(opts: {
   const description = esc(item?.description);
   const ingredients = esc(item?.recipe_ingredients);
   const steps = esc(item?.recipe_steps);
-  const optionLabel = esc(item?.option_label);
-  const optionChoices = esc(item?.option_choices);
+  const configuredGroups = parseOptionGroups(
+    item?.option_groups,
+    item?.option_label,
+    item?.option_choices,
+  );
+  const optionGroups = configuredGroups.length
+    ? configuredGroups
+    : [{ label: "", choices: [] }];
   const favourite = item?.favourite ? " checked" : "";
   const noRecipeNeeded = item?.no_recipe_needed ? " checked" : "";
 
@@ -277,8 +412,14 @@ export function renderMenuItemForm(opts: {
           .join("")
       }</select></label>
       <label class="menu-description">Description commerciale<span class="field-help">Courte présentation visible par Awa et les clients.</span><textarea name="description" rows="3" maxlength="200" placeholder="Goût, ingrédients principaux ou bénéfice client…">${description}</textarea></label>
-      <label>Choix — libellé<span class="field-help">Laissez vide si l’article n’a pas de choix. Ex. « Boisson », « Lait ».</span><input name="option_label" maxlength="40" value="${optionLabel}" placeholder="Boisson"></label>
-      <label>Choix — options<span class="field-help">Séparez les options par une barre «&nbsp;|&nbsp;». Ex. « Jus d’orange | Boisson chaude ». À la commande, le choix devient obligatoire.</span><input name="option_choices" maxlength="200" value="${optionChoices}" placeholder="Jus d’orange | Boisson chaude"></label>
+      <section class="choice-editor" data-choice-editor aria-labelledby="choice-editor-title">
+        <div class="choice-editor-heading">
+          <div><h3 id="choice-editor-title">Choix demandés au client (facultatif)</h3><p class="field-help">Ajoutez plusieurs questions indépendantes si nécessaire. Exemple : « Type de lait » (entier, avoine) puis « Type de fromage » (chèvre, emmental).</p></div>
+          <span class="badge badge--gray" data-choice-group-count aria-live="polite">${configuredGroups.length} type${configuredGroups.length === 1 ? "" : "s"} de choix enregistré${configuredGroups.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="choice-groups" data-choice-groups>${optionGroups.map(optionGroupEditor).join("")}</div>
+        <div class="choice-group-actions"><button class="act act--ghost" type="button" data-choice-group-add>Ajouter un type de choix</button><span class="field-help">${MAX_MENU_OPTION_GROUPS} types maximum par article.</span></div>
+      </section>
       <label class="menu-favourite"><input type="checkbox" name="favourite"${favourite}> Incontournable proposé sur WhatsApp</label>
     </div>
   </section>
@@ -290,7 +431,8 @@ export function renderMenuItemForm(opts: {
   </section>
   <div class="actionbar"><button class="act" type="submit">${creating ? "Créer l’article" : "Enregistrer les modifications"}</button><a class="act act--ghost" href="/admin/menu">Retour au menu</a></div>
 </form>
-${item ? `<div class="card menu-danger-zone"><div><b>${item.enabled ? "Retirer cet article" : "Remettre cet article au menu"}</b><p class="muted">La recette et l’historique sont conservés.</p></div><form class="inline" method="post" action="/admin/menu/items/${query(item.id)}/toggle"${item.enabled ? ` data-confirm="Retirer « ${esc(item.name)} » du menu ? L’article pourra être restauré plus tard."` : ""}><button class="act ${item.enabled ? "act--danger" : "act--ok"}" type="submit">${item.enabled ? "Retirer du menu" : "Remettre au menu"}</button></form></div>` : ""}`;
+${item ? `<div class="card menu-danger-zone"><div><b>${item.enabled ? "Retirer cet article" : "Remettre cet article au menu"}</b><p class="muted">La recette et l’historique sont conservés.</p></div><form class="inline" method="post" action="/admin/menu/items/${query(item.id)}/toggle"${item.enabled ? ` data-confirm="Retirer « ${esc(item.name)} » du menu ? L’article pourra être restauré plus tard."` : ""}><button class="act ${item.enabled ? "act--danger" : "act--ok"}" type="submit">${item.enabled ? "Retirer du menu" : "Remettre au menu"}</button></form></div>` : ""}
+${MENU_OPTION_EDITOR_SCRIPT}`;
 }
 
 /** Category manager: add + per-row rename / delete (delete disabled when used). */

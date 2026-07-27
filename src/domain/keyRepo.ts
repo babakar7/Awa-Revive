@@ -1,0 +1,528 @@
+import { pool } from "../db/index.js";
+import type { KeyPlanMapping, KeyType } from "./keyRules.js";
+
+export interface KeyRegistry {
+  id: string;
+  paid_order_id: string;
+  bonus_order_id: string | null;
+  client_id: string | null;
+  wix_contact_id: string | null;
+  wix_member_id: string | null;
+  key_type: KeyType;
+  plan_id: string;
+  bonus_plan_id: string;
+  starts_at: Date;
+  original_ends_at: Date;
+  effective_ends_at: Date;
+  status: "SCHEDULED" | "ACTIVE" | "ENDED" | "REFUNDED" | "CANCELLED";
+  previous_key_id: string | null;
+  purchased_at: Date | null;
+  continuity_source_kind: "KEY" | "LEGACY_REFORMER" | null;
+  continuity_source_order_id: string | null;
+  continuity_source_plan_id: string | null;
+  continuity_expires_at: Date | null;
+  invitations_granted: number;
+  extension_used_at: Date | null;
+  bonus_status: "PENDING" | "ACTIVE" | "FAILED" | "MANUAL_REQUIRED";
+  bonus_attempts: number;
+  bonus_next_retry_at: Date | null;
+  bonus_last_error: string | null;
+}
+
+export async function upsertKey(args: {
+  paidOrderId: string;
+  clientId?: string | null;
+  wixContactId?: string | null;
+  wixMemberId?: string | null;
+  mapping: KeyPlanMapping;
+  startsAt: Date;
+  endsAt: Date;
+  status: "SCHEDULED" | "ACTIVE";
+  previousKeyId?: string | null;
+  purchasedAt?: Date | null;
+  continuitySourceKind?: "KEY" | "LEGACY_REFORMER" | null;
+  continuitySourceOrderId?: string | null;
+  continuitySourcePlanId?: string | null;
+  continuityExpiresAt?: Date | null;
+  invitationsGranted?: number;
+}): Promise<KeyRegistry> {
+  const result = await pool.query(
+    `insert into key_registry
+       (paid_order_id, client_id, wix_contact_id, wix_member_id, key_type,
+        plan_id, bonus_plan_id, starts_at, original_ends_at, effective_ends_at,
+        status, previous_key_id, purchased_at, continuity_source_kind,
+        continuity_source_order_id, continuity_source_plan_id,
+        continuity_expires_at, invitations_granted)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     on conflict (paid_order_id) do update set
+       client_id=coalesce(key_registry.client_id, excluded.client_id),
+       wix_contact_id=coalesce(key_registry.wix_contact_id, excluded.wix_contact_id),
+       wix_member_id=coalesce(key_registry.wix_member_id, excluded.wix_member_id),
+       purchased_at=coalesce(key_registry.purchased_at, excluded.purchased_at),
+       continuity_source_kind=coalesce(key_registry.continuity_source_kind, excluded.continuity_source_kind),
+       continuity_source_order_id=coalesce(key_registry.continuity_source_order_id, excluded.continuity_source_order_id),
+       continuity_source_plan_id=coalesce(key_registry.continuity_source_plan_id, excluded.continuity_source_plan_id),
+       continuity_expires_at=coalesce(key_registry.continuity_expires_at, excluded.continuity_expires_at),
+       invitations_granted=greatest(key_registry.invitations_granted, excluded.invitations_granted),
+       updated_at=now()
+     returning *`,
+    [
+      args.paidOrderId,
+      args.clientId ?? null,
+      args.wixContactId ?? null,
+      args.wixMemberId ?? null,
+      args.mapping.type,
+      args.mapping.planId,
+      args.mapping.bonusPlanId,
+      args.startsAt,
+      args.endsAt,
+      args.status,
+      args.previousKeyId ?? null,
+      args.purchasedAt ?? null,
+      args.continuitySourceKind ?? null,
+      args.continuitySourceOrderId ?? null,
+      args.continuitySourcePlanId ?? null,
+      args.continuityExpiresAt ?? null,
+      args.invitationsGranted ?? 0,
+    ],
+  );
+  return result.rows[0];
+}
+
+export async function keyCoveringAt(args: {
+  clientId?: string | null;
+  wixMemberId?: string | null;
+  at: Date;
+  excludePaidOrderId?: string | null;
+}): Promise<KeyRegistry | null> {
+  const result = await pool.query(
+    `select * from key_registry
+      where (($1::uuid is not null and client_id=$1)
+          or ($2::text is not null and wix_member_id=$2))
+        and starts_at <= $3 and effective_ends_at > $3
+        and ($4::text is null or paid_order_id <> $4)
+        and status not in ('REFUNDED','CANCELLED')
+      order by effective_ends_at desc
+      limit 1`,
+    [args.clientId ?? null, args.wixMemberId ?? null, args.at, args.excludePaidOrderId ?? null],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function getKeyByPaidOrder(paidOrderId: string): Promise<KeyRegistry | null> {
+  const result = await pool.query(`select * from key_registry where paid_order_id=$1`, [paidOrderId]);
+  return result.rows[0] ?? null;
+}
+
+export async function getKeyById(id: string): Promise<KeyRegistry | null> {
+  const result = await pool.query(`select * from key_registry where id=$1`, [id]);
+  return result.rows[0] ?? null;
+}
+
+export async function listKeysForAdmin(limit = 100): Promise<
+  Array<KeyRegistry & { client_name: string | null; wa_phone: string | null }>
+> {
+  const result = await pool.query(
+    `select k.*, c.name as client_name, c.wa_phone
+       from key_registry k
+       left join clients c on c.id=k.client_id
+      order by k.starts_at desc
+      limit $1`,
+    [limit],
+  );
+  return result.rows;
+}
+
+export async function listActiveKeysForNudges(): Promise<
+  Array<KeyRegistry & { client_name: string | null; wa_phone: string }>
+> {
+  const result = await pool.query(
+    `select k.*, c.name as client_name, c.wa_phone
+       from key_registry k
+       join clients c on c.id=k.client_id
+      where k.status='ACTIVE'
+        and k.starts_at <= now() and k.effective_ends_at > now()
+        and k.wix_contact_id is not null
+      order by k.effective_ends_at asc`,
+  );
+  return result.rows;
+}
+
+/**
+ * Claim-before-send for commercial nudges. FAILED is intentionally terminal:
+ * one missed reminder is preferable to duplicate client messages.
+ */
+export async function claimKeyNudge(args: {
+  dedupKey: string;
+  keyId: string;
+  clientId: string;
+}): Promise<boolean> {
+  const result = await pool.query(
+    `insert into key_nudges (dedup_key, key_id, client_id, kind, outcome, detail)
+     values ($1,$2,$3,split_part($1, ':', 1),'FAILED','claimed')
+     on conflict (dedup_key) do nothing`,
+    [args.dedupKey, args.keyId, args.clientId],
+  );
+  return result.rowCount === 1;
+}
+
+export async function completeKeyNudge(
+  dedupKey: string,
+  outcome: "SENT" | "SUPPRESSED" | "FAILED",
+  detail: string,
+): Promise<void> {
+  await pool.query(
+    `update key_nudges set outcome=$2, detail=$3 where dedup_key=$1`,
+    [dedupKey, outcome, detail.slice(0, 1000)],
+  );
+}
+
+export async function activeKeyForClient(args: {
+  clientId: string;
+  wixMemberId?: string | null;
+}): Promise<KeyRegistry | null> {
+  return (await activeKeysForClient(args))[0] ?? null;
+}
+
+export async function activeKeysForClient(args: {
+  clientId: string;
+  wixMemberId?: string | null;
+}): Promise<KeyRegistry[]> {
+  const result = await pool.query(
+    `select * from key_registry
+      where status='ACTIVE'
+        and starts_at <= now() and effective_ends_at > now()
+        and (client_id=$1 or ($2::text is not null and wix_member_id=$2))
+      order by starts_at desc`,
+    [args.clientId, args.wixMemberId ?? null],
+  );
+  return result.rows;
+}
+
+/**
+ * L'Invitée conversion rule: a paid next Key normally waits for expiry, but
+ * becomes due immediately once the third non-cancelled Reformer session has
+ * actually started. The old Invitee row remains active until its calendar end
+ * so an unused bonus stays available.
+ */
+export async function releaseScheduledKeysAfterInviteeCompletion(): Promise<string[]> {
+  const result = await pool.query(
+    `update pending_plan_orders p
+        set starts_at=now(), updated_at=now()
+      where p.status='SCHEDULED' and p.is_key and p.starts_at > now()
+        and exists (
+          select 1
+            from key_registry k
+           where k.client_id=p.client_id
+             and k.key_type='INVITEE'
+             and k.status='ACTIVE'
+             and k.effective_ends_at > now()
+             and (
+               select count(*)
+                 from key_reformer_bookings r
+                 join pending_bookings b on b.id=r.local_booking_id
+                where r.key_id=k.id and b.status <> 'CANCELLED'
+                  and r.slot_start <= now()
+             ) >= 3
+        )
+      returning p.id`,
+  );
+  return result.rows.map((row) => String(row.id));
+}
+
+export async function claimKeyExtension(keyId: string): Promise<KeyRegistry | null> {
+  const result = await pool.query(
+    `update key_registry
+        set extension_used_at=now(), updated_at=now()
+      where id=$1 and status='ACTIVE' and effective_ends_at > now()
+        and extension_used_at is null
+      returning *`,
+    [keyId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function releaseKeyExtension(keyId: string): Promise<void> {
+  await pool.query(
+    `update key_registry set extension_used_at=null, updated_at=now() where id=$1`,
+    [keyId],
+  );
+}
+
+export async function completeKeyExtension(keyId: string, newEndDate: Date): Promise<void> {
+  await pool.query(
+    `update key_registry set effective_ends_at=$2, updated_at=now() where id=$1`,
+    [keyId, newEndDate],
+  );
+}
+
+export async function shiftScheduledNextKey(
+  clientId: string | null,
+  wixMemberId: string | null,
+  days: number,
+): Promise<void> {
+  if (!clientId) return;
+  await pool.query(
+    `update pending_plan_orders
+        set starts_at=starts_at + make_interval(days => $2), updated_at=now()
+      where client_id=$1 and is_key and status='SCHEDULED' and starts_at > now()`,
+    [clientId, days],
+  );
+}
+
+export async function claimBonusProvisioning(keyId: string): Promise<KeyRegistry | null> {
+  const result = await pool.query(
+    `update key_registry
+        set bonus_claimed_at=now(), updated_at=now()
+      where id=$1 and bonus_order_id is null
+        and (bonus_claimed_at is null or bonus_claimed_at < now() - interval '2 minutes')
+      returning *`,
+    [keyId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function attachBonusOrder(keyId: string, bonusOrderId: string): Promise<void> {
+  await pool.query(
+    `update key_registry
+        set bonus_order_id=$2, bonus_status='ACTIVE', bonus_last_error=null,
+            bonus_claimed_at=null,
+            bonus_next_retry_at=null, updated_at=now()
+      where id=$1`,
+    [keyId, bonusOrderId],
+  );
+}
+
+export async function markBonusFailure(
+  keyId: string,
+  error: string,
+  nextRetryAt: Date | null,
+): Promise<void> {
+  await pool.query(
+    `update key_registry
+        set bonus_attempts=bonus_attempts+1,
+            bonus_status=case when $3::timestamptz is null then 'MANUAL_REQUIRED' else 'FAILED' end,
+            bonus_last_error=$2, bonus_next_retry_at=$3, bonus_claimed_at=null, updated_at=now()
+      where id=$1`,
+    [keyId, error.slice(0, 1000), nextRetryAt],
+  );
+}
+
+export async function dueBonusRepairs(limit = 50): Promise<KeyRegistry[]> {
+  const result = await pool.query(
+    `select * from key_registry
+      where bonus_order_id is null
+        and bonus_status in ('PENDING','FAILED')
+        and (bonus_next_retry_at is null or bonus_next_retry_at <= now())
+      order by created_at asc
+      limit $1`,
+    [limit],
+  );
+  return result.rows;
+}
+
+export async function keysMissingBonusForClient(clientId: string): Promise<KeyRegistry[]> {
+  const result = await pool.query(
+    `select * from key_registry
+      where client_id=$1
+        and status in ('ACTIVE','SCHEDULED')
+        and bonus_order_id is null
+        and bonus_status in ('PENDING','FAILED')
+      order by starts_at asc`,
+    [clientId],
+  );
+  return result.rows;
+}
+
+export async function createInvitationRights(keyId: string, count: number): Promise<void> {
+  for (let ordinal = 1; ordinal <= count; ordinal += 1) {
+    await pool.query(
+      `insert into key_invitations (key_id, ordinal)
+       values ($1,$2) on conflict (key_id, ordinal) do nothing`,
+      [keyId, ordinal],
+    );
+  }
+}
+
+export interface KeyInvitation {
+  id: string;
+  key_id: string;
+  ordinal: number;
+  status: "GRANTED" | "ASSIGNED" | "USED" | "VOID";
+  friend_first_name: string | null;
+  friend_phone: string | null;
+  wix_invitation_order_id: string | null;
+  wix_booking_id: string | null;
+}
+
+export async function availableInvitationForKey(keyId: string): Promise<KeyInvitation | null> {
+  const result = await pool.query(
+    `select * from key_invitations
+      where key_id=$1 and status in ('GRANTED','ASSIGNED')
+        and wix_booking_id is null
+      order by ordinal asc
+      limit 1`,
+    [keyId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function assignInvitation(args: {
+  invitationId: string;
+  firstName: string;
+  phone: string;
+}): Promise<KeyInvitation | null> {
+  const result = await pool.query(
+    `update key_invitations
+        set status='ASSIGNED',
+            friend_first_name=coalesce(friend_first_name,$2),
+            friend_phone=coalesce(friend_phone,$3),
+            assigned_at=coalesce(assigned_at,now()),
+            updated_at=now()
+      where id=$1 and status in ('GRANTED','ASSIGNED')
+        and (friend_phone is null or friend_phone=$3)
+      returning *`,
+    [args.invitationId, args.firstName, args.phone],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function attachInvitationOrder(
+  invitationId: string,
+  wixOrderId: string,
+): Promise<KeyInvitation | null> {
+  const result = await pool.query(
+    `update key_invitations
+        set wix_invitation_order_id=coalesce(wix_invitation_order_id,$2), updated_at=now()
+      where id=$1 and status='ASSIGNED'
+      returning *`,
+    [invitationId, wixOrderId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function markInvitationUsed(args: {
+  invitationId: string;
+  wixBookingId: string;
+}): Promise<void> {
+  await pool.query(
+    `update key_invitations
+        set status='USED', wix_booking_id=$2, used_at=now(), updated_at=now()
+      where id=$1 and status='ASSIGNED'`,
+    [args.invitationId, args.wixBookingId],
+  );
+}
+
+export async function latestPreviousKey(args: {
+  clientId?: string | null;
+  wixMemberId?: string | null;
+  before: Date;
+}): Promise<KeyRegistry | null> {
+  const result = await pool.query(
+    `select * from key_registry
+      where (($1::uuid is not null and client_id=$1)
+          or ($2::text is not null and wix_member_id=$2))
+        and starts_at <= $3
+      order by effective_ends_at desc
+      limit 1`,
+    [args.clientId ?? null, args.wixMemberId ?? null, args.before],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function markProtectedBenefitBooking(args: {
+  wixBookingId: string;
+  localBookingId?: string | null;
+  keyId: string;
+  invitationId?: string | null;
+  kind: "BONUS" | "INVITATION";
+}): Promise<void> {
+  await pool.query(
+    `insert into key_benefit_bookings
+       (wix_booking_id, local_booking_id, key_id, invitation_id, kind)
+     values ($1,$2,$3,$4,$5)
+     on conflict (wix_booking_id) do nothing`,
+    [
+      args.wixBookingId,
+      args.localBookingId ?? null,
+      args.keyId,
+      args.invitationId ?? null,
+      args.kind,
+    ],
+  );
+}
+
+export async function protectedBenefitForBooking(
+  localBookingId: string,
+): Promise<{ kind: "BONUS" | "INVITATION" } | null> {
+  const result = await pool.query(
+    `select kind from key_benefit_bookings where local_booking_id=$1`,
+    [localBookingId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function protectedBenefitForWixBooking(
+  wixBookingId: string,
+): Promise<{ kind: "BONUS" | "INVITATION" } | null> {
+  const result = await pool.query(
+    `select kind from key_benefit_bookings where wix_booking_id=$1`,
+    [wixBookingId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function recordKeyReformerBooking(args: {
+  wixBookingId: string;
+  localBookingId: string;
+  keyId: string;
+  slotStart: string;
+}): Promise<void> {
+  await pool.query(
+    `insert into key_reformer_bookings
+       (wix_booking_id, local_booking_id, key_id, slot_start)
+     values ($1,$2,$3,$4)
+     on conflict (wix_booking_id) do nothing`,
+    [args.wixBookingId, args.localBookingId, args.keyId, args.slotStart],
+  );
+}
+
+export async function inviteeGuaranteeFacts(keyId: string): Promise<{
+  reformerBookings: Array<{ wix_booking_id: string; slot_start: Date }>;
+  bonusBookings: number;
+}> {
+  const [reformer, bonus] = await Promise.all([
+    pool.query(
+      `select r.wix_booking_id, r.slot_start
+         from key_reformer_bookings r
+         join pending_bookings b on b.id=r.local_booking_id
+        where r.key_id=$1 and b.status <> 'CANCELLED'
+        order by r.slot_start asc`,
+      [keyId],
+    ),
+    pool.query(
+      `select count(*)::int as count from key_benefit_bookings
+        where key_id=$1 and kind='BONUS'`,
+      [keyId],
+    ),
+  ]);
+  return {
+    reformerBookings: reformer.rows,
+    bonusBookings: bonus.rows[0]?.count ?? 0,
+  };
+}
+
+export async function recordGuaranteeRequest(
+  keyId: string,
+  detail: Record<string, unknown>,
+): Promise<boolean> {
+  const result = await pool.query(
+    `update key_registry
+        set guarantee_requested_at=now(), guarantee_status='PENDING',
+            guarantee_detail_json=$2, updated_at=now()
+      where id=$1 and key_type='INVITEE' and guarantee_requested_at is null
+      returning id`,
+    [keyId, JSON.stringify(detail)],
+  );
+  return result.rowCount === 1;
+}

@@ -12,6 +12,7 @@ import {
   recentDeliveryClients,
 } from "../../src/domain/deliveryRepo.js";
 import * as clientRepo from "../../src/domain/repo.js";
+import { handleInboundText } from "../../src/agent/index.js";
 import { executeTool } from "../../src/agent/tools.js";
 import { markLogFailedByWamid, recordDeliveryLog } from "../../src/domain/notificationRepo.js";
 import { hashReadyToken, newReadyToken } from "../../src/domain/deliveryRules.js";
@@ -280,6 +281,46 @@ describe("delivery order creation → kitchen notify", () => {
 });
 
 describe("scheduled deliveries", () => {
+  it("accepts a manual kitchen lead between 1 and 90 minutes", async () => {
+    const id = await createOrder({
+      delivery_mode: "scheduled",
+      scheduled_for: dakarInputIn(24 * 60),
+      kitchen_lead_minutes: "custom",
+      kitchen_lead_custom: "45",
+    });
+    const row = (
+      await pool.query(
+        `select scheduled_for, kitchen_notify_at from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(
+      Math.round(
+        (new Date(row.scheduled_for).getTime() - new Date(row.kitchen_notify_at).getTime()) /
+          60_000,
+      ),
+    ).toBe(45);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/admin/livraisons",
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        client_name: "Rama",
+        client_phone: "770009988",
+        address: "Almadies",
+        delivery_mode: "scheduled",
+        scheduled_for: dakarInputIn(24 * 60),
+        kitchen_lead_minutes: "custom",
+        kitchen_lead_custom: "91",
+        qty_SMOOTHIE_JANT_BI: "1",
+      }).toString(),
+    });
+    expect(invalid.statusCode).toBe(200);
+    expect(invalid.body).toContain("entre 1 et 90 minutes");
+    expect(invalid.body).toContain('value="91"');
+  });
+
   it("rejects a past arrival and activates immediately when the kitchen deadline is already due", async () => {
     const past = await app.inject({
       method: "POST",
@@ -491,6 +532,30 @@ describe("scheduled deliveries", () => {
       }).toString(),
     });
     expect(leadOnly.headers.location).toContain("done=reprogrammed");
+    const customLead = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/reschedule`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({
+        scheduled_for: secondArrival,
+        kitchen_lead_minutes: "custom",
+        kitchen_lead_custom: "45",
+      }).toString(),
+    });
+    expect(customLead.headers.location).toContain("done=reprogrammed");
+    const timing = (
+      await pool.query(
+        `select scheduled_for, kitchen_notify_at from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(
+      Math.round(
+        (new Date(timing.scheduled_for).getTime() -
+          new Date(timing.kitchen_notify_at).getTime()) /
+          60_000,
+      ),
+    ).toBe(45);
     await sweepDeliveries(noopLog);
     expect(await rescheduleCount()).toBe(1);
   });
@@ -764,6 +829,50 @@ describe("delivery payment handover to Awa", () => {
     expect(routeText).not.toContain("paiement");
   });
 
+  it("routes a terse Wave reply to the live delivery despite a stale class conversation", async () => {
+    await seedKitchenContact();
+    const id = await createOrder();
+    await settle();
+    const client = await clientRepo.upsertClient("221770009988");
+    await pool.query(`update clients set name='Soxna' where id=$1`, [client.id]);
+    await pool.query(
+      `insert into conversations (client_id, role, content, created_at)
+       values ($1, 'assistant', $2, now() - interval '15 days')`,
+      [
+        client.id,
+        "Ton lien pour le cours de Pilates a expiré. Tu veux que je t'en renvoie un ?",
+      ],
+    );
+
+    await handleInboundText({
+      waPhone: client.wa_phone,
+      text: "Par Wave",
+      waMessageId: "wamid.delivery-wave-reply",
+      profileName: "Soxna",
+    });
+    await settle();
+
+    const order = (
+      await pool.query(`select payment_status, payment_method from delivery_orders where id=$1`, [id])
+    ).rows[0];
+    expect(order).toEqual({ payment_status: "AWAITING_PAYMENT", payment_method: "wave" });
+    const replies = mock.waTextsTo(client.wa_phone);
+    expect(replies.at(-1)).toContain("payer la livraison");
+    expect(replies.at(-1)).toContain("https://pay.wave.com/c/test");
+    expect(replies.at(-1)).not.toMatch(/cours|Pilates/i);
+
+    const toolTurn = (
+      await pool.query(
+        `select content from conversations
+          where client_id=$1 and role='tool'
+          order by created_at desc limit 1`,
+        [client.id],
+      )
+    ).rows[0]?.content;
+    expect(toolTurn).toContain("create_delivery_payment_link");
+    expect(toolTurn).toContain(id);
+  });
+
   it("uses the verified Orange Money callback for a Max It delivery payment", async () => {
     await seedKitchenContact();
     const id = await createOrder();
@@ -985,17 +1094,17 @@ describe("item with a built-in choice", () => {
   // to avoid leaking the option into other suites sharing this DB.
   afterAll(async () => {
     await pool.query(
-      `update cafe_menu_items set option_label=null, option_choices=null where id='BRUNCH_MYKONOS'`,
+      `update cafe_menu_items set option_label=null, option_choices=null, option_groups='[]'::jsonb where id='BRUNCH_MYKONOS'`,
     );
   });
   async function giveBrunchAChoice(): Promise<void> {
     await pool.query(
-      `update cafe_menu_items set option_label='Boisson', option_choices=$1 where id='BRUNCH_MYKONOS'`,
+      `update cafe_menu_items set option_label='Boisson', option_choices=$1, option_groups='[]'::jsonb where id='BRUNCH_MYKONOS'`,
       ["Jus d'orange | Boisson chaude"],
     );
     await refreshCafeMenu();
   }
-  async function postBrunch(choice?: string) {
+  async function postBrunch(choice?: string, secondChoice?: string) {
     const fields: Record<string, string> = {
       client_name: "Rama",
       client_phone: "770009988",
@@ -1004,6 +1113,7 @@ describe("item with a built-in choice", () => {
       qty_BRUNCH_MYKONOS: "1",
     };
     if (choice !== undefined) fields.choice_BRUNCH_MYKONOS = choice;
+    if (secondChoice !== undefined) fields.choice_BRUNCH_MYKONOS__1 = secondChoice;
     return app.inject({
       method: "POST",
       url: "/admin/livraisons",
@@ -1020,7 +1130,7 @@ describe("item with a built-in choice", () => {
     // submitted form in place so the receptionist does not lose quantities.
     expect(res.statusCode).toBe(200);
     expect(res.headers.location).toBeUndefined();
-    expect(res.body).toContain("choisis une option");
+    expect(res.body).toContain("choisis une réponse");
     expect(res.body).toContain(`name="qty_BRUNCH_MYKONOS" value="1"`);
     expect((await pool.query(`select count(*)::int as n from delivery_orders`)).rows[0].n).toBe(0);
   });
@@ -1038,6 +1148,42 @@ describe("item with a built-in choice", () => {
 
     const kitchenText = mock.waTextsTo("221770000099").join("\n");
     expect(kitchenText).toContain("Brunch Mykonos (Jus d'orange)");
+  });
+
+  it("requires, stores and displays every configured choice type", async () => {
+    await seedKitchenContact();
+    await pool.query(
+      `update cafe_menu_items
+          set option_label='Lait',
+              option_choices='Entier | Avoine',
+              option_groups=$1::jsonb
+        where id='BRUNCH_MYKONOS'`,
+      [
+        JSON.stringify([
+          { label: "Type de lait", choices: ["Entier", "Avoine"] },
+          { label: "Type de fromage", choices: ["Chèvre", "Emmental"] },
+        ]),
+      ],
+    );
+    await refreshCafeMenu();
+
+    const missing = await postBrunch("Avoine");
+    expect(missing.statusCode).toBe(200);
+    expect(missing.body).toContain("Type de fromage");
+
+    const res = await postBrunch("Avoine", "Chèvre");
+    expect(res.statusCode).toBe(303);
+    const order = (
+      await pool.query(`select * from delivery_orders order by created_at desc limit 1`)
+    ).rows[0];
+    expect(order.items_json[0].selections).toEqual([
+      { label: "Type de lait", value: "Avoine" },
+      { label: "Type de fromage", value: "Chèvre" },
+    ]);
+    const kitchenText = mock.waTextsTo("221770000099").join("\n");
+    expect(kitchenText).toContain(
+      "Type de lait : Avoine · Type de fromage : Chèvre",
+    );
   });
 });
 

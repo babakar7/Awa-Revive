@@ -291,6 +291,21 @@ create index if not exists idx_plan_orders_client_status
 -- à l'activation (ordre PENDING jusqu'à cette date, activé automatiquement).
 alter table pending_plan_orders
   add column if not exists starts_at timestamptz;
+alter table pending_plan_orders
+  add column if not exists is_key boolean not null default false;
+alter table pending_plan_orders
+  add column if not exists key_invitation_count integer;
+alter table pending_plan_orders add column if not exists paid_at timestamptz;
+alter table pending_plan_orders add column if not exists continuity_source_kind text
+  check (continuity_source_kind is null or continuity_source_kind in ('KEY','LEGACY_REFORMER'));
+alter table pending_plan_orders add column if not exists continuity_source_order_id text;
+alter table pending_plan_orders add column if not exists continuity_source_plan_id text;
+alter table pending_plan_orders add column if not exists continuity_expires_at timestamptz;
+alter table pending_plan_orders add column if not exists continuity_remaining integer;
+alter table pending_plan_orders add column if not exists continuity_alerted_at timestamptz;
+create unique index if not exists idx_plan_orders_one_scheduled_key
+  on pending_plan_orders (client_id)
+  where status='SCHEDULED' and is_key;
 
 -- Bar-only Wave orders: a menu order attached to a booking the client paid
 -- with their abonnement (that flow has no payment link, so the bar can't ride
@@ -334,6 +349,22 @@ alter table pending_plan_orders
 -- failed) so retries don't spam. Auto path uses wix_order_id instead.
 alter table pending_plan_orders
   add column if not exists reception_notified_at timestamptz;
+
+-- Pack Découverte Meta campaign: étape 1 is a real one-session Wix plan.
+-- Persist the selected slot on the plan payment so the verified webhook can
+-- activate the plan then redeem it immediately against that exact class.
+alter table pending_plan_orders add column if not exists campaign_code text;
+alter table pending_plan_orders add column if not exists service_id text;
+alter table pending_plan_orders add column if not exists service_name text;
+alter table pending_plan_orders add column if not exists event_id text;
+alter table pending_plan_orders add column if not exists slot_json jsonb;
+alter table pending_plan_orders add column if not exists slot_start timestamptz;
+alter table pending_plan_orders add column if not exists slot_end timestamptz;
+alter table pending_plan_orders add column if not exists wix_booking_id text;
+alter table pending_plan_orders add column if not exists benefit_transaction_id text;
+alter table pending_plan_orders add column if not exists linked_booking_id uuid references pending_bookings(id);
+alter table pending_plan_orders add column if not exists discovery_booking_status text;
+alter table pending_plan_orders add column if not exists discovery_booking_error text;
 
 alter table pending_cafe_orders
   add column if not exists fulfilling_at timestamptz;
@@ -569,8 +600,15 @@ create index if not exists idx_admin_audit_created
 create table if not exists renewal_nudges (
   wix_order_id text primary key,
   client_id uuid references clients(id),
-  sent_at timestamptz not null default now()
+  sent_at timestamptz not null default now(),
+  kind text not null default 'RENEWAL',
+  outcome text not null default 'SENT'
+    check (outcome in ('SENT','SUPPRESSED','FAILED')),
+  detail text
 );
+alter table renewal_nudges add column if not exists kind text not null default 'RENEWAL';
+alter table renewal_nudges add column if not exists outcome text not null default 'SENT';
+alter table renewal_nudges add column if not exists detail text;
 
 -- Copie locale des champs édités depuis /admin/profile (profil WhatsApp
 -- Business). Meta n'a pas de champ "horaires" natif : on le garde ici séparé
@@ -993,6 +1031,10 @@ alter table cafe_menu_items add column if not exists recipe_steps text;
 -- article sans choix. À la saisie d'une commande le choix devient obligatoire.
 alter table cafe_menu_items add column if not exists option_label text;
 alter table cafe_menu_items add column if not exists option_choices text;
+-- Plusieurs questions indépendantes par article, conservées dans l'ordre.
+-- Les deux colonnes historiques ci-dessus restent le miroir du premier groupe
+-- pour les anciens consommateurs et formulaires.
+alter table cafe_menu_items add column if not exists option_groups jsonb not null default '[]'::jsonb;
 -- Backfill one-shot des choix déjà documentés dans cafe-menu.md (guardé sur
 -- null → ne réécrit pas un choix édité ensuite via /admin/menu).
 update cafe_menu_items set option_label = 'Boisson',
@@ -1344,6 +1386,13 @@ create index if not exists idx_kitchen_tickets_open
 create index if not exists idx_kitchen_tickets_fallback_due
   on kitchen_tickets (fallback_due_at)
   where ipad_ack_at is null and fallback_claimed_at is null and fallback_due_at is not null;
+-- Rattrapage : heading/subheading (rendu figé iPad) ont été ajoutés APRÈS la
+-- première création de la table en prod ; create-table-if-not-exists ne les
+-- pose donc pas sur une table préexistante → le sweep cuisine plantait chaque
+-- minute (42703, colonne heading manquante). Ces alter idempotents rattrapent
+-- l'écart. NE PAS retirer.
+alter table kitchen_tickets add column if not exists heading text not null default '';
+alter table kitchen_tickets add column if not exists subheading text;
 
 -- Appareils appairés (iPad cuisine, téléphones accueil, propriétaire). Le token
 -- de session n'est JAMAIS stocké en clair : seul son sha256. Révocation = poser
@@ -1501,4 +1550,164 @@ alter table kitchen_tickets add column if not exists takeaway boolean not null d
 alter table kitchen_tickets add column if not exists urgent_at timestamptz;
 create index if not exists idx_kitchen_tickets_session
   on kitchen_tickets (session_id) where session_id is not null;
+-- Clés de la Maison. Wix remains the only ledger for Reformer/bonus session
+-- balances; this registry stores only cross-order relationships and policies
+-- Wix cannot represent (extension, invitation rights, guarantee, sync state).
+create table if not exists key_registry (
+  id uuid primary key default gen_random_uuid(),
+  paid_order_id text unique not null,
+  bonus_order_id text unique,
+  client_id uuid references clients(id),
+  wix_contact_id text,
+  wix_member_id text,
+  key_type text not null check (key_type in ('INVITEE','HABITUEE','RESIDENTE')),
+  plan_id text not null,
+  bonus_plan_id text not null,
+  starts_at timestamptz not null,
+  original_ends_at timestamptz not null,
+  effective_ends_at timestamptz not null,
+  status text not null default 'ACTIVE'
+    check (status in ('SCHEDULED','ACTIVE','ENDED','REFUNDED','CANCELLED')),
+  previous_key_id uuid references key_registry(id),
+  extension_used_at timestamptz,
+  guarantee_requested_at timestamptz,
+  guarantee_status text
+    check (guarantee_status is null or guarantee_status in ('PENDING','APPROVED','REFUSED')),
+  guarantee_detail_json jsonb not null default '{}'::jsonb,
+  bonus_status text not null default 'PENDING'
+    check (bonus_status in ('PENDING','ACTIVE','FAILED','MANUAL_REQUIRED')),
+  bonus_attempts integer not null default 0,
+  bonus_next_retry_at timestamptz,
+  bonus_claimed_at timestamptz,
+  bonus_last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists idx_key_registry_one_scheduled
+  on key_registry (coalesce(client_id::text, wix_member_id))
+  where status = 'SCHEDULED';
+create index if not exists idx_key_registry_bonus_repair
+  on key_registry (bonus_status, bonus_next_retry_at);
+create index if not exists idx_key_registry_member
+  on key_registry (wix_member_id, effective_ends_at desc);
+alter table key_registry add column if not exists purchased_at timestamptz;
+alter table key_registry add column if not exists continuity_source_kind text
+  check (continuity_source_kind is null or continuity_source_kind in ('KEY','LEGACY_REFORMER'));
+alter table key_registry add column if not exists continuity_source_order_id text;
+alter table key_registry add column if not exists continuity_source_plan_id text;
+alter table key_registry add column if not exists continuity_expires_at timestamptz;
+alter table key_registry add column if not exists invitations_granted integer not null default 0;
+alter table key_registry add column if not exists continuity_alerted_at timestamptz;
+
+create table if not exists key_invitations (
+  id uuid primary key default gen_random_uuid(),
+  key_id uuid not null references key_registry(id),
+  ordinal integer not null check (ordinal > 0),
+  status text not null default 'GRANTED'
+    check (status in ('GRANTED','ASSIGNED','USED','VOID')),
+  friend_first_name text,
+  friend_phone text,
+  wix_invitation_order_id text unique,
+  wix_booking_id text unique,
+  assigned_at timestamptz,
+  used_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (key_id, ordinal)
+);
+
+-- Once a bonus/invitation booking is confirmed, its right is consumed even if
+-- somebody later cancels it directly in Wix. Awa therefore blocks cancellation
+-- and rescheduling from this immutable policy marker; reception alone may
+-- replace a class Revive cancelled.
+create table if not exists key_benefit_bookings (
+  wix_booking_id text primary key,
+  local_booking_id uuid references pending_bookings(id),
+  key_id uuid not null references key_registry(id),
+  invitation_id uuid references key_invitations(id),
+  kind text not null check (kind in ('BONUS','INVITATION')),
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_key_benefit_local_booking
+  on key_benefit_bookings (local_booking_id) where local_booking_id is not null;
+
+-- Usage events only (never a balance): links each normal Reformer booking to
+-- the exact paid Key order selected in Benefit Programs. Required for the
+-- L'Invitée guarantee and visit choreography.
+create table if not exists key_reformer_bookings (
+  wix_booking_id text primary key,
+  local_booking_id uuid references pending_bookings(id),
+  key_id uuid not null references key_registry(id),
+  slot_start timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists idx_key_reformer_local_booking
+  on key_reformer_bookings (local_booking_id) where local_booking_id is not null;
+
+create table if not exists key_nudges (
+  dedup_key text primary key,
+  key_id uuid references key_registry(id),
+  client_id uuid references clients(id),
+  kind text not null,
+  outcome text not null check (outcome in ('SENT','SUPPRESSED','FAILED')),
+  detail text,
+  created_at timestamptz not null default now()
+);
+
+-- Wix remains the source of truth for attendance. This local projection keeps
+-- the admin leaderboard fast and retains the last successful snapshot during
+-- a temporary Wix outage.
+create table if not exists wix_attendance_records (
+  attendance_id text primary key,
+  booking_id text not null,
+  wix_contact_id text,
+  client_name text,
+  client_phone text,
+  client_phone_key text,
+  service_id text,
+  service_name text,
+  event_id text,
+  session_start timestamptz,
+  status text not null,
+  number_of_attendees integer not null default 1,
+  synced_at timestamptz not null default now()
+);
+create index if not exists idx_wix_attendance_rank
+  on wix_attendance_records (status, session_start desc);
+create index if not exists idx_wix_attendance_contact
+  on wix_attendance_records (wix_contact_id);
+create index if not exists idx_wix_attendance_phone
+  on wix_attendance_records (client_phone_key);
+
+-- The leaderboard's main total is past, non-cancelled confirmed bookings.
+-- Attendance marks remain alongside it as an audit/breakdown, since older
+-- sessions were not consistently marked ATTENDED in Wix.
+create table if not exists wix_confirmed_booking_records (
+  booking_id text primary key,
+  wix_contact_id text,
+  client_name text,
+  client_phone text,
+  client_phone_key text,
+  service_id text,
+  service_name text,
+  session_start timestamptz,
+  synced_at timestamptz not null default now()
+);
+create index if not exists idx_wix_confirmed_booking_rank
+  on wix_confirmed_booking_records (session_start desc);
+create index if not exists idx_wix_confirmed_booking_contact
+  on wix_confirmed_booking_records (wix_contact_id);
+create index if not exists idx_wix_confirmed_booking_phone
+  on wix_confirmed_booking_records (client_phone_key);
+
+create table if not exists wix_attendance_sync_state (
+  singleton boolean primary key default true check (singleton),
+  last_started_at timestamptz,
+  last_succeeded_at timestamptz,
+  last_error text,
+  record_count integer not null default 0
+);
+insert into wix_attendance_sync_state (singleton)
+  values (true)
+  on conflict (singleton) do nothing;
 `;

@@ -280,6 +280,8 @@ export interface NotifyReceptionOpts {
   /**
    * Internal/staff alerts are usually outside the 24h window. Template-first
    * avoids Meta accepting a free-text message with 200 and dropping it later.
+   * DEFAULTS to true for reception (see notifyReception) — set false only when
+   * the window is known-open and the richer free-text form is preferred.
    */
   preferTemplate?: boolean;
 }
@@ -296,10 +298,16 @@ export function notifyReception(
   opts: NotifyReceptionOpts = {},
 ): void {
   const logBody = `${subject}\n${body}`;
+  // Reception's 24h window WITH the bot number is ~always closed: reception
+  // RECEIVES from Awa, it doesn't message the bot. Free-text out-of-window then
+  // gets accepted (200) and silently dropped by Meta (131047, async) — the exact
+  // miss that left a "client planté" handoff undelivered. So template-first by
+  // DEFAULT here; a caller that knows the window is open can pass preferTemplate:false.
+  const preferTemplate = opts.preferTemplate ?? true;
 
   if (opts.whatsappFirst) {
     // WhatsApp primary; email only as a safety net if WhatsApp fails.
-    sendReceptionWhatsAppDetailed(subject, body, { preferTemplate: opts.preferTemplate })
+    sendReceptionWhatsAppDetailed(subject, body, { preferTemplate })
       .then(({ path, waMessageId }) => {
         console.log(`[notify] Reception notified on WhatsApp (${path}): ${subject}`);
         void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null, waMessageId);
@@ -327,7 +335,7 @@ export function notifyReception(
       .catch((err) => console.error(`[notify] Failed to email reception (${subject}):`, err));
   }
 
-  sendReceptionWhatsAppDetailed(subject, body, { preferTemplate: opts.preferTemplate })
+  sendReceptionWhatsAppDetailed(subject, body, { preferTemplate })
     .then(({ path, waMessageId }) => {
       console.log(`[notify] Reception notified on WhatsApp (${path}): ${subject}`);
       void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null, waMessageId);

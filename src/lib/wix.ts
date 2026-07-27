@@ -153,7 +153,8 @@ async function wixPatch(path: string, body: unknown): Promise<any> {
     const text = await res.text();
     throw new Error(`Wix ${path} failed (${res.status}): ${text}`);
   }
-  return res.json();
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
 }
 
 // ---------- services (class catalog) ----------
@@ -394,6 +395,119 @@ export async function getBookingStatuses(bookingIds: string[]): Promise<Record<s
   return out;
 }
 
+// ---------- attendance leaderboard ----------
+
+export interface WixAttendanceRecord {
+  id: string;
+  bookingId: string;
+  eventId: string | null;
+  status: "ATTENDED" | "NOT_ATTENDED" | string;
+  numberOfAttendees: number;
+}
+
+export interface WixAttendanceBookingSnapshot {
+  bookingId: string;
+  contactId: string | null;
+  clientName: string | null;
+  clientPhone: string | null;
+  serviceId: string | null;
+  serviceName: string | null;
+  sessionStart: string | null;
+}
+
+function attendanceSnapshotFromBooking(booking: any): WixAttendanceBookingSnapshot | null {
+  if (!booking?.id) return null;
+  const slot = booking?.bookedEntity?.slot ?? booking?.bookedEntity?.schedule ?? {};
+  const contact = booking?.contactDetails ?? {};
+  const name = [contact.firstName, contact.lastName]
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return {
+    bookingId: String(booking.id),
+    contactId: contact.contactId ? String(contact.contactId) : null,
+    clientName: name || null,
+    clientPhone: contact.phone ? String(contact.phone) : null,
+    serviceId: slot.serviceId ? String(slot.serviceId) : null,
+    serviceName: booking?.bookedEntity?.title ? String(booking.bookedEntity.title) : null,
+    sessionStart: slot.startDate ?? slot.firstSessionStart ?? null,
+  };
+}
+
+/**
+ * Read every attendance entry through Wix's dedicated Attendance API. The
+ * endpoint is paged by cursor; attendance can be corrected later, so callers
+ * reconcile the complete set rather than assuming entries are immutable.
+ */
+export async function listWixAttendanceRecords(): Promise<WixAttendanceRecord[]> {
+  const records: WixAttendanceRecord[] = [];
+  let cursor: string | undefined;
+  const seen = new Set<string>();
+  for (;;) {
+    const data = await wixPost("/bookings/bookings-attendance/query", {
+      query: { cursorPaging: { limit: 100, ...(cursor ? { cursor } : {}) } },
+    });
+    const batch: any[] = Array.isArray(data?.attendances) ? data.attendances : [];
+    for (const attendance of batch) {
+      if (!attendance?.id || !attendance?.bookingId) continue;
+      records.push({
+        id: String(attendance.id),
+        bookingId: String(attendance.bookingId),
+        eventId: attendance.eventId ? String(attendance.eventId) : attendance.sessionId ? String(attendance.sessionId) : null,
+        status: String(attendance.status ?? "UNKNOWN").toUpperCase(),
+        numberOfAttendees: Math.max(0, Number(attendance.numberOfAttendees ?? 1) || 0),
+      });
+    }
+    const next = data?.pagingMetadata?.cursors?.next;
+    if (typeof next !== "string" || !next || seen.has(next)) break;
+    seen.add(next);
+    cursor = next;
+  }
+  return records;
+}
+
+/** Resolve contact, service and date for attendance rows in a single reader call. */
+export async function getWixAttendanceBookingSnapshots(
+  bookingIds: string[],
+): Promise<WixAttendanceBookingSnapshot[]> {
+  if (bookingIds.length === 0) return [];
+  const out: WixAttendanceBookingSnapshot[] = [];
+  for (let i = 0; i < bookingIds.length; i += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: { filter: { id: { $in: bookingIds.slice(i, i + 100) } } },
+    });
+    for (const entry of data?.extendedBookings ?? []) {
+      const snapshot = attendanceSnapshotFromBooking(entry?.booking);
+      if (snapshot) out.push(snapshot);
+    }
+  }
+  return out;
+}
+
+/**
+ * Every confirmed Wix booking, including historical classes that reception
+ * did not explicitly mark ATTENDED. Bookings Reader's date filter is not
+ * reliable for old sessions, so the past/future cut stays in our database.
+ */
+export async function listWixConfirmedBookingSnapshots(): Promise<WixAttendanceBookingSnapshot[]> {
+  const out: WixAttendanceBookingSnapshot[] = [];
+  for (let offset = 0;; offset += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: {
+        filter: { status: { $eq: "CONFIRMED" } },
+        paging: { limit: 100, offset },
+      },
+    });
+    const batch: any[] = Array.isArray(data?.extendedBookings) ? data.extendedBookings : [];
+    for (const entry of batch) {
+      const snapshot = attendanceSnapshotFromBooking(entry?.booking);
+      if (snapshot) out.push(snapshot);
+    }
+    if (batch.length < 100) break;
+  }
+  return out;
+}
+
 // ---------- Booking contact repair (cas « A »/Amy Ndiaye, PROGRESS §6.6bis) ----------
 
 export interface BookingContactSnapshot {
@@ -476,6 +590,8 @@ export async function updateBookingContactDetails(args: {
  */
 export interface WixContactBooking {
   id: string;
+  /** Needed to prove a requested direct move stays within the same class. */
+  serviceId: string | null;
   serviceName: string;
   startDate: string; // ISO
   participants: number;
@@ -557,6 +673,7 @@ export async function listContactUpcomingBookings(
     if (!startDate || Number.isNaN(Date.parse(startDate)) || Date.parse(startDate) <= now) continue;
     out.push({
       id: b.id,
+      serviceId: typeof slot.serviceId === "string" ? slot.serviceId : null,
       serviceName: b?.bookedEntity?.title ?? serviceName(slot.serviceId),
       startDate,
       participants: Math.max(1, Number(b.numberOfParticipants ?? 1)),
@@ -615,6 +732,30 @@ export async function hasPastPilatesBooking(contactId: string): Promise<boolean>
     console.error("hasPastPilatesBooking failed (allowing sale):", err);
     return false;
   }
+}
+
+/**
+ * Has this contact ever held a confirmed/pending booking at Revive, in any
+ * discipline. This is the eligibility rule for L'Invitée and invited friends.
+ * A Wix failure is deliberately surfaced to the caller: "unknown" must be
+ * handed to reception, never silently treated as "new".
+ */
+export async function hasAnyPastReviveBooking(contactId: string): Promise<boolean> {
+  for (let offset = 0; offset < 500; offset += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: {
+        filter: {
+          "contactDetails.contactId": contactId,
+          status: { $in: ["CONFIRMED", "PENDING"] },
+        },
+        paging: { limit: 100, offset },
+      },
+    });
+    const batch: any[] = data?.extendedBookings ?? [];
+    if (batch.some((entry) => entry?.booking?.id)) return true;
+    if (batch.length < 100) return false;
+  }
+  return false;
 }
 
 // ---------- contacts ----------
@@ -848,6 +989,29 @@ export async function findContactByPhone(
   }
 }
 
+export type PhoneContactResolution =
+  | { kind: "none" }
+  | { kind: "one"; contact: WixContactMatch }
+  | { kind: "ambiguous"; count: number };
+
+/**
+ * Unlike findContactByPhone(), preserves the important distinction between no
+ * contact and ambiguous duplicate contacts.
+ */
+export async function resolvePhoneContact(
+  phone: string,
+  nameHint?: string,
+): Promise<PhoneContactResolution> {
+  const contacts = await queryContactsByPhone(phone);
+  if (contacts.length === 0) return { kind: "none" };
+  const chosen = chooseContact(contacts, nameHint);
+  if (!chosen?.id) return { kind: "ambiguous", count: contacts.length };
+  return {
+    kind: "one",
+    contact: { id: String(chosen.id), fullName: wixContactFullName(chosen) },
+  };
+}
+
 export async function findContactIdByPhone(
   phone: string,
   firstName?: string,
@@ -935,6 +1099,11 @@ export async function getContactById(contactId: string): Promise<any | null> {
   if (!res.ok) throw new Error(`Wix get contact failed (${res.status}): ${await res.text()}`);
   const data: any = await res.json();
   return data?.contact ?? null;
+}
+
+/** Presentation-safe lookup for admin pages selecting one Wix client by id. */
+export async function getWixDeliveryClient(contactId: string): Promise<WixDeliveryClient | null> {
+  return wixDeliveryClientFromContact(await getContactById(contactId));
 }
 
 // ---------- email-based account linking (liaison par email vérifié) ----------
@@ -1117,6 +1286,76 @@ export async function listAllActiveOrders(): Promise<any[]> {
   return orders;
 }
 
+/**
+ * All pricing-plan orders, including ENDED/CANCELED ones. Wix documents the
+ * unfiltered management endpoint as returning every status; this is required
+ * for delayed Order Purchased webhooks and once-ever discovery eligibility.
+ */
+export async function listAllPlanOrders(): Promise<any[]> {
+  const orders: any[] = [];
+  for (let offset = 0; offset < 5000; offset += 50) {
+    const res = await fetch(
+      `${WIX_API}/pricing-plans/v2/orders?limit=50&offset=${offset}`,
+      { headers: headers(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) },
+    );
+    if (!res.ok) throw new Error(`Wix orders list failed (${res.status}): ${await res.text()}`);
+    const data: any = await res.json();
+    orders.push(...(data?.orders ?? []));
+    if (!data?.pagingMetadata?.hasNext) break;
+  }
+  return orders;
+}
+
+export async function hasPlanOrderHistory(args: {
+  contactId?: string | null;
+  memberId?: string | null;
+  planIds: string[];
+}): Promise<boolean> {
+  if (!args.contactId && !args.memberId) return false;
+  const ids = new Set(args.planIds.filter(Boolean));
+  if (ids.size === 0) return false;
+  return (await listAllPlanOrders()).some((order) => {
+    if (!ids.has(String(order?.planId ?? ""))) return false;
+    const buyerContactId = String(order?.buyer?.contactId ?? "");
+    const buyerMemberId = String(order?.buyer?.memberId ?? order?.memberId ?? "");
+    return (
+      (!!args.contactId && buyerContactId === args.contactId) ||
+      (!!args.memberId && buyerMemberId === args.memberId)
+    );
+  });
+}
+
+export async function findPlanOrderForMember(args: {
+  planId: string;
+  memberId: string;
+  startDate: Date;
+}): Promise<string | null> {
+  for (const status of ["ACTIVE", "PENDING"]) {
+    for (let offset = 0; offset < 1000; offset += 50) {
+      const res = await fetch(
+        `${WIX_API}/pricing-plans/v2/orders?orderStatuses=${status}&limit=50&offset=${offset}`,
+        { headers: headers(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) },
+      );
+      if (!res.ok) throw new Error(`Wix orders list failed (${res.status}): ${await res.text()}`);
+      const data: any = await res.json();
+      for (const order of data?.orders ?? []) {
+        if (order?.planId !== args.planId) continue;
+        const buyerMemberId = String(order?.buyer?.memberId ?? order?.memberId ?? "");
+        if (!buyerMemberId || buyerMemberId !== args.memberId) continue;
+        const orderStart = Date.parse(String(order?.startDate ?? ""));
+        if (
+          Number.isFinite(orderStart) &&
+          Math.abs(orderStart - args.startDate.getTime()) <= 5 * 60 * 1000
+        ) {
+          return String(order.id);
+        }
+      }
+      if (!data?.pagingMetadata?.hasNext) break;
+    }
+  }
+  return null;
+}
+
 export async function listActiveMemberships(contactId: string): Promise<Membership[]> {
   const orders = await listAllActiveOrders();
   return orders
@@ -1260,6 +1499,45 @@ export async function getPlan(planId: string): Promise<WixPlan | null> {
   return plans.find((p) => p.id === planId) ?? null;
 }
 
+export async function getPlanV3(planId: string): Promise<any> {
+  const res = await fetch(
+    `${WIX_API}/pricing-plans/v3/plans/${encodeURIComponent(planId)}`,
+    { headers: headers(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) },
+  );
+  if (!res.ok) throw new Error(`Wix v3 plan get failed (${res.status}): ${await res.text()}`);
+  const data: any = await res.json();
+  return data?.plan ?? data;
+}
+
+export async function updatePlanAvailabilityV3(args: {
+  planId: string;
+  revision: string;
+  visibility: "PUBLIC" | "PRIVATE";
+  buyable: boolean;
+}): Promise<any> {
+  const res = await fetch(
+    `${WIX_API}/pricing-plans/v3/plans/${encodeURIComponent(args.planId)}`,
+    {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({
+        plan: {
+          id: args.planId,
+          revision: args.revision,
+          visibility: args.visibility,
+          buyable: args.buyable,
+        },
+      }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Wix v3 plan availability update failed (${res.status}): ${await res.text()}`);
+  }
+  const data: any = await res.json();
+  return data?.plan ?? data;
+}
+
 /**
  * Activate a plan for a member after an offline (Wave) payment. The offline
  * order API REQUIRES a real Wix member id (a bare contactId → 400
@@ -1292,6 +1570,15 @@ export async function createOfflinePlanOrder(
   return orderId;
 }
 
+export async function postponePlanOrderEndDate(
+  orderId: string,
+  newEndDate: Date,
+): Promise<void> {
+  await wixPatch(`/pricing-plans/v2/orders/${encodeURIComponent(orderId)}`, {
+    endDate: newEndDate.toISOString(),
+  });
+}
+
 /**
  * The latest future end date among a contact's active plans, or null when they
  * have none (or none with a readable future endDate). Used to chain a renewal:
@@ -1308,6 +1595,21 @@ export async function latestPlanEndDate(contactId: string): Promise<string | nul
     if (!Number.isNaN(t) && t > now && (latest === null || t > latest)) latest = t;
   }
   return latest === null ? null : new Date(latest).toISOString();
+}
+
+/** Same chaining helper, but scoped to a specific product family. */
+export async function latestPlanEndDateForPlans(
+  contactId: string,
+  planIds: string[],
+): Promise<string | null> {
+  const allowed = new Set(planIds);
+  const memberships = await listActiveMemberships(contactId);
+  const now = Date.now();
+  const dates = memberships
+    .filter((membership) => allowed.has(membership.planId) && membership.expiresAt)
+    .map((membership) => Date.parse(membership.expiresAt!))
+    .filter((value) => Number.isFinite(value) && value > now);
+  return dates.length ? new Date(Math.max(...dates)).toISOString() : null;
 }
 
 /** Contact → member GUID (offline plan activation via API needs a member id).
@@ -1341,6 +1643,10 @@ export interface EligibleBenefit {
   benefitKey: string;
   memberId: string;
   planName: string;
+  /** Pricing Plans plan id (program definition external id). */
+  planId: string | null;
+  /** Pricing Plans order id (provisioned program external id). */
+  orderId: string | null;
   available: number;
 }
 
@@ -1358,30 +1664,75 @@ export async function findMemberIdByContactId(contactId: string): Promise<string
 }
 
 /**
+ * Create a Wix site member for a contact whose email was just verified by Awa.
+ * Wix sends its own welcome/set-password email; callers must make that explicit
+ * before using this path. A PENDING member can still receive an offline plan.
+ */
+export async function createMember(loginEmail: string): Promise<{ id: string; contactId: string | null }> {
+  const data = await wixPost("/members/v1/members", {
+    member: { loginEmail: loginEmail.trim().toLowerCase() },
+  });
+  const member = data?.member;
+  if (!member?.id) throw new Error(`Wix create member returned no id: ${JSON.stringify(data)}`);
+  return { id: member.id, contactId: member.contactId ?? null };
+}
+
+/**
  * Does one of this contact's active plans cover this service right now
  * (with balance left)? Returns the redeemable benefit, or null.
  */
-export async function findEligibleBenefit(
+export async function findEligibleBenefits(
   serviceId: string,
   contactId: string,
-): Promise<EligibleBenefit | null> {
+  count = 1,
+): Promise<EligibleBenefit[]> {
   const memberId = (await findMemberIdByContactId(contactId)) ?? contactId;
   const data = await wixPost("/benefit-programs/v1/pools/eligible-pools", {
     itemReference: { externalId: serviceId, providerAppId: WIX_BOOKINGS_APP_ID },
-    count: 1,
+    // This is the number of credits the caller intends to consume, NOT a
+    // response-page size. Asking for 20 would remove pools with <20 credits.
+    count: Math.max(1, Math.floor(count)),
     beneficiary: { identityType: "MEMBER", memberId },
     namespace: PRICING_PLANS_NAMESPACE,
   });
-  const benefit = (data?.eligibleBenefits ?? [])[0];
-  if (!benefit?.poolId || !benefit?.benefitKey) return null;
-  return {
-    poolId: benefit.poolId,
-    benefitKey: benefit.benefitKey,
-    memberId,
-    planName:
-      benefit.poolInfo?.displayName ?? benefit.benefitInfo?.displayName ?? "abonnement",
-    available: Number(benefit.poolInfo?.balance?.available ?? 0),
-  };
+  return (data?.eligibleBenefits ?? [])
+    .filter((benefit: any) => benefit?.poolId && benefit?.benefitKey)
+    .map((benefit: any) => ({
+      poolId: benefit.poolId,
+      benefitKey: benefit.benefitKey,
+      memberId,
+      planName:
+        benefit.poolInfo?.displayName ?? benefit.benefitInfo?.displayName ?? "abonnement",
+      planId: benefit.programDefinitionInfo?.externalId
+        ? String(benefit.programDefinitionInfo.externalId)
+        : null,
+      orderId: benefit.programInfo?.externalId ? String(benefit.programInfo.externalId) : null,
+      available: Number(benefit.poolInfo?.balance?.available ?? 0),
+    }));
+}
+
+/**
+ * Fail-closed selection for parallel/same-name plans. A Key flow must pass the
+ * exact order id; plan-only selection is accepted only when it is unambiguous.
+ */
+export function selectEligibleBenefit(
+  benefits: EligibleBenefit[],
+  target: { planId: string; orderId?: string | null },
+): EligibleBenefit | null {
+  const matches = benefits.filter(
+    (benefit) =>
+      benefit.planId === target.planId &&
+      (!target.orderId || benefit.orderId === target.orderId),
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export async function findEligibleBenefit(
+  serviceId: string,
+  contactId: string,
+  count = 1,
+): Promise<EligibleBenefit | null> {
+  return (await findEligibleBenefits(serviceId, contactId, count))[0] ?? null;
 }
 
 /**
@@ -1396,17 +1747,19 @@ export async function planRemainingSessions(
   contactId: string,
   planId: string,
   planName: string,
+  orderId?: string | null,
 ): Promise<number | null> {
   try {
     const services = await listServices();
     const covered = services.find((s) => s.pricingPlanIds.includes(planId));
     if (!covered) return null;
-    const benefit = await findEligibleBenefit(covered.id, contactId);
+    const benefit = selectEligibleBenefit(
+      await findEligibleBenefits(covered.id, contactId),
+      { planId, orderId },
+    );
     if (!benefit) return null;
-    // eligible-pools returns pools for the SERVICE — with several active plans
-    // the first pool may belong to another one. Only trust a name match.
-    const norm = (s: string) => s.trim().toLowerCase();
-    if (norm(benefit.planName) !== norm(planName)) return null;
+    // Name is a secondary guard only. IDs above select the actual plan.
+    if (benefit.planName.trim().toLowerCase() !== planName.trim().toLowerCase()) return null;
     return benefit.available;
   } catch (err) {
     console.error("Plan balance lookup failed (treated as unknown):", err);
@@ -1483,6 +1836,22 @@ export async function cancelBooking(bookingId: string): Promise<void> {
     revision,
     participantNotification: { notifyParticipants: false },
     flowControlSettings: { ignoreCancellationPolicy: true },
+  });
+}
+
+/**
+ * Move a confirmed class booking to another session of the SAME service.
+ * Payment, participant count and booking id stay intact in Wix. The caller
+ * owns the 16h, ownership, service-match and fresh-availability checks.
+ */
+export async function rescheduleBooking(bookingId: string, eventId: string): Promise<void> {
+  const revision = await getBookingRevision(bookingId);
+  await wixPost(`/_api/bookings-service/v2/bookings/${bookingId}/reschedule`, {
+    revision,
+    // For class bookings Wix requires the existing class event id, not a full
+    // appointment slot. This preserves the existing custom/offline payment.
+    slot: { eventId },
+    participantNotification: { notifyParticipants: false },
   });
 }
 

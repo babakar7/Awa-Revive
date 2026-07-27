@@ -58,23 +58,7 @@ export interface PendingBooking {
   wix_order_sync_error: string | null;
   /** Multi-session commitment item this attempt pays for (null = standalone). */
   commitment_item_id: string | null;
-  /** Server-owned commercial campaign marker; never model-controlled. */
   campaign_code: string | null;
-}
-
-export interface CampaignLead {
-  id: string;
-  client_id: string;
-  campaign_key: string;
-  trigger_message_id: string | null;
-  matched_by: "meta_referral" | "message";
-  source_id: string | null;
-  source_type: string | null;
-  source_url: string | null;
-  headline: string | null;
-  ctwa_clid: string | null;
-  created_at: Date;
-  updated_at: Date;
 }
 
 export interface Turn {
@@ -134,6 +118,25 @@ export async function clearAwaDisengaged(clientId: string): Promise<void> {
       where id = $1`,
     [clientId],
   );
+}
+
+export async function recordCampaignLead(args: { clientId: string; campaignKey: string; triggerMessageId: string; matchedBy: "meta_referral" | "message"; sourceId?: string; sourceType?: string; sourceUrl?: string; headline?: string; ctwaClid?: string }): Promise<void> {
+  await pool.query(`insert into campaign_leads (client_id,campaign_key,trigger_message_id,matched_by,source_id,source_type,source_url,headline,ctwa_clid) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (client_id,campaign_key) do update set updated_at=now(), source_id=coalesce(campaign_leads.source_id,excluded.source_id), ctwa_clid=coalesce(campaign_leads.ctwa_clid,excluded.ctwa_clid)`, [args.clientId,args.campaignKey,args.triggerMessageId,args.matchedBy,args.sourceId ?? null,args.sourceType ?? null,args.sourceUrl ?? null,args.headline ?? null,args.ctwaClid ?? null]);
+}
+export async function activeCampaignLead(clientId: string, campaignKey: string): Promise<{ matchedBy: "meta_referral" | "message" } | null> {
+  const r = await pool.query(
+    `select matched_by from campaign_leads l
+      where l.client_id=$1 and l.campaign_key=$2 and l.created_at > now()-interval '14 days'
+        and not exists (
+          select 1 from pending_bookings b
+           where b.client_id=l.client_id and b.campaign_code=l.campaign_key
+             and b.status in ('PAID','BOOKED','REFUND_NEEDED')
+        )
+      limit 1`,
+    [clientId, campaignKey],
+  );
+  const matchedBy = r.rows[0]?.matched_by;
+  return matchedBy === "meta_referral" || matchedBy === "message" ? { matchedBy } : null;
 }
 
 /**
@@ -213,13 +216,31 @@ export async function findClientByPhone(candidates: string[]): Promise<Client | 
  * period; a renewal creates a new Wix order → a fresh claim). Claimed BEFORE
  * sending: a lost nudge is a minor miss, a double nudge is spam.
  */
-export async function claimRenewalNudge(wixOrderId: string, clientId: string): Promise<boolean> {
+export async function claimRenewalNudge(
+  wixOrderId: string,
+  clientId: string | null,
+  kind = "RENEWAL",
+): Promise<boolean> {
   const res = await pool.query(
-    `insert into renewal_nudges (wix_order_id, client_id) values ($1, $2)
+    `insert into renewal_nudges (wix_order_id, client_id, kind, outcome, detail)
+     values ($1, $2, $3, 'FAILED', 'claimed')
      on conflict (wix_order_id) do nothing`,
-    [wixOrderId, clientId],
+    [wixOrderId, clientId, kind],
   );
   return (res.rowCount ?? 0) > 0;
+}
+
+export async function completeRenewalNudge(
+  wixOrderId: string,
+  outcome: "SENT" | "SUPPRESSED" | "FAILED",
+  detail: string,
+): Promise<void> {
+  await pool.query(
+    `update renewal_nudges
+        set outcome=$2, detail=$3, sent_at=now()
+      where wix_order_id=$1`,
+    [wixOrderId, outcome, detail.slice(0, 1000)],
+  );
 }
 
 export async function saveClaimedEmail(clientId: string, email: string): Promise<void> {
@@ -227,72 +248,6 @@ export async function saveClaimedEmail(clientId: string, email: string): Promise
     `update clients set claimed_email = $2, updated_at = now() where id = $1`,
     [clientId, email],
   );
-}
-
-// ---------- campaign attribution / offers ----------
-
-export async function recordCampaignLead(args: {
-  clientId: string;
-  campaignKey: string;
-  triggerMessageId: string;
-  matchedBy: "meta_referral" | "message";
-  sourceId?: string;
-  sourceType?: string;
-  sourceUrl?: string;
-  headline?: string;
-  ctwaClid?: string;
-}): Promise<CampaignLead> {
-  const res = await pool.query(
-    `insert into campaign_leads
-       (client_id, campaign_key, trigger_message_id, matched_by, source_id, source_type, source_url, headline, ctwa_clid)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     on conflict (client_id, campaign_key) do update
-       set trigger_message_id = coalesce(campaign_leads.trigger_message_id, excluded.trigger_message_id),
-           source_id = coalesce(campaign_leads.source_id, excluded.source_id),
-           source_type = coalesce(campaign_leads.source_type, excluded.source_type),
-           source_url = coalesce(campaign_leads.source_url, excluded.source_url),
-           headline = coalesce(campaign_leads.headline, excluded.headline),
-           ctwa_clid = coalesce(campaign_leads.ctwa_clid, excluded.ctwa_clid),
-           updated_at = now()
-     returning *`,
-    [
-      args.clientId,
-      args.campaignKey,
-      args.triggerMessageId,
-      args.matchedBy,
-      args.sourceId ?? null,
-      args.sourceType ?? null,
-      args.sourceUrl ?? null,
-      args.headline ?? null,
-      args.ctwaClid ?? null,
-    ],
-  );
-  return res.rows[0] as CampaignLead;
-}
-
-/**
- * A campaign offer remains usable for 14 days until its first payment reaches
- * a terminal paid state. Expired links are deliberately ignored so a prospect
- * can ask Awa for a fresh 10,000 FCFA link without losing the offer.
- */
-export async function activeCampaignLead(
-  clientId: string,
-  campaignKey: string,
-): Promise<CampaignLead | null> {
-  const res = await pool.query(
-    `select l.*
-       from campaign_leads l
-      where l.client_id = $1 and l.campaign_key = $2
-        and l.created_at > now() - interval '14 days'
-        and not exists (
-          select 1 from pending_bookings b
-           where b.client_id = l.client_id and b.campaign_code = l.campaign_key
-             and b.status in ('PAID', 'BOOKED', 'REFUND_NEEDED')
-        )
-      limit 1`,
-    [clientId, campaignKey],
-  );
-  return (res.rows[0] as CampaignLead | undefined) ?? null;
 }
 
 export async function updateClientLanguage(clientId: string, language: string): Promise<void> {
@@ -307,6 +262,23 @@ export async function updateClientName(clientId: string, name: string): Promise<
     `update clients set name = $2, updated_at = now() where id = $1 and (name is null or name <> $2)`,
     [clientId, name],
   );
+}
+
+/**
+ * Store a WhatsApp display name only as a fallback. Names obtained from a Wix
+ * contact, booking, or admin action are authoritative and must never be
+ * replaced by the informal profile name a person can edit in WhatsApp.
+ * Returns the name that won so callers can keep their in-memory client fresh.
+ */
+export async function setClientNameIfMissing(clientId: string, name: string): Promise<string | null> {
+  const res = await pool.query(
+    `update clients
+        set name = $2, updated_at = now()
+      where id = $1 and nullif(btrim(name), '') is null
+      returning name`,
+    [clientId, name],
+  );
+  return res.rows[0]?.name ?? null;
 }
 
 // ---------- conversations ----------
@@ -429,10 +401,9 @@ export async function createDraftBooking(args: {
   orderNote?: string | null;
   /** Links this attempt to a multi-session commitment item (reversed FK). */
   commitmentItemId?: string | null;
-  /** Optional server-authorized campaign marker for the booked service. */
-  campaignCode?: string | null;
   /** Optional transaction client (e.g. inside the per-client commitment lock). */
   tx?: pg.Pool | pg.PoolClient;
+  campaignCode?: string | null;
 }): Promise<PendingBooking> {
   const db = args.tx ?? pool;
   const res = await db.query(
@@ -966,6 +937,31 @@ export async function markRefundNeeded(bookingId: string): Promise<void> {
   await transition(pool, bookingId, "REFUND_NEEDED");
 }
 
+/** Persist a successful Wix direct reschedule without touching its payment. */
+export async function updateBookedSlot(args: {
+  bookingId: string;
+  clientId: string;
+  eventId: string;
+  slotJson: unknown;
+  slotStart: string;
+  slotEnd: string | null;
+}): Promise<boolean> {
+  const res = await pool.query(
+    `update pending_bookings
+        set event_id=$3, slot_json=$4, slot_start=$5, slot_end=$6, updated_at=now()
+      where id=$1 and client_id=$2 and status='BOOKED' and wix_booking_id is not null`,
+    [
+      args.bookingId,
+      args.clientId,
+      args.eventId,
+      JSON.stringify(args.slotJson),
+      args.slotStart,
+      args.slotEnd,
+    ],
+  );
+  return res.rowCount === 1;
+}
+
 /**
  * Record a membership-paid booking. Inserted directly as BOOKED: the
  * "payment" is the plan credit, redeemed and validated by Wix's checkout
@@ -1051,6 +1047,27 @@ export interface PlanOrder {
   payment_method: string;
   fulfilling_at: Date | null;
   reception_notified_at: Date | null;
+  campaign_code: string | null;
+  service_id: string | null;
+  service_name: string | null;
+  event_id: string | null;
+  slot_json: unknown;
+  slot_start: Date | null;
+  slot_end: Date | null;
+  wix_booking_id: string | null;
+  benefit_transaction_id: string | null;
+  linked_booking_id: string | null;
+  discovery_booking_status: string | null;
+  discovery_booking_error: string | null;
+  is_key: boolean;
+  key_invitation_count: number | null;
+  paid_at: Date | null;
+  continuity_source_kind: "KEY" | "LEGACY_REFORMER" | null;
+  continuity_source_order_id: string | null;
+  continuity_source_plan_id: string | null;
+  continuity_expires_at: Date | null;
+  continuity_remaining: number | null;
+  continuity_alerted_at: Date | null;
 }
 
 /**
@@ -1086,13 +1103,79 @@ export async function createDraftPlanOrder(args: {
   memberId: string | null;
   /** Chained renewal: when the new plan should start (null = immediately). */
   startsAt?: Date | null;
+  campaignCode?: string | null;
+  serviceId?: string | null;
+  serviceName?: string | null;
+  eventId?: string | null;
+  slotJson?: unknown;
+  slotStart?: string | Date | null;
+  slotEnd?: string | Date | null;
+  isKey?: boolean;
+  keyInvitationCount?: number | null;
+  continuitySourceKind?: "KEY" | "LEGACY_REFORMER" | null;
+  continuitySourceOrderId?: string | null;
+  continuitySourcePlanId?: string | null;
+  continuityExpiresAt?: Date | null;
+  continuityRemaining?: number | null;
 }): Promise<PlanOrder> {
+  const campaignCode = args.campaignCode ?? null;
+  const discoveryBookingStatus: string | null =
+    campaignCode === null ? null : "PENDING";
   const res = await pool.query(
-    `insert into pending_plan_orders (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, status)
-     values ($1, $2, $3, $4, $5, $6, 'DRAFT') returning *`,
-    [args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null],
+    `insert into pending_plan_orders
+       (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, campaign_code,
+        service_id, service_name, event_id, slot_json, slot_start, slot_end,
+        discovery_booking_status, is_key, key_invitation_count,
+        continuity_source_kind, continuity_source_order_id,
+        continuity_source_plan_id, continuity_expires_at, continuity_remaining,
+        status)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+             $14, $15, $16, $17, $18, $19, $20, $21, 'DRAFT') returning *`,
+    [
+      args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null,
+      campaignCode, args.serviceId ?? null, args.serviceName ?? null, args.eventId ?? null,
+      args.slotJson === undefined ? null : JSON.stringify(args.slotJson), args.slotStart ?? null, args.slotEnd ?? null,
+      discoveryBookingStatus,
+      args.isKey ?? false,
+      args.keyInvitationCount ?? null,
+      args.continuitySourceKind ?? null,
+      args.continuitySourceOrderId ?? null,
+      args.continuitySourcePlanId ?? null,
+      args.continuityExpiresAt ?? null,
+      args.continuityRemaining ?? null,
+    ],
   );
   return res.rows[0];
+}
+
+export async function finishDiscoveryPlanBooking(args: {
+  planOrderId: string;
+  wixBookingId: string;
+  benefitTransactionId: string | null;
+  bookingId: string;
+}): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set wix_booking_id=$2, benefit_transaction_id=$3, linked_booking_id=$4,
+            discovery_booking_status='BOOKED', discovery_booking_error=null,
+            fulfilling_at=null, updated_at=now()
+      where id=$1`,
+    [args.planOrderId, args.wixBookingId, args.benefitTransactionId, args.bookingId],
+  );
+}
+
+export async function deferDiscoveryPlanBooking(
+  planOrderId: string,
+  status: "SLOT_UNAVAILABLE" | "FAILED",
+  error: string,
+): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set discovery_booking_status=$2, discovery_booking_error=$3,
+            fulfilling_at=null, updated_at=now()
+      where id=$1`,
+    [planOrderId, status, error.slice(0, 800)],
+  );
 }
 
 export async function setPlanOrderAwaitingPayment(
@@ -1110,18 +1193,70 @@ export async function setPlanOrderAwaitingPayment(
   });
 }
 
-export async function markPlanOrderPaid(id: string): Promise<PlanOrder | null> {
+export async function markPlanOrderPaid(
+  id: string,
+  paidAt = new Date(),
+): Promise<PlanOrder | null> {
   // DRAFT included: verified payment can land before setAwaitingPayment
   // (crash between session create and AWAITING). Same money-first rule as bookings.
-  return transitionPlanOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED", "DRAFT"]);
+  return transitionPlanOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED", "DRAFT"], {
+    paid_at: paidAt,
+  });
+}
+
+export async function finalizePaidKeyContinuity(args: {
+  id: string;
+  startsAt: Date;
+  invitationCount: number;
+  sourceKind?: "KEY" | "LEGACY_REFORMER" | null;
+  sourceOrderId?: string | null;
+  sourcePlanId?: string | null;
+  sourceExpiresAt?: Date | null;
+  sourceRemaining?: number | null;
+}): Promise<PlanOrder | null> {
+  const res = await pool.query(
+    `update pending_plan_orders
+        set starts_at=$2, key_invitation_count=$3,
+            continuity_source_kind=$4, continuity_source_order_id=$5,
+            continuity_source_plan_id=$6, continuity_expires_at=$7,
+            continuity_remaining=$8, updated_at=now()
+      where id=$1 and status in ('PAID','SCHEDULED')
+      returning *`,
+    [
+      args.id,
+      args.startsAt,
+      args.invitationCount,
+      args.sourceKind ?? null,
+      args.sourceOrderId ?? null,
+      args.sourcePlanId ?? null,
+      args.sourceExpiresAt ?? null,
+      args.sourceRemaining ?? null,
+    ],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function markPlanContinuityAlerted(id: string): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set continuity_alerted_at=coalesce(continuity_alerted_at,now()), updated_at=now()
+      where id=$1`,
+    [id],
+  );
 }
 
 export async function markPlanOrderActivated(
   id: string,
   wixOrderId: string,
 ): Promise<PlanOrder | null> {
-  return transitionPlanOrder(id, "ACTIVATED", ["PAID"], {
+  return transitionPlanOrder(id, "ACTIVATED", ["PAID", "SCHEDULED"], {
     wix_order_id: wixOrderId,
+    fulfilling_at: null,
+  });
+}
+
+export async function markPlanOrderScheduled(id: string): Promise<PlanOrder | null> {
+  return transitionPlanOrder(id, "SCHEDULED", ["PAID"], {
     fulfilling_at: null,
   });
 }
@@ -1139,10 +1274,11 @@ export async function claimPlanOrderForFulfillment(id: string): Promise<PlanOrde
   const res = await pool.query(
     `update pending_plan_orders
         set fulfilling_at = now(), updated_at = now()
-      where id = $1 and status = 'PAID'
+      where id = $1
         and (
-          (member_id is not null and wix_order_id is null)
-          or (reception_notified_at is null)
+          (status = 'PAID' and ((member_id is not null and wix_order_id is null) or reception_notified_at is null))
+          or (status = 'SCHEDULED' and starts_at <= now() and member_id is not null and wix_order_id is null)
+          or (status = 'ACTIVATED' and campaign_code is not null and discovery_booking_status = 'PENDING')
         )
         and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
       returning *`,
@@ -1174,10 +1310,10 @@ export async function stuckPaidPlanOrders(
 ): Promise<PlanOrder[]> {
   const res = await pool.query(
     `select * from pending_plan_orders
-      where status = 'PAID'
-        and (
-          (member_id is not null and wix_order_id is null)
-          or reception_notified_at is null
+      where (
+          (status = 'PAID' and ((member_id is not null and wix_order_id is null) or reception_notified_at is null))
+          or (status = 'SCHEDULED' and starts_at <= now() and member_id is not null and wix_order_id is null)
+          or (status = 'ACTIVATED' and campaign_code is not null and discovery_booking_status = 'PENDING')
         )
         and updated_at < now() - make_interval(mins => $1)
         and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
@@ -1217,6 +1353,16 @@ export async function activeAwaitingPlanOrder(clientId: string): Promise<PlanOrd
     [clientId],
   );
   return res.rows[0] ?? null;
+}
+
+export async function hasScheduledKeyOrder(clientId: string): Promise<boolean> {
+  const result = await pool.query(
+    `select 1 from pending_plan_orders
+      where client_id=$1 and is_key and status='SCHEDULED' and starts_at > now()
+      limit 1`,
+    [clientId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // ---------- bar-only orders (menu order alongside a membership booking) ----------
@@ -1534,6 +1680,20 @@ export async function recordHandoff(clientId: string, reason: string): Promise<v
     allowCreateJourney: false,
     metadata: { reason_category: reason.split(":", 1)[0]?.slice(0, 80) || "unspecified" },
   }).catch((error) => console.error("Failed to record booking handoff funnel event:", error));
+}
+
+export async function recordSystemAudit(
+  action: string,
+  targetType: string,
+  targetId: string,
+  detail: Record<string, unknown> = {},
+): Promise<void> {
+  await pool.query(
+    `insert into admin_audit_log
+       (admin_user, admin_role, action, target_type, target_id, detail_json)
+     values ('awa-system','admin',$1,$2,$3,$4::jsonb)`,
+    [action, targetType, targetId, JSON.stringify(detail)],
+  );
 }
 
 /**

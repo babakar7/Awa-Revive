@@ -1,5 +1,10 @@
 import { config } from "../config.js";
-import { type CafeMenuItem, formatExtrasMultiline, formatExtrasOneLine } from "../lib/cafeMenu.js";
+import {
+  type CafeMenuItem,
+  formatExtrasMultiline,
+  formatExtrasOneLine,
+  menuOptionGroups,
+} from "../lib/cafeMenu.js";
 import {
   orderItems,
   type ClosedDeliveryOrder,
@@ -104,14 +109,17 @@ function scheduledEditor(o: DeliveryOrder): string {
             60000,
         )
       : 60;
+  const presetLead = [30, 60, 90].includes(lead);
   return `<form method="post" action="${esc(base)}/reschedule" class="delivery-secondary-form">
   <b>Reprogrammer</b>
   <label>Nouvelle arrivée (Dakar)<input name="scheduled_for" type="datetime-local" required value="${esc(arrival)}"></label>
   <label>Alerter la cuisine
     <select name="kitchen_lead_minutes">
       ${[30, 60, 90].map((n) => `<option value="${n}"${lead === n ? " selected" : ""}>${n} min avant</option>`).join("")}
+      <option value="custom"${presetLead ? "" : " selected"}>Autre délai…</option>
     </select>
   </label>
+  <label>Délai personnalisé <span class="muted">(1 à 90 min avant)</span><input name="kitchen_lead_custom" type="number" min="1" max="90" step="1" inputmode="numeric" value="${presetLead ? "" : esc(lead)}" placeholder="Ex. 45"></label>
   <button class="act act--sm act--ghost" type="submit">Enregistrer le nouvel horaire</button>
 </form>`;
 }
@@ -529,6 +537,7 @@ export interface LivraisonPrefill {
   delivery_mode?: string;
   scheduled_for?: string;
   kitchen_lead_minutes?: string;
+  kitchen_lead_custom?: string;
   is_test?: string;
   qty?: Record<string, number>;
   choice?: Record<string, string>;
@@ -552,6 +561,7 @@ export function renderLivraisonForm(
     "recipient_phone",
     "articles",
     "scheduled_for",
+    "kitchen_lead_minutes",
   ];
   const firstError = errorOrder.find((name) => errors[name]);
   const fieldError = (name: string) =>
@@ -570,16 +580,18 @@ export function renderLivraisonForm(
         .map((it) => {
           const n = Math.max(0, Math.min(10, qty[it.id] ?? 0));
           if (n > 0) catHasQty = true;
-          const choices = it.optionChoices ?? [];
-          const picked = choicePick[it.id] ?? "";
-          const optionSelect = choices.length
-            ? `<select name="choice_${esc(it.id)}" class="liv-choice" style="margin-top:.4rem;width:100%${n > 0 ? "" : ";display:none"}"><option value="">— ${esc(it.optionLabel || "Choix")} (à préciser) —</option>${choices
+          const optionSelect = menuOptionGroups(it)
+            .map((group, groupIndex) => {
+              const fieldKey = groupIndex === 0 ? it.id : `${it.id}__${groupIndex}`;
+              const picked = choicePick[fieldKey] ?? "";
+              return `<label class="liv-choice-wrap" style="flex-basis:100%;${n > 0 ? "" : "display:none"}"><span>${esc(group.label)}</span><select name="choice_${esc(fieldKey)}" class="liv-choice" style="${n > 0 ? "" : "display:none"}"><option value="">— Réponse à préciser —</option>${group.choices
                 .map(
-                  (c) =>
-                    `<option value="${esc(c)}"${c === picked ? " selected" : ""}>${esc(c)}</option>`,
+                  (choice) =>
+                    `<option value="${esc(choice)}"${choice === picked ? " selected" : ""}>${esc(choice)}</option>`,
                 )
-                .join("")}</select>`
-            : "";
+                .join("")}</select></label>`;
+            })
+            .join("");
           const haystack = esc(normalizeSearch(`${it.name} ${cat} ${it.id}`));
           return `<div class="liv-item${n > 0 ? " on" : ""}" data-search="${haystack}" style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;padding:.55rem .2rem;border-top:1px solid var(--border-soft)">
 <span style="flex:1;min-width:9rem">${esc(it.name)} <span class="muted">— ${esc(it.priceXof)} F</span></span>
@@ -616,9 +628,12 @@ ${optionSelect}</div>`;
     : "";
   const sla = prefill.sla_minutes ?? String(config.DELIVERY_SLA_MINUTES);
   const deliveryMode = prefill.delivery_mode === "scheduled" ? "scheduled" : "now";
-  const kitchenLead = [30, 60, 90].includes(Number(prefill.kitchen_lead_minutes))
-    ? Number(prefill.kitchen_lead_minutes)
-    : 60;
+  const submittedLead = String(prefill.kitchen_lead_minutes ?? "60");
+  const presetLead = [30, 60, 90].includes(Number(submittedLead));
+  const kitchenLead = presetLead ? Number(submittedLead) : "custom";
+  const customKitchenLead =
+    prefill.kitchen_lead_custom ??
+    (submittedLead !== "custom" && !presetLead ? submittedLead : "");
   const scheduleMin = dakarInputValue(new Date(Date.now() + 60_000));
   const hasWixClient = !!prefill.wix_contact_id;
   const hasRecipient = !!(prefill.recipient_name || prefill.recipient_phone);
@@ -630,7 +645,7 @@ ${optionSelect}</div>`;
 .liv-wix-result{display:block;width:100%;text-align:left;white-space:normal}
 .liv-wix-result small{display:block;margin-top:.15rem;font-weight:400}
 .delivery-selected-client{display:flex;align-items:center;justify-content:space-between;gap:.7rem;margin-top:.65rem;padding:.7rem;border:1px solid var(--brand-border);border-radius:10px;background:var(--brand-soft)}.delivery-selected-client p{margin:0}.delivery-manual{margin-top:.8rem}.delivery-manual>summary{min-height:44px;display:flex;align-items:center;color:var(--brand);font-weight:650}.delivery-manual-grid{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}.delivery-manual-grid .wide{grid-column:1/-1}
-.liv-item.on{background:var(--brand-soft);border-radius:8px}.liv-item.on>span:first-child{font-weight:650}.liv-stepper .act{min-width:44px;min-height:44px!important}.liv-choice{flex-basis:100%}.liv-cat>summary{min-height:44px;display:flex;align-items:center}
+.liv-item.on{background:var(--brand-soft);border-radius:8px}.liv-item.on>span:first-child{font-weight:650}.liv-stepper .act{min-width:44px;min-height:44px!important}.liv-choice-wrap{display:grid;gap:.25rem;margin-top:.35rem}.liv-choice-wrap>span{font-size:.78rem;font-weight:650;color:var(--ink-600)}.liv-choice{width:100%;margin:0}.liv-cat>summary{min-height:44px;display:flex;align-items:center}
 .liv-optional-fields[hidden]{display:none}.field-error{display:block;margin-top:.3rem;color:var(--danger);font-size:.82rem;font-weight:650}.delivery-article-error{margin:.5rem 0;padding:.6rem .7rem;border-radius:9px;background:var(--danger-bg);color:var(--danger)}
 .delivery-mode-options{display:grid;grid-template-columns:1fr 1fr;gap:.65rem}.delivery-radio{display:flex;align-items:center;gap:.55rem;min-height:48px;padding:.65rem;border:1px solid var(--border);border-radius:10px;background:var(--cream-25)}.delivery-radio:has(input:checked){border-color:var(--brand);background:var(--brand-soft)}
 .delivery-advanced{margin-top:.8rem}.delivery-advanced>summary{min-height:44px;display:flex;align-items:center;color:var(--brand);font-weight:650}.delivery-advanced-body{display:grid;gap:.8rem;padding-top:.65rem}
@@ -700,7 +715,12 @@ ${optionSelect}</div>`;
         <label>Alerter la cuisine
           <select name="kitchen_lead_minutes">
             ${[30, 60, 90].map((n) => `<option value="${n}"${kitchenLead === n ? " selected" : ""}>${n} minutes avant l'arrivée</option>`).join("")}
+            <option value="custom"${kitchenLead === "custom" ? " selected" : ""}>Autre délai à renseigner manuellement…</option>
           </select>
+        </label>
+        <label>Délai personnalisé <span class="muted">(1 à 90 minutes avant l’arrivée)</span>
+          <input name="kitchen_lead_custom" type="number" min="1" max="90" step="1" inputmode="numeric" value="${esc(customKitchenLead)}" placeholder="Ex. 45"${fieldState("kitchen_lead_minutes")}>
+          ${fieldError("kitchen_lead_minutes")}
         </label>
         <span class="muted">Si ce délai est déjà atteint, la commande sera activée immédiatement.</span>
       </div>
@@ -863,8 +883,10 @@ ${optionSelect}</div>`;
       var row=i.closest('.liv-item');
       if(row){
         row.classList.toggle('on',q>0);
-        var sel=row.querySelector('.liv-choice');
-        if(sel){sel.style.display=q>0?'':'none';sel.required=q>0;if(q>0&&!sel.value)missing++;}
+        row.querySelectorAll('.liv-choice-wrap').forEach(function(wrap){
+          var sel=wrap.querySelector('.liv-choice');
+          wrap.style.display=q>0?'':'none';sel.style.display=q>0?'':'none';sel.required=q>0;if(q>0&&!sel.value)missing++;
+        });
       }
     });
     document.getElementById('livtotal').textContent=t.toLocaleString('fr-FR');

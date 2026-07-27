@@ -16,18 +16,26 @@ import pg from "pg";
  * computed with these same dummy secrets. No real service is ever contacted.
  */
 
-const CONTAINER = "resabot-integration-pg";
+// Per-PID name so parallel integration runs (several agents / worktrees at
+// once) each own a distinct container instead of racing on one fixed name.
+const CONTAINER = `resabot-integration-pg-${process.pid}`;
+const LABEL = "resabot-integration=1";
 
 export async function setup(): Promise<void> {
-  // Remove any leftover from a crashed previous run.
+  // Sweep only EXITED leftovers from crashed runs. Label-scoped and
+  // status-filtered so a container from a concurrent live run is never killed
+  // (the host port is already randomized, so a stray orphan is otherwise inert).
   try {
-    execSync(`docker rm -f ${CONTAINER}`, { stdio: "ignore" });
+    execSync(
+      `docker ps -aq --filter label=${LABEL} --filter status=exited | xargs docker rm -f`,
+      { stdio: "ignore", shell: "/bin/bash" },
+    );
   } catch {
-    /* not running — fine */
+    /* nothing to sweep — fine */
   }
 
   execSync(
-    `docker run -d --name ${CONTAINER} ` +
+    `docker run -d --name ${CONTAINER} --label ${LABEL} ` +
       `-e POSTGRES_PASSWORD=test -e POSTGRES_DB=resabot_test ` +
       `-p 127.0.0.1:0:5432 postgres:16-alpine`,
     { stdio: "ignore" },

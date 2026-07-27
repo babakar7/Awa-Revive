@@ -239,7 +239,10 @@ export const CUISINE_APP_JS = String.raw`(function(){
     if(t.subheading) c.appendChild(el('div','sub',t.subheading));
     var ul=el('ul','items');
     (t.items||[]).forEach(function(l){ var li=el('li'); li.appendChild(el('span','q',l.qty+'× '));
-      li.appendChild(document.createTextNode(l.name+(l.choice?' ('+l.choice+')':''))); ul.appendChild(li); });
+      var picked=Array.isArray(l.selections)&&l.selections.length>1
+        ? l.selections.map(function(s){return s.label+' : '+s.value;}).join(' · ')
+        : l.choice||'';
+      li.appendChild(document.createTextNode(l.name+(picked?' ('+picked+')':''))); ul.appendChild(li); });
     c.appendChild(ul);
     if(t.note) c.appendChild(el('div','note','📝 '+t.note));
     if(t.status==='READY'){ c.appendChild(el('span','pill ready','Prête — à récupérer')); }

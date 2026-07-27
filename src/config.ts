@@ -163,24 +163,53 @@ export const config = {
   // A message counts as a NEW conversation when the client had no activity in
   // the last N hours (so a back-and-forth within one session pings only once).
   NEW_CHAT_NOTIFY_GAP_HOURS: parseInt(optional("NEW_CHAT_NOTIFY_GAP_HOURS", "6"), 10),
-  // Click-to-WhatsApp Pack Découverte campaign. source IDs are the Meta ad IDs
-  // separated by commas; text matching remains the fallback when Meta omits a
-  // referral object. Service IDs are optional: when unset, any service whose
-  // name contains "Reformer" is eligible for the campaign's first session.
-  PACK_DISCOVERY_META_SOURCE_IDS: optional("PACK_DISCOVERY_META_SOURCE_IDS", "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean),
-  PACK_DISCOVERY_SERVICE_IDS: optional("PACK_DISCOVERY_SERVICE_IDS", "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean),
-  // Hidden two-credit continuation plans used only by reception at the studio.
-  // They must never be exposed by Awa's catalogue or payment-link tools.
-  PACK_DISCOVERY_CONTINUATION_PLAN_IDS: optional("PACK_DISCOVERY_CONTINUATION_PLAN_IDS", "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean),
+  PACK_DISCOVERY_META_SOURCE_IDS: optional("PACK_DISCOVERY_META_SOURCE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  PACK_DISCOVERY_SERVICE_IDS: optional("PACK_DISCOVERY_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  // First 10,000 FCFA / one-session plan for Meta Pack Découverte leads. Empty
+  // leaves the existing direct-booking campaign flow in place until rollout.
+  PACK_DISCOVERY_STEP1_PLAN_ID: optional("PACK_DISCOVERY_STEP1_PLAN_ID", ""),
+  PACK_DISCOVERY_CONTINUATION_PLAN_IDS: optional("PACK_DISCOVERY_CONTINUATION_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  // Explicit boundary for plans Awa may expose and sell. Wix `public:false`
+  // only hides a plan from the website and is not an internal-plan marker.
+  // Empty is tolerated outside production for local/unit tests; production
+  // refuses to boot without an allowlist.
+  AWA_SELLABLE_PLAN_IDS: optional("AWA_SELLABLE_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  // Clés de la Maison. Sales are governed separately by
+  // AWA_SELLABLE_PLAN_IDS; this switch controls provisioning/lifecycle only.
+  KEYS_AUTOMATION_ENABLED: optional("KEYS_AUTOMATION_ENABLED", "false") === "true",
+  INVITEE_PLAN_ID: optional("INVITEE_PLAN_ID", ""),
+  INVITEE_BONUS_PLAN_ID: optional("INVITEE_BONUS_PLAN_ID", ""),
+  HABITUEE_PLAN_ID: optional("HABITUEE_PLAN_ID", ""),
+  HABITUEE_BONUS_PLAN_ID: optional("HABITUEE_BONUS_PLAN_ID", ""),
+  RESIDENTE_PLAN_ID: optional("RESIDENTE_PLAN_ID", ""),
+  RESIDENTE_BONUS_PLAN_ID: optional("RESIDENTE_BONUS_PLAN_ID", ""),
+  INVITATION_PLAN_ID: optional("INVITATION_PLAN_ID", ""),
+  KEY_REFORMER_SERVICE_IDS: optional("KEY_REFORMER_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  KEY_BONUS_SERVICE_IDS: optional("KEY_BONUS_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  LEGACY_REFORMER_PLAN_IDS: optional("LEGACY_REFORMER_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  // Both the retired full Pack Découverte and the new L'Invitée count toward
+  // the once-per-person discovery entitlement.
+  INVITEE_HISTORY_PLAN_IDS: optional("INVITEE_HISTORY_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  INVITATION_SLOT_HOUR: parseInt(optional("INVITATION_SLOT_HOUR", "12"), 10),
+  INVITATION_SLOT_MINUTE: parseInt(optional("INVITATION_SLOT_MINUTE", "30"), 10),
+  // Clés lifecycle templates. Each feature stays dark until its exact Meta
+  // template name is configured; language codes must match Meta approval.
+  WA_KEY_INVITEE_J5_TEMPLATE: optional("WA_KEY_INVITEE_J5_TEMPLATE", ""),
+  WA_KEY_INVITEE_J5_TEMPLATE_LANG: optional("WA_KEY_INVITEE_J5_TEMPLATE_LANG", "fr"),
+  WA_KEY_THIRD_SESSION_TEMPLATE: optional("WA_KEY_THIRD_SESSION_TEMPLATE", ""),
+  WA_KEY_THIRD_SESSION_TEMPLATE_LANG: optional("WA_KEY_THIRD_SESSION_TEMPLATE_LANG", "fr"),
+  WA_KEY_MEMBER_J5_TEMPLATE: optional("WA_KEY_MEMBER_J5_TEMPLATE", ""),
+  WA_KEY_MEMBER_J5_TEMPLATE_LANG: optional("WA_KEY_MEMBER_J5_TEMPLATE_LANG", "fr"),
+  WA_KEY_FINISHED_TEMPLATE: optional("WA_KEY_FINISHED_TEMPLATE", ""),
+  WA_KEY_FINISHED_TEMPLATE_LANG: optional("WA_KEY_FINISHED_TEMPLATE_LANG", "fr"),
+  // J-5 conversion of a legacy Reformer subscriber to a Key. Kept separate
+  // from WA_RENEWAL_TEMPLATE because closed legacy plans must not be renewed.
+  WA_LEGACY_KEY_CONVERSION_TEMPLATE: optional("WA_LEGACY_KEY_CONVERSION_TEMPLATE", ""),
+  WA_LEGACY_KEY_CONVERSION_TEMPLATE_LANG: optional("WA_LEGACY_KEY_CONVERSION_TEMPLATE_LANG", "fr"),
+  // Wix in-site backend forwards Order Purchased as JSON over HTTPS with this
+  // shared secret. Native Wix RS256 JWTs remain supported as a fallback.
+  WIX_WEBHOOK_SHARED_SECRET: optional("WIX_WEBHOOK_SHARED_SECRET", ""),
+  WIX_WEBHOOK_PUBLIC_KEY: optional("WIX_WEBHOOK_PUBLIC_KEY", ""),
   // Guarded admin-to-client messaging. Keep false until takeover behavior has
   // been verified in production with the Meta number.
   ADMIN_HUMAN_REPLY_ENABLED: optional("ADMIN_HUMAN_REPLY_ENABLED", "false") === "true",
@@ -209,6 +238,31 @@ export const config = {
  * surface once, clearly, instead of as scattered runtime failures.
  */
 export function assertConfig(): void {
+  if (process.env.NODE_ENV === "production" && config.AWA_SELLABLE_PLAN_IDS.length === 0) {
+    missing.push("AWA_SELLABLE_PLAN_IDS");
+  }
+  if (config.KEYS_AUTOMATION_ENABLED) {
+    const keyConfig: Array<[string, unknown]> = [
+      ["INVITEE_PLAN_ID", config.INVITEE_PLAN_ID],
+      ["INVITEE_BONUS_PLAN_ID", config.INVITEE_BONUS_PLAN_ID],
+      ["HABITUEE_PLAN_ID", config.HABITUEE_PLAN_ID],
+      ["HABITUEE_BONUS_PLAN_ID", config.HABITUEE_BONUS_PLAN_ID],
+      ["RESIDENTE_PLAN_ID", config.RESIDENTE_PLAN_ID],
+      ["RESIDENTE_BONUS_PLAN_ID", config.RESIDENTE_BONUS_PLAN_ID],
+      ["INVITATION_PLAN_ID", config.INVITATION_PLAN_ID],
+      ["KEY_REFORMER_SERVICE_IDS", config.KEY_REFORMER_SERVICE_IDS.length],
+      ["KEY_BONUS_SERVICE_IDS", config.KEY_BONUS_SERVICE_IDS.length],
+      ["LEGACY_REFORMER_PLAN_IDS", config.LEGACY_REFORMER_PLAN_IDS.length],
+      ["INVITEE_HISTORY_PLAN_IDS", config.INVITEE_HISTORY_PLAN_IDS.length],
+      [
+        "WIX_WEBHOOK_AUTH",
+        config.WIX_WEBHOOK_SHARED_SECRET.length >= 32 || Boolean(config.WIX_WEBHOOK_PUBLIC_KEY),
+      ],
+    ];
+    for (const [name, value] of keyConfig) {
+      if (!value) missing.push(name);
+    }
+  }
   if (missing.length > 0) {
     throw new Error(
       `Missing required environment variables:\n  - ${missing.join("\n  - ")}\n` +

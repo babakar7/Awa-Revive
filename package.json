@@ -15,6 +15,11 @@
     "migrate": "tsx src/db/migrate.ts",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "agent:new": "scripts/agent-worktree.sh new",
+    "agent:start": "scripts/codex-agent.sh",
+    "agent:ship": "scripts/agent-worktree.sh ship",
+    "agent:done": "scripts/agent-worktree.sh done",
+    "agent:list": "scripts/agent-worktree.sh list",
     "simulate:wave": "tsx scripts/simulate-wave-webhook.ts",
     "om:create-link": "tsx scripts/create-om-link.ts",
     "refund:done": "tsx scripts/mark-refunded.ts",
@@ -25,7 +30,8 @@
     "crm:merge": "tsx scripts/merge-duplicates.ts",
     "crm:backfill-names": "tsx scripts/backfill-client-names.ts",
     "wix:probe-member": "tsx scripts/probe-create-member.ts",
-    "wix:probe-contact-plan": "tsx scripts/probe-contact-plan.ts"
+    "wix:probe-contact-plan": "tsx scripts/probe-contact-plan.ts",
+    "wix:probe-plan-closure": "tsx scripts/probe-wix-plan-closure.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
