@@ -24,6 +24,7 @@ import {
   cancelTableTicket,
   setTicketUrgent,
   kitchenTicketView,
+  ticketStatsToday,
   ticketsForSession,
   listOpenKitchenTickets,
   claimStaleServeEscalations,
@@ -197,6 +198,19 @@ describe("createTableTicket", () => {
     await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
     await serveTableTicket(t.id, "Fatou"); // → COMPLETED, leaves the board
     expect(await setTicketUrgent(t.id, true, "Fatou")).toBeNull();
+  });
+
+  it("ticketStatsToday aggregates today's counts + average prep (owner KPIs)", async () => {
+    const s = await seat(canapeSpot);
+    const a = await makeTableTicket(s.id, s.short_code);
+    const b = await makeTableTicket(s.id, s.short_code);
+    await setTicketUrgent(b.id, true, "Fatou");
+    await advanceTicketByCuisine(a.id, "READY", "iPad Cuisine"); // stamps ready_at → avg prep
+    const stats = await ticketStatsToday();
+    expect(stats.totalToday).toBeGreaterThanOrEqual(2);
+    expect(stats.urgentToday).toBeGreaterThanOrEqual(1);
+    expect(stats.inProgress).toBeGreaterThanOrEqual(1);
+    expect(stats.avgPrepSecs).not.toBeNull();
   });
 });
 

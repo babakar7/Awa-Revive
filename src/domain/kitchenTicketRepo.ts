@@ -604,6 +604,34 @@ export async function getKitchenTicket(id: string): Promise<KitchenTicket | null
   return (res.rows[0] as KitchenTicket) ?? null;
 }
 
+/** Owner supervision KPIs (indicative — the POS remains the ledger). Today's
+ *  counts + average prep time. Dakar is UTC+0 so the server `current_date`
+ *  matches the local day. `avgPrepSecs` is null before any ticket is READY. */
+export interface TicketStatsToday {
+  totalToday: number;
+  urgentToday: number;
+  inProgress: number;
+  avgPrepSecs: number | null;
+}
+export async function ticketStatsToday(): Promise<TicketStatsToday> {
+  const res = await pool.query(
+    `select
+       count(*) filter (where created_at::date = current_date)                          as total_today,
+       count(*) filter (where created_at::date = current_date and urgent_at is not null) as urgent_today,
+       count(*) filter (where status in ('NEW','PREPARING','READY'))                     as in_progress,
+       avg(extract(epoch from (ready_at - created_at)))
+         filter (where ready_at is not null and created_at::date = current_date)         as avg_prep_secs
+     from kitchen_tickets`,
+  );
+  const r = res.rows[0] ?? {};
+  return {
+    totalToday: Number(r.total_today ?? 0),
+    urgentToday: Number(r.urgent_today ?? 0),
+    inProgress: Number(r.in_progress ?? 0),
+    avgPrepSecs: r.avg_prep_secs == null ? null : Number(r.avg_prep_secs),
+  };
+}
+
 export async function ticketByDeliveryOrder(orderId: string): Promise<KitchenTicket | null> {
   if (!UUID_RE.test(String(orderId))) return null;
   const res = await pool.query(

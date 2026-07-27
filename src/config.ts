@@ -72,6 +72,7 @@ export const config = {
   // tous pointant sur ce même service Railway.
   CUISINE_HOST: optional("CUISINE_HOST", "cuisine.revive.sn"),
   SERVICE_HOST: optional("SERVICE_HOST", "service.revive.sn"),
+  OWNER_HOST: optional("OWNER_HOST", "owner.revive.sn"),
   // Deux modes du canal WhatsApp interne cuisine :
   //  - parallel (pilote) : le ticket WhatsApp part SYSTÉMATIQUEMENT, en plus de
   //    l'iPad, pour comparer les deux canaux.

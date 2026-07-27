@@ -6,6 +6,7 @@ import {
   provisionDevAccueilDevice,
   redeemPairing,
   verifyDeviceSession,
+  listOpsDevices,
   type OpsDevice,
 } from "../domain/opsDeviceRepo.js";
 import {
@@ -18,6 +19,7 @@ import {
   serveTableTicket,
   cancelTableTicket,
   setTicketUrgent,
+  ticketStatsToday,
   ticketsForSession,
 } from "../domain/kitchenTicketRepo.js";
 import { onOpsEvent, opsEventsSince, latestOpsEventId, type OpsEvent } from "../domain/opsEvents.js";
@@ -60,6 +62,14 @@ import {
   servicePairingPage,
   hardenService,
 } from "./opsServicePage.js";
+import {
+  OWNER_APP_JS,
+  OWNER_MANIFEST,
+  OWNER_SW,
+  ownerBoardPage,
+  ownerPairingPage,
+  hardenOwner,
+} from "./opsOwnerPage.js";
 
 /**
  * Realtime ops surface (Phase 1: the cuisine iPad at cuisine.revive.sn). All
@@ -231,6 +241,7 @@ export function registerOps(app: FastifyInstance): void {
   });
 
   registerServiceRoutes(app);
+  registerOwnerRoutes(app);
 }
 
 /**
@@ -562,5 +573,107 @@ function registerServiceRoutes(app: FastifyInstance): void {
     const device = await deviceFromReq(req, "accueil");
     if (!device) return reply.code(401).send({ error: "unpaired" });
     return pipeOpsEvents(req, reply, ACCUEIL_CHANNEL);
+  });
+}
+
+// ═══ Owner supervision PWA (/ops/owner, role "owner") — READ-ONLY ═══
+// A manager overview: today's KPIs, device status, and every live ticket (both
+// sources), urgents first. No mutations. Subscribes to the cuisine channel (which
+// already carries all tickets) and exposes /stats for the aggregates.
+const OWNER_BASE = "/ops/owner";
+
+async function ownerBootData(): Promise<unknown> {
+  const [tickets, cursor, stats, devices] = await Promise.all([
+    listOpenKitchenTickets(),
+    latestOpsEventId(CUISINE_CHANNEL),
+    ticketStatsToday(),
+    listOpsDevices(),
+  ]);
+  return { cursor, tickets: tickets.map(kitchenTicketView), stats, devices };
+}
+
+async function serveOwnerHome(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+  hardenOwner(reply);
+  const device = await deviceFromReq(req, "owner");
+  reply.type("text/html");
+  if (!device) return reply.send(ownerPairingPage());
+  return reply.send(ownerBoardPage(JSON.stringify(await ownerBootData())));
+}
+
+/** Host-aware redirect for owner.revive.sn "/" → the PWA scope. */
+export async function serveOwnerRoot(_req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+  return reply.redirect(`${OWNER_BASE}/`, 302);
+}
+
+function registerOwnerRoutes(app: FastifyInstance): void {
+  app.get(`${OWNER_BASE}/manifest.webmanifest`, async (_req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return reply.type("application/manifest+json").send(OWNER_MANIFEST);
+  });
+  app.get(`${OWNER_BASE}/sw.js`, async (_req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    reply.header("Service-Worker-Allowed", `${OWNER_BASE}/`);
+    return reply.type("text/javascript").send(OWNER_SW);
+  });
+  app.get(`${OWNER_BASE}/app.js`, async (_req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return reply.type("text/javascript").send(OWNER_APP_JS);
+  });
+  app.get(`${OWNER_BASE}/icon-192.png`, async (_req, reply) => {
+    if (!icon192) icon192 = renderOpsIcon(192);
+    reply.header("Cache-Control", "public, max-age=86400");
+    return reply.type("image/png").send(icon192);
+  });
+  app.get(`${OWNER_BASE}/icon-512.png`, async (_req, reply) => {
+    if (!icon512) icon512 = renderOpsIcon(512);
+    reply.header("Cache-Control", "public, max-age=86400");
+    return reply.type("image/png").send(icon512);
+  });
+
+  app.get(`${OWNER_BASE}/`, serveOwnerHome);
+  app.get(`${OWNER_BASE}`, async (_req, reply) => reply.redirect(`${OWNER_BASE}/`, 302));
+
+  app.post(`${OWNER_BASE}/pair`, async (req, reply) => {
+    hardenOwner(reply);
+    const code = normalizePairCode((req.body as any)?.code ?? "");
+    if (!code) {
+      reply.type("text/html");
+      return reply.code(400).send(ownerPairingPage("Code manquant."));
+    }
+    const token = newOpsToken();
+    const device = await redeemPairing(hashOpsToken(code), hashOpsToken(token));
+    if (!device) {
+      reply.type("text/html");
+      return reply.code(400).send(ownerPairingPage("Code invalide ou expiré. Regénérez-en un dans l'administration."));
+    }
+    reply.header("Set-Cookie", opsCookieHeader(token));
+    return reply.redirect(`${OWNER_BASE}/`, 303);
+  });
+
+  app.post(`${OWNER_BASE}/unpair`, async (_req, reply) => {
+    reply.header("Set-Cookie", clearOpsCookieHeader());
+    return reply.redirect(`${OWNER_BASE}/`, 303);
+  });
+
+  // Read-only refresh of the whole board (self-heal a stale cached page).
+  app.get(`${OWNER_BASE}/state`, async (req, reply) => {
+    const device = await deviceFromReq(req, "owner");
+    if (!device) return reply.code(401).type("application/json").send({ error: "unpaired" });
+    return reply.type("application/json").send(await ownerBootData());
+  });
+
+  // Just the aggregates (KPIs + device status) — polled every 60s.
+  app.get(`${OWNER_BASE}/stats`, async (req, reply) => {
+    const device = await deviceFromReq(req, "owner");
+    if (!device) return reply.code(401).type("application/json").send({ error: "unpaired" });
+    const [stats, devices] = await Promise.all([ticketStatsToday(), listOpsDevices()]);
+    return reply.type("application/json").send({ stats, devices });
+  });
+
+  // Live stream: the cuisine channel carries every ticket event (both sources).
+  app.get(`${OWNER_BASE}/events`, async (req, reply) => {
+    const device = await deviceFromReq(req, "owner");
+    if (!device) return reply.code(401).send({ error: "unpaired" });
+    return pipeOpsEvents(req, reply, CUISINE_CHANNEL);
   });
 }
