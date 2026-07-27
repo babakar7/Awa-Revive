@@ -248,23 +248,9 @@ export function assertConfig(): void {
         "WIX_WEBHOOK_AUTH",
         config.WIX_WEBHOOK_SHARED_SECRET.length >= 32 || Boolean(config.WIX_WEBHOOK_PUBLIC_KEY),
       ],
-      ["WA_KEY_INVITEE_J5_TEMPLATE", config.WA_KEY_INVITEE_J5_TEMPLATE],
-      ["WA_KEY_THIRD_SESSION_TEMPLATE", config.WA_KEY_THIRD_SESSION_TEMPLATE],
-      ["WA_KEY_MEMBER_J5_TEMPLATE", config.WA_KEY_MEMBER_J5_TEMPLATE],
-      ["WA_KEY_FINISHED_TEMPLATE", config.WA_KEY_FINISHED_TEMPLATE],
-      ["WA_LEGACY_KEY_CONVERSION_TEMPLATE", config.WA_LEGACY_KEY_CONVERSION_TEMPLATE],
     ];
     for (const [name, value] of keyConfig) {
       if (!value) missing.push(name);
-    }
-    for (const [name, planId] of [
-      ["INVITEE_PLAN_ID", config.INVITEE_PLAN_ID],
-      ["HABITUEE_PLAN_ID", config.HABITUEE_PLAN_ID],
-      ["RESIDENTE_PLAN_ID", config.RESIDENTE_PLAN_ID],
-    ] as const) {
-      if (planId && !config.AWA_SELLABLE_PLAN_IDS.includes(planId)) {
-        missing.push(`AWA_SELLABLE_PLAN_IDS(${name})`);
-      }
     }
   }
   if (missing.length > 0) {

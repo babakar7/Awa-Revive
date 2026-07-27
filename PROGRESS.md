@@ -3441,3 +3441,20 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   le même traitement métier que les ventes comptoir natives.
 - L'automatisation Clés reste désactivée jusqu'à la répétition générale.
 - Vérification locale : build TypeScript et 710 tests unitaires verts.
+
+## 2026-07-27 — Garde de répétition masquée des Clés
+
+- Le préflight `KEYS_AUTOMATION_ENABLED` ne couple plus le provisionnement
+  comptoir/webhook à l'ouverture commerciale dans `AWA_SELLABLE_PLAN_IDS`.
+  Les trois Clés peuvent donc rester invisibles et invendables par Awa pendant
+  la répétition générale, tandis qu'une commande Wix de test déclenche bien son
+  bonus.
+- Les cinq templates Meta ne sont plus des prérequis de boot de
+  l'automatisation. Chaque branche de relance reste sombre individuellement
+  tant que son nom de template est vide, conformément au comportement déjà
+  implémenté dans `keyNudge` et `renewalNudge`.
+- Les mappings Clé/bonus, les services, le périmètre legacy, l'historique
+  Invitée et une méthode d'authentification webhook restent obligatoires.
+- Régression dédiée : production simulée avec automation active, catalogue Awa
+  fermé et templates vides ; les mappings de provisionnement manquants restent
+  refusés.
