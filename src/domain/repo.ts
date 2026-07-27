@@ -216,13 +216,31 @@ export async function findClientByPhone(candidates: string[]): Promise<Client | 
  * period; a renewal creates a new Wix order → a fresh claim). Claimed BEFORE
  * sending: a lost nudge is a minor miss, a double nudge is spam.
  */
-export async function claimRenewalNudge(wixOrderId: string, clientId: string): Promise<boolean> {
+export async function claimRenewalNudge(
+  wixOrderId: string,
+  clientId: string | null,
+  kind = "RENEWAL",
+): Promise<boolean> {
   const res = await pool.query(
-    `insert into renewal_nudges (wix_order_id, client_id) values ($1, $2)
+    `insert into renewal_nudges (wix_order_id, client_id, kind, outcome, detail)
+     values ($1, $2, $3, 'FAILED', 'claimed')
      on conflict (wix_order_id) do nothing`,
-    [wixOrderId, clientId],
+    [wixOrderId, clientId, kind],
   );
   return (res.rowCount ?? 0) > 0;
+}
+
+export async function completeRenewalNudge(
+  wixOrderId: string,
+  outcome: "SENT" | "SUPPRESSED" | "FAILED",
+  detail: string,
+): Promise<void> {
+  await pool.query(
+    `update renewal_nudges
+        set outcome=$2, detail=$3, sent_at=now()
+      where wix_order_id=$1`,
+    [wixOrderId, outcome, detail.slice(0, 1000)],
+  );
 }
 
 export async function saveClaimedEmail(clientId: string, email: string): Promise<void> {
@@ -1043,6 +1061,13 @@ export interface PlanOrder {
   discovery_booking_error: string | null;
   is_key: boolean;
   key_invitation_count: number | null;
+  paid_at: Date | null;
+  continuity_source_kind: "KEY" | "LEGACY_REFORMER" | null;
+  continuity_source_order_id: string | null;
+  continuity_source_plan_id: string | null;
+  continuity_expires_at: Date | null;
+  continuity_remaining: number | null;
+  continuity_alerted_at: Date | null;
 }
 
 /**
@@ -1087,6 +1112,11 @@ export async function createDraftPlanOrder(args: {
   slotEnd?: string | Date | null;
   isKey?: boolean;
   keyInvitationCount?: number | null;
+  continuitySourceKind?: "KEY" | "LEGACY_REFORMER" | null;
+  continuitySourceOrderId?: string | null;
+  continuitySourcePlanId?: string | null;
+  continuityExpiresAt?: Date | null;
+  continuityRemaining?: number | null;
 }): Promise<PlanOrder> {
   const campaignCode = args.campaignCode ?? null;
   const discoveryBookingStatus: string | null =
@@ -1095,9 +1125,12 @@ export async function createDraftPlanOrder(args: {
     `insert into pending_plan_orders
        (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, campaign_code,
         service_id, service_name, event_id, slot_json, slot_start, slot_end,
-        discovery_booking_status, is_key, key_invitation_count, status)
+        discovery_booking_status, is_key, key_invitation_count,
+        continuity_source_kind, continuity_source_order_id,
+        continuity_source_plan_id, continuity_expires_at, continuity_remaining,
+        status)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-             $14, $15, $16, 'DRAFT') returning *`,
+             $14, $15, $16, $17, $18, $19, $20, $21, 'DRAFT') returning *`,
     [
       args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null,
       campaignCode, args.serviceId ?? null, args.serviceName ?? null, args.eventId ?? null,
@@ -1105,6 +1138,11 @@ export async function createDraftPlanOrder(args: {
       discoveryBookingStatus,
       args.isKey ?? false,
       args.keyInvitationCount ?? null,
+      args.continuitySourceKind ?? null,
+      args.continuitySourceOrderId ?? null,
+      args.continuitySourcePlanId ?? null,
+      args.continuityExpiresAt ?? null,
+      args.continuityRemaining ?? null,
     ],
   );
   return res.rows[0];
@@ -1155,10 +1193,56 @@ export async function setPlanOrderAwaitingPayment(
   });
 }
 
-export async function markPlanOrderPaid(id: string): Promise<PlanOrder | null> {
+export async function markPlanOrderPaid(
+  id: string,
+  paidAt = new Date(),
+): Promise<PlanOrder | null> {
   // DRAFT included: verified payment can land before setAwaitingPayment
   // (crash between session create and AWAITING). Same money-first rule as bookings.
-  return transitionPlanOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED", "DRAFT"]);
+  return transitionPlanOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED", "DRAFT"], {
+    paid_at: paidAt,
+  });
+}
+
+export async function finalizePaidKeyContinuity(args: {
+  id: string;
+  startsAt: Date;
+  invitationCount: number;
+  sourceKind?: "KEY" | "LEGACY_REFORMER" | null;
+  sourceOrderId?: string | null;
+  sourcePlanId?: string | null;
+  sourceExpiresAt?: Date | null;
+  sourceRemaining?: number | null;
+}): Promise<PlanOrder | null> {
+  const res = await pool.query(
+    `update pending_plan_orders
+        set starts_at=$2, key_invitation_count=$3,
+            continuity_source_kind=$4, continuity_source_order_id=$5,
+            continuity_source_plan_id=$6, continuity_expires_at=$7,
+            continuity_remaining=$8, updated_at=now()
+      where id=$1 and status in ('PAID','SCHEDULED')
+      returning *`,
+    [
+      args.id,
+      args.startsAt,
+      args.invitationCount,
+      args.sourceKind ?? null,
+      args.sourceOrderId ?? null,
+      args.sourcePlanId ?? null,
+      args.sourceExpiresAt ?? null,
+      args.sourceRemaining ?? null,
+    ],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function markPlanContinuityAlerted(id: string): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set continuity_alerted_at=coalesce(continuity_alerted_at,now()), updated_at=now()
+      where id=$1`,
+    [id],
+  );
 }
 
 export async function markPlanOrderActivated(
@@ -1596,6 +1680,20 @@ export async function recordHandoff(clientId: string, reason: string): Promise<v
     allowCreateJourney: false,
     metadata: { reason_category: reason.split(":", 1)[0]?.slice(0, 80) || "unspecified" },
   }).catch((error) => console.error("Failed to record booking handoff funnel event:", error));
+}
+
+export async function recordSystemAudit(
+  action: string,
+  targetType: string,
+  targetId: string,
+  detail: Record<string, unknown> = {},
+): Promise<void> {
+  await pool.query(
+    `insert into admin_audit_log
+       (admin_user, admin_role, action, target_type, target_id, detail_json)
+     values ('awa-system','admin',$1,$2,$3,$4::jsonb)`,
+    [action, targetType, targetId, JSON.stringify(detail)],
+  );
 }
 
 /**

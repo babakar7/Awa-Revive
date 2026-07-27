@@ -30,7 +30,8 @@
     "crm:merge": "tsx scripts/merge-duplicates.ts",
     "crm:backfill-names": "tsx scripts/backfill-client-names.ts",
     "wix:probe-member": "tsx scripts/probe-create-member.ts",
-    "wix:probe-contact-plan": "tsx scripts/probe-contact-plan.ts"
+    "wix:probe-contact-plan": "tsx scripts/probe-contact-plan.ts",
+    "wix:probe-plan-closure": "tsx scripts/probe-wix-plan-closure.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

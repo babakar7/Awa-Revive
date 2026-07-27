@@ -3,7 +3,13 @@ import { config } from "../config.js";
 import * as repo from "../domain/repo.js";
 import { registerAndEnsureKey } from "../domain/keyProvisioning.js";
 import { keyMappingForPlan } from "../domain/keyRules.js";
+import {
+  keyPurchaseContinuityDecision,
+  resolveContinuitySource,
+} from "../domain/keyContinuity.js";
 import { verifyAndNormalizeWixWebhook } from "../lib/wixWebhook.js";
+import { notifyReception } from "../lib/notify.js";
+import * as wix from "../lib/wix.js";
 
 function orderFromEvent(event: ReturnType<typeof verifyAndNormalizeWixWebhook>): any {
   return event.actionEvent?.body?.order ?? null;
@@ -50,13 +56,68 @@ export function registerWixWebhook(app: FastifyInstance): void {
       }
       const endRaw = String(order?.endDate ?? "");
       const end = endRaw && !Number.isNaN(Date.parse(endRaw)) ? new Date(endRaw) : null;
+      const purchasedAt = new Date(String(order?.createdDate ?? ""));
+      if (Number.isNaN(purchasedAt.getTime())) {
+        throw new Error(`Wix Key order ${event.entityId} has no valid purchase date`);
+      }
+      const contactId = String(order?.buyer?.contactId ?? "") || null;
+      let clientId: string | null = null;
+      if (contactId) {
+        const contact = await wix.getContactById(contactId);
+        const phones = (contact?.info?.phones?.items ?? [])
+          .map((phone: any) => String(phone?.e164Phone ?? phone?.phone ?? ""))
+          .filter(Boolean);
+        clientId = (await repo.findClientByPhone(phones))?.id ?? null;
+      }
+      const continuity = await resolveContinuitySource({
+        clientId,
+        contactId,
+        memberId,
+        at: purchasedAt,
+        excludePaidOrderId: event.entityId,
+      });
+      const decision = keyPurchaseContinuityDecision({
+        newKeyType: mapping.type,
+        purchasedAt,
+        source: continuity,
+      });
+      if (
+        continuity &&
+        start.getTime() < continuity.expiresAt.getTime() - 60_000
+      ) {
+        notifyReception(
+          "⚠️ Clé comptoir démarrée avant la fin de l'abonnement",
+          `La Clé Wix ${event.entityId} démarre le ${start.toISOString().slice(0, 10)}, ` +
+            `mais ${continuity.kind === "KEY" ? "la Clé précédente" : "l'abonnement Fondatrice"} ` +
+            `${continuity.orderId} se termine le ${continuity.expiresAt.toISOString().slice(0, 10)}. ` +
+            `La commande Wix est conservée : vérifier les dates avec la cliente.`,
+        );
+      }
+      if (
+        continuity?.kind === "LEGACY_REFORMER" &&
+        (continuity.remaining === 0 || continuity.remaining === null)
+      ) {
+        notifyReception(
+          "⚠️ Démarrage d'une Clé comptoir à vérifier",
+          `La source legacy ${continuity.orderId} a un solde ` +
+            `${continuity.remaining === 0 ? "à 0" : "illisible"}. Vérifier si la Clé ${event.entityId} doit démarrer plus tôt.`,
+        );
+      }
       await registerAndEnsureKey({
         paidOrderId: event.entityId,
         planId,
-        wixContactId: String(order?.buyer?.contactId ?? "") || null,
+        clientId,
+        wixContactId: contactId,
         wixMemberId: memberId,
         startsAt: start,
         endsAt: end,
+        purchasedAt,
+        invitationCount: decision.invitationCount,
+        continuitySourceKind: decision.sourceKind,
+        continuitySourceOrderId: decision.sourceOrderId,
+        continuitySourcePlanId: decision.sourcePlanId,
+        continuityExpiresAt: decision.sourceExpiresAt,
+        previousKeyId: decision.previousKeyId,
       });
       await repo.markProcessed(dedupId, "wix");
       return reply.code(200).send("OK");

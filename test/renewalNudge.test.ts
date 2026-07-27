@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { renewalNudgeCandidates } from "../src/domain/renewalNudge.js";
+import {
+  legacyKeyConversionCandidates,
+  renewalNudgeCandidates,
+} from "../src/domain/renewalNudge.js";
 
 const now = new Date("2026-07-12T10:00:00Z");
 // "plan_monthly" is renewable (≥ 1 month); "plan_pack" is a short trial / gift card.
@@ -17,6 +20,20 @@ describe("renewalNudgeCandidates", () => {
     const out = renewalNudgeCandidates([order({ endDate: "2026-07-14T10:00:00Z" })], now, 3, renewable);
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ orderId: "ord_1", contactId: "c_1", planId: "plan_monthly" });
+  });
+
+  it("selects only configured legacy Reformer orders for the J-5 Key conversion", () => {
+    const orders = [
+      order({ id: "legacy", planId: "legacy-reformer", endDate: "2026-07-17T10:00:00Z" }),
+      order({ id: "aqua", planId: "aquafitness", endDate: "2026-07-17T10:00:00Z" }),
+    ];
+    expect(
+      legacyKeyConversionCandidates(
+        orders,
+        now,
+        new Set(["legacy-reformer"]),
+      ).map((candidate) => candidate.orderId),
+    ).toEqual(["legacy"]);
   });
 
   it("NEVER nudges a one-time pack, even when it ends within the window", () => {

@@ -23,6 +23,12 @@ import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { backfillBookingContacts } from "./bookingContactBackfill.js";
 import * as deliveries from "./deliveryRepo.js";
 import * as keyRepo from "./keyRepo.js";
+import {
+  keyPurchaseContinuityDecision,
+  resolveContinuitySource,
+  type ContinuitySource,
+} from "./keyContinuity.js";
+import { keyMappingForPlan } from "./keyRules.js";
 
 /**
  * Payment fulfillment — shared by Wave and Orange Money / Max It webhooks.
@@ -533,7 +539,85 @@ export async function processPlanPayment(order: any, log: PaymentLog): Promise<v
     }
     log.info({ planOrderId: order.id }, "Plan already PAID — resuming fulfillment");
   }
+  const current = paid ?? (await repo.findPlanOrderById(order.id));
+  if (current?.is_key && current.paid_at) {
+    await finalizeVerifiedKeyContinuity(current, log);
+  }
   await fulfillPlanOrder(order.id, log);
+}
+
+async function finalizeVerifiedKeyContinuity(
+  order: repo.PlanOrder,
+  log: PaymentLog,
+): Promise<void> {
+  const mapping = keyMappingForPlan(order.plan_id);
+  if (!mapping || !order.paid_at) return;
+  const paidAt = new Date(order.paid_at);
+  const clientRes = await pool.query(`select * from clients where id=$1`, [order.client_id]);
+  const client = clientRes.rows[0];
+  let source: ContinuitySource | null = null;
+  try {
+    const contact = client
+      ? await wix.findContactByPhone(
+          `+${String(client.wa_phone ?? "").replace(/^\+/, "")}`,
+          client.name ?? undefined,
+        )
+      : null;
+    source = await resolveContinuitySource({
+      clientId: order.client_id,
+      contactId: contact?.id ?? null,
+      memberId: order.member_id,
+      at: paidAt,
+    });
+  } catch (error) {
+    // Do not block a verified payment on a transient Wix read. The source
+    // snapshotted when the link was created remains a safe fallback.
+    log.error({ err: error, planOrderId: order.id }, "Key continuity refresh failed");
+    if (
+      order.continuity_source_kind &&
+      order.continuity_source_order_id &&
+      order.continuity_source_plan_id &&
+      order.continuity_expires_at
+    ) {
+      source = {
+        kind: order.continuity_source_kind,
+        orderId: order.continuity_source_order_id,
+        planId: order.continuity_source_plan_id,
+        planName: order.continuity_source_plan_id,
+        expiresAt: new Date(order.continuity_expires_at),
+        remaining: order.continuity_remaining,
+        previousKeyId: null,
+      };
+    }
+  }
+  const decision = keyPurchaseContinuityDecision({
+    newKeyType: mapping.type,
+    purchasedAt: paidAt,
+    source,
+  });
+  await repo.finalizePaidKeyContinuity({
+    id: order.id,
+    startsAt: decision.startsAt,
+    invitationCount: decision.invitationCount,
+    sourceKind: decision.sourceKind,
+    sourceOrderId: decision.sourceOrderId,
+    sourcePlanId: decision.sourcePlanId,
+    sourceExpiresAt: decision.sourceExpiresAt,
+    sourceRemaining: decision.sourceRemaining,
+  });
+  if (
+    source?.kind === "LEGACY_REFORMER" &&
+    (source.remaining === 0 || source.remaining === null) &&
+    !order.continuity_alerted_at
+  ) {
+    notifyReception(
+      "⚠️ Démarrage d'une Clé à vérifier",
+      `La Clé "${order.plan_name}" a été payée et programmée au ${decision.startsAt.toISOString().slice(0, 10)} ` +
+        `après l'abonnement legacy ${source.planName} (${source.orderId}), mais son solde est ` +
+        `${source.remaining === 0 ? "à 0" : "illisible"}. Vérifier avec la cliente si la Clé doit démarrer plus tôt.`,
+    );
+    await repo.markPlanContinuityAlerted(order.id);
+  }
 }
 
 /**
@@ -625,6 +709,11 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
         wixMemberId: order.member_id,
         startsAt: startsAt ?? new Date(),
         invitationCount: order.key_invitation_count,
+        purchasedAt: order.paid_at,
+        continuitySourceKind: order.continuity_source_kind,
+        continuitySourceOrderId: order.continuity_source_order_id,
+        continuitySourcePlanId: order.continuity_source_plan_id,
+        continuityExpiresAt: order.continuity_expires_at,
       });
     } catch (err) {
       // The paid Key is already active. Provisioning has its own retry/audit

@@ -280,6 +280,14 @@ alter table pending_plan_orders
   add column if not exists is_key boolean not null default false;
 alter table pending_plan_orders
   add column if not exists key_invitation_count integer;
+alter table pending_plan_orders add column if not exists paid_at timestamptz;
+alter table pending_plan_orders add column if not exists continuity_source_kind text
+  check (continuity_source_kind is null or continuity_source_kind in ('KEY','LEGACY_REFORMER'));
+alter table pending_plan_orders add column if not exists continuity_source_order_id text;
+alter table pending_plan_orders add column if not exists continuity_source_plan_id text;
+alter table pending_plan_orders add column if not exists continuity_expires_at timestamptz;
+alter table pending_plan_orders add column if not exists continuity_remaining integer;
+alter table pending_plan_orders add column if not exists continuity_alerted_at timestamptz;
 create unique index if not exists idx_plan_orders_one_scheduled_key
   on pending_plan_orders (client_id)
   where status='SCHEDULED' and is_key;
@@ -577,8 +585,15 @@ create index if not exists idx_admin_audit_created
 create table if not exists renewal_nudges (
   wix_order_id text primary key,
   client_id uuid references clients(id),
-  sent_at timestamptz not null default now()
+  sent_at timestamptz not null default now(),
+  kind text not null default 'RENEWAL',
+  outcome text not null default 'SENT'
+    check (outcome in ('SENT','SUPPRESSED','FAILED')),
+  detail text
 );
+alter table renewal_nudges add column if not exists kind text not null default 'RENEWAL';
+alter table renewal_nudges add column if not exists outcome text not null default 'SENT';
+alter table renewal_nudges add column if not exists detail text;
 
 -- Copie locale des champs édités depuis /admin/profile (profil WhatsApp
 -- Business). Meta n'a pas de champ "horaires" natif : on le garde ici séparé
@@ -1437,6 +1452,14 @@ create index if not exists idx_key_registry_bonus_repair
   on key_registry (bonus_status, bonus_next_retry_at);
 create index if not exists idx_key_registry_member
   on key_registry (wix_member_id, effective_ends_at desc);
+alter table key_registry add column if not exists purchased_at timestamptz;
+alter table key_registry add column if not exists continuity_source_kind text
+  check (continuity_source_kind is null or continuity_source_kind in ('KEY','LEGACY_REFORMER'));
+alter table key_registry add column if not exists continuity_source_order_id text;
+alter table key_registry add column if not exists continuity_source_plan_id text;
+alter table key_registry add column if not exists continuity_expires_at timestamptz;
+alter table key_registry add column if not exists invitations_granted integer not null default 0;
+alter table key_registry add column if not exists continuity_alerted_at timestamptz;
 
 create table if not exists key_invitations (
   id uuid primary key default gen_random_uuid(),

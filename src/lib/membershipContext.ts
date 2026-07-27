@@ -97,7 +97,9 @@ export async function activeMemberships(client: Client): Promise<MembershipLooku
           : null,
         expiresAt: m.expiresAt,
         renewable: renewablePlanIds.has(m.planId),
-        foundingMember: config.LEGACY_REFORMER_PLAN_IDS.includes(m.planId),
+        foundingMember:
+          config.KEYS_AUTOMATION_ENABLED &&
+          config.LEGACY_REFORMER_PLAN_IDS.includes(m.planId),
       })),
     );
     const result: MembershipLookup = { linked: contactId !== null, plans };

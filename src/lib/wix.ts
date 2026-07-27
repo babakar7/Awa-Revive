@@ -1168,6 +1168,45 @@ export async function listAllActiveOrders(): Promise<any[]> {
   return orders;
 }
 
+/**
+ * All pricing-plan orders, including ENDED/CANCELED ones. Wix documents the
+ * unfiltered management endpoint as returning every status; this is required
+ * for delayed Order Purchased webhooks and once-ever discovery eligibility.
+ */
+export async function listAllPlanOrders(): Promise<any[]> {
+  const orders: any[] = [];
+  for (let offset = 0; offset < 5000; offset += 50) {
+    const res = await fetch(
+      `${WIX_API}/pricing-plans/v2/orders?limit=50&offset=${offset}`,
+      { headers: headers(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) },
+    );
+    if (!res.ok) throw new Error(`Wix orders list failed (${res.status}): ${await res.text()}`);
+    const data: any = await res.json();
+    orders.push(...(data?.orders ?? []));
+    if (!data?.pagingMetadata?.hasNext) break;
+  }
+  return orders;
+}
+
+export async function hasPlanOrderHistory(args: {
+  contactId?: string | null;
+  memberId?: string | null;
+  planIds: string[];
+}): Promise<boolean> {
+  if (!args.contactId && !args.memberId) return false;
+  const ids = new Set(args.planIds.filter(Boolean));
+  if (ids.size === 0) return false;
+  return (await listAllPlanOrders()).some((order) => {
+    if (!ids.has(String(order?.planId ?? ""))) return false;
+    const buyerContactId = String(order?.buyer?.contactId ?? "");
+    const buyerMemberId = String(order?.buyer?.memberId ?? order?.memberId ?? "");
+    return (
+      (!!args.contactId && buyerContactId === args.contactId) ||
+      (!!args.memberId && buyerMemberId === args.memberId)
+    );
+  });
+}
+
 export async function findPlanOrderForMember(args: {
   planId: string;
   memberId: string;
@@ -1342,6 +1381,45 @@ export async function getPlan(planId: string): Promise<WixPlan | null> {
   return plans.find((p) => p.id === planId) ?? null;
 }
 
+export async function getPlanV3(planId: string): Promise<any> {
+  const res = await fetch(
+    `${WIX_API}/pricing-plans/v3/plans/${encodeURIComponent(planId)}`,
+    { headers: headers(), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) },
+  );
+  if (!res.ok) throw new Error(`Wix v3 plan get failed (${res.status}): ${await res.text()}`);
+  const data: any = await res.json();
+  return data?.plan ?? data;
+}
+
+export async function updatePlanAvailabilityV3(args: {
+  planId: string;
+  revision: string;
+  visibility: "PUBLIC" | "PRIVATE";
+  buyable: boolean;
+}): Promise<any> {
+  const res = await fetch(
+    `${WIX_API}/pricing-plans/v3/plans/${encodeURIComponent(args.planId)}`,
+    {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({
+        plan: {
+          id: args.planId,
+          revision: args.revision,
+          visibility: args.visibility,
+          buyable: args.buyable,
+        },
+      }),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Wix v3 plan availability update failed (${res.status}): ${await res.text()}`);
+  }
+  const data: any = await res.json();
+  return data?.plan ?? data;
+}
+
 /**
  * Activate a plan for a member after an offline (Wave) payment. The offline
  * order API REQUIRES a real Wix member id (a bare contactId → 400
@@ -1399,6 +1477,21 @@ export async function latestPlanEndDate(contactId: string): Promise<string | nul
     if (!Number.isNaN(t) && t > now && (latest === null || t > latest)) latest = t;
   }
   return latest === null ? null : new Date(latest).toISOString();
+}
+
+/** Same chaining helper, but scoped to a specific product family. */
+export async function latestPlanEndDateForPlans(
+  contactId: string,
+  planIds: string[],
+): Promise<string | null> {
+  const allowed = new Set(planIds);
+  const memberships = await listActiveMemberships(contactId);
+  const now = Date.now();
+  const dates = memberships
+    .filter((membership) => allowed.has(membership.planId) && membership.expiresAt)
+    .map((membership) => Date.parse(membership.expiresAt!))
+    .filter((value) => Number.isFinite(value) && value > now);
+  return dates.length ? new Date(Math.max(...dates)).toISOString() : null;
 }
 
 /** Contact → member GUID (offline plan activation via API needs a member id).

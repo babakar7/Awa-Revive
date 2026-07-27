@@ -27,6 +27,14 @@ export interface RenewalCandidate {
   endDate: string; // ISO
 }
 
+export function legacyKeyConversionCandidates(
+  orders: any[],
+  now: Date,
+  legacyPlanIds: Set<string>,
+): RenewalCandidate[] {
+  return renewalNudgeCandidates(orders, now, 5, legacyPlanIds);
+}
+
 /**
  * Pure filter (unit-tested): ACTIVE plan orders whose endDate falls in
  * [now, now + days] AND whose plan is renewable (per the business rule in
@@ -72,7 +80,10 @@ export async function sweepRenewalNudges(log: {
   info: (o: unknown, m?: string) => void;
   error: (o: unknown, m?: string) => void;
 }): Promise<number> {
-  if (!config.WA_RENEWAL_TEMPLATE) return 0; // feature off until Meta approves it
+  if (
+    !config.WA_RENEWAL_TEMPLATE &&
+    !(config.KEYS_AUTOMATION_ENABLED && config.WA_LEGACY_KEY_CONVERSION_TEMPLATE)
+  ) return 0;
 
   const [orders, catalog] = await Promise.all([wix.listAllActiveOrders(), wix.listPlans()]);
   const renewablePlanIds = new Set(catalog.filter((p) => p.renewable).map((p) => p.id));
@@ -85,12 +96,20 @@ export async function sweepRenewalNudges(log: {
   ]) {
     if (planId) renewablePlanIds.delete(planId);
   }
-  const candidates = renewalNudgeCandidates(
-    orders,
-    new Date(),
-    config.RENEWAL_NUDGE_DAYS,
-    renewablePlanIds,
-  );
+  if (config.KEYS_AUTOMATION_ENABLED) {
+    for (const planId of config.LEGACY_REFORMER_PLAN_IDS) {
+      renewablePlanIds.delete(planId);
+    }
+  }
+  const now = new Date();
+  const candidates = config.WA_RENEWAL_TEMPLATE
+    ? renewalNudgeCandidates(
+        orders,
+        now,
+        config.RENEWAL_NUDGE_DAYS,
+        renewablePlanIds,
+      )
+    : [];
   let sent = 0;
   for (const c of candidates) {
     let client;
@@ -120,6 +139,7 @@ export async function sweepRenewalNudges(log: {
         config.WA_RENEWAL_TEMPLATE_LANG,
         [toTemplateParam(name, 60), toTemplateParam(c.planName, 60), toTemplateParam(endLabel, 40)],
       );
+      await repo.completeRenewalNudge(c.orderId, "SENT", "generic renewal sent");
       // Persist an assistant turn so Awa has the context when the client replies.
       await repo.addTurn(
         client.id,
@@ -129,7 +149,82 @@ export async function sweepRenewalNudges(log: {
       sent++;
       log.info({ orderId: c.orderId, clientId: client.id }, "Renewal nudge sent");
     } catch (err) {
+      await repo.completeRenewalNudge(
+        c.orderId,
+        "FAILED",
+        err instanceof Error ? err.message : String(err),
+      ).catch(() => undefined);
       log.error({ err, orderId: c.orderId }, "Renewal nudge send failed");
+    }
+  }
+  if (config.KEYS_AUTOMATION_ENABLED && config.WA_LEGACY_KEY_CONVERSION_TEMPLATE) {
+    const legacyCandidates = legacyKeyConversionCandidates(
+      orders,
+      now,
+      new Set(config.LEGACY_REFORMER_PLAN_IDS),
+    );
+    for (const candidate of legacyCandidates) {
+      const claimKey = `legacy-key:${candidate.orderId}`;
+      let client = null;
+      try {
+        const contact = await wix.getContactById(candidate.contactId);
+        if (contact) client = await repo.findClientByPhone(contactPhones(contact));
+      } catch (err) {
+        log.error(
+          { err, orderId: candidate.orderId },
+          "Legacy Key conversion: contact/client lookup failed",
+        );
+        continue;
+      }
+      if (!client) {
+        if (await repo.claimRenewalNudge(claimKey, null, "LEGACY_KEY_J5")) {
+          await repo.completeRenewalNudge(
+            claimKey,
+            "SUPPRESSED",
+            "no local WhatsApp client",
+          );
+        }
+        continue;
+      }
+      if (!(await repo.claimRenewalNudge(claimKey, client.id, "LEGACY_KEY_J5"))) continue;
+      try {
+        const name = client.name || "toi";
+        const endLabel = new Date(candidate.endDate).toLocaleDateString("fr-FR", {
+          timeZone: config.TIMEZONE,
+          day: "numeric",
+          month: "long",
+        });
+        await sendTemplate(
+          client.wa_phone,
+          config.WA_LEGACY_KEY_CONVERSION_TEMPLATE,
+          config.WA_LEGACY_KEY_CONVERSION_TEMPLATE_LANG,
+          [toTemplateParam(name, 60), toTemplateParam(endLabel, 40)],
+        );
+        await repo.completeRenewalNudge(
+          claimKey,
+          "SENT",
+          "legacy Key conversion sent",
+        );
+        await repo.addTurn(
+          client.id,
+          "assistant",
+          `[relance passage aux Clés] Ton abonnement se termine le ${endLabel}. ` +
+            `Une reprise avant cette date donne une invitation Reformer avec L'Habituée, ` +
+            `deux avec La Résidente, à offrir à des personnes qui ne sont jamais venues chez Revive.`,
+        );
+        sent += 1;
+        log.info(
+          { orderId: candidate.orderId, clientId: client.id },
+          "Legacy Key conversion nudge sent",
+        );
+      } catch (err) {
+        await repo.completeRenewalNudge(
+          claimKey,
+          "FAILED",
+          err instanceof Error ? err.message : String(err),
+        ).catch(() => undefined);
+        log.error({ err, orderId: candidate.orderId }, "Legacy Key conversion send failed");
+      }
     }
   }
   return sent;

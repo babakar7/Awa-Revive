@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, pool } from "../../src/db/index.js";
 import * as keys from "../../src/domain/keyRepo.js";
+import * as repo from "../../src/domain/repo.js";
 import type { KeyPlanMapping } from "../../src/domain/keyRules.js";
 import { inHours, seedClient, truncateAll } from "./helpers.js";
 
@@ -55,6 +56,60 @@ describe("Clés registry", () => {
         ).rows[0].count,
       ),
     ).toBe(2);
+  });
+
+  it("persists the same verified continuity facts on the payment and Key registry", async () => {
+    const client = await seedClient();
+    const paidAt = new Date("2026-07-27T10:00:00Z");
+    const legacyEnd = new Date("2026-08-05T10:00:00Z");
+    const draft = await repo.createDraftPlanOrder({
+      clientId: client.id,
+      planId: mapping.planId,
+      planName: "La Résidente — Clé 12 séances",
+      amountXof: 144000,
+      memberId: "member-continuity",
+      isKey: true,
+      startsAt: legacyEnd,
+      continuitySourceKind: "LEGACY_REFORMER",
+      continuitySourceOrderId: "legacy-order",
+      continuitySourcePlanId: "legacy-plan",
+      continuityExpiresAt: legacyEnd,
+      continuityRemaining: 4,
+    });
+    const paid = await repo.markPlanOrderPaid(draft.id, paidAt);
+    expect(new Date(paid!.paid_at!).toISOString()).toBe(paidAt.toISOString());
+    await repo.finalizePaidKeyContinuity({
+      id: draft.id,
+      startsAt: legacyEnd,
+      invitationCount: 2,
+      sourceKind: "LEGACY_REFORMER",
+      sourceOrderId: "legacy-order",
+      sourcePlanId: "legacy-plan",
+      sourceExpiresAt: legacyEnd,
+      sourceRemaining: 4,
+    });
+    const key = await keys.upsertKey({
+      paidOrderId: "new-key-order",
+      clientId: client.id,
+      wixMemberId: "member-continuity",
+      mapping,
+      startsAt: legacyEnd,
+      endsAt: new Date(legacyEnd.getTime() + 60 * 86_400_000),
+      status: "SCHEDULED",
+      purchasedAt: paidAt,
+      continuitySourceKind: "LEGACY_REFORMER",
+      continuitySourceOrderId: "legacy-order",
+      continuitySourcePlanId: "legacy-plan",
+      continuityExpiresAt: legacyEnd,
+      invitationsGranted: 2,
+    });
+    expect(key).toMatchObject({
+      continuity_source_kind: "LEGACY_REFORMER",
+      continuity_source_order_id: "legacy-order",
+      continuity_source_plan_id: "legacy-plan",
+      invitations_granted: 2,
+    });
+    expect(new Date(key.purchased_at!).toISOString()).toBe(paidAt.toISOString());
   });
 
   it("enforces at most one scheduled Key per client", async () => {

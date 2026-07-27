@@ -3378,3 +3378,39 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   allowlist de vente jusqu'à la répétition générale et la configuration de la
   clé publique du webhook.
 - Vérification : build, 681 tests unitaires et 183 tests d'intégration passent.
+
+## 2026-07-27 — Continuité legacy des Clés
+
+- Le catalogue live a été partitionné par couverture Wix, pas par nom :
+  dix plans legacy couvrant le Reformer (purs, Carnet 10, quatre mixtes et
+  Pilates 360 2×/3×). Aquafitness, Mat et Natation restent hors du périmètre.
+- La source de continuité est résolue à la date du paiement vérifié : Clé active
+  d'abord, sinon legacy Reformer couvrant la date, échéance la plus tardive en
+  cas de chevauchement. Un abonnement hors Reformer ne peut plus repousser le
+  démarrage d'une Clé.
+- `paid_at` et les champs `continuity_source_*` sont persistés dans
+  `pending_plan_orders` et `key_registry`. Les droits ne sont plus figés à la
+  création du lien : paiement Awa et webhook comptoir appellent la même décision
+  pure et produisent les mêmes invitations/dates.
+- Bonus de continuité Fondatrice : +1 invitation si le paiement précède
+  l'échéance legacy. Résidente conserve son invitation normale, donc deux au
+  total ; Habituée en reçoit une.
+- Un solde legacy nul ou illisible garde l'échéance sûre mais alerte la
+  réception afin d'avancer éventuellement la date. Une Clé comptoir déjà
+  démarrée trop tôt est conservée et signalée, jamais annulée automatiquement.
+- Relance dédiée à J-5 (`WA_LEGACY_KEY_CONVERSION_TEMPLATE`) avec claim
+  `sent/suppressed/failed` terminal. Quand l'automatisation Clés est active,
+  les legacy sortent du rappel générique de renouvellement.
+- Unicité L'Invitée renforcée : toute réservation Revive ou toute commande Wix,
+  quel que soit son statut, sur le Pack complet ou L'Invitée bloque
+  l'activation automatique. Une panne Wix autorise la vente mais produit un
+  audit ; une contestation ouvre un handoff réception.
+- Les droits Fondatrice restent eux-mêmes gated par
+  `KEYS_AUTOMATION_ENABLED`; aucun changement client avant la bascule.
+- Probe réversible Wix V3 validé en live sur Pilates 360 privé :
+  `buyable=true → false`, relecture, puis restauration vérifiée à `true` ;
+  `visibility=PRIVATE` est restée inchangée et le plan n'a jamais été archivé.
+- Configuration constatée avant livraison : Clés absentes de
+  `AWA_SELLABLE_PLAN_IDS`, `KEYS_AUTOMATION_ENABLED=false`.
+- Vérification locale : build TypeScript, 693 tests unitaires et suite
+  d'intégration PostgreSQL complète verts.

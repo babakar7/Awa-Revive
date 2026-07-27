@@ -16,6 +16,12 @@ export interface KeyRegistry {
   effective_ends_at: Date;
   status: "SCHEDULED" | "ACTIVE" | "ENDED" | "REFUNDED" | "CANCELLED";
   previous_key_id: string | null;
+  purchased_at: Date | null;
+  continuity_source_kind: "KEY" | "LEGACY_REFORMER" | null;
+  continuity_source_order_id: string | null;
+  continuity_source_plan_id: string | null;
+  continuity_expires_at: Date | null;
+  invitations_granted: number;
   extension_used_at: Date | null;
   bonus_status: "PENDING" | "ACTIVE" | "FAILED" | "MANUAL_REQUIRED";
   bonus_attempts: number;
@@ -33,17 +39,31 @@ export async function upsertKey(args: {
   endsAt: Date;
   status: "SCHEDULED" | "ACTIVE";
   previousKeyId?: string | null;
+  purchasedAt?: Date | null;
+  continuitySourceKind?: "KEY" | "LEGACY_REFORMER" | null;
+  continuitySourceOrderId?: string | null;
+  continuitySourcePlanId?: string | null;
+  continuityExpiresAt?: Date | null;
+  invitationsGranted?: number;
 }): Promise<KeyRegistry> {
   const result = await pool.query(
     `insert into key_registry
        (paid_order_id, client_id, wix_contact_id, wix_member_id, key_type,
         plan_id, bonus_plan_id, starts_at, original_ends_at, effective_ends_at,
-        status, previous_key_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11)
+        status, previous_key_id, purchased_at, continuity_source_kind,
+        continuity_source_order_id, continuity_source_plan_id,
+        continuity_expires_at, invitations_granted)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      on conflict (paid_order_id) do update set
        client_id=coalesce(key_registry.client_id, excluded.client_id),
        wix_contact_id=coalesce(key_registry.wix_contact_id, excluded.wix_contact_id),
        wix_member_id=coalesce(key_registry.wix_member_id, excluded.wix_member_id),
+       purchased_at=coalesce(key_registry.purchased_at, excluded.purchased_at),
+       continuity_source_kind=coalesce(key_registry.continuity_source_kind, excluded.continuity_source_kind),
+       continuity_source_order_id=coalesce(key_registry.continuity_source_order_id, excluded.continuity_source_order_id),
+       continuity_source_plan_id=coalesce(key_registry.continuity_source_plan_id, excluded.continuity_source_plan_id),
+       continuity_expires_at=coalesce(key_registry.continuity_expires_at, excluded.continuity_expires_at),
+       invitations_granted=greatest(key_registry.invitations_granted, excluded.invitations_granted),
        updated_at=now()
      returning *`,
     [
@@ -58,9 +78,35 @@ export async function upsertKey(args: {
       args.endsAt,
       args.status,
       args.previousKeyId ?? null,
+      args.purchasedAt ?? null,
+      args.continuitySourceKind ?? null,
+      args.continuitySourceOrderId ?? null,
+      args.continuitySourcePlanId ?? null,
+      args.continuityExpiresAt ?? null,
+      args.invitationsGranted ?? 0,
     ],
   );
   return result.rows[0];
+}
+
+export async function keyCoveringAt(args: {
+  clientId?: string | null;
+  wixMemberId?: string | null;
+  at: Date;
+  excludePaidOrderId?: string | null;
+}): Promise<KeyRegistry | null> {
+  const result = await pool.query(
+    `select * from key_registry
+      where (($1::uuid is not null and client_id=$1)
+          or ($2::text is not null and wix_member_id=$2))
+        and starts_at <= $3 and effective_ends_at > $3
+        and ($4::text is null or paid_order_id <> $4)
+        and status not in ('REFUNDED','CANCELLED')
+      order by effective_ends_at desc
+      limit 1`,
+    [args.clientId ?? null, args.wixMemberId ?? null, args.at, args.excludePaidOrderId ?? null],
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function getKeyByPaidOrder(paidOrderId: string): Promise<KeyRegistry | null> {

@@ -39,11 +39,12 @@ export function keyMappingForPlan(planId: string): KeyPlanMapping | null {
 
 export function invitationEarnings(
   newKeyType: KeyType,
-  hasPreviousKey: boolean,
+  hasPreviousKeyOrLegacyReformer: boolean,
   boughtBeforePreviousExpiry: boolean,
 ): number {
   const normalBenefit = newKeyType === "RESIDENTE" ? 1 : 0;
-  const continuity = hasPreviousKey && boughtBeforePreviousExpiry ? 1 : 0;
+  const continuity =
+    hasPreviousKeyOrLegacyReformer && boughtBeforePreviousExpiry ? 1 : 0;
   return normalBenefit + continuity;
 }
 

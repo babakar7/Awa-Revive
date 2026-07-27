@@ -42,11 +42,11 @@ import { resolveServiceAlias } from "../domain/serviceAlias.js";
 import * as keyRepo from "../domain/keyRepo.js";
 import {
   dakarDateKey,
-  invitationEarnings,
   isBonusSlotAllowed,
   isInvitationSlotAllowed,
   keyMappingForPlan,
 } from "../domain/keyRules.js";
+import { resolveContinuitySource } from "../domain/keyContinuity.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -2329,16 +2329,34 @@ export async function executeTool(
         contactId
       ) {
         try {
-          if (await wix.hasAnyPastReviveBooking(contactId)) {
+          const alreadyUsed =
+            (await wix.hasAnyPastReviveBooking(contactId)) ||
+            (await wix.hasPlanOrderHistory({
+              contactId,
+              memberId,
+              planIds: config.INVITEE_HISTORY_PLAN_IDS,
+            }));
+          if (alreadyUsed) {
             return JSON.stringify({
               error: "invitee_not_eligible",
               message:
-                "L'Invitée est réservée aux personnes qui ne sont jamais venues chez Revive. " +
-                "Ne la vends pas ; propose L'Habituée ou La Résidente.",
+                "Une ancienne commande Pack Découverte ou L'Invitée apparaît sur ton compte. " +
+                "Comme cette offre est limitée à une fois par personne, je ne peux pas l'activer automatiquement. " +
+                "Si cette commande avait été annulée avant ton essai, je peux transmettre ta demande à la réception pour vérification.",
             });
           }
         } catch (error) {
           console.error("L'Invitée eligibility lookup failed (allowing sale with audit):", error);
+          await repo.recordSystemAudit(
+            "invitee_eligibility_lookup_failed_allow",
+            "client",
+            client.id,
+            {
+              contactId,
+              memberId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          ).catch(() => undefined);
         }
       }
 
@@ -2351,16 +2369,24 @@ export async function executeTool(
             wixMemberId: memberId,
           })
         : null;
+      const continuitySource = isKeyPlan
+        ? await resolveContinuitySource({
+            clientId: client.id,
+            contactId,
+            memberId,
+            at: new Date(),
+          })
+        : null;
 
       // Chained renewal: when the client wants the new plan to start after the
       // current one, resolve the real end date from Wix (never from the model).
       // No active plan / no readable end date → fall back to "now" and flag it.
       let startsAt: Date | null = null;
       let startFellBack = false;
-      if (currentKey) {
+      if (continuitySource) {
         // Keys never overlap. An early renewal always starts when the current
-        // Key (including an approved extension) ends.
-        startsAt = new Date(currentKey.effective_ends_at);
+        // Key or legacy Reformer plan (including an approved extension) ends.
+        startsAt = new Date(continuitySource.expiresAt);
       } else if (input.start === "after_current") {
         const endIso = contactId ? await wix.latestPlanEndDate(contactId) : null;
         if (endIso) startsAt = new Date(endIso);
@@ -2388,14 +2414,13 @@ export async function executeTool(
         memberId,
         startsAt,
         isKey: isKeyPlan,
-        keyInvitationCount: keyMapping
-          ? invitationEarnings(
-              keyMapping.type,
-              currentKey !== null,
-              currentKey !== null &&
-                Date.now() < currentKey.effective_ends_at.getTime(),
-            )
-          : null,
+        // Continuity rights are finalized only after a verified payment.
+        keyInvitationCount: null,
+        continuitySourceKind: continuitySource?.kind,
+        continuitySourceOrderId: continuitySource?.orderId,
+        continuitySourcePlanId: continuitySource?.planId,
+        continuityExpiresAt: continuitySource?.expiresAt,
+        continuityRemaining: continuitySource?.remaining,
       });
 
       let session;

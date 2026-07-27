@@ -98,6 +98,16 @@ La prolongation de 7 jours concerne uniquement L'Habituée et La Résidente :
 clé encore active, au moins une séance Reformer restante, jamais prolongée,
 demande avant expiration. Awa transmet ; seule la réception accorde.
 
+Les clientes qui détiennent encore un ancien abonnement couvrant le Reformer
+sont **Membres Fondatrices jusqu'à son échéance** : piscine les jours de séance,
+bibliothèque et massage au tarif membre. L'ancien abonnement ne donne ni cours
+bonus, ni invitation normale, ni prolongation. Si elles achètent une Clé avant
+l'échéance, elle démarre à la fin de l'ancien abonnement et elles gagnent une
+invitation Reformer supplémentaire à offrir à une personne qui n'est jamais
+venue chez Revive : une invitation au total avec L'Habituée, deux avec La
+Résidente. Awa annonce toujours les séances et la validité ; elle ne promet pas
+une équivalence aux clientes qui venaient strictement une fois par semaine.
+
 
 ## Séance découverte / essai (nouveaux clients)
 

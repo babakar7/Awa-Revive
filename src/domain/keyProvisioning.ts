@@ -21,17 +21,38 @@ export async function registerPaidKey(args: {
   startsAt: Date;
   endsAt?: Date | null;
   invitationCount?: number | null;
+  purchasedAt?: Date | null;
+  continuitySourceKind?: "KEY" | "LEGACY_REFORMER" | null;
+  continuitySourceOrderId?: string | null;
+  continuitySourcePlanId?: string | null;
+  continuityExpiresAt?: Date | null;
+  previousKeyId?: string | null;
 }): Promise<keys.KeyRegistry | null> {
   if (!config.KEYS_AUTOMATION_ENABLED) return null;
   const mapping = keyMappingForPlan(args.planId);
   if (!mapping) return null;
   const alreadyRegistered = await keys.getKeyByPaidOrder(args.paidOrderId);
   if (alreadyRegistered) return alreadyRegistered;
-  const previous = await keys.latestPreviousKey({
-    clientId: args.clientId,
-    wixMemberId: args.wixMemberId,
-    before: args.startsAt,
-  });
+  const purchasedAt = args.purchasedAt ?? new Date();
+  const previous =
+    args.previousKeyId === undefined && args.continuitySourceKind !== "LEGACY_REFORMER"
+      ? await keys.latestPreviousKey({
+          clientId: args.clientId,
+          wixMemberId: args.wixMemberId,
+          before: args.startsAt,
+        })
+      : args.previousKeyId
+        ? await keys.getKeyById(args.previousKeyId)
+        : null;
+  const earned =
+    args.invitationCount ??
+    invitationEarnings(
+      mapping.type,
+      !!args.continuitySourceOrderId || previous !== null,
+      args.continuityExpiresAt
+        ? purchasedAt.getTime() < args.continuityExpiresAt.getTime()
+        : previous !== null && purchasedAt.getTime() < previous.effective_ends_at.getTime(),
+    );
   const row = await keys.upsertKey({
     paidOrderId: args.paidOrderId,
     clientId: args.clientId,
@@ -41,15 +62,14 @@ export async function registerPaidKey(args: {
     startsAt: args.startsAt,
     endsAt: args.endsAt ?? addDays(args.startsAt, mapping.durationDays),
     status: args.startsAt.getTime() > Date.now() ? "SCHEDULED" : "ACTIVE",
-    previousKeyId: previous?.id ?? null,
+    previousKeyId: args.previousKeyId ?? previous?.id ?? null,
+    purchasedAt,
+    continuitySourceKind: args.continuitySourceKind ?? (previous ? "KEY" : null),
+    continuitySourceOrderId: args.continuitySourceOrderId ?? previous?.paid_order_id ?? null,
+    continuitySourcePlanId: args.continuitySourcePlanId ?? previous?.plan_id ?? null,
+    continuityExpiresAt: args.continuityExpiresAt ?? previous?.effective_ends_at ?? null,
+    invitationsGranted: earned,
   });
-  const earned =
-    args.invitationCount ??
-    invitationEarnings(
-      mapping.type,
-      previous !== null,
-      previous !== null && Date.now() < previous.effective_ends_at.getTime(),
-    );
   await keys.createInvitationRights(row.id, earned);
   return row;
 }
@@ -113,6 +133,12 @@ export async function registerAndEnsureKey(args: {
   startsAt: Date;
   endsAt?: Date | null;
   invitationCount?: number | null;
+  purchasedAt?: Date | null;
+  continuitySourceKind?: "KEY" | "LEGACY_REFORMER" | null;
+  continuitySourceOrderId?: string | null;
+  continuitySourcePlanId?: string | null;
+  continuityExpiresAt?: Date | null;
+  previousKeyId?: string | null;
 }): Promise<boolean> {
   const row = await registerPaidKey(args);
   if (!row) return false;

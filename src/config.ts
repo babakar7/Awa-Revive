@@ -177,6 +177,9 @@ export const config = {
   KEY_REFORMER_SERVICE_IDS: optional("KEY_REFORMER_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   KEY_BONUS_SERVICE_IDS: optional("KEY_BONUS_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   LEGACY_REFORMER_PLAN_IDS: optional("LEGACY_REFORMER_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  // Both the retired full Pack Découverte and the new L'Invitée count toward
+  // the once-per-person discovery entitlement.
+  INVITEE_HISTORY_PLAN_IDS: optional("INVITEE_HISTORY_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   INVITATION_SLOT_HOUR: parseInt(optional("INVITATION_SLOT_HOUR", "12"), 10),
   INVITATION_SLOT_MINUTE: parseInt(optional("INVITATION_SLOT_MINUTE", "30"), 10),
   // Clés lifecycle templates. Each feature stays dark until its exact Meta
@@ -189,6 +192,10 @@ export const config = {
   WA_KEY_MEMBER_J5_TEMPLATE_LANG: optional("WA_KEY_MEMBER_J5_TEMPLATE_LANG", "fr"),
   WA_KEY_FINISHED_TEMPLATE: optional("WA_KEY_FINISHED_TEMPLATE", ""),
   WA_KEY_FINISHED_TEMPLATE_LANG: optional("WA_KEY_FINISHED_TEMPLATE_LANG", "fr"),
+  // J-5 conversion of a legacy Reformer subscriber to a Key. Kept separate
+  // from WA_RENEWAL_TEMPLATE because closed legacy plans must not be renewed.
+  WA_LEGACY_KEY_CONVERSION_TEMPLATE: optional("WA_LEGACY_KEY_CONVERSION_TEMPLATE", ""),
+  WA_LEGACY_KEY_CONVERSION_TEMPLATE_LANG: optional("WA_LEGACY_KEY_CONVERSION_TEMPLATE_LANG", "fr"),
   // Wix custom-app Order Purchased webhook (RS256 JWT raw body).
   WIX_WEBHOOK_PUBLIC_KEY: optional("WIX_WEBHOOK_PUBLIC_KEY", ""),
   // Guarded admin-to-client messaging. Keep false until takeover behavior has
@@ -233,11 +240,14 @@ export function assertConfig(): void {
       ["INVITATION_PLAN_ID", config.INVITATION_PLAN_ID],
       ["KEY_REFORMER_SERVICE_IDS", config.KEY_REFORMER_SERVICE_IDS.length],
       ["KEY_BONUS_SERVICE_IDS", config.KEY_BONUS_SERVICE_IDS.length],
+      ["LEGACY_REFORMER_PLAN_IDS", config.LEGACY_REFORMER_PLAN_IDS.length],
+      ["INVITEE_HISTORY_PLAN_IDS", config.INVITEE_HISTORY_PLAN_IDS.length],
       ["WIX_WEBHOOK_PUBLIC_KEY", config.WIX_WEBHOOK_PUBLIC_KEY],
       ["WA_KEY_INVITEE_J5_TEMPLATE", config.WA_KEY_INVITEE_J5_TEMPLATE],
       ["WA_KEY_THIRD_SESSION_TEMPLATE", config.WA_KEY_THIRD_SESSION_TEMPLATE],
       ["WA_KEY_MEMBER_J5_TEMPLATE", config.WA_KEY_MEMBER_J5_TEMPLATE],
       ["WA_KEY_FINISHED_TEMPLATE", config.WA_KEY_FINISHED_TEMPLATE],
+      ["WA_LEGACY_KEY_CONVERSION_TEMPLATE", config.WA_LEGACY_KEY_CONVERSION_TEMPLATE],
     ];
     for (const [name, value] of keyConfig) {
       if (!value) missing.push(name);
