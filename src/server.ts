@@ -6,6 +6,7 @@ import { registerWixWebhook } from "./webhooks/wix.js";
 import { registerAdmin } from "./admin/routes.js";
 import { registerDeliveryPublic } from "./deliveryPublic.js";
 import { MENU_HOST, registerMenuPublic, serveMenuPage } from "./menuPublic.js";
+import { registerCommande } from "./public/commandeRoutes.js";
 import { registerOps, serveCuisineRoot, serveServiceRoot, serveOwnerRoot } from "./ops/opsRoutes.js";
 import { config } from "./config.js";
 import { pool } from "./db/index.js";
@@ -97,6 +98,8 @@ export function buildServer() {
   registerDeliveryPublic(app);
   // Public café-menu page (menu.revive.sn, stable path /menu — outside /admin).
   registerMenuPublic(app);
+  // Public customer ordering app (QR in the changing rooms → /commander).
+  registerCommande(app);
   // Realtime ops PWA (cuisine.revive.sn — the kitchen iPad, Phase 1).
   registerOps(app);
 

@@ -1523,7 +1523,16 @@ export interface CafeOrder {
   payment_method: string;
   fulfilling_at: Date | null;
   fulfilled_at: Date | null;
+  /** Web orders (/commander): fulfillment mode. NULL = WhatsApp order (unchanged). */
+  service_mode: CafeServiceMode | null;
+  delivery_address: string | null;
+  /** First name typed on the page — the ticket uses this, NOT the CRM name. */
+  customer_name: string | null;
+  /** Idempotency key of the public POST (double-tap / retry → same order). */
+  client_request_id: string | null;
 }
+
+export type CafeServiceMode = "SUR_PLACE" | "A_EMPORTER" | "RETRAIT" | "LIVRAISON";
 
 async function transitionCafeOrder(
   id: string,
@@ -1554,11 +1563,16 @@ export async function createDraftCafeOrder(args: {
   extrasJson: unknown;
   amountXof: number;
   orderNote: string | null;
+  serviceMode?: CafeServiceMode | null;
+  deliveryAddress?: string | null;
+  customerName?: string | null;
+  clientRequestId?: string | null;
 }): Promise<CafeOrder> {
   const res = await pool.query(
     `insert into pending_cafe_orders
-       (client_id, linked_booking_id, service_name, slot_start, extras_json, amount_xof, order_note, status)
-     values ($1, $2, $3, $4, $5, $6, $7, 'DRAFT') returning *`,
+       (client_id, linked_booking_id, service_name, slot_start, extras_json, amount_xof, order_note, status,
+        service_mode, delivery_address, customer_name, client_request_id)
+     values ($1, $2, $3, $4, $5, $6, $7, 'DRAFT', $8, $9, $10, $11) returning *`,
     [
       args.clientId,
       args.linkedBookingId,
@@ -1567,9 +1581,25 @@ export async function createDraftCafeOrder(args: {
       JSON.stringify(args.extrasJson),
       args.amountXof,
       args.orderNote,
+      args.serviceMode ?? null,
+      args.deliveryAddress ?? null,
+      args.customerName ?? null,
+      args.clientRequestId ?? null,
     ],
   );
   return res.rows[0];
+}
+
+/** Idempotency for the public /commander POST: the live order already created
+ *  for this request id (a double-tap / retry / second tab must not create a 2nd). */
+export async function findActiveCafeOrderByRequestId(requestId: string): Promise<CafeOrder | null> {
+  const res = await pool.query(
+    `select * from pending_cafe_orders
+      where client_request_id = $1 and status in ('DRAFT','AWAITING_PAYMENT')
+      order by created_at desc limit 1`,
+    [requestId],
+  );
+  return res.rows[0] ?? null;
 }
 
 export async function setCafeOrderAwaitingPayment(

@@ -420,6 +420,20 @@ alter table pending_cafe_orders
 alter table pending_cafe_orders
   add column if not exists fulfilled_at timestamptz;
 
+-- Commandes WEB (/commander, QR vestiaires). NULL = commande WhatsApp historique
+-- (comportement inchangé). service_mode pilote le fulfillment : SUR_PLACE /
+-- A_EMPORTER / RETRAIT → ticket BAR ; LIVRAISON → livraison auto-créée.
+-- customer_name = prénom SAISI sur la page (figé — le ticket ne relit pas le CRM,
+-- un client déjà nommé qui tape un autre prénom obtient bien le prénom saisi).
+-- client_request_id = idempotence du POST public (double tap / retry / 2 onglets
+-- renvoient le même ordre et le même lien).
+alter table pending_cafe_orders add column if not exists service_mode text;
+alter table pending_cafe_orders add column if not exists delivery_address text;
+alter table pending_cafe_orders add column if not exists customer_name text;
+alter table pending_cafe_orders add column if not exists client_request_id text;
+create unique index if not exists idx_cafe_orders_client_request
+  on pending_cafe_orders (client_request_id) where client_request_id is not null;
+
 -- REFUND_NEEDED with no successful client/reception notify (crash mid-markRefund).
 -- Sweep re-notifies rows where this is null.
 alter table pending_bookings
@@ -949,6 +963,21 @@ create index if not exists idx_delivery_orders_scheduled_activation
   where status='IN_KITCHEN' and scheduled_for is not null and activated_at is null;
 create index if not exists idx_delivery_orders_reschedule_wamid
   on delivery_orders (reschedule_notify_wamid) where reschedule_notify_wamid is not null;
+
+-- Livraisons issues d'une commande WEB payée (/commander). Paiement HYBRIDE : les
+-- ARTICLES sont payés en ligne (payment_status='PAID'), les FRAIS de livraison
+-- restent dus en espèces au livreur (delivery_fee_status='CASH_DUE'). delivery_fee_xof
+-- NULL = pas de montant fixe (le livreur applique le tarif du moment). source_cafe_order_id
+-- UNIQUE rend la création idempotente : un rejeu de fulfillment (bail expiré) ne crée
+-- jamais une 2ᵉ livraison. Colonnes NULL = livraison staff/WhatsApp historique (inchangée).
+alter table delivery_orders add column if not exists source_cafe_order_id uuid;
+alter table delivery_orders add column if not exists delivery_fee_xof integer;
+alter table delivery_orders add column if not exists delivery_fee_status text;
+alter table delivery_orders drop constraint if exists delivery_orders_delivery_fee_status_check;
+alter table delivery_orders add constraint delivery_orders_delivery_fee_status_check
+  check (delivery_fee_status is null or delivery_fee_status in ('CASH_DUE','PAID'));
+create unique index if not exists idx_delivery_orders_source_cafe
+  on delivery_orders (source_cafe_order_id) where source_cafe_order_id is not null;
 
 -- Chaque lien mobile possède sa propre référence fournisseur. Cela permet de
 -- reconnaître un ancien lien payé tardivement après un changement de moyen et

@@ -14,6 +14,47 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Commande client par QR — page /commander (28 juillet 2026)
+
+Nouvelle **app client web** (QR dans les vestiaires → `menu.revive.sn/commander`)
+qui réutilise 100 % du pipeline café d'Awa. Le client compose son panier (menu
+partagé `pickerMenu()`, prix serveur, favoris ⭐, choix multi-groupes → `selections`),
+choisit un **mode de service** et **paie en ligne les ARTICLES** (Wave/OM) ; le
+webhook vérifié pilote `fulfillCafeOrder` — invariant paiement-d'abord identique.
+
+- **4 modes** : Sur place / À emporter / À venir chercher → **ticket BAR** cuisine
+  (heading = prénom saisi, badge 📦 + voix « à emporter » si à emporter) ;
+  **Livraison** → **livraison auto-créée** dans /admin/livraisons.
+- **Paiement livraison hybride** : articles payés en ligne (`payment_status='PAID'`),
+  **frais réglés en espèces au livreur** (`delivery_fee_status='CASH_DUE'`,
+  `delivery_fee_xof` = `config.DELIVERY_FEE_XOF` ou NULL si non fixé). Tous les
+  textes livraison (staff, départ, page magique livreur, notif client, templates)
+  sont **fee-aware** : jamais « ne rien encaisser » sur une livraison web à frais.
+- **Idempotence** : `delivery_orders.source_cafe_order_id UNIQUE` + primitive
+  `createWebDeliveryFromPaidCafeOrder` (`on conflict do nothing`) → un rejeu de
+  fulfillment (bail 2 min / sweep stuck) ne crée JAMAIS 2 livraisons ; échec de
+  création → la commande café reste PAID non-fulfilled (le sweep retente).
+  POST public idempotent sur `client_request_id`.
+- **Prénom figé** : `pending_cafe_orders.customer_name` (le ticket/la livraison
+  utilisent le prénom SAISI, pas le nom CRM ; la fiche n'est complétée que si vide).
+- **Horaires** : `barOpenNow()` (nouveau `src/domain/openingHours.ts`) lit le
+  planning publié du rôle **bar** → **fail-closed** sur endpoint public (pas de
+  planning = fermé) ; **Livraison** coupée après `DELIVERY_ORDER_CUTOFF_MIN` (18h).
+- **Sécurité** : CSP stricte (boot par `fetch /commander/menu.json`, pas d'inline) ;
+  prix jamais dans le POST (recalcul `computeExtras`) ; numéro SN strict
+  `^221(7[05678])\d{7}$` ; rate-limit `allowPublicOrder` (IP + numéro) ; URLs de
+  retour construites serveur (`COMMANDER_PUBLIC_BASE_URL`), jamais depuis le body.
+- **Nouveaux réglages** : `DELIVERY_FEE_XOF` (0 = pas de montant fixe affiché),
+  `DELIVERY_ORDER_CUTOFF_MIN` (1080), `COMMANDER_PUBLIC_BASE_URL` (menu.revive.sn).
+- **Vitrine + QR** : `menu.revive.sn` gagne un bouton « 🛒 Commander » ; QR
+  imprimable A6 dans **/admin/qr-commander** (dépendance `qrcode`).
+- **Hors périmètre** : frais en ligne (espèces au livreur), création de livraison
+  par Awa WhatsApp (inchangée — le staff saisit toujours ses livraisons), page de
+  suivi/notif « prête », EN/wolof.
+- Tests : `commandePage`/`deliveryFeeMessages` (purs) + `integration/commandePublic`
+  (e2e à emporter/sur place/livraison, idempotence webhook, prénom, horaires
+  fail-closed, cutoff, validation, rate-limit). 820 purs + 255 intégration verts.
+
 ## Politique annulation / report / transfert (28 juillet 2026)
 
 - Une annulation volontaire, un changement d’avis ou une absence ne déclenche

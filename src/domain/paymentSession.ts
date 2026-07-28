@@ -18,8 +18,14 @@ export async function createClientPaymentSession(args: {
   amountXof: number;
   clientReference: string;
   name: string;
+  /** Override the provider return URLs (web /commander flow). Server-built only —
+   *  NEVER accept these from a public request body. Default = the WhatsApp pages. */
+  successUrl?: string;
+  errorUrl?: string;
 }): Promise<ClientPaymentSession> {
   const ttlMin = config.PAYMENT_LINK_TTL_MINUTES;
+  const successUrl = args.successUrl ?? `${config.BASE_URL}/payment/success`;
+  const errorUrl = args.errorUrl ?? `${config.BASE_URL}/payment/error`;
   const t0 = Date.now();
   if (args.method === "wave") {
     // One retry on a transient provider hiccup (5xx/429/network): a payment
@@ -27,7 +33,13 @@ export async function createClientPaymentSession(args: {
     // the orphaned session is never shown or paid. Avoids the "service
     // temporarily unavailable" → immediate handoff we saw strand a client.
     const session = await withTransientRetry(
-      () => wave.createCheckoutSession({ amountXof: args.amountXof, clientReference: args.clientReference }),
+      () =>
+        wave.createCheckoutSession({
+          amountXof: args.amountXof,
+          clientReference: args.clientReference,
+          successUrl,
+          errorUrl,
+        }),
       { label: "wave.createCheckoutSession" },
     );
     console.log(`[pay] wave checkout ${Date.now() - t0}ms`);
@@ -47,8 +59,8 @@ export async function createClientPaymentSession(args: {
         name: args.name,
         validityMinutes: ttlMin,
         callbackUrl: `${config.BASE_URL}/webhooks/orange-money`,
-        successUrl: `${config.BASE_URL}/payment/success`,
-        cancelUrl: `${config.BASE_URL}/payment/error`,
+        successUrl,
+        cancelUrl: errorUrl,
       }),
     { label: "om.createQrPayment" },
   );

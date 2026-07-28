@@ -36,7 +36,7 @@ import {
   publishOpenSessionUpdate,
   listRecentClosedSessions,
 } from "../domain/serviceSessionRepo.js";
-import { getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
+import { getCafeMenu, computeExtras, pickerMenu } from "../lib/cafeMenu.js";
 import { savePushSubscription } from "../domain/pushRepo.js";
 import { pushToRole } from "./pushSender.js";
 import { ticketItemsSummary } from "../domain/kitchenTicketRules.js";
@@ -336,28 +336,11 @@ function pipeOpsEvents(req: FastifyRequest, reply: FastifyReply, channel: string
 const SERVICE_BASE = "/ops/service";
 
 /** The bar menu grouped by category (sort order preserved) for the order picker.
- *  ids + prices only from the server snapshot — the client never sets a price. */
+ *  ids + prices only from the server snapshot — the client never sets a price.
+ *  Delegates to the shared pickerMenu() (single source of truth with /commander);
+ *  the composer reads optionLabel/choices/fav, which pickerMenu still exposes. */
 function buildServiceMenu(): Array<{ category: string; items: unknown[] }> {
-  const { items } = getCafeMenu();
-  const cats: Array<{ category: string; items: unknown[] }> = [];
-  const byCat = new Map<string, unknown[]>();
-  for (const it of items.values()) {
-    let arr = byCat.get(it.category);
-    if (!arr) {
-      arr = [];
-      byCat.set(it.category, arr);
-      cats.push({ category: it.category, items: arr });
-    }
-    arr.push({
-      id: it.id,
-      name: it.name,
-      price: it.priceXof,
-      optionLabel: it.optionLabel,
-      choices: it.optionChoices ?? [],
-      fav: Boolean(it.favourite),
-    });
-  }
-  return cats;
+  return pickerMenu();
 }
 
 /** Everything the reception board needs to render: the fixed spot tiles, which

@@ -133,7 +133,10 @@ h2{font-family:Georgia,"Times New Roman",serif;font-weight:500;text-transform:up
 .opts{margin:.15rem 0 0;color:#7d5f80;font-size:.85rem;font-style:italic}
 .empty{text-align:center;color:#6b5c6c;margin-top:3rem}
 footer{text-align:center;margin-top:3rem}
-a.wa-float{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(.9rem + env(safe-area-inset-bottom));z-index:3;padding:.8rem 1.4rem;background:#7c547d;color:#fbf6f0;text-decoration:none;border-radius:999px;font-weight:600;font-size:.95rem;white-space:nowrap;box-shadow:0 2px 10px rgba(33,25,33,.18)}
+.floatbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(.9rem + env(safe-area-inset-bottom));z-index:3;display:flex;gap:.5rem;align-items:center}
+.floatbar a{text-decoration:none;border-radius:999px;font-weight:600;font-size:.95rem;white-space:nowrap;box-shadow:0 2px 10px rgba(33,25,33,.18)}
+a.order-float{padding:.8rem 1.4rem;background:#1a7f4b;color:#fbf6f0}
+a.wa-float{padding:.8rem 1.1rem;background:#7c547d;color:#fbf6f0}
 .foot-note{color:#7d5f80;font-size:.7rem;letter-spacing:.22em;text-transform:uppercase;margin-top:1.5rem}`;
 
 /** Onglets CSS-only : une seule catégorie visible (la première par défaut),
@@ -221,7 +224,7 @@ ${tabsCss(slugs)}</style></head><body>
 <p class="tagline">Pilates | Wellness | Community</p></header>
 ${nav}<main>${content}
 <footer><p class="foot-note">Revive — Dakar</p></footer></main>
-<a class="wa-float" href="${AWA_WA_ME}">Commander sur WhatsApp 📲</a></body></html>`;
+<div class="floatbar"><a class="order-float" href="/commander">🛒 Commander</a><a class="wa-float" href="${AWA_WA_ME}">WhatsApp 📲</a></div></body></html>`;
 }
 
 /** Query + render + headers; shared by GET /menu and the host-aware "/". */

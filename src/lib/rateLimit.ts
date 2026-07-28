@@ -44,4 +44,36 @@ setInterval(() => {
   for (const [phone, at] of notified) {
     if (now - at >= WINDOW_MS) notified.delete(phone);
   }
+  for (const [key, ts] of orderWindows) {
+    const fresh = ts.filter((t) => now - t < ORDER_WINDOW_MS);
+    if (fresh.length === 0) orderWindows.delete(key);
+    else orderWindows.set(key, fresh);
+  }
 }, 5 * 60 * 1000).unref();
+
+// ── Public /commander order endpoint (unauthenticated) ──
+// Tighter, longer window than the WhatsApp limiter: a handful of order attempts
+// per key over 15 min. Call once per IP and once per phone so neither a shared IP
+// nor a spoofed phone alone can flood order/payment creation.
+const ORDER_WINDOW_MS = 15 * 60 * 1000;
+const ORDER_MAX = 5;
+const orderWindows = new Map<string, number[]>();
+
+/** Whether a public order attempt is allowed for this key (an IP or a phone). */
+export function allowPublicOrder(key: string): boolean {
+  const now = Date.now();
+  const ts = (orderWindows.get(key) ?? []).filter((t) => now - t < ORDER_WINDOW_MS);
+  if (ts.length >= ORDER_MAX) {
+    orderWindows.set(key, ts);
+    return false;
+  }
+  ts.push(now);
+  orderWindows.set(key, ts);
+  return true;
+}
+
+/** Test-only: clear the public-order windows so cases don't leak the shared-IP
+ *  budget into one another. Never called in production. */
+export function __resetPublicOrderLimiter(): void {
+  orderWindows.clear();
+}

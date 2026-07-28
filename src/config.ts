@@ -65,6 +65,18 @@ export const config = {
   // alert if it hasn't departed (snapshotted per order at creation, so orders
   // in flight keep their SLA).
   DELIVERY_SLA_MINUTES: parseInt(optional("DELIVERY_SLA_MINUTES", "20"), 10),
+  // Frais de livraison des commandes WEB (/commander) : réglés EN ESPÈCES au
+  // livreur à l'arrivée, jamais encaissés en ligne. 0/vide = pas de montant fixe
+  // affiché (« frais réglés en espèces au livreur », le livreur applique le tarif
+  // du moment) ; >0 = montant fixe affiché au client avant paiement et porté sur
+  // la commande (« frais : X F à remettre au livreur »).
+  DELIVERY_FEE_XOF: parseInt(optional("DELIVERY_FEE_XOF", "0"), 10),
+  // Heure limite (minutes depuis minuit, Dakar) au-delà de laquelle le mode
+  // Livraison de /commander est refusé (la cuisine ferme les livraisons). 1080 = 18h.
+  DELIVERY_ORDER_CUTOFF_MIN: parseInt(optional("DELIVERY_ORDER_CUTOFF_MIN", "1080"), 10),
+  // Base URL publique de la page de commande client (/commander) — sert à
+  // construire les URLs de retour de paiement. Distincte de BASE_URL (callbacks Awa).
+  COMMANDER_PUBLIC_BASE_URL: optional("COMMANDER_PUBLIC_BASE_URL", "https://menu.revive.sn"),
 
   // ── Opérations temps réel (PWA cuisine, Phase 1) ──
   // Hôtes des interfaces PWA (dispatch host-aware, cf. menu.revive.sn). L'iPad

@@ -65,6 +65,26 @@ export interface DeliveryOrderView {
   scheduled_for?: Date | string | null;
   payment_status?: "PENDING_CHOICE" | "AWAITING_PAYMENT" | "CASH_DUE" | "PAID" | "REFUND_NEEDED";
   payment_method?: "wave" | "orange_money" | "maxit" | "cash" | null;
+  /** Web order (/commander): articles paid online, delivery fee due in cash. */
+  source_cafe_order_id?: string | null;
+  delivery_fee_xof?: number | null;
+  delivery_fee_status?: "CASH_DUE" | "PAID" | null;
+}
+
+/** A web delivery: articles paid online, delivery fee still collected in cash. */
+export function isWebDelivery(o: Pick<DeliveryOrderView, "source_cafe_order_id">): boolean {
+  return Boolean(o.source_cafe_order_id);
+}
+
+/** The delivery fee the driver still collects in cash, as a short phrase; "" if
+ *  nothing is due. Amount included only when a fixed fee is configured. */
+export function deliveryFeeCashPhrase(
+  o: Pick<DeliveryOrderView, "delivery_fee_status" | "delivery_fee_xof">,
+): string {
+  if (o.delivery_fee_status !== "CASH_DUE") return "";
+  return o.delivery_fee_xof && o.delivery_fee_xof > 0
+    ? `${o.delivery_fee_xof} FCFA de frais de livraison en espèces`
+    : `les frais de livraison en espèces`;
 }
 
 type DeliveryContactView = Pick<
@@ -96,8 +116,13 @@ export function deliveryTicketSubheading(
 
 export function deliveryPaymentStaffText(o: DeliveryOrderView): string {
   switch (o.payment_status) {
-    case "PAID":
-      return `payé${o.payment_method ? ` (${o.payment_method})` : ""} — ne rien encaisser`;
+    case "PAID": {
+      const paid = `payé${o.payment_method ? ` (${o.payment_method})` : ""}`;
+      // Web order: articles paid online, but the delivery fee is collected in cash —
+      // never say "ne rien encaisser" here (the driver DOES collect the fee).
+      const fee = deliveryFeeCashPhrase(o);
+      return fee ? `${paid} — articles réglés, ENCAISSER ${fee}` : `${paid} — ne rien encaisser`;
+    }
     case "CASH_DUE":
       return `${o.amount_xof} FCFA en espèces à encaisser à la livraison`;
     case "AWAITING_PAYMENT":
@@ -288,6 +313,28 @@ export function createdClientMessage(lang: string | null, o: DeliveryOrderView):
   const first = firstName(o.client_name);
   const summary = formatExtrasOneLine(o.items);
   const testPrefix = o.is_test ? "🧪 TEST — " : "";
+  // Web order (/commander): articles ALREADY paid online — never ask the client to
+  // pick a payment method again; just confirm and state the cash delivery fee.
+  if (isWebDelivery(o)) {
+    const fee = deliveryFeeCashPhrase(o);
+    const feeSentence = fee
+      ? ` À l'arrivée, prévois ${fee} à remettre au livreur.`
+      : ` Les frais de livraison se règlent en espèces au livreur à l'arrivée.`;
+    if (lang === "en") {
+      const feeEn =
+        o.delivery_fee_xof && o.delivery_fee_xof > 0
+          ? ` On arrival, have ${o.delivery_fee_xof} FCFA cash ready for the delivery fee.`
+          : ` The delivery fee is paid in cash to the driver on arrival.`;
+      return (
+        `${testPrefix}✅ Thanks${first ? ` ${first}` : ""}! Your Revive order is paid: ${summary} — ` +
+        `delivery to ${o.address}. We're preparing it now.${feeEn} We'll let you know when it's on its way!`
+      );
+    }
+    return (
+      `${testPrefix}✅ Merci${first ? ` ${first}` : ""} ! Ta commande Revive est payée : ${summary} — ` +
+      `livraison à ${o.address}. On la prépare tout de suite.${feeSentence} On te prévient dès qu'elle part !`
+    );
+  }
   const scheduled = o.scheduled_for
     ? formatDakarDateTime(o.scheduled_for, lang)
     : null;
@@ -348,10 +395,13 @@ export function routeClientMessage(lang: string | null, o: DeliveryOrderView): s
 /** Dedicated departure alert sent only to the optional handoff contact. */
 export function recipientRouteMessage(o: DeliveryOrderView): string {
   if (!o.recipient_name || !o.recipient_phone) return "";
+  const fee = deliveryFeeCashPhrase(o);
   const payment =
     o.payment_status === "CASH_DUE"
       ? `Prévoir ${o.amount_xof} FCFA en espèces à remettre au livreur.`
-      : "La commande est déjà payée : rien à régler au livreur.";
+      : fee
+        ? `Les articles sont payés ; prévoir ${fee} à remettre au livreur.`
+        : "La commande est déjà payée : rien à régler au livreur.";
   return (
     `${o.is_test ? "🧪 TEST — " : ""}Bonjour ${firstName(o.recipient_name)} 🙏🏾 ` +
     `La commande Revive de ${o.client_name} est en route vers ${o.address}. ` +
@@ -373,9 +423,16 @@ export function deliveryUpdateTemplateParams(
   kind: ClientPingKind,
   o: DeliveryOrderView,
 ): [string, string] {
+  const createdText = isWebDelivery(o)
+    ? `payée ✓ : ${formatExtrasOneLine(o.items)} — livraison à ${o.address}. On prépare.${
+        deliveryFeeCashPhrase(o)
+          ? ` Prévois ${deliveryFeeCashPhrase(o)} au livreur.`
+          : " Frais de livraison en espèces au livreur."
+      }`
+    : `bien reçue — total ${o.amount_xof} FCFA${o.scheduled_for ? `, arrivée prévue ${formatDakarDateTime(o.scheduled_for, "fr")} (Dakar)` : ""}. Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton paiement. Commande : ${formatExtrasOneLine(o.items)}`;
   const text =
     kind === "created"
-      ? `bien reçue — total ${o.amount_xof} FCFA${o.scheduled_for ? `, arrivée prévue ${formatDakarDateTime(o.scheduled_for, "fr")} (Dakar)` : ""}. Réponds WAVE, OM, MAXIT ou ESPÈCES pour choisir ton paiement. Commande : ${formatExtrasOneLine(o.items)}`
+      ? createdText
       : kind === "rescheduled"
         ? `livraison reprogrammée au ${o.scheduled_for ? formatDakarDateTime(o.scheduled_for, "fr") : "nouvel horaire"} (heure de Dakar)`
         : `en route !${o.recipient_name && o.recipient_phone ? ` Le livreur appellera ${o.recipient_name} au +${o.recipient_phone} pour la remise.` : " À tout de suite"}`;
@@ -389,10 +446,13 @@ export function deliveryUpdateTemplateParams(
 export function recipientRouteTemplateParams(
   o: DeliveryOrderView,
 ): [string, string] {
+  const fee = deliveryFeeCashPhrase(o);
   const payment =
     o.payment_status === "CASH_DUE"
       ? `${o.amount_xof} FCFA en espèces à remettre au livreur`
-      : "commande déjà payée, rien à régler";
+      : fee
+        ? `articles payés ; prévoir ${fee}`
+        : "commande déjà payée, rien à régler";
   return [
     toTemplateParam(firstName(o.recipient_name ?? "") || o.recipient_name || "contact", 60),
     toTemplateParam(

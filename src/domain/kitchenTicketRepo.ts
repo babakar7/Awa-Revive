@@ -218,6 +218,8 @@ export interface BarTicketInput {
   amountXof: number;
   note: string | null;
   isTest: boolean;
+  /** Web order to be packaged to-go (kitchen wraps it). Absent/false = comptoir. */
+  takeaway?: boolean;
 }
 
 /**
@@ -231,8 +233,8 @@ export async function createBarTicket(
   const res = await pool.query(
     `insert into kitchen_tickets
        (source, client_request_id, items_json, note, amount_xof,
-        heading, subheading, is_test)
-     values ('BAR', $1, $2, $3, $4, $5, $6, $7)
+        heading, subheading, is_test, takeaway)
+     values ('BAR', $1, $2, $3, $4, $5, $6, $7, $8)
      on conflict (client_request_id) where client_request_id is not null do nothing
      returning *`,
     [
@@ -243,6 +245,7 @@ export async function createBarTicket(
       input.heading,
       input.subheading,
       input.isTest,
+      input.takeaway ?? false,
     ],
   );
   const inserted = res.rows[0] as KitchenTicket | undefined;

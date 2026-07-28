@@ -9,7 +9,7 @@ import {
   orderItems,
   type DeliveryOrder,
 } from "./domain/deliveryRepo.js";
-import { deliveryCallContact } from "./domain/deliveryRules.js";
+import { deliveryCallContact, deliveryFeeCashPhrase } from "./domain/deliveryRules.js";
 
 /**
  * Public, no-auth page the kitchen opens from its WhatsApp ticket. Its explicit
@@ -75,9 +75,12 @@ function orderCard(order: DeliveryOrder, token: string): string {
   if (order.status === "IN_KITCHEN") {
     const contact = deliveryCallContact(order);
     const mayDepart = deliveryMayDepart(order);
+    const feePhrase = deliveryFeeCashPhrase(order);
     const payment =
       order.payment_status === "PAID"
-        ? `Payé via ${esc(order.payment_method ?? "mobile money")} — ne rien encaisser.`
+        ? feePhrase
+          ? `Articles payés via ${esc(order.payment_method ?? "mobile money")} — ENCAISSER ${esc(feePhrase)} auprès de ${esc(contact.name)}.`
+          : `Payé via ${esc(order.payment_method ?? "mobile money")} — ne rien encaisser.`
         : order.payment_status === "CASH_DUE"
           ? `${esc(order.amount_xof)} FCFA en espèces à encaisser auprès de ${esc(contact.name)}.`
           : order.payment_status === "REFUND_NEEDED"

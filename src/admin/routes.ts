@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { config } from "../config.js";
+import QRCode from "qrcode";
 import { pool } from "../db/index.js";
 import { transition } from "../domain/stateMachine.js";
 import * as repo from "../domain/repo.js";
@@ -1323,6 +1324,25 @@ ${
           error: err ?? null,
         });
         reply.type("text/html").send(await layout("Appareils", "/admin/appareils", body, { subtitle: "iPad cuisine & écrans temps réel", contentWidth: "wide" }));
+      });
+
+      // Printable QR poster for the changing-room ordering page (/commander).
+      admin.get("/qr-commander", async (_req, reply) => {
+        const url = `${config.COMMANDER_PUBLIC_BASE_URL.replace(/\/$/, "")}/commander`;
+        const dataUri = await QRCode.toDataURL(url, { width: 520, margin: 2, errorCorrectionLevel: "M" });
+        const body = `<div class="card" style="text-align:center;max-width:34rem;margin:0 auto">
+<h2 style="font-family:Georgia,serif;margin:.2rem 0 1rem">Commander au bar</h2>
+<p style="color:#6b5a6c;margin:0 0 1.2rem">Scanne pour commander depuis ton téléphone.</p>
+<img src="${dataUri}" alt="QR code /commander" style="width:min(80vw,360px);height:auto;border:1px solid #e7dccd;border-radius:14px;padding:12px;background:#fff"/>
+<p style="margin:1.2rem 0 0;font-weight:700;letter-spacing:.02em">${escapeHtml(url)}</p>
+<p style="margin:1.4rem 0 0"><button onclick="window.print()" class="btn">🖨️ Imprimer</button></p>
+<p style="color:#8d7a8e;font-size:.8rem;margin-top:1rem">À imprimer (A6) et coller dans les vestiaires.</p></div>`;
+        reply.type("text/html").send(
+          await layout("QR Commander", "/admin/qr-commander", body, {
+            subtitle: "Affiche vestiaires",
+            contentWidth: "standard",
+          }),
+        );
       });
 
       admin.post("/appareils", async (req, reply) => {

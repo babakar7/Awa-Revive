@@ -115,14 +115,17 @@ describe("renderPublicMenuPage", () => {
     expect(html).toContain("Le menu arrive bientôt");
   });
 
-  it("stays script-free with a labelled nav, favicon, og:image and one floating CTA", () => {
+  it("stays script-free with a labelled nav, favicon, og:image and both floating CTAs", () => {
     const html = renderPublicMenuPage(groupPublicMenu([item()], ["Cafés"]));
     expect(html).not.toContain("<script");
     expect(html).toContain(`aria-label="Catégories"`);
     expect(html).toContain(`rel="icon" href="data:image/svg+xml`);
     expect(html).toContain(`property="og:image"`);
     expect(html).toContain(`content="only light"`);
-    expect(html.match(/Commander sur WhatsApp/g)).toHaveLength(1); // floating CTA only
+    // Storefront CTAs: order on the page (/commander) + WhatsApp handoff.
+    expect(html).toContain(`href="/commander"`);
+    expect(html.match(/class="order-float"/g)).toHaveLength(1);
+    expect(html.match(/class="wa-float"/g)).toHaveLength(1);
   });
 
   it("shows one category at a time: first is default, others revealed by :target", () => {

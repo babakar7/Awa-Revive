@@ -198,6 +198,55 @@ export function getCafeMenu(): CafeMenu {
   return snapshot;
 }
 
+/** One clickable item in an order picker (service composer + /commander). */
+export interface PickerMenuItem {
+  id: string;
+  name: string;
+  price: number; // server-priced — the client NEVER sends a price
+  /** First group's label/choices (back-compat for the single-choice service UI). */
+  optionLabel?: string;
+  choices: string[];
+  /** Every independent choice group (the /commander app submits `selections`). */
+  optionGroups: MenuOptionGroup[];
+  fav: boolean;
+}
+export interface PickerMenuCategory {
+  category: string;
+  items: PickerMenuItem[];
+}
+
+/**
+ * The live menu grouped by category for an order picker — the SINGLE source of
+ * truth for both the reception composer and the public /commander app. Ids +
+ * prices come only from the server snapshot; the browser never sets a price.
+ * Exposes the FULL optionGroups (not just the first group) so multi-choice items
+ * are orderable under computeExtras({requireChoices:true}).
+ */
+export function pickerMenu(): PickerMenuCategory[] {
+  const { items } = getCafeMenu();
+  const cats: PickerMenuCategory[] = [];
+  const byCat = new Map<string, PickerMenuItem[]>();
+  for (const it of items.values()) {
+    let arr = byCat.get(it.category);
+    if (!arr) {
+      arr = [];
+      byCat.set(it.category, arr);
+      cats.push({ category: it.category, items: arr });
+    }
+    const groups = menuOptionGroups(it);
+    arr.push({
+      id: it.id,
+      name: it.name,
+      price: it.priceXof,
+      optionLabel: groups[0]?.label,
+      choices: groups[0]?.choices ?? [],
+      optionGroups: groups,
+      fav: Boolean(it.favourite),
+    });
+  }
+  return cats;
+}
+
 /** Bumped on every setCafeMenu — memo key for systemPrompt(). */
 export function cafeMenuVersion(): number {
   return menuVersion;

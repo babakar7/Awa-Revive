@@ -15,13 +15,16 @@ export interface WaveSession {
 export async function createCheckoutSession(args: {
   amountXof: number;
   clientReference: string;
+  /** Optional return URLs (web /commander flow); default = the WhatsApp pages. */
+  successUrl?: string;
+  errorUrl?: string;
 }): Promise<WaveSession> {
   const body = JSON.stringify({
     amount: String(args.amountXof), // XOF: integer amount, no decimals
     currency: "XOF",
     client_reference: args.clientReference,
-    success_url: `${config.BASE_URL}/payment/success`,
-    error_url: `${config.BASE_URL}/payment/error`,
+    success_url: args.successUrl ?? `${config.BASE_URL}/payment/success`,
+    error_url: args.errorUrl ?? `${config.BASE_URL}/payment/error`,
   });
 
   const headers: Record<string, string> = {

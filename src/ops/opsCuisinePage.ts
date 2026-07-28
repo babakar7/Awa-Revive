@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v13";
+const ASSET_VERSION = "v14";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -246,7 +246,7 @@ export const CUISINE_APP_JS = String.raw`(function(){
   function newSpeech(t){ var w=t.heading||'';
     var lead;
     if(t.source==='DELIVERY') lead='Nouvelle livraison';
-    else if(t.source==='BAR') lead='Nouvelle commande bar';
+    else if(t.source==='BAR') lead='Nouvelle commande bar'+(t.takeaway?' à emporter':'');
     else lead='Nouvelle commande'+(t.takeaway?' à emporter':'');
     var it=itemsSpeech(t); return lead+(w?', '+w:'')+(it?'. '+it:''); }
   function urgentSpeech(t){ return 'Commande urgente'+(t.heading?', '+t.heading:''); }
@@ -306,7 +306,7 @@ export const CUISINE_APP_JS = String.raw`(function(){
     // One fulfilment-mode badge per ticket: Sur place / À emporter / Livraison.
     var b;
     if(t.source==='DELIVERY') b=el('span','badge','🛵 Livraison');
-    else if(t.source==='BAR') b=el('span','badge away','☕ Commande bar');
+    else if(t.source==='BAR') b=el('span','badge away',t.takeaway?'📦 Bar à emporter':'☕ Commande bar');
     else if(t.takeaway) b=el('span','badge away','📦 À emporter');
     else b=el('span','badge table','🍽️ Sur place');
     top.appendChild(b);

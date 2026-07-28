@@ -54,6 +54,12 @@ export interface DeliveryOrder {
   payment_ref: string | null;
   paid_at: Date | null;
   payment_issue: string | null;
+  /** Web order origin (idempotency anchor). NULL = staff/WhatsApp delivery. */
+  source_cafe_order_id: string | null;
+  /** Hybrid payment: articles paid online, delivery fee due in cash to the driver.
+   *  delivery_fee_xof NULL = no fixed amount (driver applies the going rate). */
+  delivery_fee_xof: number | null;
+  delivery_fee_status: "CASH_DUE" | "PAID" | null;
   status: DeliveryStatus;
   sla_minutes: number;
   ready_token_hash: string;
@@ -172,6 +178,79 @@ export async function createDeliveryOrder(
 export async function findDeliveryOrder(id: string): Promise<DeliveryOrder | null> {
   if (!UUID_RE.test(String(id))) return null; // never 500 on a junk public URL
   const res = await pool.query(`select * from delivery_orders where id = $1`, [id]);
+  return (res.rows[0] as DeliveryOrder) ?? null;
+}
+
+export interface WebDeliveryInput {
+  sourceCafeOrderId: string;
+  clientName: string; // first name typed on the page (NOT the CRM name)
+  clientPhone: string; // normalized wa digits
+  address: string;
+  note: string | null;
+  items: ExtraLine[];
+  amountXof: number; // ARTICLES only — already paid online
+  paymentMethod: "wave" | "orange_money" | "maxit";
+  paymentRef: string; // the cafe payment session reference
+  deliveryFeeXof: number | null; // fixed fee shown to the client, or null (going rate)
+  slaMinutes: number;
+  isTest: boolean;
+}
+
+/**
+ * Create the delivery for a PAID web cafe order. IDEMPOTENT on source_cafe_order_id:
+ * a fulfillment replay (the 2-minute lease expiring, or the stuck-order sweep) never
+ * creates a second delivery. Inserted already `payment_status='PAID'` for the articles
+ * (paid online) while the delivery fee stays `CASH_DUE` (cash to the driver). Activated
+ * immediately — the kitchen ticket + reception pings fire from the normal sweep.
+ * Returns {created:false} when the row already existed (a replay).
+ */
+export async function createWebDeliveryFromPaidCafeOrder(
+  input: WebDeliveryInput,
+): Promise<{ order: DeliveryOrder; created: boolean }> {
+  const token = newReadyToken();
+  const res = await pool.query(
+    `insert into delivery_orders
+       (client_name, client_phone, wix_contact_id, recipient_name, recipient_phone,
+        address, note, items_json, amount_xof, sla_minutes, ready_token_hash,
+        created_by, is_test, activated_at, activation_notify_status, recipient_route_notify_status,
+        payment_status, payment_method, payment_ref, paid_at,
+        source_cafe_order_id, delivery_fee_xof, delivery_fee_status)
+     values ($1,$2,null,null,null,
+        $3,$4,$5,$6,$7,$8,
+        'web',$9, now(), 'sent', 'sent',
+        'PAID',$10,$11, now(),
+        $12,$13,'CASH_DUE')
+     on conflict (source_cafe_order_id) where source_cafe_order_id is not null do nothing
+     returning *`,
+    [
+      input.clientName,
+      input.clientPhone,
+      input.address,
+      input.note,
+      JSON.stringify(input.items),
+      input.amountXof,
+      input.slaMinutes,
+      hashReadyToken(token),
+      input.isTest,
+      input.paymentMethod,
+      input.paymentRef,
+      input.sourceCafeOrderId,
+      input.deliveryFeeXof,
+    ],
+  );
+  const inserted = res.rows[0] as DeliveryOrder | undefined;
+  if (inserted) return { order: inserted, created: true };
+  const existing = await findDeliveryBySourceCafeOrder(input.sourceCafeOrderId);
+  if (!existing) throw new Error(`web delivery missing after conflict: ${input.sourceCafeOrderId}`);
+  return { order: existing, created: false };
+}
+
+export async function findDeliveryBySourceCafeOrder(cafeOrderId: string): Promise<DeliveryOrder | null> {
+  if (!UUID_RE.test(String(cafeOrderId))) return null;
+  const res = await pool.query(
+    `select * from delivery_orders where source_cafe_order_id = $1`,
+    [cafeOrderId],
+  );
   return (res.rows[0] as DeliveryOrder) ?? null;
 }
 

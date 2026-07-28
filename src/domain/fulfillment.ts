@@ -22,6 +22,8 @@ import {
 import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { backfillBookingContacts } from "./bookingContactBackfill.js";
 import * as deliveries from "./deliveryRepo.js";
+import { normalizeDeliveryPhone } from "./deliveryRules.js";
+import type { CafeServiceMode } from "./repo.js";
 import * as keyRepo from "./keyRepo.js";
 import {
   keyPurchaseContinuityDecision,
@@ -939,25 +941,87 @@ export async function fulfillCafeOrder(cafeOrderId: string, log: PaymentLog): Pr
     ? new Date(order.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })
     : "?";
 
+  // The name the KITCHEN/DELIVERY sees is the one TYPED on the page (web orders),
+  // NOT the CRM name — a known client who orders under a different first name gets
+  // that first name on the ticket. NULL customer_name = WhatsApp order → CRM name.
+  const displayName = order.customer_name ?? client?.name ?? "Client Awa";
+  const mode = (order.service_mode as CafeServiceMode | null) ?? null;
+
+  // ── Web delivery: articles paid online → auto-create the delivery (no bar ticket) ──
+  if (mode === "LIVRAISON") {
+    const phone =
+      normalizeDeliveryPhone(String(client?.wa_phone ?? "")) ??
+      String(client?.wa_phone ?? "").replace(/\D/g, "");
+    const method = (["wave", "orange_money", "maxit"].includes(order.payment_method)
+      ? order.payment_method
+      : "wave") as "wave" | "orange_money" | "maxit";
+    const feeXof = config.DELIVERY_FEE_XOF > 0 ? config.DELIVERY_FEE_XOF : null;
+    try {
+      await deliveries.createWebDeliveryFromPaidCafeOrder({
+        sourceCafeOrderId: order.id,
+        clientName: displayName,
+        clientPhone: phone,
+        address: order.delivery_address ?? "",
+        note: order.order_note,
+        items: extras,
+        amountXof: order.amount_xof,
+        paymentMethod: method,
+        paymentRef: order.wave_session_id ?? `cafe:${order.id}`,
+        deliveryFeeXof: feeXof,
+        slaMinutes: config.DELIVERY_SLA_MINUTES,
+        isTest: client?.is_test === true,
+      });
+    } catch (err) {
+      // Load-bearing: if the delivery can't be created, DO NOT mark the cafe order
+      // fulfilled — leave it PAID so reconcileStuckCafeOrders retries (no lost order,
+      // and idempotency on source_cafe_order_id guarantees no duplicate on retry).
+      log.error({ err, cafeOrderId: order.id }, "Web delivery creation failed — leaving cafe order for reconcile");
+      notifyReception(
+        "⚠️ Livraison web payée non créée",
+        `La commande web ${order.id} (payée) n'a pas pu créer sa livraison.\n` +
+          `Client : ${displayName} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
+          `Adresse : ${order.delivery_address ?? "?"}\n` +
+          `Articles : ${extras.map((line) => `${line.qty}× ${line.name}`).join(", ")}`,
+      );
+      return;
+    }
+    // The delivery's own created-ping (web variant) IS the client confirmation —
+    // no generic cafe WhatsApp here (that would double-message the client).
+    await repo.markCafeOrderFulfilled(order.id);
+    return;
+  }
+
+  // ── Bar ticket modes (sur place / à emporter / retrait / historical WhatsApp) ──
   const standalone = !order.linked_booking_id;
+  let takeaway = false;
+  let subheading: string;
+  if (mode === "SUR_PLACE") {
+    subheading = `Sur place — servir à ${displayName}`;
+  } else if (mode === "A_EMPORTER") {
+    takeaway = true;
+    subheading = "À emporter — comptoir";
+  } else if (mode === "RETRAIT") {
+    subheading = "Retrait au comptoir";
+  } else {
+    subheading = standalone ? "Retrait au comptoir" : `${order.service_name ?? "Cours"} · ${slotLabel}`;
+  }
   try {
     await createBarTicket({
       sourceKey: `bar:cafe:${order.id}`,
-      heading: client?.name ?? "Client Awa",
-      subheading: standalone
-        ? "Retrait au comptoir"
-        : `${order.service_name ?? "Cours"} · ${slotLabel}`,
+      heading: displayName,
+      subheading,
       lines: extras,
       amountXof: order.amount_xof,
       note: order.order_note ?? (standalone ? "dès que possible" : "prête après le cours"),
       isTest: client?.is_test === true,
+      takeaway,
     });
   } catch (err) {
     log.error({ err, cafeOrderId: order.id }, "Paid cafe order ticket projection failed");
     notifyReception(
       "⚠️ Commande bar payée absente de l’iPad",
       `La commande bar ${order.id} n’a pas pu être affichée en cuisine.\n` +
-        `Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
+        `Client : ${displayName} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
         `Articles : ${extras.map((line) => `${line.qty}× ${line.name}`).join(", ")}`,
     );
   }
