@@ -1,152 +1,73 @@
-# Plan — Pack Découverte & plan activation: final decision
+# Activation automatique des plans — décision produit actuelle
 
-## Context
+## Décision
 
-Two product tracks for Awa plan sales (Babakar, 13/07):
+L’e-mail Wix de bienvenue/définition de mot de passe est désormais un compromis
+produit accepté, à condition d’être annoncé avant paiement. Awa provisionne donc
+un membre Wix pour toute vente de plan lorsque le client n’en possède pas déjà.
+Le mot de passe reste facultatif : il n’est nécessaire ni pour l’activation du
+plan, ni pour réserver avec Awa.
 
-| Track | Goal | Status |
-|---|---|---|
-| **A — Eligibility** | Never sell Pack Découverte to someone who already did Pilates at Revive | **Shipped** (`a6ad317`) |
-| **B — Activation** | After payment, activate the plan without client pain | **B1 shipped; B2 closed as no-go** |
+L’ancien no-go sur `createMember` est clos et ne doit plus guider le code.
 
-Live Wix probes (13/07) settled B2:
+## Parcours
 
-| Case | Offline order |
-|---|---|
-| Bare contact (no member) + `memberId = contactId` | **400** `MEMBER_DOESNT_EXIST` |
-| Create member via API (`POST /members/v1/members`) then offline | **200** ACTIVE (even `status: PENDING`) |
-| Create member via API | **Client receives Wix email** (invite / set-password / welcome) |
-| Dashboard manual plan assign | Staff can choose **send email or not** — that control is **not** available on the API path we probed |
+1. Le client choisit un plan et donne son nom.
+2. Awa appelle `create_plan_payment_link` sans inventer d’identité.
+3. Si aucun membre Wix n’existe, le serveur exige une preuve par e-mail :
+   `request_email_verification` reçoit le nom déjà connu dès le premier appel,
+   envoie un code, puis `submit_verification_code` prouve ou crée la fiche.
+4. Un code encore valide est réutilisé ; aucun second e-mail n’est envoyé. Un
+   code expiré peut être renvoyé.
+5. Après toutes les gardes de catalogue, d’éligibilité, de renouvellement et de
+   moyen de paiement, le serveur crée le membre Wix juste avant le draft.
+6. Le webhook de paiement crée l’ordre offline et confirme « ACTIF ».
 
-**Product conclusion:** Awa must **not** auto-create members to activate plans. The email is unacceptable for a silent WhatsApp payment flow. Reception keeps the dashboard path (optional email). Awa auto-activates **only when a member already exists**.
+La fiche prouvée par e-mail prime sur l’index téléphone :
+`verified.linked_contact_id ?? contactId`. Cette identité unique sert à
+l’éligibilité Pack Découverte/L’Invitée, à la continuité des Clés et à
+`latestPlanEndDate`.
 
-Clarify language for docs/code comments:
+## Garde-fous
 
-- Non-members **can have** plans (dashboard, CRM).
-- **API** `createOfflineOrder` **requires** a real `memberId`.
-- Having ≠ auto-activating via Awa.
+- Aucun paiement si le membre créé est rattaché à une autre fiche.
+- Aucun paiement si Wix refuse la création ou signale un conflit d’e-mail qui
+  ne se résout pas vers le membre attendu.
+- La réception est notifiée une seule fois dans ces cas.
+- `createMember` n’est jamais appelé avant les gardes métier et le choix du rail
+  de paiement.
+- `PACK_DISCOVERY_CONTINUATION_PLAN_IDS` reste réservé à la réception.
+- La campagne Meta conserve ses codes `discovery_member_*`.
+- Le webhook reste idempotent : une double livraison, même sous deux event IDs,
+  ne peut pas activer deux fois le plan.
 
----
+## Fallback manuel
 
-## Final product rules (locked)
+Si le client refuse la vérification ou ne peut pas accéder à sa boîte, Awa
+explique que l’activation ne sera pas instantanée et rappelle
+`create_plan_payment_link` avec `client_declined_verification:true`. Le paiement
+peut alors être créé avec `member_id = null`; le webhook notifie la réception
+une seule fois pour une activation manuelle.
 
-### A. Pack Découverte eligibility (done)
+Un incident technique ou une incohérence Wix n’utilise pas ce fallback : aucun
+paiement n’est pris tant que l’identité n’est pas sûre.
 
-Server decides, before any payment link:
+## API Wix vérifiée
 
-1. Plan is discovery if `isDiscoveryPlan(name)` → `/découverte|discovery|essai|trial/i`.
-2. If linked `contactId` and `hasPastPilatesBooking(contactId)` (any CONFIRMED/PENDING booking whose title matches `/pilates/i`) → refuse with `discovery_not_eligible`; Awa offers à-la-carte.
-3. No contact / unlinked → sell without asking (minimal friction; accepted blind spot).
-4. Wix/history errors → fail-open (`false`); never block a sale on a bug.
-5. Aquabike/yoga alone do **not** disqualify.
-6. Scope = Pilates **presence**, not “already bought discovery pack”.
+- Un `contactId` nu comme `memberId` reste invalide (`MEMBER_DOESNT_EXIST`).
+- `POST /members/v1/members` crée le membre et peut envoyer l’e-mail Wix.
+- `POST /pricing-plans/v2/checkout/orders/offline` exige le vrai `memberId`.
+- L’attribution manuelle depuis le dashboard reste disponible en secours.
 
-### B. Plan activation after payment (done + closed)
+Scripts de sonde : `npm run wix:probe-member` et
+`npm run wix:probe-contact-plan`.
 
-| Client state at link creation | Behaviour |
-|---|---|
-| `memberId` resolved | Auto: `createOfflinePlanOrder` in webhook → ACTIVATED + client “plan active” |
-| `memberId` null | Manual: stay PAID → email réception → client told activation by team (B1 note **before** pay) |
-| Lazy `createMember` in webhook | **No-go** (Wix email to client) |
+## Validation attendue
 
-No new activation feature until Wix offers create-member without email (or site settings fully suppress it and we re-probe).
-
----
-
-## Recommended remaining work (docs + hygiene only)
-
-No product code for B2. Small doc/comment alignment so the next agent does not re-open the wrong path.
-
-### 1. Record probe outcome in `PROGRESS.md`
-
-Replace “étape 2 EN ATTENTE d’un probe” with closed decision:
-
-- Probes: bare contact fails; createMember works + **emails**; B2 **abandoned**.
-- Auto-activation only if `member_id` set at link creation.
-- Manual = dashboard (optional email); Awa must not create members for activation.
-- Point to `scripts/probe-contact-plan.ts` / `scripts/probe-create-member.ts` if kept for re-check after Wix setting changes.
-
-### 2. Fix overstated comments in code
-
-Update wording in:
-
-- `src/lib/wix.ts` — `createOfflinePlanOrder` / `resolveMemberIdForPlan` comments  
-- `scripts/probe-create-member.ts` header (if kept)  
-- Reception copy in `processPlanPayment` is already correct; optional tighten: “attribuer le plan dans Wix (dashboard → option email off si possible)”
-
-Accurate phrasing:
-
-> Offline API requires a Wix **member** id. Contacts can hold plans when assigned in the dashboard. Awa does not create members (API emails the client).
-
-### 3. Ops probe script
-
-- Keep `scripts/probe-contact-plan.ts` (local) as the re-validation tool if Babakar later disables Wix welcome emails site-wide.
-- Optional: add npm script `wix:probe-contact-plan` + commit the file, or leave untracked.
-- **Do not** wire create-member into production fulfillment.
-
-### 4. Cleanup test data (ops, manual)
-
-Cancel free test orders / junk members from probes if still active:
-
-- `bbd25011@gmail.com` / test test — free *Programme Ambassadrice*  
-- `bbd2501+test@gmail.com` / Baba Test — free plan + member `3bc20458-…`  
-- Contact *Probe NoMember* if still in CRM  
-
-### 5. Explicit non-goals
-
-- No lazy `createMember` in `processPlanPayment`.
-- No offline order with bare `contactId` (proven 400).
-- No discovery pre-flag in dynamic context (nice-to-have; gate is enough).
-- No block on “already bought discovery pack” (presence only).
-- No plan-fulfillment lease/reconcile in this plan (separate robustness track).
-
----
-
-## Already in production (no re-implement)
-
-| Piece | Location |
-|---|---|
-| `isDiscoveryPlan` | `src/lib/wix.ts` |
-| `hasPastPilatesBooking` | `src/lib/wix.ts` |
-| Gate `discovery_not_eligible` | `src/agent/tools.ts` → `create_plan_payment_link` |
-| business-info discovery rule | `business-info.md` |
-| Unit tests | `test/discoveryPlan.test.ts` |
-| B1 `manual_after_payment` + activation note | `src/agent/tools.ts` |
-| Auto offline when `member_id` set | `src/domain/fulfillment.ts` → `processPlanPayment` |
-
----
-
-## Verification (already done + regression)
-
-**Probes (done):**
-
-- Contact-only offline → fail  
-- createMember + offline → success + email received  
-- Dashboard mental model: email optional for humans only  
-
-**Code regression (if only docs change):**
-
-```bash
-npm run build && npm test
-```
-
-**Live (when convenient):**
-
-1. Linked client with past Pilates → Pack Découverte refused → à-la-carte.  
-2. Linked without Pilates → discovery link OK.  
-3. Unknown number → discovery OK without past questions.  
-4. Client **with** Wix member → plan pay → auto ACTIVE.  
-5. Client **without** member → plan pay → manual path + honest pre-pay warning; réception activates in dashboard without email if preferred.
-
----
-
-## Execution checklist (when implementing remaining docs work)
-
-1. Update `PROGRESS.md` (B2 closed + probe summary).  
-2. Soften/correct “member-only” comments in `wix.ts` (+ probe script header if committed).  
-3. Optionally commit `scripts/probe-contact-plan.ts` + package.json script.  
-4. `npm run build && npm test`.  
-5. Commit + push only those doc/script files (not unrelated dirty work: new-chat notify, etc.).  
-6. Manual Wix cleanup of probe junk.
-
-**Effort:** ~30–60 minutes. **Risk:** none to payment path if code behaviour unchanged.
+- Décision pure : membre existant, code actif/expiré, fiche prouvée prioritaire.
+- Provisioning : succès, mismatch, conflit d’e-mail, panne Wix, reprise après
+  écriture Wix incertaine et notification unique.
+- Outil : vérification requise, création différée, auto après paiement et
+  fallback manuel explicite.
+- Webhook : activation unique avec `member_id`, notification manuelle unique
+  sans `member_id`, panne offline sans perte du paiement.

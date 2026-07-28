@@ -47,6 +47,13 @@ import {
   keyMappingForPlan,
 } from "../domain/keyRules.js";
 import { resolveContinuitySource } from "../domain/keyContinuity.js";
+import {
+  decideMemberProvisioning,
+  effectiveMemberContactId,
+  provisionWixMember,
+  type MemberProvisioningDecision,
+  type MemberProvisioningResult,
+} from "../domain/memberProvisioning.js";
 
 export type ClientPaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -340,8 +347,10 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "create_plan_payment_link",
     description:
       "Create a payment link to BUY an abonnement/pack (Wave, Orange Money, or Max It). Price from Wix catalog. " +
-      "payment_method required when OM is enabled (present_options three buttons if unset). After payment the plan " +
-      "is activated (or by reception) and the client gets a WhatsApp confirmation.",
+      "For a client without a Wix member, this first requires email verification and safely creates the member; " +
+      "then payment_method is required when OM is enabled (present_options three buttons if unset). After verified " +
+      "payment the plan activates automatically. Manual activation remains only when the client explicitly cannot " +
+      "access/refuses email verification.",
     input_schema: {
       type: "object",
       properties: {
@@ -372,8 +381,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: "boolean",
           description:
             "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly " +
-            "says they can't access that inbox or prefers to pay now. Otherwise leave absent: if a code is " +
-            "pending, the server refuses the link so the client can type the code first (they may already own a plan).",
+            "says they can't access that inbox or refuses verification. This keeps the manual-after-payment fallback. " +
+            "Otherwise leave absent: the server requires verification before any plan payment.",
         },
       },
       required: ["plan_id", "plan_name_confirm", "client_name"],
@@ -694,7 +703,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "client agrees, call again with create_account:true AND client_name (their full name). If the " +
       "client says they have no email or can't access it, call with client_has_no_email:true instead — " +
       "reception takes over (the client does NOT need to call). You never see the code: it only exists in " +
-      "the client's inbox.",
+      "the client's inbox. This tool is explicitly allowed during a plan purchase: always pass the already-known " +
+      "client_name on the first call.",
     input_schema: {
       type: "object",
       properties: {
@@ -1055,6 +1065,86 @@ async function escalateLinkRequest(
   );
 }
 
+interface PlanMemberContext {
+  contactId: string | null;
+  memberId: string | null;
+  verification: links.LinkRequest | null;
+  decision: MemberProvisioningDecision;
+}
+
+/**
+ * Read-only identity resolution. Safe to call before eligibility/renewal
+ * guards: it never creates a Wix member.
+ */
+async function resolvePlanMemberContext(
+  client: Client,
+  phone: string,
+  nameHint: string,
+  pending: links.LinkRequest | null,
+  now = new Date(),
+): Promise<PlanMemberContext> {
+  const [phoneContactId, recentlyVerified] = await Promise.all([
+    wix.findContactIdByPhone(phone, nameHint || undefined),
+    links.recentlyResolved(client.id, 60),
+  ]);
+  const verification = recentlyVerified ?? pending;
+  const contactId = effectiveMemberContactId(phoneContactId, verification, now);
+  const memberId = contactId ? await wix.findMemberIdByContactId(contactId) : null;
+  return {
+    contactId,
+    memberId,
+    verification,
+    decision: decideMemberProvisioning({
+      phoneContactId,
+      memberId,
+      verification,
+      now,
+    }),
+  };
+}
+
+/** The only write side of plan-member provisioning. Call immediately pre-draft. */
+async function provisionPlanMember(
+  context: PlanMemberContext,
+  client: Client,
+): Promise<MemberProvisioningResult> {
+  return provisionWixMember(context.decision, {
+    getContact: wix.getContactById,
+    findMemberId: wix.findMemberIdByContactId,
+    createMember: wix.createMember,
+    notifyFailure: async (reason, detail) => {
+      if (context.verification) {
+        await links.notifyLinkNeedsReception(
+          context.verification,
+          client,
+          `provisionnement membre Wix impossible (${reason}) : ${detail.slice(0, 500)}`,
+          context.verification.claimed_email,
+        );
+        return;
+      }
+      notifyReception(
+        "⚠️ Compte membre Wix à vérifier avant paiement",
+        `Le provisioning membre a échoué pour ${client.name ?? "?"} ` +
+          `(+${client.wa_phone.replace(/^\+/, "")}). Aucun paiement n'a été créé.\n` +
+          `Motif : ${reason} — ${detail.slice(0, 500)}`,
+      );
+    },
+  });
+}
+
+function verificationRequiredResult(
+  error: "plan_member_verification_required" | "discovery_member_verification_required",
+  codeAlreadySent: boolean,
+): string {
+  return JSON.stringify({
+    error,
+    verification: codeAlreadySent ? "code_active" : "email_required",
+    message: codeAlreadySent
+      ? "A valid verification code was already emailed. Ask the client to type that 6-digit code here now; do NOT call request_email_verification again and do NOT create a payment link."
+      : "An email verification is required before this plan purchase can be auto-activated. Ask for the client's email, then call request_email_verification and pass the already-known client_name on that FIRST call. Tell them Wix may also send an optional welcome/set-password email; choosing a password is not required. If they refuse or cannot access the inbox, retry create_plan_payment_link with client_declined_verification:true for manual activation after payment.",
+  });
+}
+
 async function exactBenefitWithShortRetry(args: {
   serviceId: string;
   contactId: string;
@@ -1342,9 +1432,12 @@ export async function executeTool(
 
       // 0. Code-before-payment: refuse while an email verification is live,
       //    unless the client explicitly declined it (see verificationBlocksPayment).
-      if (input.client_declined_verification !== true) {
-        const pending = await links.getOpen(client.id);
-        if (verificationBlocksPayment(pending, new Date())) return VERIFICATION_PENDING_RESULT;
+      const pendingVerification = await links.getOpen(client.id);
+      if (
+        input.client_declined_verification !== true &&
+        verificationBlocksPayment(pendingVerification, new Date())
+      ) {
+        return VERIFICATION_PENDING_RESULT;
       }
 
       // The offered slot is the server authority for the service. The model may
@@ -1512,6 +1605,46 @@ export async function executeTool(
         });
       }
 
+      // Resolve the campaign plan identity before asking for a payment method:
+      // strict conversation order is name → email proof → payment. This is
+      // read-only; member creation still happens after the payment guard.
+      const campaign =
+        !config.KEYS_AUTOMATION_ENABLED &&
+        participants === 1 &&
+        isCampaignReformerService({
+          serviceId,
+          serviceName: service.name,
+          configuredServiceIds: config.PACK_DISCOVERY_SERVICE_IDS,
+        }) &&
+        await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
+      let campaignMemberContext: PlanMemberContext | null = null;
+      if (campaign) {
+        campaignMemberContext = await resolvePlanMemberContext(
+          client,
+          `+${client.wa_phone.replace(/^\+/, "")}`,
+          clientName || client.name || "",
+          pendingVerification,
+        );
+        if (
+          campaignMemberContext.contactId &&
+          await wix.hasPastPilatesBooking(campaignMemberContext.contactId)
+        ) {
+          return JSON.stringify({
+            error: "discovery_not_eligible",
+            message: "Client already did Pilates at Revive; offer the normal class price.",
+          });
+        }
+        if (
+          config.PACK_DISCOVERY_STEP1_PLAN_ID &&
+          campaignMemberContext.decision.action === "require_verification"
+        ) {
+          return verificationRequiredResult(
+            "discovery_member_verification_required",
+            campaignMemberContext.decision.codeAlreadySent,
+          );
+        }
+      }
+
       const preferred = await repo.lastSuccessfulBookingPaymentMethod(client.id);
       const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled(), preferred);
       if (!pay.ok) {
@@ -1536,19 +1669,6 @@ export async function executeTool(
 
       // 5. DRAFT booking → payment session → AWAITING_PAYMENT. Class only.
 
-      const campaign =
-        !config.KEYS_AUTOMATION_ENABLED &&
-        participants === 1 &&
-        isCampaignReformerService({
-          serviceId,
-          serviceName: service.name,
-          configuredServiceIds: config.PACK_DISCOVERY_SERVICE_IDS,
-        }) &&
-        await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
-      if (campaign) {
-        const contactId = await wix.findContactIdByPhone(`+${client.wa_phone}`, clientName || client.name || undefined);
-        if (contactId && await wix.hasPastPilatesBooking(contactId)) return JSON.stringify({ error: "discovery_not_eligible", message: "Client already did Pilates at Revive; offer the normal class price." });
-      }
       // Pack Découverte Meta leads buy a REAL one-session plan for the first
       // payment. The later webhook redeems that benefit against this exact slot
       // so Wix shows an abonnement deduction in the participant list.
@@ -1577,56 +1697,22 @@ export async function executeTool(
           });
         }
 
-        const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
-        const contact = await wix.findContactByPhone(phone, clientName || client.name || undefined);
-        if (!contact) {
-          return JSON.stringify({
-            error: "discovery_member_verification_required",
-            message:
-              "This Pack Découverte first session must be attached to a Wix abonnement. Ask for the client's email, " +
-              "call request_email_verification, and have them type the code here before retrying this payment link.",
-          });
+        const prepared = await provisionPlanMember(campaignMemberContext!, client);
+        if (prepared.status === "verification_required") {
+          return verificationRequiredResult(
+            "discovery_member_verification_required",
+            prepared.codeAlreadySent,
+          );
         }
-
-        let memberId = await wix.findMemberIdByContactId(contact.id);
-        if (!memberId) {
-          const verified = await links.recentlyResolved(client.id);
-          if (!verified?.claimed_email) {
-            return JSON.stringify({
-              error: "discovery_member_verification_required",
-              message:
-                "This Pack Découverte first session must be attached to a Wix abonnement. Ask for the client's email, " +
-                "call request_email_verification, and have them type the code here before retrying this payment link.",
-            });
-          }
-          try {
-            const created = await wix.createMember(verified.claimed_email);
-            // Wix normally attaches the member to the proven contact by email.
-            // Do not charge if it instead created a different contact: that would
-            // leave the subscription disconnected from this WhatsApp number.
-            if (created.contactId && created.contactId !== contact.id) {
-              notifyReception(
-                "⚠️ Pack Découverte — compte Wix à vérifier",
-                `Le membre Wix créé pour ${clientName} (${phone}) est rattaché à la fiche ${created.contactId}, ` +
-                  `mais le numéro WhatsApp est sur ${contact.id}. Aucun paiement n'a été créé. Vérifier/fusionner avant de relancer.`,
-              );
-              return JSON.stringify({
-                error: "discovery_member_contact_mismatch",
-                message: "The Wix account needs a reception check before payment. Reception has been notified.",
-              });
-            }
-            memberId = created.id;
-          } catch (err) {
-            notifyReception(
-              "⚠️ Pack Découverte — création compte Wix impossible",
-              `Impossible de créer le compte membre Wix pour ${clientName} (${phone}) avant le paiement étape 1. ` +
-                `Aucun paiement n'a été créé. Erreur : ${err instanceof Error ? err.message : String(err)}`,
-            );
-            return JSON.stringify({
-              error: "discovery_member_creation_failed",
-              message: "The Wix account could not be prepared. Reception has been notified; do not take payment yet.",
-            });
-          }
+        if (prepared.status === "failed") {
+          return JSON.stringify({
+            error:
+              prepared.reason === "contact_mismatch"
+                ? "discovery_member_contact_mismatch"
+                : "discovery_member_creation_failed",
+            message:
+              "The Wix member attachment could not be prepared safely. Reception has been notified and no payment was created.",
+          });
         }
 
         await repo.expireActivePlanOrders(client.id);
@@ -1635,7 +1721,7 @@ export async function executeTool(
           planId: step1Plan.id,
           planName: step1Plan.name,
           amountXof: step1Plan.priceXof,
-          memberId,
+          memberId: prepared.memberId,
           campaignCode: PACK_DISCOVERY_CAMPAIGN,
           serviceId,
           serviceName: service.name,
@@ -1894,9 +1980,12 @@ export async function executeTool(
       }
 
       // 0. Code-before-payment guard (same as create_payment_link).
-      if (input.client_declined_verification !== true) {
-        const pending = await links.getOpen(client.id);
-        if (verificationBlocksPayment(pending, new Date())) return VERIFICATION_PENDING_RESULT;
+      const pendingVerification = await links.getOpen(client.id);
+      if (
+        input.client_declined_verification !== true &&
+        verificationBlocksPayment(pendingVerification, new Date())
+      ) {
+        return VERIFICATION_PENDING_RESULT;
       }
 
       // 1. Ownership + eligibility (belongs to client, BOOKED, in the future, 1–10).
@@ -2314,9 +2403,12 @@ export async function executeTool(
 
       // Code-before-payment: don't sell a plan while an email verification is
       // live — the client may already own a plan under another number.
-      if (input.client_declined_verification !== true) {
-        const pending = await links.getOpen(client.id);
-        if (verificationBlocksPayment(pending, new Date())) return VERIFICATION_PENDING_RESULT;
+      const pendingVerification = await links.getOpen(client.id);
+      if (
+        input.client_declined_verification !== true &&
+        verificationBlocksPayment(pendingVerification, new Date())
+      ) {
+        return verificationRequiredResult("plan_member_verification_required", true);
       }
 
       // Price and existence come from the Wix catalog — never from the model.
@@ -2347,10 +2439,16 @@ export async function executeTool(
       await repo.updateClientName(client.id, clientName);
       const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
 
-      // Member resolution decides auto vs manual activation after payment —
-      // resolved NOW and stored, so the webhook path stays fast and simple.
-      const contactId = await wix.findContactIdByPhone(phone, clientName || client.name || undefined);
-      const memberId = contactId ? await wix.findMemberIdByContactId(contactId) : null;
+      // Read-only identity resolution. The email-proven fiche wins over a stale
+      // phone index, and the same effective contact is used by every guard.
+      const memberContext = await resolvePlanMemberContext(
+        client,
+        phone,
+        clientName || client.name || "",
+        pendingVerification,
+      );
+      let contactId = memberContext.contactId;
+      let memberId = memberContext.memberId;
 
       // Pack Découverte eligibility (server decides): only for first-time
       // Pilates clients. History visible only when contactId is linked — if
@@ -2447,8 +2545,53 @@ export async function executeTool(
         });
       }
 
+      // Conversation order is strict: name → email proof (when needed) →
+      // payment method. This is decision-only; the Wix member is still not
+      // created until the payment-method guard below has passed.
+      if (
+        memberContext.decision.action === "require_verification" &&
+        input.client_declined_verification !== true
+      ) {
+        return verificationRequiredResult(
+          "plan_member_verification_required",
+          memberContext.decision.codeAlreadySent,
+        );
+      }
+
       const pay = resolvePaymentMethod(input.payment_method, om.isOmEnabled());
       if (!pay.ok) return JSON.stringify({ error: pay.error, message: pay.message });
+
+      // Provision only after every plan/catalog/eligibility/renewal/payment
+      // guard passed, immediately before the local draft. A refusal/inaccessible
+      // inbox explicitly opts into the existing manual-after-payment fallback.
+      if (
+        !(
+          memberContext.decision.action === "require_verification" &&
+          input.client_declined_verification === true
+        )
+      ) {
+        const prepared = await provisionPlanMember(memberContext, client);
+        // The decision guard above makes this branch unreachable, but keep the
+        // check as a defensive invariant if the decision type evolves.
+        if (prepared.status === "verification_required") {
+          return verificationRequiredResult(
+            "plan_member_verification_required",
+            prepared.codeAlreadySent,
+          );
+        }
+        if (prepared.status === "failed") {
+          return JSON.stringify({
+            error:
+              prepared.reason === "contact_mismatch"
+                ? "plan_member_contact_mismatch"
+                : "plan_member_creation_failed",
+            message:
+              "The Wix member could not be attached safely. Reception has been notified and no payment was created.",
+          });
+        }
+        contactId = prepared.contactId;
+        memberId = prepared.memberId;
+      }
 
       // One active plan link per client.
       await repo.expireActivePlanOrders(client.id);
@@ -2499,16 +2642,12 @@ export async function executeTool(
           : "";
 
       const appLabel = paymentMethodLabel(session.method);
-      // Activation honesty: a pricing-plan order can only be auto-activated for
-      // a Wix MEMBER. When no member was resolved (typical for a brand-new
-      // client who only has a contact fiche), activation falls to reception
-      // AFTER payment — so the plan is NOT usable instantly and a class can't
-      // be booked on it right away. Tell the model to set that expectation
-      // BEFORE the client pays, instead of letting them discover it afterwards.
+      // Manual activation remains available only through the explicit
+      // no-inbox/refusal fallback. Every verified purchase stores a member id.
       const activationManual = !memberId;
       const activationNote = activationManual
-        ? " ACTIVATION: this client has no linked member account yet, so the plan will be activated by the team shortly AFTER payment (usually quick) — NOT instantly. When you relay the link, tell the client their pack is activated by the team just after payment and that you'll be able to book their class once it's active. Do NOT promise instant activation or an immediate booking."
-        : "";
+        ? " ACTIVATION: the client explicitly declined/could not access email verification, so the team will activate the plan manually AFTER payment. Tell them clearly that activation is not instant."
+        : " ACTIVATION: automatic after verified payment. Wix may send an optional welcome/set-password email; choosing a password is not required.";
       return JSON.stringify({
         payment_link: session.paymentLink,
         payment_method: session.method,

@@ -44,6 +44,8 @@ export interface LinkRequest {
   emails_sent: number;
   status: LinkRequestStatus;
   detail: string | null;
+  /** Contact effectively proven/linked by the completed verification. */
+  linked_contact_id: string | null;
   reception_notified_at: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -252,11 +254,12 @@ export async function notifyLinkNeedsReception(
 ): Promise<void> {
   try {
     if (request.reception_notified_at) return;
-    await pool.query(
+    const claimed = await pool.query(
       `update link_requests set reception_notified_at = now(), updated_at = now()
         where id = $1 and reception_notified_at is null`,
       [request.id],
     );
+    if ((claimed.rowCount ?? 0) === 0) return;
     if (await repo.recentHandoffExists(request.client_id, HANDOFF_PREFIX, 24)) return;
     await repo.recordHandoff(request.client_id, `${HANDOFF_PREFIX} (${detail})`);
     // Email déclaré : ce qui permet à la réception de savoir quoi rattacher à la

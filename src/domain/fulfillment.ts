@@ -740,7 +740,8 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
     }
   }
 
-  // Manual path (or auto failed): notify reception once.
+  // Manual path is now reserved for explicit no-inbox/refusal fallback, or an
+  // offline-order incident after payment. Notify reception once in either case.
   if (!activated && !order.reception_notified_at) {
     notifyReception(
       `🎫 ABONNEMENT payé — activation manuelle : ${order.plan_name}`,

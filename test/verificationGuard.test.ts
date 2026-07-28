@@ -21,6 +21,7 @@ function req(
     emails_sent: 1,
     status,
     detail: null,
+    linked_contact_id: null,
     reception_notified_at: null,
     created_at: NOW,
     updated_at: NOW,

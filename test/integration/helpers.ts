@@ -42,6 +42,14 @@ export interface WixState {
   failCreateBooking: boolean;
   /** CRM contacts returned for phone lookups. */
   contacts: any[];
+  plans: any[];
+  /** Member returned by the Members query (null = contact without member). */
+  memberId: string | null;
+  memberContactId: string | null;
+  createdMemberIds: string[];
+  /** Offline Pricing Plans activation fixture. */
+  offlinePlanOrderIds: string[];
+  failOfflinePlanOrder: boolean;
   /** Benefit Programs fixture used by membership-booking tests. */
   membershipEligible: boolean;
   membershipAvailable: number;
@@ -158,6 +166,12 @@ export function makeFetchMock(): FetchMock {
     createdBookingIds: [],
     failCreateBooking: false,
     contacts: [],
+    plans: [],
+    memberId: "member_1",
+    memberContactId: null,
+    createdMemberIds: [],
+    offlinePlanOrderIds: [],
+    failOfflinePlanOrder: false,
     membershipEligible: true,
     membershipAvailable: 5,
     createdOrderIds: [],
@@ -317,6 +331,10 @@ export function makeFetchMock(): FetchMock {
       });
     }
 
+    if (url.includes("/pricing-plans/v2/plans") && method === "GET") {
+      return json(200, { plans: wix.plans });
+    }
+
     // --- Wix Calendar Events V3 (historical payroll snapshots) ---
     if (url.includes("/calendar/v3/events/query")) {
       if (wix.failCalendar) return json(503, { message: "calendar unavailable" });
@@ -361,7 +379,44 @@ export function makeFetchMock(): FetchMock {
     }
 
     if (url.includes("/members/v1/members/query")) {
-      return json(200, { members: [{ id: "member_1" }] });
+      const contactId = body?.query?.filter?.contactId;
+      const matches =
+        wix.memberId &&
+        (!wix.memberContactId || !contactId || wix.memberContactId === contactId);
+      return json(
+        200,
+        {
+          members: matches
+            ? [{ id: wix.memberId, contactId: wix.memberContactId ?? contactId ?? null }]
+            : [],
+        },
+      );
+    }
+
+    if (url.endsWith("/members/v1/members") && method === "POST") {
+      const id = `member_created_${wix.createdMemberIds.length + 1}`;
+      const loginEmail = String(body?.member?.loginEmail ?? "").toLowerCase();
+      const contact =
+        wix.contacts.find((candidate) => {
+          const emails: any[] = candidate?.info?.emails?.items ?? [];
+          return (
+            String(candidate?.primaryInfo?.email ?? "").toLowerCase() === loginEmail ||
+            emails.some((item) => String(item?.email ?? "").toLowerCase() === loginEmail)
+          );
+        }) ?? null;
+      wix.createdMemberIds.push(id);
+      wix.memberId = id;
+      wix.memberContactId = contact?.id ?? null;
+      return json(200, { member: { id, contactId: contact?.id ?? null } });
+    }
+
+    if (url.endsWith("/pricing-plans/v2/checkout/orders/offline") && method === "POST") {
+      if (wix.failOfflinePlanOrder) {
+        return json(500, { message: "offline activation exploded" });
+      }
+      const id = `plan_order_${wix.offlinePlanOrderIds.length + 1}`;
+      wix.offlinePlanOrderIds.push(id);
+      return json(200, { order: { id, status: "ACTIVE" } });
     }
 
     if (url.includes("/benefit-programs/v1/pools/eligible-pools")) {
@@ -479,6 +534,12 @@ export function makeFetchMock(): FetchMock {
       wix.createdBookingIds.length = 0;
       wix.failCreateBooking = false;
       wix.contacts = [];
+      wix.plans = [];
+      wix.memberId = "member_1";
+      wix.memberContactId = null;
+      wix.createdMemberIds.length = 0;
+      wix.offlinePlanOrderIds.length = 0;
+      wix.failOfflinePlanOrder = false;
       wix.membershipEligible = true;
       wix.membershipAvailable = 5;
       wix.createdOrderIds.length = 0;

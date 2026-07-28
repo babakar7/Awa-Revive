@@ -1541,13 +1541,13 @@ export async function updatePlanAvailabilityV3(args: {
 /**
  * Activate a plan for a member after an offline (Wave) payment. The offline
  * order API REQUIRES a real Wix member id (a bare contactId → 400
- * MEMBER_DOESNT_EXIST, probed 13/07) — the caller must resolve memberId first
- * and fall back to manual reception activation when the client has none. Note
- * a contact CAN hold a plan when assigned in the dashboard; the constraint is
- * only about auto-activating via this API. Awa deliberately does NOT create
- * members to fill the gap: POST /members/v1/members works but emails the client
- * a Wix invite/set-password mail (probed 13/07), unacceptable in a silent
- * WhatsApp flow. See PLAN-PACK-DECOUVERTE-ACTIVATION.md.
+ * MEMBER_DOESNT_EXIST, probed 13/07). A contact can still hold a plan when
+ * assigned in the dashboard; this constraint applies only to the API.
+ *
+ * Current product decision (28/07): after Awa proves the email, the sales flow
+ * may create the missing member immediately before the payment draft. Wix can
+ * send a welcome/set-password email and the client is warned beforehand; the
+ * password is optional. See PLAN-PACK-DECOUVERTE-ACTIVATION.md.
  *
  * startDate (ISO): optional. When in the FUTURE, Wix creates the order as
  * PENDING and activates it automatically on that date — this is how a renewal
@@ -1665,8 +1665,9 @@ export async function findMemberIdByContactId(contactId: string): Promise<string
 
 /**
  * Create a Wix site member for a contact whose email was just verified by Awa.
- * Wix sends its own welcome/set-password email; callers must make that explicit
- * before using this path. A PENDING member can still receive an offline plan.
+ * Wix may send its own welcome/set-password email; callers must make that
+ * explicit before using this path. A PENDING member can receive an offline
+ * plan, and choosing a password is not required for Awa bookings.
  */
 export async function createMember(loginEmail: string): Promise<{ id: string; contactId: string | null }> {
   const data = await wixPost("/members/v1/members", {

@@ -2055,8 +2055,8 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   ne pas re-renvoyer boutons/lien déjà envoyés). Constat prod 13/07 : Awa
   ignorait une question (« où êtes-vous ? ») en plein paiement et re-poussait
   les boutons + re-soumettait un code périmé. 6 tests `historyReplay`.
-- **Activation abonnement pour NOUVEAU client (13/07, étape 1 livrée ;
-  étape 2 FERMÉE — no-go).** Contrainte (§11) : l'API offline `createOfflineOrder`
+- **Activation abonnement pour NOUVEAU client (13/07, décision historique
+  supersédée le 28/07).** Contrainte (§11) : l'API offline `createOfflineOrder`
   exige un **member** id ; un vrai nouveau client n'a qu'une **fiche contact**
   (`createContact`) → `member_id` null → après paiement le plan reste PAID +
   activation manuelle réception. **Étape 1 livrée** : `create_plan_payment_link`
@@ -2070,10 +2070,10 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
   paiement WhatsApp silencieux (le dashboard, lui, laisse ce mail optionnel, mais
   ce contrôle n'existe pas sur l'API). **Décision** : Awa n'auto-active QUE si un
   member existe déjà (`member_id` résolu à la création du lien) ; sinon chemin
-  manuel réception (dashboard, mail optionnel). **Pas de `createMember` en prod.**
-  Re-valider seulement si Babakar désactive un jour les emails d'invitation côté
-  Wix : `npm run wix:probe-member` / `npm run wix:probe-contact-plan`. Détails +
-  non-goals : `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+  manuel réception. **Cette conclusion n'est plus la règle produit** : l'e-mail
+  Wix est désormais accepté et annoncé, et le provisioning self-service du
+  28/07 ci-dessous remplace ce no-go. Détails actuels :
+  `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 - **13/07 — Pack Découverte : garde-fou éligibilité (serveur décide).** Le pack
   d'essai est réservé aux clients qui n'ont **jamais fait de Pilates** à Revive
   (présence = booking CONFIRMED/PENDING dont le nom matche `/pilates/i` ;
@@ -3516,3 +3516,29 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
 - Régressions ajoutées : alias→créneau→lien de paiement, ticket BAR,
   iPad-only livraison, état durable du coupe-circuit, attribution humaine,
   choix texte libre, présentation et registre français.
+
+## 2026-07-28 — Auto-activation self-service de toutes les ventes de plans
+
+- Le provisioning membre auparavant spécifique au funnel Meta est partagé dans
+  `domain/memberProvisioning.ts` : décision pure
+  `use_member|require_verification|create_member`, fiche e-mail prouvée
+  prioritaire sur l'index téléphone pendant 60 minutes, détection du
+  rattachement divergent et orchestrateur Wix injecté/testable.
+- `create_plan_payment_link` exige désormais la vérification e-mail pour un
+  client sans membre, annonce l'e-mail Wix facultatif de définition de mot de
+  passe, puis crée le membre seulement après toutes les gardes de plan,
+  éligibilité, renouvellement/Clés et moyen de paiement, juste avant le draft.
+  La même fiche effective alimente l'éligibilité, la continuité et
+  `latestPlanEndDate`.
+- Un `AWAITING_CODE` ne compte comme code déjà envoyé que jusqu'à son
+  expiration. Le code actif est demandé sans nouvel e-mail ; le code expiré
+  autorise un renvoi. `decideNoneCandidateAction` reste inchangé : nom connu =
+  code envoyé sans double confirmation.
+- Refus ou boîte inaccessible : fallback explicite
+  `client_declined_verification:true` et activation manuelle après paiement.
+  Mismatch/conflit/panne Wix : réception notifiée une fois et aucun paiement.
+- La campagne Meta réutilise le même helper tout en conservant ses erreurs
+  `discovery_member_*`. Le fulfillment existant garde l'activation offline
+  idempotente (`member_id` → ACTIF) et la notification manuelle unique sans
+  membre.
+- Documentation mise à jour : l'ancien no-go `createMember` est supersédé.
