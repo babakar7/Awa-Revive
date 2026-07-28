@@ -140,10 +140,6 @@ function scheduledEditor(o: DeliveryOrder): string {
   </label>
   <button class="act act--sm act--ghost" type="submit">Enregistrer le nouvel horaire</button>
 </form>
-<form method="post" action="${esc(base)}/activate-now" class="delivery-activate-now" data-confirm="Afficher cette commande dans Cuisine maintenant ? Elle ne pourra ensuite plus être reprogrammée.">
-  <button class="act act--sm" type="submit">🔔 Alerter maintenant</button>
-  <span class="muted">Conserve l’heure d’arrivée promise et affiche immédiatement la commande en cuisine.</span>
-</form>
 </div>`;
 }
 
@@ -285,7 +281,17 @@ function cardTools(p: DeliveryPresentation): string {
     (o.status === "IN_KITCHEN" &&
       !!o.activated_at &&
       !["NEW", "PREPARING", "READY"].includes(o.kitchen_ticket_status ?? ""));
-  const parts: string[] = [editorButton("Modifier le contact", recipientEditor(o))];
+  const parts: string[] = [];
+  if (isWaitingForActivation(o)) {
+    parts.push(
+      `<div class="delivery-alert-now">${inlineForm(
+        `${base}/activate-now`,
+        "🔔 Alerter maintenant",
+        "Afficher cette commande dans Cuisine maintenant ? Elle ne pourra ensuite plus être reprogrammée.",
+      )}</div>`,
+    );
+  }
+  parts.push(editorButton("Modifier le contact", recipientEditor(o)));
   if (isWaitingForActivation(o)) {
     parts.push(editorButton("Reprogrammer", scheduledEditor(o)));
   }
@@ -299,17 +305,18 @@ function cardTools(p: DeliveryPresentation): string {
       ),
     );
   }
-  parts.push(
-    inlineForm(
-      `${base}/cancel`,
-      "✖ Annuler la commande",
-      o.status === "OUT_FOR_DELIVERY"
-        ? "La commande est en route — annuler quand même ?"
-        : "Annuler cette commande ?",
-      "danger",
-    ),
+  const cancel = inlineForm(
+    `${base}/cancel`,
+    "✖ Annuler la commande",
+    o.status === "OUT_FOR_DELIVERY"
+      ? "La commande est en route — annuler quand même ?"
+      : "Annuler cette commande ?",
+    "danger",
   );
-  return `<div class="delivery-card-tools">${parts.join("")}</div>`;
+  return `<div class="delivery-card-tools">
+  <div class="delivery-card-toolset">${parts.join("")}</div>
+  <div class="delivery-card-danger">${cancel}</div>
+</div>`;
 }
 
 function orderDetails(o: OpenDeliveryOrder): string {
@@ -480,10 +487,10 @@ export function renderLivraisonsBoard(
 .delivery-destination{display:grid;gap:.45rem}.delivery-destination>div{display:flex;align-items:baseline;gap:.35rem;flex-wrap:wrap}.delivery-destination>div>span:first-child{flex-basis:100%}.delivery-contact-line .ok,.delivery-contact-line .muted,.delivery-contact-line .danger-text{flex-basis:100%}
 .delivery-block{display:grid;gap:.16rem;padding:.65rem .72rem;border:1px solid var(--danger-border);border-radius:10px;background:var(--danger-bg);color:var(--danger)}.delivery-block span{font-size:.86rem;line-height:1.45}
 .delivery-order-details>summary,.delivery-history>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--brand);font-size:.88rem;font-weight:650}.delivery-order-detail{margin-top:.45rem;padding:.65rem;border-radius:9px;background:var(--cream-25);font-size:.88rem}.delivery-order-detail p{margin:.55rem 0 0}
-.delivery-card a[href^="tel:"]{display:inline-flex;align-items:center;min-height:44px}.delivery-card input,.delivery-card select{min-height:44px}.delivery-card-actions{display:flex;align-items:center;justify-content:space-between;gap:.65rem;flex-wrap:wrap;margin-top:auto;padding-top:.7rem;border-top:1px solid var(--border-soft)}.delivery-card .act{min-height:44px!important}.delivery-card-tools{display:flex;align-items:center;justify-content:flex-end;gap:.45rem;flex:1;flex-wrap:wrap}.delivery-editor{position:relative}.delivery-editor>summary{list-style:none;display:inline-flex;align-items:center;cursor:pointer}.delivery-editor>summary::-webkit-details-marker{display:none}.delivery-editor[open]{flex-basis:100%;order:10}.delivery-editor[open]>summary{margin-bottom:.55rem}.delivery-editor-panel{display:grid;gap:.75rem;padding:.8rem;border:1px solid var(--border);border-radius:12px;background:var(--cream-25)}.delivery-editor-form{display:grid;gap:.55rem}.delivery-activate-now{display:grid;gap:.35rem;padding-top:.75rem;border-top:1px solid var(--border-soft)}.delivery-activate-now .act{justify-self:start}
+.delivery-card a[href^="tel:"]{display:inline-flex;align-items:center;min-height:44px}.delivery-card input,.delivery-card select{min-height:44px}.delivery-card-actions{display:flex;align-items:center;justify-content:space-between;gap:.65rem;flex-wrap:wrap;margin-top:auto;padding-top:.7rem;border-top:1px solid var(--border-soft)}.delivery-card .act{min-height:44px!important}.delivery-card-tools{display:flex;align-items:flex-start;gap:.65rem;flex:1 1 100%;min-width:0}.delivery-card-toolset{display:flex;align-items:flex-start;gap:.45rem;flex:1;flex-wrap:wrap;min-width:0}.delivery-card-danger{display:flex;align-items:center;align-self:flex-start;margin-left:auto;padding-left:.65rem;border-left:1px solid var(--border-soft)}.delivery-editor{position:relative}.delivery-editor>summary{list-style:none;display:inline-flex;align-items:center;cursor:pointer}.delivery-editor>summary::-webkit-details-marker{display:none}.delivery-editor[open]{flex-basis:100%;order:10}.delivery-editor[open]>summary{margin-bottom:.55rem}.delivery-editor-panel{display:grid;gap:.75rem;padding:.8rem;border:1px solid var(--border);border-radius:12px;background:var(--cream-25)}.delivery-editor-form{display:grid;gap:.55rem}
 .delivery-history{margin-top:1.2rem}.delivery-history>summary{justify-content:space-between;padding:.8rem 1rem;border:1px solid var(--border);border-radius:12px;background:var(--surface)}.delivery-history[open]>summary{margin-bottom:.65rem}
 @media(max-width:900px){.delivery-counters{grid-template-columns:repeat(2,minmax(0,1fr))}.delivery-facts{grid-template-columns:1fr 1fr}.delivery-facts>div:last-child{grid-column:1/-1}.delivery-card-head{align-items:flex-start}}
-@media(max-width:430px){.delivery-card{padding:.85rem}.delivery-card-head{display:grid}.delivery-due{justify-items:start;text-align:left}.delivery-card-actions{align-items:stretch}.delivery-primary,.delivery-primary form,.delivery-primary .act{width:100%}.delivery-card-tools{justify-content:flex-start}.delivery-editor>summary{width:100%;justify-content:center}.delivery-editor{flex:1 1 calc(50% - .45rem)}.delivery-editor[open]{flex-basis:100%}.delivery-counters{gap:.45rem}.delivery-counter{min-height:60px;padding:.65rem}}
+@media(max-width:430px){.delivery-card{padding:.85rem}.delivery-card-head{display:grid}.delivery-due{justify-items:start;text-align:left}.delivery-card-actions{align-items:stretch}.delivery-primary,.delivery-primary form,.delivery-primary .act{width:100%}.delivery-card-tools{display:grid;gap:.7rem}.delivery-card-toolset{justify-content:flex-start}.delivery-alert-now,.delivery-alert-now form,.delivery-alert-now .act{width:100%}.delivery-editor>summary{width:100%;justify-content:center}.delivery-editor{flex:1 1 calc(50% - .45rem)}.delivery-editor[open]{flex-basis:100%}.delivery-card-danger{width:100%;margin:0;padding:calc(.7rem + 1px) 0 0;border-left:0;border-top:1px solid var(--border-soft)}.delivery-card-danger form,.delivery-card-danger .act{width:100%}.delivery-counters{gap:.45rem}.delivery-counter{min-height:60px;padding:.65rem}}
 </style>
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Livraisons</h2><p>Suivez le délai cuisine, le choix de paiement et le départ de chaque commande.</p></div><div class="page-header-actions"><a href="/admin/livraisons/new" class="act">Nouvelle commande</a></div></header>
 <div class="delivery-refresh">

@@ -405,6 +405,10 @@ describe("scheduled deliveries", () => {
     expect(board.body).toContain("Reprogrammer");
     expect(board.body).toContain(`/admin/livraisons/${id}/activate-now`);
     expect(board.body).toContain("Alerter maintenant");
+    expect(board.body).toContain("delivery-alert-now");
+    expect(board.body.indexOf("Alerter maintenant")).toBeLessThan(
+      board.body.indexOf("Modifier le contact"),
+    );
     expect(board.body).not.toContain("Actions secondaires");
     expect(board.body).not.toContain(`/admin/livraisons/${id}/depart`);
 
