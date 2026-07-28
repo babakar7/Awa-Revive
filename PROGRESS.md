@@ -1,8 +1,10 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **23 juillet 2026** — contact de remise des
-> livraisons et alertes dédiées (§6.29). Avant : livraisons programmées
+> Dernière mise à jour : **28 juillet 2026** — fiabilisation Awa après
+> l'incident Riche Aubambi : service canonique, coupe-circuit, attribution
+> humain/Awa et alertes cuisine iPad-only. Avant : contact de remise des
+> livraisons et alertes dédiées (§6.29), livraisons programmées
 > avec activation durable (§6.27), fiabilisation des alertes
 > livraison + mode commande de test (§6.26), refonte premium et UX de
 > tout l’admin (§4.41), notifications staff, livraisons bar, handoffs `wa.me`.
@@ -3482,3 +3484,35 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   `CANCELED`, trois lignes de registre `CANCELLED`, droit Résidente inutilisé
   `VOID`. `KEYS_AUTOMATION_ENABLED=false`, catalogue Awa toujours fermé,
   `/healthz` OK.
+
+## 2026-07-28 — Fiabilité Awa, relais humains et alertes cuisine iPad-only
+
+- Incident Riche Aubambi corrigé à la source : dès qu'un `choice_id` ou
+  `event_id` a été validé dans `slot_cache`, son `cached.service_id` canonique
+  décide du cours. L'alias répété par le modèle est seulement journalisé et ne
+  peut plus produire `unknown_slot` ni changer classe/prix. Même invariant pour
+  les liens, engagements multi-séances, abonnements et listes d'attente.
+- Les dernières options réellement envoyées sont conservées deux heures. Un
+  titre exact, un moyen de paiement explicitement offert ou une heure unique
+  écrit en texte libre est résolu avec le même ID qu'un clic ; les formulations
+  ambiguës restent au modèle.
+- Coupe-circuit persistant : deux erreurs techniques identiques
+  outil+code+ressource en deux heures créent un seul handoff, mettent Awa en
+  relais humain pendant 12 h et répondent avec un texte déterministe. Un succès
+  du même outil/ressource efface le compteur.
+- Les réponses admin restent visibles dans le replay mais portent maintenant un
+  marqueur humain explicite. La revue qualité les inclut comme
+  `human_team` et évalue seulement les tours/outils d'Awa.
+- Awa se présente en français avec les mots exacts « je suis une assistante
+  automatisée ». Le vouvoiement explicite est un cliquet durable et s'applique
+  aussi aux confirmations automatiques, erreurs média, paiements, livraisons et
+  remboursements. Un prénom déjà en base n'est plus redemandé.
+- Les créations/activations de livraison et les paiements bar ne WhatsAppent
+  plus automatiquement la cuisine. Les livraisons continuent sur le ticket
+  iPad durable ; les commandes bar payées ont désormais leur propre source
+  `BAR`, idempotente, avec bouton de clôture cuisine. Le renvoi WhatsApp manuel
+  d'une livraison reste disponible ; une panne de projection bar déclenche une
+  alerte critique à la réception.
+- Régressions ajoutées : alias→créneau→lien de paiement, ticket BAR,
+  iPad-only livraison, état durable du coupe-circuit, attribution humaine,
+  choix texte libre, présentation et registre français.

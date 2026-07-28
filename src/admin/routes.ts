@@ -37,12 +37,10 @@ import {
   attemptRecipientRouteNotify,
   attemptRescheduleNotify,
   attemptRouteNotify,
-  internalNotifyMode,
-  notifyKitchenForOrder,
   renotifyKitchen,
-  scheduleKitchenFallback,
 } from "../domain/deliveryNotify.js";
 import {
+  DELIVERY_KITCHEN_LEAD_OPTIONS,
   formatDakarDateTime,
   normalizeDeliveryPhone,
   parseDakarDateTime,
@@ -177,10 +175,17 @@ function parseDeliveryRecipientFields(
 }
 
 function parseKitchenLeadMinutes(body: Record<string, string>): number | null {
-  const selected = String(body.kitchen_lead_minutes ?? "60");
-  const raw = selected === "custom" ? body.kitchen_lead_custom : selected;
-  const minutes = Number(String(raw ?? "").trim());
-  return Number.isInteger(minutes) && minutes >= 1 && minutes <= 90 ? minutes : null;
+  const minutes = Number(String(body.kitchen_lead_minutes ?? "60").trim());
+  return DELIVERY_KITCHEN_LEAD_OPTIONS.includes(
+    minutes as (typeof DELIVERY_KITCHEN_LEAD_OPTIONS)[number],
+  )
+    ? minutes
+    : null;
+}
+
+function formatKitchenLeadHours(minutes: number): string {
+  const hours = minutes / 60;
+  return `${hours} ${hours === 1 ? "heure" : "heures"} avant`;
 }
 
 /** contactId → active plan names, for the CRM duplicates page & merge guard. */
@@ -930,7 +935,6 @@ ${
             delivery_mode: b.delivery_mode,
             scheduled_for: b.scheduled_for,
             kitchen_lead_minutes: b.kitchen_lead_minutes,
-            kitchen_lead_custom: b.kitchen_lead_custom,
             is_test: b.is_test,
             qty,
             choice,
@@ -958,7 +962,7 @@ ${
           kitchenLead = parseKitchenLeadMinutes(b);
           if (kitchenLead === null) {
             return backErr(
-              "Le délai cuisine doit être un nombre entier entre 1 et 90 minutes.",
+              "Le délai cuisine doit être compris entre 1 et 12 heures.",
               "kitchen_lead_minutes",
             );
           }
@@ -980,7 +984,7 @@ ${
         const slaRaw = parseInt(String(b.sla_minutes ?? "").trim(), 10);
         const sla = Number.isFinite(slaRaw) && slaRaw >= 5 && slaRaw <= 180 ? slaRaw : config.DELIVERY_SLA_MINUTES;
 
-        const { order, token } = await delivery.createDeliveryOrder({
+        const { order } = await delivery.createDeliveryOrder({
           client_name: name,
           client_phone: phone,
           wix_contact_id: wixContactId,
@@ -1019,14 +1023,14 @@ ${
             `Adresse : ${address}\n` +
             (scheduledFor
               ? `Arrivée promise : ${formatDakarDateTime(scheduledFor, "fr")} (heure de Dakar)\n` +
-                `Alerte cuisine : ${formatDakarDateTime(kitchenNotifyAt!, "fr")} (${kitchenLead} min avant)\n`
+                `Alerte cuisine : ${formatDakarDateTime(kitchenNotifyAt!, "fr")} (${formatKitchenLeadHours(kitchenLead!)} l’arrivée)\n`
               : "") +
             (note ? `Note : ${note}\n` : "") +
             `Suivi : /admin/livraisons`,
           { whatsappFirst: true, preferTemplate: true },
         );
-        // Only active orders reach the kitchen. A scheduled order stays durable
-        // and silent until the 60-second sweep crosses kitchen_notify_at.
+        // Only active orders reach the kitchen iPad. Creating or activating an
+        // order never sends an automatic WhatsApp to kitchen staff.
         let kitchenOk = false;
         if (order.activated_at) {
           // Project the active order onto a kitchen ticket right away so the
@@ -1037,23 +1041,7 @@ ${
               req.log.error({ err: e, order: order.id }, "Kitchen ticket create failed");
               return null;
             });
-          if (internalNotifyMode() === "parallel") {
-            // Pilot: the WhatsApp ticket fires immediately, alongside the iPad.
-            const claimed = await delivery.claimKitchenNotify(order.id);
-            if (claimed) {
-              try {
-                await notifyKitchenForOrder(claimed, token, req.log);
-                const fresh = await delivery.findDeliveryOrder(order.id);
-                kitchenOk = !!fresh && ["sent", "sent_template", "partial", "fallback_reception"].includes(fresh.kitchen_notify_status);
-              } catch (e) {
-                req.log.error({ err: e, order: order.id }, "Delivery kitchen notify threw");
-              }
-            }
-          } else {
-            // Post-pilot: the iPad is primary; arm the 15s WhatsApp safety net.
-            if (ticket) scheduleKitchenFallback(order.id, ticket.id, config.OPS_KITCHEN_FALLBACK_SECONDS, req.log);
-            kitchenOk = !!ticket; // the ticket reached the iPad board
-          }
+          kitchenOk = !!ticket;
           if (scheduledFor) await attemptActivationNotify(order.id, req.log);
         }
         const done = scheduledFor && !order.activated_at
@@ -1126,7 +1114,7 @@ ${
         const lead = parseKitchenLeadMinutes(b);
         if (lead === null) {
           return reply.redirect(
-            "/admin/livraisons?err=délai cuisine invalide (1 à 90 minutes)",
+            "/admin/livraisons?err=délai cuisine invalide (1 à 12 heures)",
             303,
           );
         }
@@ -1147,11 +1135,45 @@ ${
         );
         if (changed.arrivalChanged) await attemptRescheduleNotify(id, req.log);
         if (changed.order.activated_at) {
-          const claimed = await delivery.claimKitchenNotify(id);
-          if (claimed) await notifyKitchenForOrder(claimed, changed.token, req.log);
+          await createDeliveryTicket(
+            changed.order,
+            config.OPS_KITCHEN_FALLBACK_SECONDS,
+          ).catch((error) =>
+            req.log.error(
+              { err: error, order: id },
+              "Activated delivery ticket create failed after reschedule",
+            ),
+          );
           await attemptActivationNotify(id, req.log);
         }
         return reply.redirect("/admin/livraisons?done=reprogrammed", 303);
+      });
+
+      admin.post("/livraisons/:id/activate-now", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const activated = await delivery.activateScheduledDeliveryNow(id);
+        if (!activated) {
+          return reply.redirect(
+            "/admin/livraisons?err=alerte immédiate impossible : commande déjà activée ou traitée",
+            303,
+          );
+        }
+        req.log.info(
+          { order: id, by: req.adminUser },
+          "Scheduled delivery manually activated",
+        );
+        await createDeliveryTicket(
+          activated,
+          config.OPS_KITCHEN_FALLBACK_SECONDS,
+        )
+          .catch((error) => {
+            req.log.error(
+              { err: error, order: id },
+              "Kitchen ticket create failed after manual activation",
+            );
+          });
+        await attemptActivationNotify(id, req.log);
+        return reply.redirect("/admin/livraisons?done=activated-now", 303);
       });
 
       admin.post("/livraisons/:id/depart", async (req, reply) => {

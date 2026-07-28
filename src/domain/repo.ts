@@ -14,6 +14,7 @@ export interface Client {
   claimed_email: string | null;
   /** Last capability menu (vague opener) delivered — once-per-conversation window. */
   capability_menu_at: Date | null;
+  fr_register: "tu" | "vous" | null;
   /** Studio team/test number — badged in admin, no new-conversation ping. */
   is_test: boolean;
   /** Awa stays paused while this timestamp is in the future. */
@@ -74,7 +75,7 @@ export async function upsertClient(waPhone: string): Promise<Client> {
     `insert into clients (wa_phone) values ($1)
      on conflict (wa_phone) do update set updated_at = now()
      returning id, wa_phone, name, language, email_prompted_at, claimed_email,
-               capability_menu_at, is_test, human_takeover_until,
+               capability_menu_at, fr_register, is_test, human_takeover_until,
                human_takeover_by, human_takeover_at, awa_disengaged_until,
                awa_disengaged_at, awa_disengaged_reason`,
     [waPhone],
@@ -201,7 +202,7 @@ export async function findClientByPhone(candidates: string[]): Promise<Client | 
   if (digits.length === 0) return null;
   const res = await pool.query(
     `select id, wa_phone, name, language, email_prompted_at, claimed_email,
-            capability_menu_at, is_test, human_takeover_until,
+            capability_menu_at, fr_register, is_test, human_takeover_until,
             human_takeover_by, human_takeover_at, awa_disengaged_until,
             awa_disengaged_at, awa_disengaged_reason
        from clients where regexp_replace(wa_phone, '\\D', '', 'g') = any($1) limit 1`,
@@ -257,6 +258,14 @@ export async function updateClientLanguage(clientId: string, language: string): 
   );
 }
 
+export async function latchClientFormalRegister(clientId: string): Promise<void> {
+  await pool.query(
+    `update clients set fr_register='vous', updated_at=now()
+      where id=$1 and fr_register is distinct from 'vous'`,
+    [clientId],
+  );
+}
+
 export async function updateClientName(clientId: string, name: string): Promise<void> {
   await pool.query(
     `update clients set name = $2, updated_at = now() where id = $1 and (name is null or name <> $2)`,
@@ -303,7 +312,10 @@ export async function lastTurns(clientId: string, n = 20): Promise<Turn[]> {
                  from conversations
                 where client_id = $1 and role in ('user', 'assistant')
                union all
-               select 'assistant' as role, body as content, coalesce(sent_at, created_at) as created_at
+               select 'assistant' as role,
+                      '[MESSAGE HUMAIN DE L''ÉQUIPE REVIVE — contexte, pas une réponse d''Awa]' ||
+                      E'\n' || body as content,
+                      coalesce(sent_at, created_at) as created_at
                  from admin_outbound_messages
                 where client_id = $1 and status = 'sent'
              ) history order by created_at desc limit $2) t
@@ -335,12 +347,138 @@ export async function lastTurnsForReplay(clientId: string, n = 30): Promise<Turn
                  from conversations
                 where client_id = $1 and role in ('user', 'assistant', 'tool')
                union all
-               select 'assistant' as role, body as content, coalesce(sent_at, created_at) as created_at
+               select 'assistant' as role,
+                      '[MESSAGE HUMAIN DE L''ÉQUIPE REVIVE — contexte, pas une réponse d''Awa]' ||
+                      E'\n' || body as content,
+                      coalesce(sent_at, created_at) as created_at
                  from admin_outbound_messages
                 where client_id = $1 and status = 'sent'
              ) history order by created_at desc limit $2) t
       order by created_at asc`,
     [clientId, n],
+  );
+  return res.rows;
+}
+
+// ---------- agent tool circuit breaker ----------
+
+export async function recordAgentToolFailure(args: {
+  clientId: string;
+  toolName: string;
+  errorCode: string;
+  resourceKey: string;
+  ttlHours?: number;
+}): Promise<{ failureCount: number; alreadyTripped: boolean }> {
+  const ttlHours = args.ttlHours ?? 2;
+  await pool.query(`delete from agent_tool_failures where expires_at <= now()`);
+  const res = await pool.query(
+    `insert into agent_tool_failures
+       (client_id, tool_name, error_code, resource_key, failure_count, expires_at)
+     values ($1,$2,$3,$4,1,now() + ($5 || ' hours')::interval)
+     on conflict (client_id, tool_name, error_code, resource_key) do update
+       set failure_count = case
+             when agent_tool_failures.expires_at <= now() then 1
+             else agent_tool_failures.failure_count + 1
+           end,
+           first_failed_at = case
+             when agent_tool_failures.expires_at <= now() then now()
+             else agent_tool_failures.first_failed_at
+           end,
+           last_failed_at = now(),
+           expires_at = now() + ($5 || ' hours')::interval,
+           tripped_at = case
+             when agent_tool_failures.expires_at <= now() then null
+             else agent_tool_failures.tripped_at
+           end
+     returning failure_count, tripped_at is not null as already_tripped`,
+    [args.clientId, args.toolName, args.errorCode, args.resourceKey, String(ttlHours)],
+  );
+  return {
+    failureCount: Number(res.rows[0]?.failure_count ?? 1),
+    alreadyTripped: Boolean(res.rows[0]?.already_tripped),
+  };
+}
+
+export async function clearAgentToolFailure(args: {
+  clientId: string;
+  toolName: string;
+  resourceKey: string;
+}): Promise<void> {
+  await pool.query(
+    `delete from agent_tool_failures
+      where client_id=$1 and tool_name=$2 and resource_key=$3`,
+    [args.clientId, args.toolName, args.resourceKey],
+  );
+}
+
+/** Atomically marks this failure as handled; false means another turn won. */
+export async function markAgentToolFailureTripped(args: {
+  clientId: string;
+  toolName: string;
+  errorCode: string;
+  resourceKey: string;
+}): Promise<boolean> {
+  const res = await pool.query(
+    `update agent_tool_failures
+        set tripped_at=now()
+      where client_id=$1 and tool_name=$2 and error_code=$3 and resource_key=$4
+        and tripped_at is null
+      returning client_id`,
+    [args.clientId, args.toolName, args.errorCode, args.resourceKey],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function pauseAwaForTechnicalHandoff(
+  clientId: string,
+  hours = 12,
+): Promise<void> {
+  await pool.query(
+    `update clients
+        set human_takeover_until=now() + ($2 || ' hours')::interval,
+            human_takeover_by='awa-circuit-breaker',
+            human_takeover_at=now(),
+            updated_at=now()
+      where id=$1`,
+    [clientId, String(hours)],
+  );
+}
+
+// ---------- last interactive choices ----------
+
+export async function savePresentedChoices(
+  clientId: string,
+  choices: readonly { id: string; title: string }[],
+  ttlHours = 2,
+): Promise<void> {
+  if (choices.length === 0) return;
+  const presentationId = crypto.randomUUID();
+  await pool.query(`delete from presented_choices where expires_at <= now()`);
+  await pool.query(
+    `insert into presented_choices
+       (client_id, presentation_id, choice_id, title, expires_at)
+     select $1, $2, item.id, item.title, now() + ($4 || ' hours')::interval
+       from jsonb_to_recordset($3::jsonb) as item(id text, title text)`,
+    [clientId, presentationId, JSON.stringify(choices), String(ttlHours)],
+  );
+}
+
+export async function latestPresentedChoices(
+  clientId: string,
+): Promise<{ choice_id: string; title: string }[]> {
+  const res = await pool.query(
+    `select choice_id, title
+       from presented_choices
+      where client_id=$1 and expires_at > now()
+        and presentation_id = (
+          select presentation_id
+            from presented_choices
+           where client_id=$1 and expires_at > now()
+           order by presented_at desc, presentation_id desc
+           limit 1
+        )
+      order by presented_at, choice_id`,
+    [clientId],
   );
   return res.rows;
 }

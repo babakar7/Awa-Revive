@@ -209,6 +209,52 @@ export async function createTableTicket(
   return { ticket: existing as KitchenTicket, created: false };
 }
 
+export interface BarTicketInput {
+  /** Stable `bar:cafe:<uuid>` or `bar:booking:<uuid>` source key. */
+  sourceKey: string;
+  heading: string;
+  subheading: string | null;
+  lines: ExtraLine[];
+  amountXof: number;
+  note: string | null;
+  isTest: boolean;
+}
+
+/**
+ * Project a verified paid Awa bar order onto the kitchen iPad. The source key is
+ * unique, so webhook retries and reconciliation can never create two tickets.
+ * BAR has no WhatsApp fallback: the durable iPad event is the normal alert.
+ */
+export async function createBarTicket(
+  input: BarTicketInput,
+): Promise<{ ticket: KitchenTicket; created: boolean }> {
+  const res = await pool.query(
+    `insert into kitchen_tickets
+       (source, client_request_id, items_json, note, amount_xof,
+        heading, subheading, is_test)
+     values ('BAR', $1, $2, $3, $4, $5, $6, $7)
+     on conflict (client_request_id) where client_request_id is not null do nothing
+     returning *`,
+    [
+      input.sourceKey,
+      JSON.stringify(input.lines),
+      input.note,
+      input.amountXof,
+      input.heading,
+      input.subheading,
+      input.isTest,
+    ],
+  );
+  const inserted = res.rows[0] as KitchenTicket | undefined;
+  if (inserted) {
+    await emitTicket("ticket_new", inserted);
+    return { ticket: inserted, created: true };
+  }
+  const existing = await ticketByClientRequest(input.sourceKey);
+  if (!existing) throw new Error(`BAR ticket source key missing after conflict: ${input.sourceKey}`);
+  return { ticket: existing, created: false };
+}
+
 async function ticketByClientRequest(clientRequestId: string): Promise<KitchenTicket | null> {
   const res = await pool.query(
     `select * from kitchen_tickets where client_request_id = $1`,
@@ -362,6 +408,25 @@ export async function advanceTicketByCuisine(
   );
   const ticket = (res.rows[0] as KitchenTicket) ?? null;
   if (ticket) await emitTicket("ticket_update", ticket);
+  return ticket;
+}
+
+/** A paid BAR order leaves the kitchen board only after the kitchen taps Done. */
+export async function completeBarTicket(
+  id: string,
+  by: string | null,
+): Promise<KitchenTicket | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update kitchen_tickets
+        set status='COMPLETED', completed_at=now(),
+            claimed_by=coalesce(claimed_by,$2), updated_at=now()
+      where id=$1 and source='BAR' and status='READY'
+      returning *`,
+    [id, by],
+  );
+  const ticket = (res.rows[0] as KitchenTicket) ?? null;
+  if (ticket) await emitRemoved(ticket);
   return ticket;
 }
 

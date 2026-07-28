@@ -9,7 +9,7 @@ import { type ExtraLine, formatExtrasOneLine } from "../lib/cafeMenu.js";
  * unit-testable and reused identically by the repo, the sweep, and the PWA.
  */
 
-export type KitchenTicketSource = "DELIVERY" | "TABLE";
+export type KitchenTicketSource = "DELIVERY" | "TABLE" | "BAR";
 
 export type KitchenTicketStatus =
   | "NEW"

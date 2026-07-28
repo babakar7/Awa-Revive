@@ -62,6 +62,7 @@ const APP_STYLE = `main{padding:1rem;display:grid;gap:1rem;grid-template-columns
 .card{background:var(--surface-raised);border:1px solid var(--border-soft);border-left:6px solid var(--plum-600);
 border-radius:var(--radius-lg);padding:1rem 1.1rem;display:flex;flex-direction:column;gap:.55rem;box-shadow:var(--shadow-1)}
 .card.src-delivery{border-left-color:var(--info)}
+.card.src-bar{border-left-color:#b7791f}
 .card.test{border-left-color:var(--danger)}
 .card.ready{background:var(--ok-bg);border-color:var(--ok-border);box-shadow:0 0 0 1px var(--ok-border)}
 .card.urgent{border-color:var(--danger);border-left-color:var(--danger);box-shadow:0 0 0 3px var(--danger-bg)}
@@ -198,7 +199,10 @@ export const CUISINE_APP_JS = String.raw`(function(){
     speechSynthesis.speak(u); }catch(e){} }
   function itemsSpeech(t){ return (t.items||[]).map(function(l){ return l.qty+' '+l.name+(l.choice?' '+l.choice:''); }).join(', '); }
   function newSpeech(t){ var w=t.heading||'';
-    var lead=t.source!=='TABLE'?'Nouvelle livraison':('Nouvelle commande'+(t.takeaway?' à emporter':''));
+    var lead;
+    if(t.source==='DELIVERY') lead='Nouvelle livraison';
+    else if(t.source==='BAR') lead='Nouvelle commande bar';
+    else lead='Nouvelle commande'+(t.takeaway?' à emporter':'');
     var it=itemsSpeech(t); return lead+(w?', '+w:'')+(it?'. '+it:''); }
   function urgentSpeech(t){ return 'Commande urgente'+(t.heading?', '+t.heading:''); }
   function cancelSpeech(t){ var it=itemsSpeech(t); return 'Commande annulée'+(t.heading?', '+t.heading:'')+(it?'. '+it:''); }
@@ -216,14 +220,15 @@ export const CUISINE_APP_JS = String.raw`(function(){
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
 
   function card(t){
-    var c=el('div','card src-'+(t.source==='TABLE'?'table':'delivery')+(t.status==='READY'?' ready':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
+    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
     c.dataset.id=t.id;
     var top=el('div','top');
     // Urgent escalation stands out first, then the fulfilment-mode badge.
     if(t.urgent) top.appendChild(el('span','badge urgent','⚡ URGENT'));
     // One fulfilment-mode badge per ticket: Sur place / À emporter / Livraison.
     var b;
-    if(t.source!=='TABLE') b=el('span','badge','🛵 Livraison');
+    if(t.source==='DELIVERY') b=el('span','badge','🛵 Livraison');
+    else if(t.source==='BAR') b=el('span','badge away','☕ Commande bar');
     else if(t.takeaway) b=el('span','badge away','📦 À emporter');
     else b=el('span','badge table','🍽️ Sur place');
     top.appendChild(b);
@@ -247,7 +252,10 @@ export const CUISINE_APP_JS = String.raw`(function(){
       li.appendChild(document.createTextNode(l.name+(picked?' ('+picked+')':''))); ul.appendChild(li); });
     c.appendChild(ul);
     if(t.note) c.appendChild(el('div','note','📝 '+t.note));
-    if(t.status==='READY'){ c.appendChild(el('span','pill ready','Prête — à récupérer')); }
+    if(t.status==='READY'){
+      c.appendChild(el('span','pill ready','Prête — à récupérer'));
+      if(t.source==='BAR'){ var d=el('button','act ready','Terminée'); d.onclick=function(){move(t.id,'complete',d);}; c.appendChild(d); }
+    }
     else {
       if(t.status==='PREPARING') c.appendChild(el('span','pill preparing','En préparation'));
       var acts=el('div','actions');

@@ -304,9 +304,10 @@ describe("Clés registry", () => {
       scheduled.rows[0].id,
     ]);
     const row = await pool.query(
-      `select starts_at from pending_plan_orders where id=$1`,
+      `select starts_at, starts_at <= now() as started
+         from pending_plan_orders where id=$1`,
       [scheduled.rows[0].id],
     );
-    expect(new Date(row.rows[0].starts_at).getTime()).toBeLessThanOrEqual(Date.now());
+    expect(row.rows[0].started).toBe(true);
   });
 });

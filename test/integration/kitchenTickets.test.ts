@@ -24,6 +24,8 @@ import {
   ticketByDeliveryOrder,
   unlockedPendingKitchenOrderIds,
   kitchenTicketView,
+  createBarTicket,
+  completeBarTicket,
 } from "../../src/domain/kitchenTicketRepo.js";
 import { findDeliveryOrder } from "../../src/domain/deliveryRepo.js";
 import { opsEventsSince, latestOpsEventId } from "../../src/domain/opsEvents.js";
@@ -132,6 +134,38 @@ describe("cuisine transitions", () => {
     const { ticket } = await createDeliveryTicket(order, 15);
     const ready = await advanceTicketByCuisine(ticket.id, "READY", null);
     expect(ready?.status).toBe("READY");
+  });
+});
+
+describe("paid BAR tickets", () => {
+  it("creates one durable iPad ticket and lets kitchen complete it", async () => {
+    const first = await createBarTicket({
+      sourceKey: "bar:cafe:00000000-0000-4000-8000-000000000001",
+      heading: "Riche",
+      subheading: "Retrait au comptoir",
+      lines: ITEMS,
+      amountXof: 6000,
+      note: "sans sucre",
+      isTest: false,
+    });
+    const replay = await createBarTicket({
+      sourceKey: "bar:cafe:00000000-0000-4000-8000-000000000001",
+      heading: "Riche",
+      subheading: "Retrait au comptoir",
+      lines: ITEMS,
+      amountXof: 6000,
+      note: "sans sucre",
+      isTest: false,
+    });
+
+    expect(first.created).toBe(true);
+    expect(first.ticket.source).toBe("BAR");
+    expect(replay.created).toBe(false);
+    expect(replay.ticket.id).toBe(first.ticket.id);
+    expect((await advanceTicketByCuisine(first.ticket.id, "READY", "iPad Cuisine"))?.status).toBe("READY");
+    expect((await completeBarTicket(first.ticket.id, "iPad Cuisine"))?.status).toBe("COMPLETED");
+    expect(await completeBarTicket(first.ticket.id, "iPad Cuisine")).toBeNull();
+    expect(await listOpenKitchenTickets()).toHaveLength(0);
   });
 });
 

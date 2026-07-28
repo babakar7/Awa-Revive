@@ -21,6 +21,22 @@ export type DeliveryStatus =
   | "DELIVERED"
   | "CANCELLED";
 
+/** Whole-hour delays offered and accepted by the delivery admin. */
+export const DELIVERY_KITCHEN_LEAD_OPTIONS = [
+  60,
+  120,
+  180,
+  240,
+  300,
+  360,
+  420,
+  480,
+  540,
+  600,
+  660,
+  720,
+] as const;
+
 const TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
   IN_KITCHEN: ["OUT_FOR_DELIVERY", "DELIVERED", "CANCELLED"], // DELIVERED kept: reception may close an order whose departure was never tapped (no route ping then)
   OUT_FOR_DELIVERY: ["DELIVERED", "CANCELLED"], // cancel-en-route allowed (order aborted)

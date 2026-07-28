@@ -66,6 +66,7 @@ export interface ReviewTurn {
   role: string; // user | assistant | tool
   content: string;
   created_at: Date;
+  source?: "awa" | "admin";
 }
 
 /** Truncate by Unicode code point so a lone half-emoji can never reach an API. */
@@ -107,6 +108,9 @@ email code, and hands off to human reception when she can't help.
 The conversation went silent: classify HOW it ended for the client, from the transcript alone.
 Turns prefixed "tool:" are Awa's tool calls with their results — trust them over wording (e.g. a
 booked:true result means the booking really happened).
+Turns prefixed "human_team:" were written by a Revive employee who temporarily took over. Treat
+them as context and client outcome, but NEVER attribute their wording, promises, or mistakes to
+Awa. Score only Awa's own assistant/tool behavior.
 
 - resolved: the client's expressed need was satisfied (booking confirmed, question answered,
   cancellation done, order paid...). A client who got their answer and simply didn't reply
@@ -129,7 +133,10 @@ Otherwise normal. When unsure between two outcomes, pick the one that gets a hum
 
 /** Rend le transcript compact envoyé au classificateur (pur, testé). */
 export function buildTranscript(turns: ReviewTurn[], maxChars = 6000): string {
-  const lines = turns.map((t) => truncateUnicode(`${t.role}: ${t.content}`, 500));
+  const lines = turns.map((t) => {
+    const role = t.source === "admin" ? "human_team" : t.role;
+    return truncateUnicode(`${role}: ${t.content}`, 500);
+  });
   let out = lines.join("\n");
   if (Array.from(out).length > maxChars) out = Array.from(out).slice(-maxChars).join("");
   return out;
@@ -140,7 +147,13 @@ export function normalizeVerdictForTranscript(
   verdict: ReviewVerdict,
   turns: ReviewTurn[],
 ): ReviewVerdict {
-  const lastHumanFacing = [...turns].reverse().find((turn) => turn.role === "user" || turn.role === "assistant");
+  const lastHumanFacing = [...turns]
+    .reverse()
+    .find(
+      (turn) =>
+        turn.role === "user" ||
+        (turn.role === "assistant" && turn.source !== "admin"),
+    );
   if (verdict.outcome === "deadend" && lastHumanFacing?.role === "assistant" && /\?/.test(lastHumanFacing.content)) {
     return { ...verdict, outcome: "dropoff", suggested_action: "" };
   }
@@ -200,17 +213,23 @@ export interface PendingReview {
 export async function conversationsToReview(): Promise<PendingReview[]> {
   const res = await pool.query(
     `select c.id as client_id, c.name as client_name, c.wa_phone,
-            max(conv.created_at)::text as last_message_at
+            max(activity.created_at)::text as last_message_at
        from clients c
-       join conversations conv on conv.client_id = c.id
+       join (
+         select client_id, created_at from conversations
+         union all
+         select client_id, coalesce(sent_at, created_at) as created_at
+           from admin_outbound_messages
+          where status = 'sent'
+       ) activity on activity.client_id = c.id
       group by c.id, c.name, c.wa_phone
-     having max(conv.created_at) < now() - ($1 || ' minutes')::interval
-        and max(conv.created_at) > now() - ($2 || ' hours')::interval
-        and max(conv.created_at) > coalesce(
+     having max(activity.created_at) < now() - ($1 || ' minutes')::interval
+        and max(activity.created_at) > now() - ($2 || ' hours')::interval
+        and max(activity.created_at) > coalesce(
               (select max(r.last_message_at) from conversation_reviews r
                 where r.client_id = c.id),
               'epoch'::timestamptz)
-      order by max(conv.created_at) asc
+      order by max(activity.created_at) asc
       limit $3`,
     [String(REVIEW_AFTER_MINUTES), String(REVIEW_MAX_AGE_HOURS), MAX_REVIEWS_PER_SWEEP],
   );
@@ -220,10 +239,19 @@ export async function conversationsToReview(): Promise<PendingReview[]> {
 /** Tours de la conversation, tool inclus (l'issue se lit dans les résultats). */
 export async function reviewTurns(clientId: string, n = 30): Promise<ReviewTurn[]> {
   const res = await pool.query(
-    `select role, content, created_at
-       from (select role, content, created_at
-               from conversations
-              where client_id = $1
+    `select role, content, created_at, source
+       from (select role, content, created_at, source
+               from (
+                 select role, content, created_at, 'awa'::text as source
+                   from conversations
+                  where client_id = $1
+                 union all
+                 select 'assistant'::text as role, body as content,
+                        coalesce(sent_at, created_at) as created_at,
+                        'admin'::text as source
+                   from admin_outbound_messages
+                  where client_id = $1 and status = 'sent'
+               ) history
               order by created_at desc
               limit $2) t
       order by created_at asc`,

@@ -235,4 +235,28 @@ describe("delivery reception presentation", () => {
     expect(html).toContain("Prêtes à partir");
     expect(html).toContain("Programmées");
   });
+
+  it("keeps the immediate kitchen alert visible beside the contact action", () => {
+    const scheduled = order({
+      scheduled_for: new Date("2026-07-24T13:00:00Z"),
+      kitchen_notify_at: new Date("2026-07-24T12:00:00Z"),
+      activated_at: null,
+      kitchen_ticket_status: null,
+    });
+    const html = renderLivraisonsBoardFragment({ open: [scheduled], recent: [] }, NOW);
+    const toolset = html.match(
+      /<div class="delivery-card-toolset">([\s\S]*?)<div class="delivery-card-danger">/,
+    )?.[1];
+
+    expect(toolset).toBeDefined();
+    expect(toolset).toContain("delivery-alert-now");
+    expect(toolset).toContain(`/admin/livraisons/${scheduled.id}/activate-now`);
+    expect(toolset).toContain("Modifier le contact");
+    expect(toolset!.indexOf("Alerter maintenant")).toBeLessThan(
+      toolset!.indexOf("Modifier le contact"),
+    );
+    expect(html.indexOf("delivery-card-danger")).toBeGreaterThan(
+      html.indexOf("delivery-card-toolset"),
+    );
+  });
 });
