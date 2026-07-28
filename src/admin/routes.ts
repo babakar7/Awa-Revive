@@ -128,7 +128,7 @@ import { renderMessage, STAFF_FOOTER } from "../domain/notificationRules.js";
 import { notifyReception, sendWhatsAppNotification } from "../lib/notify.js";
 import { ago, badge, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
 import { layout } from "./layout.js";
-import { loadNavBadges } from "./navBadges.js";
+import { emptyNavBadges, loadNavBadges } from "./navBadges.js";
 import { renderInbox } from "./inboxPage.js";
 import * as staffPlan from "../domain/staffPlanningRepo.js";
 import { buildEmployeeScheduleMessage, validateGridPayload } from "../domain/staffPlanningRules.js";
@@ -142,6 +142,7 @@ import * as adminOps from "../domain/adminOperations.js";
 import { renderAdminReport, renderAuditPage } from "./reportPage.js";
 import { bookingConversionDashboard } from "../domain/bookingFunnel.js";
 import { renderConversionPage } from "./conversionPage.js";
+import { renderKeyReceptionMemo } from "./keyReceptionMemoPage.js";
 import {
   attendanceDetail,
   attendanceLeaders,
@@ -329,6 +330,27 @@ export function registerAdmin(app: FastifyInstance): void {
       });
 
       // ---------- Clés de la Maison (réception = registre) ----------
+      admin.get("/cles/memo", async (_req, reply) => {
+        reply
+          .type("text/html")
+          .send(
+            await layout(
+              "Clés de la Maison",
+              "/admin/cles",
+              renderKeyReceptionMemo(),
+              {
+                subtitle: "Mémo réception",
+                contentWidth: "standard",
+                badges: emptyNavBadges,
+                breadcrumbs: [
+                  { href: "/admin/cles", label: "Clés" },
+                  { label: "Mémo réception" },
+                ],
+              },
+            ),
+          );
+      });
+
       admin.get("/cles", async (req, reply) => {
         const rows = await keyRepo.listKeysForAdmin();
         const query = (req.query ?? {}) as Record<string, string>;
@@ -370,7 +392,18 @@ export function registerAdmin(app: FastifyInstance): void {
             await layout(
               "Clés",
               "/admin/cles",
-              `${banner}<section class="grid">${cards}</section>`,
+              `${banner}
+              <header class="page-header">
+                <div class="page-header-copy">
+                  <span class="eyebrow">Clés de la Maison</span>
+                  <h2>Registre réception</h2>
+                  <p>Suivez les activations et validez ici les prolongations autorisées.</p>
+                </div>
+                <div class="page-header-actions">
+                  <a class="act act--ghost" href="/admin/cles/memo">Ouvrir le mémo réception</a>
+                </div>
+              </header>
+              <section class="grid">${cards}</section>`,
               { subtitle: "Registre réception", contentWidth: "wide" },
             ),
           );

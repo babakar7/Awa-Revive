@@ -267,6 +267,50 @@ form.inline{display:inline}
 .report-breakdown>div:last-child{border:0}
 .report-breakdown span{color:var(--ink-500);font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 
+/* Clés de la Maison — reception memo */
+.key-memo{max-width:980px;margin:0 auto}
+.key-memo-header{margin-bottom:1rem}
+.key-memo-principle{display:grid;grid-template-columns:auto minmax(0,1fr);gap:1rem;align-items:center;margin-bottom:1rem;padding:1.15rem 1.25rem;border:1px solid var(--plum-200);border-radius:var(--radius-xl);background:linear-gradient(135deg,var(--plum-50),var(--surface-raised));box-shadow:var(--shadow-1)}
+.key-memo-principle-icon{display:grid;place-items:center;width:46px;height:46px;border-radius:14px;background:var(--brand);color:#fff;font-size:1.15rem;box-shadow:0 8px 20px -12px var(--brand)}
+.key-memo-principle .eyebrow{margin:0 0 .15rem}
+.key-memo-principle h2{margin:0;font-size:1.13rem;line-height:1.4}
+.key-memo-principle p{margin:.25rem 0 0;color:var(--ink-500);font-size:.9rem}
+.key-memo-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem}
+.key-rule-card{min-width:0;margin:0;padding:1.1rem 1.15rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);box-shadow:var(--shadow-1)}
+.key-rule-card--wide{grid-column:1/-1}
+.key-rule-heading{display:flex;align-items:center;gap:.8rem;margin-bottom:.85rem;padding-bottom:.8rem;border-bottom:1px solid var(--border-soft)}
+.key-rule-heading .eyebrow{margin:0 0 .12rem}
+.key-rule-heading h2{margin:0;font-size:1.08rem;line-height:1.3}
+.key-rule-number{display:grid;place-items:center;width:36px;height:36px;flex:0 0 36px;border-radius:11px;background:var(--plum-100);color:var(--brand-strong);font-size:.94rem;font-weight:780}
+.key-rule-card>p{font-size:.92rem;line-height:1.62}
+.key-callout{display:grid;gap:.08rem;margin-top:.65rem;padding:.68rem .75rem;border:1px solid var(--border);border-radius:10px;font-size:.86rem;line-height:1.5}
+.key-callout strong{font-size:.76rem;letter-spacing:.045em;text-transform:uppercase}
+.key-callout--success{background:var(--ok-bg);border-color:var(--ok-border)}
+.key-callout--success strong{color:var(--ok)}
+.key-callout--danger{background:var(--danger-bg);border-color:var(--danger-border)}
+.key-callout--danger strong{color:var(--danger)}
+.key-facts{display:grid;gap:0;margin:0}
+.key-facts>div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:.75rem;padding:.62rem 0;border-bottom:1px solid var(--border-soft)}
+.key-facts>div:last-child{border-bottom:0}
+.key-facts dt{color:var(--ink-500);font-size:.72rem;font-weight:750;letter-spacing:.055em;text-transform:uppercase}
+.key-facts dd{margin:0;color:var(--ink-700);font-size:.9rem;font-weight:620}
+.key-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem;margin:.85rem 0}
+.key-check-grid p{display:flex;align-items:flex-start;gap:.48rem;margin:0;padding:.62rem .7rem;border:1px solid var(--border-soft);border-radius:9px;background:var(--cream-25);color:var(--ink-700);font-size:.88rem;line-height:1.5}
+.key-check-grid p span{color:var(--ok);font-weight:800}
+.key-checklist{display:grid;gap:.5rem;margin:.7rem 0 1rem;padding:0;list-style:none}
+.key-checklist li{position:relative;padding-left:1.5rem;color:var(--ink-700);font-size:.9rem;line-height:1.5}
+.key-checklist li:before{content:"✓";position:absolute;left:0;top:0;color:var(--ok);font-weight:800}
+.key-checklist--excluded li:before{content:"×";color:var(--danger)}
+.key-final-rule,.key-owner-note,.key-deadline{margin:.8rem 0 0;padding:.68rem .75rem;border-radius:10px;background:var(--cream-50);color:var(--ink-700);font-size:.87rem!important}
+.key-deadline{background:var(--warn-bg);border:1px solid var(--warn-border)}
+.key-owner-note{background:var(--info-bg);border:1px solid var(--info-border)}
+.key-founders-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}
+.key-founders-layout>div{padding:.85rem;border:1px solid var(--border-soft);border-radius:11px;background:var(--cream-25)}
+.key-founders-layout h3{margin:0 0 .7rem;font-size:.92rem}
+.key-founders-layout .key-checklist{margin-bottom:0}
+.key-memo-footer{display:flex;align-items:center;gap:.55rem;margin-top:1rem;padding:.9rem 1rem;border-radius:12px;background:var(--plum-800);color:#fff;font-size:.9rem}
+.key-memo-footer span{color:#eee3ee}
+
 /* menu catalogue and internal recipes */
 .menu-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
 .menu-filters{display:grid;grid-template-columns:minmax(220px,1.5fr) repeat(2,minmax(130px,.75fr)) auto;align-items:end;gap:.75rem}
@@ -416,6 +460,13 @@ details>summary{cursor:pointer}
   .activity-stat-label{align-items:flex-start;flex-direction:column;gap:.4rem}
   .follow-up-filters,.conversation-filters,.workspace-history-grid{grid-template-columns:1fr}
   .report-stat-grid,.report-breakdown{grid-template-columns:1fr}
+  .key-memo-grid,.key-check-grid,.key-founders-layout{grid-template-columns:1fr}
+  .key-rule-card--wide{grid-column:auto}
+  .key-memo-principle{align-items:start;padding:1rem}
+  .key-memo-principle-icon{width:38px;height:38px}
+  .key-memo-actions{width:100%}
+  .key-memo-actions .act{flex:1}
+  .key-memo-footer{align-items:flex-start;flex-direction:column}
   .resolution-form{position:fixed;inset:auto .75rem .75rem;width:auto;max-height:80vh;overflow:auto}
   .takeover-banner{align-items:flex-start;flex-direction:column}
   button.act,a.act{min-height:44px}
@@ -452,6 +503,20 @@ details>summary{cursor:pointer}
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
   *,*:before,*:after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}
+}
+@media print{
+  @page{size:A4;margin:12mm}
+  body{background:#fff;font-size:10.5pt}
+  .sidebar,.topbar,.nav-scrim,.confirm-dialog,.breadcrumbs,.key-memo-actions{display:none!important}
+  .main-wrap,body.nav-collapsed .main-wrap{margin-left:0}
+  main,main.content-standard{max-width:none;padding:0}
+  .key-memo{max-width:none}
+  .key-memo-header{margin-bottom:7mm}
+  .key-memo-principle,.key-rule-card,.key-memo-footer{box-shadow:none;break-inside:avoid}
+  .key-memo-grid{gap:4mm}
+  .key-rule-card{padding:4mm}
+  .key-rule-heading{margin-bottom:3mm;padding-bottom:3mm}
+  .key-callout,.key-final-rule,.key-owner-note,.key-deadline{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 }
 `;
 

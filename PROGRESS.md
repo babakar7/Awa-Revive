@@ -3596,3 +3596,18 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   Les boutons des relances Clés ne tombent donc plus dans le repli « type de
   message non pris en charge ».
 - Régression unitaire ajoutée avec la forme exacte du webhook Cloud API.
+
+## 2026-07-28 — Mémo réception des Clés dans l’admin
+
+- Nouvelle page statique `/admin/cles/memo`, accessible aux comptes équipe,
+  qui reprend les six consignes opérationnelles : vente comptoir, cours bonus,
+  invitations, prolongation, garantie L’Invitée et continuité des Membres
+  Fondatrices.
+- Le principe d’autorité est affiché en tête et en pied : Awa transmet, la
+  réception valide et tient le registre ; aucun doublon ne doit être créé dans
+  Wix. La page ne dépend ni de Wix ni de Postgres et ne contient aucune
+  mutation.
+- Le registre `/admin/cles` pointe vers le mémo, la navigation affiche le nom
+  complet « Clés de la Maison » et une mise en page A4 imprimable est fournie.
+- Régression unitaire : contenu métier complet, absence de formulaire et état
+  actif de la navigation.

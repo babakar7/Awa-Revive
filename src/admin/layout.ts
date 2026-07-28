@@ -22,6 +22,7 @@ type IconName =
   | "review"
   | "crm"
   | "booking"
+  | "key"
   | "team"
   | "wallet"
   | "funnel"
@@ -75,7 +76,7 @@ const NAV: NavSection[] = [
     title: "Studio",
     links: [
       { href: "/admin/bookings", label: "Réservations", icon: "booking" },
-      { href: "/admin/cles", label: "Clés", icon: "gift" },
+      { href: "/admin/cles", label: "Clés de la Maison", icon: "key" },
       { href: "/admin/staff", label: "Équipe", icon: "team" },
       { href: "/admin/paiements-coachs", label: "Paiements coachs", icon: "wallet" },
     ],
@@ -116,6 +117,7 @@ const ICON_PATHS: Record<IconName, string> = {
   review: '<path d="M4 3.5h12v13H4z"/><path d="M7 7h6M7 10h6M7 13h3"/>',
   crm: '<circle cx="7" cy="7" r="2.5"/><circle cx="14.5" cy="8" r="2"/><path d="M2.5 16c.7-3 2.2-4.5 4.5-4.5S11 13 11.5 16M12 13c1.8-.8 4 .2 5 2.5"/>',
   booking: '<rect x="3" y="5" width="14" height="12" rx="2"/><path d="M6 3v4m8-4v4M3 9h14M7 12h2m2 0h2"/>',
+  key: '<circle cx="6.5" cy="8" r="3.5"/><path d="m9.2 10.2 7 7M12 13l2-2M14.2 15.2l2-2"/>',
   team: '<circle cx="10" cy="6.5" r="3"/><path d="M4.5 17c.7-3.5 2.5-5.2 5.5-5.2s4.8 1.7 5.5 5.2"/><path d="M15 5.2c1.6.2 2.5 1.2 2.5 2.5s-.8 2.2-2.2 2.5"/>',
   wallet: '<path d="M3 5h12.5A1.5 1.5 0 0 1 17 6.5V15H4.5A1.5 1.5 0 0 1 3 13.5z"/><path d="M3 6.5 14 3v3M13 9.5h4v3h-4a1.5 1.5 0 0 1 0-3Z"/>',
   funnel: '<path d="M3 4h14l-5.5 6v5l-3 1.5V10z"/><path d="M6 7h8"/>',
