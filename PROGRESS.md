@@ -21,9 +21,11 @@
   réservé aux paiements que Revive n’a pas pu honorer (créneau perdu, échec
   technique ou faute Revive confirmée).
 - À ≥16 h, Awa propose d’abord le report natif vers un autre créneau du même
-  cours (`reschedule_booking`) : paiement et places conservés. Le changement de
-  cours et le transfert à une autre personne passent par `handoff_to_human`,
-  avec la réservation existante laissée intacte.
+  cours (`reschedule_booking`) : paiement et places conservés. Le transfert à
+  une autre personne est autonome, même à moins de 16 h : aucune intervention
+  de la réception, aucune modification Wix ; le remplaçant se présente sous le
+  nom de la réservation d’origine. Seul le changement de cours passe par
+  `handoff_to_human`, avec la réservation existante laissée intacte.
 - Pour une réservation Awa payée directement, `cancel_booking` exige
   `acknowledge_no_refund:true`, uniquement après acceptation explicite du
   client. La place est libérée, le statut devient `CANCELLED` avec
@@ -258,8 +260,9 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
    `forfeited_at`. Les résas comptoir/site restent intactes et passent en
    handoff car Awa ne connaît pas leur mode de paiement. < 16h → refus poli, sans
    JAMAIS suggérer d'exemples d'excuses valables (consigne explicite de
-   Babakar). Transfert, changement de cours et annulations partielles = handoff
-   sans annuler la réservation. Aucun `BOOKED → REFUND_NEEDED` : ce dernier
+   Babakar). Transfert = autonome, sans modification Wix, sous le nom de la
+   réservation d'origine ; changement de cours et annulations partielles =
+   handoff sans annuler la réservation. Aucun `BOOKED → REFUND_NEEDED` : ce dernier
    statut est réservé à un paiement que Revive n’a pas pu honorer.
 9. **Emojis** : teinte de peau medium-dark (🏾) partout — codé en dur dans les
    templates + règle de style dans le prompt.

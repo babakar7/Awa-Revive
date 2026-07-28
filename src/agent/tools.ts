@@ -616,7 +616,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "before the class start — the server enforces this and refuses otherwise. Membership-paid bookings: " +
       "the plan session is automatically re-credited. Direct-paid bookings are NON-REFUNDABLE when the client " +
       "cancels voluntarily. Studio/site bookings require handoff because their payment type is unknown. Offer " +
-      "reschedule_booking for the same class or a reception-handled transfer first. For a final direct " +
+      "reschedule_booking for the same class or a self-service transfer first; for a transfer, leave the booking " +
+      "unchanged and tell the replacement to attend under the original booking name, with no reception handoff. For a final direct " +
       "cancellation, call ONLY after the client explicitly accepts " +
       "that payment is lost, and pass acknowledge_no_refund:true. Never use cancellation as part of a reschedule.",
     input_schema: {
@@ -788,8 +789,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "handoff_to_human",
     description:
       "Escalate the conversation to the human reception team. Triggers: the client wants to call or speak to " +
-      "a person (e.g. \"je peux vous appeler ?\"), complaints, alleged Revive-fault refund claims, session " +
-      "transfers, different-class changes, cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
+      "a person (e.g. \"je peux vous appeler ?\"), complaints, alleged Revive-fault refund claims, " +
+      "different-class changes, cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
       "medical questions, factures needing special legal mentions or covering payments send_invoice " +
       "doesn't list, anything off-script. Records the handoff, notifies reception with a one-tap link to " +
       "message the client, and the client is simply told reception will reach out to them — they send nothing.",
@@ -3519,7 +3520,8 @@ export async function executeTool(
         note:
           external.length > 0
             ? "booked_via 'studio' bookings were made at the counter/website. Offer a same-class move or " +
-              "transfer first. Because Awa cannot see their payment type, a final cancellation requires " +
+              "a self-service transfer first (the replacement attends under the original booking name; no Wix change " +
+              "and no reception handoff). Because Awa cannot see their payment type, a final cancellation requires " +
               "handoff_to_human and the booking must stay unchanged until reception handles it."
             : undefined,
         // No bookings AND this number is on no Wix account: their account (and
@@ -3775,7 +3777,8 @@ export async function executeTool(
           error: "no_refund_confirmation_required",
           message:
             "Do not cancel yet. Explain that a voluntary cancellation is non-refundable, and offer a " +
-            "same-class reschedule or a transfer to another person. Retry with acknowledge_no_refund:true " +
+            "same-class reschedule or a self-service transfer to another person, who attends under the original " +
+            "booking name without any Wix change or reception handoff. Retry with acknowledge_no_refund:true " +
             "only after the client explicitly accepts losing the payment.",
         });
       }

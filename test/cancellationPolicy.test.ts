@@ -17,10 +17,23 @@ describe("Awa cancellation policy", () => {
     expect(cancellationSection).not.toMatch(/refund.*24h|24h.*refund/i);
   });
 
-  it("keeps transfers human-handled without cancelling the existing booking", () => {
-    expect(systemPrompt()).toMatch(
-      /Transfer a session to another person[\s\S]*handoff_to_human[\s\S]*Never cancel or reschedule the booking/,
+  it("keeps transfers self-service under the original booking name", () => {
+    const transferSection = systemPrompt().match(
+      /# Transfer a session to another person([\s\S]*?)# Linking accounts/,
+    )?.[1];
+
+    expect(transferSection).toBeTruthy();
+    expect(transferSection).toMatch(/including less than 16h/i);
+    expect(transferSection).toMatch(/do NOT call handoff_to_human/);
+    expect(transferSection).toMatch(/do NOT involve reception/);
+    expect(transferSection).toMatch(/do NOT change anything in Wix/);
+    expect(transferSection).toMatch(/ORIGINAL BOOKING NAME/);
+    expect(transferSection).toMatch(/Never cancel or reschedule/);
+
+    const handoffTool = TOOL_DEFINITIONS.find(
+      (candidate) => candidate.name === "handoff_to_human",
     );
+    expect(handoffTool?.description).not.toMatch(/session transfers/);
   });
 
   it("requires explicit no-refund acceptance in the cancellation tool contract", () => {

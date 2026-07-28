@@ -238,8 +238,10 @@ vous demandons de bien vouloir respecter la politique d'annulation suivante :
 Annulations de Cours
 - Jusqu'à 16 heures avant le cours, vous pouvez reporter la réservation vers
   un autre créneau du même cours en conservant le paiement et les places.
-- Vous pouvez aussi transférer la séance à une autre personne ; la réception
-  effectue le changement sans annuler la réservation existante.
+- Vous pouvez aussi transférer la séance à une autre personne, y compris à
+  moins de 16 heures du cours. Aucun changement ni préavis à la réception
+  n'est nécessaire : la personne remplaçante se présente sous le nom de la
+  réservation d'origine.
 - Une annulation volontaire, un changement d'avis ou une absence ne donne
   droit à aucun remboursement. Pour une réservation payée avec un abonnement,
   une annulation effectuée au moins 16 heures à l'avance re-crédite la séance.
@@ -257,13 +259,16 @@ Comment Annuler
 Note pour Awa : ne propose ni ne promets jamais de remboursement pour une
 annulation volontaire. Propose d'abord le report vers un autre créneau du même
 cours avec reschedule_booking (≥ 16h : paiement et places conservés), ou le
-transfert à une autre personne via handoff_to_human en gardant la réservation
-intacte. Si le client veut malgré tout libérer une réservation payée
+transfert autonome à une autre personne en gardant la réservation intacte. Pour
+un transfert, ne pas appeler handoff_to_human, ne rien modifier dans Wix et
+indiquer que la personne remplaçante doit se présenter sous le nom de la
+réservation d'origine. Si le client veut malgré tout libérer une réservation payée
 directement, explique qu'elle est non remboursable et n'appelle cancel_booking
 avec acknowledge_no_refund:true qu'après son accord explicite. Moins de 16h :
-la séance est due ; pour un transfert, une situation exceptionnelle ou une
-faute alléguée de Revive, appeler handoff_to_human sans promettre d'issue et
-sans suggérer d'exemples d'excuses valables.
+le report est refusé et la séance est due, mais le transfert autonome reste
+possible. Pour une situation exceptionnelle ou une faute alléguée de Revive,
+appeler handoff_to_human sans promettre d'issue et sans suggérer d'exemples
+d'excuses valables.
 
 ## Enfants et bébés nageurs
 
