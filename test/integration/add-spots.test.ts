@@ -203,6 +203,10 @@ describe("add_spots_to_booking", () => {
     await waitForStatus(draft.id, "REFUND_NEEDED");
     // Original booking still fine.
     expect((await pool.query(`select status from pending_bookings where id=$1`, [orig.id])).rows[0].status).toBe("BOOKED");
+    // The webhook acknowledges before its background fulfillment/notification
+    // chain has fully released its DB locks. Let that chain settle before the
+    // next test truncates the shared integration database.
+    await settle();
   });
 
   it("works over Orange Money too (amount verified against the order)", async () => {
@@ -220,5 +224,8 @@ describe("add_spots_to_booking", () => {
     await deliverOmWebhook(app, { orderId: draft.id });
     await waitForStatus(draft.id, "BOOKED");
     expect(mock.wixCreateBookingCalls().length).toBe(1);
+    // BOOKED is visible before the webhook finishes Wix order sync and writes
+    // its idempotency marker; don't let afterAll close the pool underneath it.
+    await settle();
   });
 });
