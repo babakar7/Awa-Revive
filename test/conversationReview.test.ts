@@ -40,6 +40,13 @@ describe("buildTranscript", () => {
     );
   });
 
+  it("labels team replies separately from Awa", () => {
+    const out = buildTranscript([
+      { role: "assistant", source: "admin", content: "Je prends le relais", created_at: new Date() },
+    ]);
+    expect(out).toBe("human_team: Je prends le relais");
+  });
+
   it("caps each line and keeps the END of long conversations (the outcome lives there)", () => {
     const turns = [
       turn("user", "x".repeat(2000)),

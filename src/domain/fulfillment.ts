@@ -29,6 +29,8 @@ import {
   type ContinuitySource,
 } from "./keyContinuity.js";
 import { keyMappingForPlan } from "./keyRules.js";
+import { createBarTicket } from "./kitchenTicketRepo.js";
+import { applyFrenchRegister } from "../lib/frenchRegister.js";
 
 /**
  * Payment fulfillment — shared by Wave and Orange Money / Max It webhooks.
@@ -117,10 +119,12 @@ export async function processDeliveryPayment(
   }
 
   if (result.outcome === "refund_needed") {
-    const msg =
+    const msg = applyFrenchRegister(
       client.language === "en"
         ? `⚠️ We received your ${attempt.amount_xof} FCFA payment, but this delivery was already closed or paid. The Revive team is checking it and will contact you about the refund.`
-        : `⚠️ Nous avons reçu ton paiement de ${attempt.amount_xof} FCFA, mais cette livraison était déjà clôturée ou payée. L'équipe Revive vérifie et te recontacte pour le remboursement.`;
+        : `⚠️ Nous avons reçu ton paiement de ${attempt.amount_xof} FCFA, mais cette livraison était déjà clôturée ou payée. L'équipe Revive vérifie et te recontacte pour le remboursement.`,
+      client.language !== "en" && client.fr_register === "vous",
+    );
     await sendText(order.client_phone, msg).catch((err) =>
       log.error({ err, order: order.id }, "Delivery refund-warning client send failed"),
     );
@@ -136,10 +140,12 @@ export async function processDeliveryPayment(
     return;
   }
 
-  const msg =
+  const msg = applyFrenchRegister(
     client.language === "en"
       ? `✅ Payment received — ${order.amount_xof} FCFA via ${paymentMethodLabel(attempt.method)}. Your delivery can now leave; you won't need to pay the delivery person.`
-      : `✅ Paiement reçu — ${order.amount_xof} FCFA via ${paymentMethodLabel(attempt.method)}. Ta livraison peut maintenant partir ; tu n'auras rien à régler au livreur.`;
+      : `✅ Paiement reçu — ${order.amount_xof} FCFA via ${paymentMethodLabel(attempt.method)}. Ta livraison peut maintenant partir ; tu n'auras rien à régler au livreur.`,
+    client.language !== "en" && client.fr_register === "vous",
+  );
   await sendText(order.client_phone, msg).catch((err) =>
     log.error({ err, order: order.id }, "Delivery payment confirmation send failed"),
   );
@@ -257,13 +263,13 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
 
   // --- Post-BOOKED: never refund from here ---
   try {
-    const confirmation = confirmationMessage(
+    const confirmation = applyFrenchRegister(confirmationMessage(
       lang,
       serviceLabel,
       new Date(booking.slot_start),
       extras,
       booking.order_note,
-    );
+    ), lang === "fr" && client?.fr_register === "vous");
     await sendText(client.wa_phone, confirmation);
     await repo.addTurn(booking.client_id, "assistant", confirmation);
   } catch (err) {
@@ -286,18 +292,25 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
 
   if (extras.length > 0) {
     try {
-      notifyReception(
-        `☕ Commande bar payée — ${booking.extras_amount_xof} FCFA`,
-        `Un client a payé une commande bar avec sa réservation :\n` +
-          `  Client : ${client?.name ?? "?"} (+${String(client.wa_phone).replace(/^\+/, "")})\n` +
-          extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
-          `\n  À servir : ${booking.order_note ?? "prête après le cours"}\n` +
-          `  Cours : ${serviceLabel} — ${new Date(booking.slot_start).toLocaleString("fr-FR", { timeZone: config.TIMEZONE })}\n` +
-          `  Total bar : ${booking.extras_amount_xof} FCFA (payé, inclus dans le paiement)`,
-        { whatsappFirst: true },
-      );
+      await createBarTicket({
+        sourceKey: `bar:booking:${booking.id}`,
+        heading: client?.name ?? "Client Awa",
+        subheading: `${serviceLabel} · ${new Date(booking.slot_start).toLocaleString("fr-FR", {
+          timeZone: config.TIMEZONE,
+        })}`,
+        lines: extras,
+        amountXof: booking.extras_amount_xof,
+        note: booking.order_note ?? "prête après le cours",
+        isTest: client?.is_test === true,
+      });
     } catch (err) {
-      log.error({ err, bookingId: booking.id }, "Bar order notification failed");
+      log.error({ err, bookingId: booking.id }, "Paid booking bar ticket projection failed");
+      notifyReception(
+        "⚠️ Commande bar payée absente de l’iPad",
+        `La commande bar de la réservation ${booking.id} n’a pas pu être affichée en cuisine.\n` +
+          `Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
+          `Articles : ${extras.map((line) => `${line.qty}× ${line.name}`).join(", ")}`,
+      );
     }
   }
 
@@ -658,14 +671,14 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
       clientId: order.client_id,
       wixMemberId: order.member_id,
     });
-    const msg = planConfirmationMessage(
+    const msg = applyFrenchRegister(planConfirmationMessage(
       lang,
       order.plan_name,
       true,
       startsAt,
       client?.name,
       currentKey?.key_type === "INVITEE",
-    );
+    ), lang === "fr" && client?.fr_register === "vous");
     await sendText(client.wa_phone, msg).catch((err) =>
       log.error({ err, planOrderId: order.id }, "Failed to send scheduled Key confirmation"),
     );
@@ -751,13 +764,13 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
     await repo.clearPlanOrderFulfilling(order.id).catch(() => {});
   }
 
-  const msg = planConfirmationMessage(
+  const msg = applyFrenchRegister(planConfirmationMessage(
     lang,
     order.plan_name,
     activated,
     startsInFuture ? startsAt! : null,
     client?.name,
-  );
+  ), lang === "fr" && client?.fr_register === "vous");
   try {
     await sendText(client.wa_phone, msg);
     await repo.addTurn(order.client_id, "assistant", msg);
@@ -785,7 +798,10 @@ async function fulfillDiscoveryStep1Booking(
   const slotStart = new Date(order.slot_start).toISOString();
   if (Date.parse(slotStart) <= Date.now()) {
     await repo.deferDiscoveryPlanBooking(order.id, "SLOT_UNAVAILABLE", "class already started");
-    const msg = "✅ Ton Pack Découverte étape 1 est actif. Le créneau choisi a déjà commencé : réponds ici et je te propose immédiatement un autre créneau Reformer avec ton abonnement.";
+    const msg = applyFrenchRegister(
+      "✅ Ton Pack Découverte étape 1 est actif. Le créneau choisi a déjà commencé : réponds ici et je te propose immédiatement un autre créneau Reformer avec ton abonnement.",
+      lang === "fr" && client?.fr_register === "vous",
+    );
     await sendText(client.wa_phone, msg).catch(() => undefined);
     await repo.addTurn(order.client_id, "assistant", msg).catch(() => undefined);
     return;
@@ -794,7 +810,10 @@ async function fulfillDiscoveryStep1Booking(
   const fresh = await wix.isSlotStillOpen(order.service_id, order.event_id, slotStart, 1);
   if (!fresh) {
     await repo.deferDiscoveryPlanBooking(order.id, "SLOT_UNAVAILABLE", "selected slot filled while payment was pending");
-    const msg = "✅ Ton Pack Découverte étape 1 est actif. Le créneau choisi vient de se remplir pendant le paiement ; réponds ici et je te propose tout de suite les prochains créneaux Reformer, sans nouveau paiement.";
+    const msg = applyFrenchRegister(
+      "✅ Ton Pack Découverte étape 1 est actif. Le créneau choisi vient de se remplir pendant le paiement ; réponds ici et je te propose tout de suite les prochains créneaux Reformer, sans nouveau paiement.",
+      lang === "fr" && client?.fr_register === "vous",
+    );
     await sendText(client.wa_phone, msg).catch(() => undefined);
     await repo.addTurn(order.client_id, "assistant", msg).catch(() => undefined);
     return;
@@ -810,7 +829,10 @@ async function fulfillDiscoveryStep1Booking(
       `Le plan ${order.plan_name} est actif mais son bénéfice n'est pas utilisable pour le créneau choisi.\n` +
         `Client : ${client?.name ?? "?"} (${phone})\nCours : ${order.service_name}\nPlan order : ${order.id}`,
     );
-    const msg = "✅ Ton Pack Découverte étape 1 est actif. L'équipe finalise la réservation du premier cours et te confirme très vite ici.";
+    const msg = applyFrenchRegister(
+      "✅ Ton Pack Découverte étape 1 est actif. L'équipe finalise la réservation du premier cours et te confirme très vite ici.",
+      lang === "fr" && client?.fr_register === "vous",
+    );
     await sendText(client.wa_phone, msg).catch(() => undefined);
     await repo.addTurn(order.client_id, "assistant", msg).catch(() => undefined);
     return;
@@ -859,7 +881,10 @@ async function fulfillDiscoveryStep1Booking(
       bookingId: booking.id,
     });
     invalidateMembershipCache(order.client_id);
-    const msg = confirmationMessage(lang, order.service_name, new Date(fresh.startDate));
+    const msg = applyFrenchRegister(
+      confirmationMessage(lang, order.service_name, new Date(fresh.startDate)),
+      lang === "fr" && client?.fr_register === "vous",
+    );
     await sendText(client.wa_phone, msg);
     await repo.addTurn(order.client_id, "assistant", msg);
     log.info({ planOrderId: order.id, wixBookingId }, "Discovery step 1 activated and booked with membership");
@@ -915,25 +940,31 @@ export async function fulfillCafeOrder(cafeOrderId: string, log: PaymentLog): Pr
 
   const standalone = !order.linked_booking_id;
   try {
-    notifyReception(
-      standalone
-        ? `☕ Commande bar payée (sans réservation) — ${order.amount_xof} FCFA`
-        : `☕ Commande bar payée (résa existante) — ${order.amount_xof} FCFA`,
-      (standalone
-        ? `Un client a payé une commande bar seule (aucun cours associé — retrait au comptoir) :\n`
-        : `Un client a payé une commande bar qui accompagne une réservation existante :\n`) +
-        `  Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
-        extras.map((l) => `  • ${l.qty}× ${l.name} — ${l.lineTotalXof} FCFA`).join("\n") +
-        `\n  À servir : ${order.order_note ?? (standalone ? "dès que possible" : "prête après le cours")}\n` +
-        (standalone ? "" : `  Cours associé : ${order.service_name ?? "?"} — ${slotLabel}\n`) +
-        `  Total bar : ${order.amount_xof} FCFA (payé)`,
-      { whatsappFirst: true },
-    );
+    await createBarTicket({
+      sourceKey: `bar:cafe:${order.id}`,
+      heading: client?.name ?? "Client Awa",
+      subheading: standalone
+        ? "Retrait au comptoir"
+        : `${order.service_name ?? "Cours"} · ${slotLabel}`,
+      lines: extras,
+      amountXof: order.amount_xof,
+      note: order.order_note ?? (standalone ? "dès que possible" : "prête après le cours"),
+      isTest: client?.is_test === true,
+    });
   } catch (err) {
-    log.error({ err, cafeOrderId: order.id }, "Bar order notification failed");
+    log.error({ err, cafeOrderId: order.id }, "Paid cafe order ticket projection failed");
+    notifyReception(
+      "⚠️ Commande bar payée absente de l’iPad",
+      `La commande bar ${order.id} n’a pas pu être affichée en cuisine.\n` +
+        `Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")})\n` +
+        `Articles : ${extras.map((line) => `${line.qty}× ${line.name}`).join(", ")}`,
+    );
   }
 
-  const msg = cafeConfirmationMessage(lang, extras, order.order_note, order.service_name);
+  const msg = applyFrenchRegister(
+    cafeConfirmationMessage(lang, extras, order.order_note, order.service_name),
+    lang === "fr" && client?.fr_register === "vous",
+  );
   try {
     await sendText(client.wa_phone, msg);
     await repo.addTurn(order.client_id, "assistant", msg);
@@ -941,8 +972,8 @@ export async function fulfillCafeOrder(cafeOrderId: string, log: PaymentLog): Pr
     log.error({ err, cafeOrderId: order.id }, "Failed to send bar confirmation");
   }
 
-  // Mark fulfilled even if WhatsApp failed — reception was told (or we logged).
-  // Retrying forever would re-spam the kitchen.
+  // Ticket creation is idempotent. If it failed, reception received a critical
+  // exception alert; routine paid orders never WhatsApp the kitchen.
   await repo.markCafeOrderFulfilled(order.id);
 }
 
@@ -1116,7 +1147,10 @@ async function maybeHandleUnlinkedClient(
 
     await repo.markEmailPrompted(client.id);
 
-    const ask = emailAskMessage(lang);
+    const ask = applyFrenchRegister(
+      emailAskMessage(lang),
+      lang === "fr" && client?.fr_register === "vous",
+    );
     await sendText(client.wa_phone, ask);
     await repo.addTurn(client.id, "assistant", ask);
 
@@ -1204,7 +1238,10 @@ async function notifyRefundParties(
       `  railway run npm run refund:done -- ${bookingId}\n\n` +
       `Le client a été (ou sera) prévenu sur WhatsApp (remboursement sous 24h).`,
   );
-  const msg = refundMessage(lang, spots, reason, client?.name);
+  const msg = applyFrenchRegister(
+    refundMessage(lang, spots, reason, client?.name),
+    lang === "fr" && client?.fr_register === "vous",
+  );
   try {
     await sendText(client.wa_phone, msg);
     await repo.addTurn(client.id, "assistant", msg);

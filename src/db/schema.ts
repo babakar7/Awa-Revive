@@ -98,6 +98,13 @@ alter table clients
 alter table clients
   add column if not exists capability_menu_at timestamptz;
 
+-- NULL = informal default. Once set to vous, inbound processing never
+-- automatically downgrades the client's French register.
+alter table clients add column if not exists fr_register text;
+alter table clients drop constraint if exists clients_fr_register_check;
+alter table clients add constraint clients_fr_register_check
+  check (fr_register is null or fr_register in ('tu','vous'));
+
 -- Last time the post-booking bar menu offer was delivered. Caps the offer at
 -- once per ~24h: a client paying several sessions back-to-back must not get
 -- the same "incontournables" list after every single confirmation (observed
@@ -217,6 +224,39 @@ create table if not exists conversations (
 
 create index if not exists idx_conversations_client_created
   on conversations (client_id, created_at);
+
+-- Coupe-circuit durable de la boucle agent. Deux erreurs techniques identiques
+-- sur la même ressource déclenchent un relais humain et une pause d'Awa. La
+-- fenêtre vit en base (pas en mémoire) afin de survivre aux redéploiements.
+create table if not exists agent_tool_failures (
+  client_id uuid not null references clients(id) on delete cascade,
+  tool_name text not null,
+  error_code text not null,
+  resource_key text not null,
+  failure_count integer not null default 1 check (failure_count > 0),
+  first_failed_at timestamptz not null default now(),
+  last_failed_at timestamptz not null default now(),
+  expires_at timestamptz not null default (now() + interval '2 hours'),
+  tripped_at timestamptz,
+  primary key (client_id, tool_name, error_code, resource_key)
+);
+create index if not exists idx_agent_tool_failures_expiry
+  on agent_tool_failures (expires_at);
+
+-- Dernière liste réellement présentée au client. Permet de traiter un choix
+-- écrit ("12h30", "Wave", titre exact) exactement comme un clic WhatsApp,
+-- sans laisser le modèle deviner l'identifiant technique.
+create table if not exists presented_choices (
+  client_id uuid not null references clients(id) on delete cascade,
+  presentation_id uuid not null,
+  choice_id text not null,
+  title text not null,
+  presented_at timestamptz not null default now(),
+  expires_at timestamptz not null default (now() + interval '2 hours'),
+  primary key (client_id, presentation_id, choice_id)
+);
+create index if not exists idx_presented_choices_recent
+  on presented_choices (client_id, presented_at desc);
 
 -- Human replies are kept separately from Awa's turns so pending/failed sends
 -- never pollute the model history. request_key makes form retries idempotent;
@@ -1339,7 +1379,7 @@ on conflict (idempotency_key) do nothing;
 -- différée pour une programmée) : la cuisine ne voit jamais une commande future.
 create table if not exists kitchen_tickets (
   id uuid primary key default gen_random_uuid(),
-  source text not null check (source in ('DELIVERY','TABLE')),
+  source text not null check (source in ('DELIVERY','TABLE','BAR')),
   -- Lien vers la commande source. Pour une livraison : delivery_order_id (unique
   -- → un seul ticket par commande, idempotence de la création/réconciliation).
   delivery_order_id uuid references delivery_orders(id) on delete cascade,
@@ -1374,6 +1414,11 @@ create table if not exists kitchen_tickets (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- BAR tickets were added after the original DELIVERY/TABLE constraint. Reapply
+-- the named constraint idempotently so existing databases accept the new source.
+alter table kitchen_tickets drop constraint if exists kitchen_tickets_source_check;
+alter table kitchen_tickets add constraint kitchen_tickets_source_check
+  check (source in ('DELIVERY','TABLE','BAR'));
 create unique index if not exists idx_kitchen_tickets_delivery
   on kitchen_tickets (delivery_order_id) where delivery_order_id is not null;
 create unique index if not exists idx_kitchen_tickets_client_request

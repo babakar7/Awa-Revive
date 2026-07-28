@@ -15,6 +15,7 @@ import {
   advanceTicketByCuisine,
   ackTicketDisplayed,
   createTableTicket,
+  completeBarTicket,
   claimTableServe,
   serveTableTicket,
   cancelTableTicket,
@@ -230,6 +231,13 @@ export function registerOps(app: FastifyInstance): void {
         tag: `ready-${t.id}`,
       }).catch(() => {});
     }
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${BASE}/tickets/:id/complete`, async (req, reply) => {
+    const device = await requireCuisine(req, reply);
+    if (!device) return reply;
+    const t = await completeBarTicket((req.params as any).id, device.label);
     return reply.type("application/json").send({ ok: !!t });
   });
 

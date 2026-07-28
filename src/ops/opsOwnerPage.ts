@@ -65,6 +65,7 @@ main{padding:.9rem 1rem 1rem;display:grid;gap:.9rem;grid-template-columns:repeat
 .card{background:var(--surface-raised);border:1px solid var(--border-soft);border-left:6px solid var(--plum-600);
 border-radius:var(--radius-lg);padding:.9rem 1rem;display:flex;flex-direction:column;gap:.5rem;box-shadow:var(--shadow-1)}
 .card.src-delivery{border-left-color:var(--info)}
+.card.src-bar{border-left-color:#b7791f}
 .card.test{border-left-color:var(--danger)}
 .card.ready{background:var(--ok-bg);border-color:var(--ok-border);box-shadow:0 0 0 1px var(--ok-border)}
 .card.urgent{border-color:var(--danger);border-left-color:var(--danger);box-shadow:0 0 0 3px var(--danger-bg)}
@@ -164,12 +165,13 @@ export const OWNER_APP_JS = String.raw`(function(){
     if(s<86400) return 'il y a '+Math.floor(s/3600)+' h'; return 'il y a '+Math.floor(s/86400)+' j'; }
 
   function card(t){
-    var c=el('div','card src-'+(t.source==='TABLE'?'table':'delivery')+(t.status==='READY'?' ready':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
+    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
     c.dataset.id=t.id;
     var top=el('div','top');
     if(t.urgent) top.appendChild(el('span','badge urgent','⚡ URGENT'));
     var b;
-    if(t.source!=='TABLE') b=el('span','badge','🛵 Livraison');
+    if(t.source==='DELIVERY') b=el('span','badge','🛵 Livraison');
+    else if(t.source==='BAR') b=el('span','badge','☕ Bar');
     else if(t.takeaway) b=el('span','badge away','📦 À emporter');
     else b=el('span','badge table','🍽️ Sur place');
     top.appendChild(b);

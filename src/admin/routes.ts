@@ -37,10 +37,7 @@ import {
   attemptRecipientRouteNotify,
   attemptRescheduleNotify,
   attemptRouteNotify,
-  internalNotifyMode,
-  notifyKitchenForOrder,
   renotifyKitchen,
-  scheduleKitchenFallback,
 } from "../domain/deliveryNotify.js";
 import {
   DELIVERY_KITCHEN_LEAD_OPTIONS,
@@ -987,7 +984,7 @@ ${
         const slaRaw = parseInt(String(b.sla_minutes ?? "").trim(), 10);
         const sla = Number.isFinite(slaRaw) && slaRaw >= 5 && slaRaw <= 180 ? slaRaw : config.DELIVERY_SLA_MINUTES;
 
-        const { order, token } = await delivery.createDeliveryOrder({
+        const { order } = await delivery.createDeliveryOrder({
           client_name: name,
           client_phone: phone,
           wix_contact_id: wixContactId,
@@ -1032,8 +1029,8 @@ ${
             `Suivi : /admin/livraisons`,
           { whatsappFirst: true, preferTemplate: true },
         );
-        // Only active orders reach the kitchen. A scheduled order stays durable
-        // and silent until the 60-second sweep crosses kitchen_notify_at.
+        // Only active orders reach the kitchen iPad. Creating or activating an
+        // order never sends an automatic WhatsApp to kitchen staff.
         let kitchenOk = false;
         if (order.activated_at) {
           // Project the active order onto a kitchen ticket right away so the
@@ -1044,23 +1041,7 @@ ${
               req.log.error({ err: e, order: order.id }, "Kitchen ticket create failed");
               return null;
             });
-          if (internalNotifyMode() === "parallel") {
-            // Pilot: the WhatsApp ticket fires immediately, alongside the iPad.
-            const claimed = await delivery.claimKitchenNotify(order.id);
-            if (claimed) {
-              try {
-                await notifyKitchenForOrder(claimed, token, req.log);
-                const fresh = await delivery.findDeliveryOrder(order.id);
-                kitchenOk = !!fresh && ["sent", "sent_template", "partial", "fallback_reception"].includes(fresh.kitchen_notify_status);
-              } catch (e) {
-                req.log.error({ err: e, order: order.id }, "Delivery kitchen notify threw");
-              }
-            }
-          } else {
-            // Post-pilot: the iPad is primary; arm the 15s WhatsApp safety net.
-            if (ticket) scheduleKitchenFallback(order.id, ticket.id, config.OPS_KITCHEN_FALLBACK_SECONDS, req.log);
-            kitchenOk = !!ticket; // the ticket reached the iPad board
-          }
+          kitchenOk = !!ticket;
           if (scheduledFor) await attemptActivationNotify(order.id, req.log);
         }
         const done = scheduledFor && !order.activated_at
@@ -1154,8 +1135,15 @@ ${
         );
         if (changed.arrivalChanged) await attemptRescheduleNotify(id, req.log);
         if (changed.order.activated_at) {
-          const claimed = await delivery.claimKitchenNotify(id);
-          if (claimed) await notifyKitchenForOrder(claimed, changed.token, req.log);
+          await createDeliveryTicket(
+            changed.order,
+            config.OPS_KITCHEN_FALLBACK_SECONDS,
+          ).catch((error) =>
+            req.log.error(
+              { err: error, order: id },
+              "Activated delivery ticket create failed after reschedule",
+            ),
+          );
           await attemptActivationNotify(id, req.log);
         }
         return reply.redirect("/admin/livraisons?done=reprogrammed", 303);
@@ -1174,40 +1162,16 @@ ${
           { order: id, by: req.adminUser },
           "Scheduled delivery manually activated",
         );
-        const ticket = await createDeliveryTicket(
+        await createDeliveryTicket(
           activated,
           config.OPS_KITCHEN_FALLBACK_SECONDS,
         )
-          .then((result) => result.ticket)
           .catch((error) => {
             req.log.error(
               { err: error, order: id },
               "Kitchen ticket create failed after manual activation",
             );
-            return null;
           });
-        if (internalNotifyMode() === "parallel") {
-          const claimed = await delivery.claimKitchenNotifyWithFreshToken(id);
-          if (claimed) {
-            await notifyKitchenForOrder(
-              claimed.order,
-              claimed.token,
-              req.log,
-            ).catch((error) =>
-              req.log.error(
-                { err: error, order: id },
-                "Kitchen notify failed after manual activation",
-              ),
-            );
-          }
-        } else if (ticket) {
-          scheduleKitchenFallback(
-            id,
-            ticket.id,
-            config.OPS_KITCHEN_FALLBACK_SECONDS,
-            req.log,
-          );
-        }
         await attemptActivationNotify(id, req.log);
         return reply.redirect("/admin/livraisons?done=activated-now", 303);
       });

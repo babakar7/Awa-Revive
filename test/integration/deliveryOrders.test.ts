@@ -100,6 +100,17 @@ async function chooseCash(id: string): Promise<void> {
   expect(res.headers.location).toContain("done=cash");
 }
 
+async function manuallyNotifyKitchen(id: string, phone = "221770000099"): Promise<string> {
+  const res = await app.inject({
+    method: "POST",
+    url: `/admin/livraisons/${id}/renotify-kitchen`,
+    headers: { authorization: AUTH },
+  });
+  expect(res.statusCode).toBe(303);
+  expect(res.headers.location).toContain("done=renotified");
+  return magicLinkFrom(mock.waTextsTo(phone));
+}
+
 /** Newest-first: the mock accumulates texts across a test, so the latest kitchen
  *  message (e.g. after a renotify/rotate) is at the end. Token-only URL. */
 function magicLinkFrom(texts: string[]): string {
@@ -114,8 +125,8 @@ function dakarInputIn(minutes: number): string {
   return new Date(Date.now() + minutes * 60_000).toISOString().slice(0, 16);
 }
 
-describe("delivery order creation → kitchen notify", () => {
-  it("prices server-side, creates IN_KITCHEN, and WhatsApps the kitchen a magic link", async () => {
+describe("delivery order creation → kitchen iPad only", () => {
+  it("prices server-side, creates IN_KITCHEN and an iPad ticket without WhatsApping the kitchen", async () => {
     await seedKitchenContact();
     const id = await createOrder({ wix_contact_id: "wix-contact-123" });
 
@@ -126,11 +137,13 @@ describe("delivery order creation → kitchen notify", () => {
     expect(order.wix_contact_id).toBe("wix-contact-123");
     expect(order.payment_status).toBe("PENDING_CHOICE");
     expect(order.payment_method).toBeNull();
-    expect(["sent", "sent_template"]).toContain(order.kitchen_notify_status);
-
-    const link = magicLinkFrom(mock.waTextsTo("221770000099"));
-    expect(link).toMatch(/\/livraison\/[0-9a-f]{32}$/);
-    void id;
+    expect(order.kitchen_notify_status).toBe("pending");
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+    const ticket = await pool.query(
+      `select status from kitchen_tickets where delivery_order_id=$1`,
+      [id],
+    );
+    expect(ticket.rows[0].status).toBe("NEW");
   });
 
   it("stores and normalizes an optional handoff contact on the order and kitchen ticket", async () => {
@@ -144,9 +157,7 @@ describe("delivery order creation → kitchen notify", () => {
     expect(order.recipient_name).toBe("Fatou Assistante");
     expect(order.recipient_phone).toBe("221780001122");
     expect(order.recipient_route_notify_status).toBe("pending");
-    expect(mock.waTextsTo("221770000099").join("\n")).toContain(
-      "Contact remise : Fatou Assistante (+221780001122)",
-    );
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
     const ticket = (
       await pool.query(`select subheading from kitchen_tickets where delivery_order_id=$1`, [id])
     ).rows[0];
@@ -162,7 +173,7 @@ describe("delivery order creation → kitchen notify", () => {
 
     const publicCard = await app.inject({
       method: "GET",
-      url: magicLinkFrom(mock.waTextsTo("221770000099")),
+      url: await manuallyNotifyKitchen(id),
     });
     expect(publicCard.statusCode).toBe(200);
     expect(publicCard.body).toContain("Contact de remise");
@@ -231,17 +242,16 @@ describe("delivery order creation → kitchen notify", () => {
     expect(ticket.subheading).toContain("Appeler Rama (+221770009988)");
   });
 
-  it("with no reachable bar contact (none, or empty phone), falls back to reception", async () => {
-    // A bar contact WITHOUT a phone must not count as reachable.
+  it("does not fall back to WhatsApp when no bar contact is reachable", async () => {
     await pool.query(
       `insert into staff_contacts (name, phone, role, muted) values ('SansTel', '', 'bar', false)`,
     );
     const id = await createOrder();
     await settle();
     const toReception = mock.waTextsTo(RECEPTION).join("\n");
-    expect(toReception).toContain("Aucun contact");
+    expect(toReception).not.toContain("Aucun contact");
     const order = (await pool.query(`select kitchen_notify_status from delivery_orders where id=$1`, [id])).rows[0];
-    expect(order.kitchen_notify_status).toBe("fallback_reception");
+    expect(order.kitchen_notify_status).toBe("pending");
   });
 
   it("pings reception on every new order (owner may be the one entering it)", async () => {
@@ -253,7 +263,7 @@ describe("delivery order creation → kitchen notify", () => {
     );
   });
 
-  it("falls back to the approved generic template when ticket_cuisine is misconfigured", async () => {
+  it("does not call the kitchen template at creation even when configured", async () => {
     const previousKitchen = config.WA_KITCHEN_TICKET_TEMPLATE;
     const previousReception = config.WA_RECEPTION_TEMPLATE;
     const previousLang = config.WA_RECEPTION_TEMPLATE_LANG;
@@ -265,13 +275,12 @@ describe("delivery order creation → kitchen notify", () => {
       await seedKitchenContact();
       const id = await createOrder();
       const kitchenCalls = mock.waCalls().filter((c) => c.body?.to === "221770000099");
-      expect(kitchenCalls.some((c) => c.body?.template?.name === "ticket_cuisine")).toBe(true);
-      expect(kitchenCalls.some((c) => c.body?.template?.name === "awa_notification")).toBe(true);
+      expect(kitchenCalls).toHaveLength(0);
       expect(mock.waTextsTo("221770000099")).toHaveLength(0);
       const order = (
         await pool.query(`select kitchen_notify_status from delivery_orders where id=$1`, [id])
       ).rows[0];
-      expect(order.kitchen_notify_status).toBe("sent_template");
+      expect(order.kitchen_notify_status).toBe("pending");
     } finally {
       config.WA_KITCHEN_TICKET_TEMPLATE = previousKitchen;
       config.WA_RECEPTION_TEMPLATE = previousReception;
@@ -347,8 +356,12 @@ describe("scheduled deliveries", () => {
     const active = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
     expect(active.scheduled_for).not.toBeNull();
     expect(active.activated_at).not.toBeNull();
-    expect(["sent", "sent_template"]).toContain(active.kitchen_notify_status);
-    expect(mock.waTextsTo("221770000099").some((text) => text.includes("/livraison/"))).toBe(true);
+    expect(active.kitchen_notify_status).toBe("pending");
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+    expect(
+      (await pool.query(`select status from kitchen_tickets where delivery_order_id=$1`, [id]))
+        .rows[0].status,
+    ).toBe("NEW");
   });
 
   it("confirms payment immediately but keeps a week-ahead order away from the kitchen and SLA", async () => {
@@ -464,7 +477,7 @@ describe("scheduled deliveries", () => {
     ).toBe(1);
   });
 
-  it("activates after restart, alerts kitchen/reception once, and resists concurrent sweeps", async () => {
+  it("activates after restart, creates one iPad ticket, alerts reception once, and resists concurrent sweeps", async () => {
     await seedKitchenContact();
     const id = await createOrder({
       delivery_mode: "scheduled",
@@ -489,11 +502,17 @@ describe("scheduled deliveries", () => {
     await Promise.all([sweepDeliveries(noopLog), sweepDeliveries(noopLog)]);
     const order = (await pool.query(`select * from delivery_orders where id=$1`, [id])).rows[0];
     expect(order.activated_at).not.toBeNull();
-    expect(["sent", "sent_template"]).toContain(order.kitchen_notify_status);
+    expect(order.kitchen_notify_status).toBe("pending");
     expect(["sent", "sent_template"]).toContain(order.activation_notify_status);
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
     expect(
-      mock.waTextsTo("221770000099").filter((text) => text.includes("/livraison/")),
-    ).toHaveLength(1);
+      (
+        await pool.query(
+          `select count(*)::int as n from kitchen_tickets where delivery_order_id=$1`,
+          [id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
 
     const activationLogs = await pool.query(
       `select count(*)::int as n from notification_log
@@ -519,9 +538,7 @@ describe("scheduled deliveries", () => {
       ).toISOString(),
     ).toBe(promisedBefore);
     await sweepDeliveries(noopLog);
-    expect(
-      mock.waTextsTo("221770000099").filter((text) => text.includes("/livraison/")),
-    ).toHaveLength(1);
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
   });
 
   it("reprograms only before activation, preserves payment, and warns the client only for arrival changes", async () => {
@@ -718,7 +735,7 @@ describe("Wix client picker", () => {
   });
 });
 
-describe("kitchen shift gate (published staff planning)", () => {
+describe("manual kitchen WhatsApp shift gate (published staff planning)", () => {
   const OWNER = config.OWNER_PHONE.replace(/\D/g, "");
 
   async function seedBarContact(name: string, phone: string): Promise<string> {
@@ -748,38 +765,49 @@ describe("kitchen shift gate (published staff planning)", () => {
   // full-day shift today = on shift now; a shift tomorrow only = off shift now.
   const today = () => planningNowSlot(new Date()).weekday;
 
-  it("pings only the bar contact on shift now; the off-shift one stays quiet", async () => {
+  it("stays quiet on creation, then a manual resend pings only the on-shift bar contact", async () => {
     const onId = await seedBarContact("OnShift", "221770000031");
     await seedBarContact("OffShift", "221770000032");
     await publishShifts([{ staff_id: onId, weekday: today(), start_min: 0, end_min: 1440 }]);
 
     const id = await createOrder();
+    expect(mock.waTextsTo("221770000031")).toHaveLength(0);
+    await manuallyNotifyKitchen(id, "221770000031");
     expect(magicLinkFrom(mock.waTextsTo("221770000031"))).toMatch(/\/livraison\/[0-9a-f]{32}$/);
     expect(mock.waTextsTo("221770000032")).toHaveLength(0);
     const order = (await pool.query(`select kitchen_notify_status from delivery_orders where id=$1`, [id])).rows[0];
     expect(["sent", "sent_template"]).toContain(order.kitchen_notify_status);
   });
 
-  it("nobody on shift → warning ticket to reception AND the owner, status fallback_reception", async () => {
+  it("a manual resend with nobody on shift warns reception and the owner", async () => {
     const offId = await seedBarContact("OffShift", "221770000033");
     await publishShifts([{ staff_id: offId, weekday: (today() + 1) % 7, start_min: 0, end_min: 1440 }]);
 
     const id = await createOrder();
     await settle();
     expect(mock.waTextsTo("221770000033")).toHaveLength(0);
+    expect(mock.waTextsTo(RECEPTION).some((t) => t.includes("en service"))).toBe(false);
+    await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/renotify-kitchen`,
+      headers: { authorization: AUTH },
+    });
+    await settle();
     expect(mock.waTextsTo(RECEPTION).some((t) => t.includes("en service"))).toBe(true);
     expect(mock.waTextsTo(OWNER).some((t) => t.includes("en service"))).toBe(true);
     const order = (await pool.query(`select kitchen_notify_status from delivery_orders where id=$1`, [id])).rows[0];
     expect(order.kitchen_notify_status).toBe("fallback_reception");
   });
 
-  it("no published planning → no gating, every reachable bar contact gets the ticket", async () => {
+  it("a manual resend without published planning reaches every bar contact", async () => {
     await seedBarContact("A", "221770000034");
     await seedBarContact("B", "221770000035");
     // Draft schedules don't gate either.
     await pool.query(`insert into staff_schedules (name, status) values ('Brouillon','draft')`);
 
-    await createOrder();
+    const id = await createOrder();
+    expect(mock.waTextsTo("221770000034")).toHaveLength(0);
+    await manuallyNotifyKitchen(id, "221770000034");
     expect(magicLinkFrom(mock.waTextsTo("221770000034"))).toMatch(/\/livraison\//);
     expect(magicLinkFrom(mock.waTextsTo("221770000035"))).toMatch(/\/livraison\//);
   });
@@ -789,7 +817,7 @@ describe("delivery payment handover to Awa", () => {
   it("blocks both admin and kitchen departure until cash or a verified payment", async () => {
     await seedKitchenContact();
     const id = await createOrder();
-    const link = magicLinkFrom(mock.waTextsTo("221770000099"));
+    const link = await manuallyNotifyKitchen(id);
 
     const boardDepart = await app.inject({
       method: "POST",
@@ -1055,7 +1083,7 @@ describe("magic link", () => {
   it("GET is read-only (prefetch-safe) and POST marks departure + pings the client once", async () => {
     await seedKitchenContact();
     const id = await createOrder();
-    const link = magicLinkFrom(mock.waTextsTo("221770000099"));
+    const link = await manuallyNotifyKitchen(id);
     await chooseCash(id);
 
     // GET must NOT mutate (WhatsApp prefetches links for previews).
@@ -1103,7 +1131,7 @@ describe("renotify rotates the token", () => {
   it("invalidates the old link and issues a working new one", async () => {
     await seedKitchenContact();
     const id = await createOrder();
-    const link1 = magicLinkFrom(mock.waTextsTo("221770000099"));
+    const link1 = await manuallyNotifyKitchen(id);
 
     const res = await app.inject({
       method: "POST",
@@ -1201,8 +1229,13 @@ describe("item with a built-in choice", () => {
     expect(order.amount_xof).toBe(7500);
     expect(order.items_json[0].choice).toBe("Jus d'orange");
 
-    const kitchenText = mock.waTextsTo("221770000099").join("\n");
-    expect(kitchenText).toContain("Brunch Mykonos (Jus d'orange)");
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+    const ticket = (
+      await pool.query(`select items_json from kitchen_tickets where delivery_order_id=$1`, [
+        order.id,
+      ])
+    ).rows[0];
+    expect(ticket.items_json[0].choice).toBe("Jus d'orange");
   });
 
   it("requires, stores and displays every configured choice type", async () => {
@@ -1235,10 +1268,13 @@ describe("item with a built-in choice", () => {
       { label: "Type de lait", value: "Avoine" },
       { label: "Type de fromage", value: "Chèvre" },
     ]);
-    const kitchenText = mock.waTextsTo("221770000099").join("\n");
-    expect(kitchenText).toContain(
-      "Type de lait : Avoine · Type de fromage : Chèvre",
-    );
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+    const ticket = (
+      await pool.query(`select items_json from kitchen_tickets where delivery_order_id=$1`, [
+        order.id,
+      ])
+    ).rows[0];
+    expect(ticket.items_json[0].selections).toEqual(order.items_json[0].selections);
   });
 });
 
@@ -1250,7 +1286,12 @@ describe("creation confirmation ping", () => {
       async () => mock.waTextsTo("221770009988").some((t) => t.includes("bien reçue")),
       "client creation confirmation",
     );
-    const order = (await pool.query(`select created_notify_status from delivery_orders where id=$1`, [id])).rows[0];
+    const order = await waitFor(async () => {
+      const row = (
+        await pool.query(`select created_notify_status from delivery_orders where id=$1`, [id])
+      ).rows[0];
+      return ["sent", "sent_template"].includes(row.created_notify_status) ? row : null;
+    }, "client creation notification outcome");
     expect(["sent", "sent_template"]).toContain(order.created_notify_status);
     const logged = (
       await pool.query(
@@ -1282,12 +1323,15 @@ describe("creation confirmation ping", () => {
         "client delivery template",
       );
       expect(mock.waTextsTo("221770009988")).toHaveLength(0);
-      const order = (
-        await pool.query(
-          `select created_notify_status, created_notify_wamid from delivery_orders where id=$1`,
-          [id],
-        )
-      ).rows[0];
+      const order = await waitFor(async () => {
+        const row = (
+          await pool.query(
+            `select created_notify_status, created_notify_wamid from delivery_orders where id=$1`,
+            [id],
+          )
+        ).rows[0];
+        return row.created_notify_status === "sent_template" ? row : null;
+      }, "delivery template status persisted");
       expect(order.created_notify_status).toBe("sent_template");
       expect(order.created_notify_wamid).toMatch(/^wamid\.test\./);
     } finally {
@@ -1346,7 +1390,7 @@ describe("test delivery mode", () => {
     expect(order.is_test).toBe(true);
     expect((await deliveryStats()).openCount).toBe(0);
     expect(await recentDeliveryClients()).toHaveLength(0);
-    expect(mock.waTextsTo("221770000099").some((t) => t.includes("COMMANDE DE TEST"))).toBe(true);
+    expect(mock.waTextsTo("221770000099")).toHaveLength(0);
     await waitFor(
       async () => mock.waTextsTo(RECEPTION).some((t) => t.includes("COMMANDE DE TEST")),
       "test reception alert",

@@ -22,6 +22,14 @@ import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
 import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
 import { normalizeInboundText } from "../lib/inboundText.js";
+import { applyFrenchRegister, detectFrenchRegister } from "../lib/frenchRegister.js";
+import {
+  circuitBreakerReply,
+  toolErrorCode,
+  toolResourceKey,
+  toolResultError,
+} from "./toolCircuitBreaker.js";
+import { resolveFreeTextChoice } from "./choiceMatcher.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -119,21 +127,28 @@ export function classifyReplyOutcome(
   return "deliver";
 }
 
-export function technicalFallbackMessage(clientName?: string | null): string {
+export function technicalFallbackMessage(
+  clientName?: string | null,
+  formal = false,
+): string {
   const contact = receptionWhatsAppLink(
     config.RECEPTION_PHONE,
     clientName,
     "un souci technique rencontré avec Awa",
   );
-  return (
+  return applyFrenchRegister(
     "Désolé, j'ai un souci technique 🙏🏾 Réessaie dans un instant.\n\n" +
-    receptionLinkInstruction("fr", contact.url)
+      receptionLinkInstruction("fr", contact.url),
+    formal,
   );
 }
 
 /** A stale <NO_REPLY> is a model lapse, not a client-visible technical outage. */
-export function modelSilenceFallbackMessage(): string {
-  return "Pas de souci 😊 Je suis là. Dis-moi simplement ce que tu veux vérifier et je t'aide.";
+export function modelSilenceFallbackMessage(formal = false): string {
+  return applyFrenchRegister(
+    "Pas de souci 😊 Je suis là. Dis-moi simplement ce que tu veux vérifier et je t'aide.",
+    formal,
+  );
 }
 
 /**
@@ -415,6 +430,38 @@ async function notifyTechnicalFailure(client: repo.Client, reason?: string): Pro
   }
 }
 
+async function tripToolCircuitBreaker(args: {
+  client: repo.Client;
+  toolName: string;
+  errorCode: string;
+  resourceKey: string;
+}): Promise<void> {
+  const claimed = await repo.markAgentToolFailureTripped({
+    clientId: args.client.id,
+    toolName: args.toolName,
+    errorCode: args.errorCode,
+    resourceKey: args.resourceKey,
+  });
+  await repo.pauseAwaForTechnicalHandoff(args.client.id, 12).catch((error) =>
+    console.error("Failed to pause Awa after tool circuit breaker:", error),
+  );
+  if (!claimed) return;
+
+  const reason =
+    `Coupe-circuit agent: ${args.toolName}/${args.errorCode} répété ` +
+    `(ressource ${args.resourceKey.slice(0, 240)})`;
+  await repo.recordHandoff(args.client.id, reason).catch((error) =>
+    console.error("Failed to record tool circuit-breaker handoff:", error),
+  );
+  notifyReception(
+    "⚠️ Awa mise en pause — erreur répétée",
+    `${args.client.name ?? "Client"} (+${args.client.wa_phone.replace(/^\+/, "")}) a rencontré ` +
+      `deux fois la même erreur (${args.toolName}/${args.errorCode}). Awa est en pause 12 h et ` +
+      `la conversation attend une reprise humaine.\n\n` +
+      `Ouvrir : ${config.BASE_URL.replace(/\/+$/, "")}/admin/conversations/${args.client.id}`,
+  );
+}
+
 /**
  * Language detection (fr | en | wo) by stopword scoring. Drives the language
  * of the templated messages (payment confirmation, refund notice) — the agent
@@ -564,7 +611,10 @@ async function maybeHandleDeliveryPaymentReply(args: {
         message: describeLoopFailure(err),
       })}`,
     );
-    const fallback = technicalFallbackMessage(args.client.name);
+    const fallback = technicalFallbackMessage(
+      args.client.name,
+      args.client.fr_register === "vous",
+    );
     await sendText(args.client.wa_phone, fallback);
     await repo.addTurn(args.client.id, "assistant", fallback);
     void notifyTechnicalFailure(args.client, `paiement livraison — ${describeLoopFailure(err)}`);
@@ -585,7 +635,10 @@ async function maybeHandleDeliveryPaymentReply(args: {
   const reply = deliveryPaymentReplyText(args.client, result);
   if (!reply) {
     console.error("Deterministic delivery payment routing returned no usable confirmation:", result);
-    const fallback = technicalFallbackMessage(args.client.name);
+    const fallback = technicalFallbackMessage(
+      args.client.name,
+      args.client.fr_register === "vous",
+    );
     await sendText(args.client.wa_phone, fallback);
     await repo.addTurn(args.client.id, "assistant", fallback);
     void notifyTechnicalFailure(
@@ -607,9 +660,14 @@ export async function handleInboundText(args: {
   profileName?: string;
   referral?: WhatsAppReferral;
 }): Promise<void> {
-  const text = normalizeInboundText(args.text);
+  const inboundText = normalizeInboundText(args.text);
+  let text = inboundText;
   const client = await repo.upsertClient(args.waPhone);
-  const campaign = isPackDiscoveryCampaignEntry({ text, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
+  const matchedChoice = resolveFreeTextChoice(text, await repo.latestPresentedChoices(client.id));
+  if (matchedChoice) {
+    text += `\n[choix écrit résolu] ${matchedChoice.title} (id: ${matchedChoice.choice_id})`;
+  }
+  const campaign = isPackDiscoveryCampaignEntry({ text: inboundText, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
   // Log every inbound ad referral (matched or not) so the real ad source_id can be harvested
   // from Railway logs and added to PACK_DISCOVERY_META_SOURCE_IDS to tighten attribution.
   if (args.referral?.sourceId) console.info(`[campaign] inbound referral source_id=${args.referral.sourceId} type=${args.referral.sourceType ?? ""} headline=${JSON.stringify(args.referral.headline ?? "")} matched=${campaign.matched} by=${campaign.matchedBy ?? ""}`);
@@ -625,10 +683,17 @@ export async function handleInboundText(args: {
 
   // Conversation-start ping (before the incoming turn is persisted, so the gap
   // query sees only prior activity).
-  await maybeNotifyConversationStart(client, text, args.profileName);
+  await maybeNotifyConversationStart(client, inboundText, args.profileName);
 
-  const lang = detectLanguage(text);
-  if (lang) await repo.updateClientLanguage(client.id, lang);
+  const lang = detectLanguage(inboundText);
+  if (lang) {
+    await repo.updateClientLanguage(client.id, lang);
+    client.language = lang;
+  }
+  if (detectFrenchRegister(inboundText) === "vous") {
+    await repo.latchClientFormalRegister(client.id);
+    client.fr_register = "vous";
+  }
 
   await repo.addTurn(client.id, "user", text, args.waMessageId);
 
@@ -693,7 +758,7 @@ export async function handleInboundText(args: {
   if (
     await maybeHandleDeliveryPaymentReply({
       client,
-      text,
+      text: inboundText,
       deliveryOrders,
       hasCompetingPaymentContext: !!(
         activeBooking ||
@@ -742,9 +807,9 @@ export async function handleInboundText(args: {
   );
   // First contact = Awa has never replied to this client before (the current
   // inbound turn is already persisted at this point, so we look for a prior
-  // ASSISTANT turn, not an empty history). Drives the "Moi c'est Awa,
-  // l'assistante de Revive" self-introduction — see dynamicContext(). Awa no
-  // longer volunteers that she is an AI (only confirms it if asked), but a
+  // ASSISTANT turn, not an empty history). Drives the "Moi c'est Awa, je suis
+  // une assistante automatisée de Revive" self-introduction — see
+  // dynamicContext(). Awa states that she is automated, and a
   // "bonjour" that fires the capability menu should still open with a warm
   // introduction rather than a bare option list.
   const isFirstContact = !history.some((t) => t.role === "assistant");
@@ -771,6 +836,7 @@ export async function handleInboundText(args: {
       text: dynamicContext({
         clientName: client.name ?? args.profileName ?? null,
         clientLanguage: client.language ?? lang,
+        clientRegister: client.fr_register,
         activeBooking,
         activePlanOrder,
         activeCafeOrder,
@@ -799,6 +865,7 @@ export async function handleInboundText(args: {
   // (the Wave flow gets the same list from the webhook).
   let membershipBooked = false;
   let cafeMenuShown = false;
+  let circuitTripped = false;
 
   let lastResponse: Anthropic.Message | null = null;
   let loopError: unknown = null;
@@ -889,8 +956,38 @@ export async function handleInboundText(args: {
           content: result,
           is_error: isError || undefined,
         });
+
+        const input = block.input as Record<string, unknown>;
+        const resourceKey = toolResourceKey(input);
+        const technicalError = toolErrorCode(result);
+        if (technicalError) {
+          const failure = await repo.recordAgentToolFailure({
+            clientId: client.id,
+            toolName: block.name,
+            errorCode: technicalError,
+            resourceKey,
+          });
+          if (failure.failureCount >= 2) {
+            await tripToolCircuitBreaker({
+              client,
+              toolName: block.name,
+              errorCode: technicalError,
+              resourceKey,
+            });
+            replyText = circuitBreakerReply(client.fr_register === "vous");
+            circuitTripped = true;
+            break;
+          }
+        } else if (toolResultError(result) === null) {
+          await repo.clearAgentToolFailure({
+            clientId: client.id,
+            toolName: block.name,
+            resourceKey,
+          });
+        }
       }
       messages.push({ role: "user", content: results });
+      if (circuitTripped) break;
     }
 
     // Iteration cap reached while the model still wanted tools: an action may
@@ -964,8 +1061,11 @@ export async function handleInboundText(args: {
   if (!replyText && !interactiveSent) {
     const modelSilence = loopError instanceof Error && /^model returned /.test(loopError.message);
     replyText = modelSilence
-      ? modelSilenceFallbackMessage()
-      : technicalFallbackMessage(client.name ?? args.profileName ?? null);
+      ? modelSilenceFallbackMessage(client.fr_register === "vous")
+      : technicalFallbackMessage(
+          client.name ?? args.profileName ?? null,
+          client.fr_register === "vous",
+        );
     usedTechnicalFallback = !modelSilence;
     // Boucle de résultat (§4.31) : le client vient de recevoir « souci
     // technique » — la réception DOIT le savoir (avant : un console.error que
@@ -1016,9 +1116,11 @@ export async function handleFailedImage(waPhone: string, waMessageId: string, pr
   }
   if (isAwaDisengaged(client)) return;
   void sendTypingIndicator(waMessageId);
-  const reply =
+  const reply = applyFrenchRegister(
     "Désolée, je n'ai pas réussi à lire ton image 🙏🏾 Tu peux m'écrire ce qu'elle montre ?\n" +
-    "(Sorry, I couldn't read your image — could you tell me what it shows?)";
+      "(Sorry, I couldn't read your image — could you tell me what it shows?)",
+    client.fr_register === "vous",
+  );
   await sendText(waPhone, reply);
   await repo.addTurn(client.id, "assistant", reply);
 }
@@ -1058,9 +1160,11 @@ export async function handleUnsupportedMedia(
   }
   if (isAwaDisengaged(client)) return;
   void sendTypingIndicator(waMessageId);
-  const reply =
+  const reply = applyFrenchRegister(
     "Je ne peux pas lire ce type de message 🙏🏾 Écris-moi (ou envoie une note vocale) et je continue à t'aider !\n" +
-    "(I can't read this kind of message — please type or voice-note it and we'll continue.)";
+      "(I can't read this kind of message — please type or voice-note it and we'll continue.)",
+    client.fr_register === "vous",
+  );
   await sendText(waPhone, reply);
   await repo.addTurn(client.id, "assistant", reply);
 }
@@ -1077,9 +1181,11 @@ export async function handleFailedVoiceNote(waPhone: string, waMessageId: string
   }
   if (isAwaDisengaged(client)) return;
   void sendTypingIndicator(waMessageId);
-  const reply =
+  const reply = applyFrenchRegister(
     "Désolée, je n'ai pas réussi à écouter ta note vocale 🙏🏾 Tu peux me l'écrire ?\n" +
-    "(Sorry, I couldn't process your voice note — could you type it instead?)";
+      "(Sorry, I couldn't process your voice note — could you type it instead?)",
+    client.fr_register === "vous",
+  );
   await sendText(waPhone, reply);
   await repo.addTurn(client.id, "assistant", reply);
 }

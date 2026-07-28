@@ -5,6 +5,7 @@ import {
   sendWhatsAppNotificationDetailed,
 } from "../lib/notify.js";
 import * as repo from "./repo.js";
+import { applyFrenchRegister } from "../lib/frenchRegister.js";
 import { normalizeName } from "./notificationRules.js";
 import { listStaffContacts, phoneDigits, recordDeliveryLog } from "./notificationRepo.js";
 import { planningNowSlot } from "./staffPlanningRules.js";
@@ -27,17 +28,12 @@ import {
 } from "./deliveryRules.js";
 import {
   reconcileDeliveryTickets,
-  dueFallbackTicketIds,
-  claimTicketFallback,
-  unlockedPendingKitchenOrderIds,
 } from "./kitchenTicketRepo.js";
-import { parseInternalNotifyMode } from "./kitchenTicketRules.js";
 import {
   activateDueScheduledDeliveries,
   claimActivationNotify,
   claimCreatedNotify,
   claimDeliverySlaAlerts,
-  claimKitchenNotifyWithFreshToken,
   claimRecipientRouteNotify,
   claimRescheduleNotify,
   claimRouteNotify,
@@ -45,7 +41,6 @@ import {
   orderItems,
   pendingActivationNotifies,
   pendingCreatedNotifies,
-  pendingKitchenNotifies,
   pendingRecipientRouteNotifies,
   pendingRescheduleNotifies,
   pendingRouteNotifies,
@@ -288,7 +283,10 @@ async function sendClientPing(
     client.name = order.client_name;
   }
   const lang = client.language ?? "fr";
-  const msg = cfg.message(lang, view);
+  const msg = applyFrenchRegister(
+    cfg.message(lang, view),
+    lang === "fr" && client.fr_register === "vous",
+  );
   const template = cfg.template();
 
   if (template) {
@@ -434,49 +432,6 @@ export async function attemptActivationNotify(id: string, log: Log): Promise<voi
   }
 }
 
-/** Claim + attempt the kitchen notification for one order id, minting a fresh
- *  token (the cleartext is never stored, so a retry rotates it). Sweep entry. */
-async function attemptKitchenNotify(id: string, log: Log): Promise<void> {
-  const claimed = await claimKitchenNotifyWithFreshToken(id);
-  if (!claimed) return;
-  await notifyKitchenForOrder(claimed.order, claimed.token, log);
-}
-
-/** The active internal-notify policy (parallel = pilot, fallback = post-pilot). */
-export function internalNotifyMode() {
-  return parseInternalNotifyMode(config.INTERNAL_NOTIFY_MODE);
-}
-
-/**
- * In FALLBACK mode, the WhatsApp kitchen ticket is the SAFETY NET behind the
- * iPad: arm a one-shot timer (grace = OPS_KITCHEN_FALLBACK_SECONDS) that, if the
- * iPad never acked the ticket, claims the fallback and sends the legacy WhatsApp.
- * unref()'d so it never holds the process open; the 60s sweep is the durable
- * backstop if the timer is lost to a restart. No-op in parallel mode (the create
- * route already sent the WhatsApp immediately).
- */
-export function scheduleKitchenFallback(
-  orderId: string,
-  ticketId: string,
-  graceSeconds: number,
-  log: Log,
-): void {
-  const timer = setTimeout(
-    () => {
-      void (async () => {
-        try {
-          const claim = await claimTicketFallback(ticketId);
-          if (claim) await attemptKitchenNotify(orderId, log);
-        } catch (err) {
-          log.error({ err, order: orderId }, "Kitchen WhatsApp fallback timer failed");
-        }
-      })();
-    },
-    Math.max(0, graceSeconds) * 1000,
-  );
-  timer.unref();
-}
-
 /**
  * 60s sweep: reconcile the durable deliveries (a crash between commit and send
  * doesn't lose them), then fire one-shot SLA alerts to reception. Returns how
@@ -494,31 +449,8 @@ export async function sweepDeliveries(log: Log): Promise<number> {
   } catch (err) {
     log.error({ err }, "Kitchen-ticket reconcile failed");
   }
-  // 1. Kitchen WhatsApp. Two policies:
-  //  - parallel (pilot): every pending/failed order gets the WhatsApp ticket,
-  //    immediately and on retry — the current behaviour, unchanged.
-  //  - fallback (post-pilot): the WhatsApp is the safety net behind the iPad.
-  //    First claim any ticket whose grace window lapsed with no iPad ack (the
-  //    durable backstop for a lost in-process timer), then send ONLY for those
-  //    now-unlocked orders. An acked ticket is never claimed → never WhatsApp'd.
-  if (internalNotifyMode() === "parallel") {
-    for (const id of await pendingKitchenNotifies()) {
-      await attemptKitchenNotify(id, log).catch((err) =>
-        log.error({ err, order: id }, "Delivery kitchen retry failed"),
-      );
-    }
-  } else {
-    for (const ticketId of await dueFallbackTicketIds()) {
-      await claimTicketFallback(ticketId).catch((err) =>
-        log.error({ err, ticket: ticketId }, "Kitchen fallback claim failed"),
-      );
-    }
-    for (const id of await unlockedPendingKitchenOrderIds()) {
-      await attemptKitchenNotify(id, log).catch((err) =>
-        log.error({ err, order: id }, "Delivery kitchen fallback send failed"),
-      );
-    }
-  }
+  // Kitchen WhatsApp is deliberately absent: the iPad projection is primary.
+  // The explicit admin "renotify kitchen" action remains the only WhatsApp path.
   // 2. Reception reminders for newly activated scheduled orders.
   for (const id of await pendingActivationNotifies()) {
     await attemptActivationNotify(id, log).catch((err) =>

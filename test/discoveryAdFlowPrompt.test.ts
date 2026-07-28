@@ -42,8 +42,9 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     });
 
     expect(context).toMatch(/FIRST CONTACT/);
-    expect(context).toMatch(/introduce Awa as Revive's assistant/);
-    expect(context).toContain("Moi c'est Awa, l'assistante de Revive");
+    expect(context).toMatch(/introduce Awa up front as an automated assistant/);
+    expect(context).toContain("Moi c'est Awa, je suis une assistante automatisée de Revive");
+    expect(context).toContain('exact words "je suis une assistante automatisée"');
   });
 
   it("states the Meta-campaign pack economics without double-counting the first session", () => {
@@ -121,7 +122,9 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     });
 
     expect(context).toContain("Always start with ‘Salut !’; never use or guess a client name");
-    expect(context).toContain("Salut ! Moi, c’est Awa 😊");
+    expect(context).toContain(
+      "Salut ! Moi, c’est Awa, je suis une assistante automatisée de Revive 😊",
+    );
     expect(context).not.toContain("Salut Sophie");
     expect(context).toContain("La première séance de Pilates Reformer coûte 10 000 FCFA.");
     expect(context).toContain("3 séances pour 30 000 FCFA sur 2 semaines.");

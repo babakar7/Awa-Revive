@@ -1307,6 +1307,7 @@ export async function executeTool(
       const preferredPaymentMethod = await repo.lastSuccessfulBookingPaymentMethod(client.id);
 
       return JSON.stringify({
+        service_id: serviceId,
         service: service.name,
         requested_period: { date_from: dateFrom, date_to: dateTo },
         alternative_period: alternativeWindow
@@ -1331,11 +1332,11 @@ export async function executeTool(
     }
 
     case "create_payment_link": {
-      const serviceId = String(input.service_id ?? "");
+      const claimedServiceId = String(input.service_id ?? "");
       const eventId = String(input.event_id ?? "");
       const clientName = String(input.client_name ?? "").slice(0, 80).trim();
       const participants = Math.min(10, Math.max(1, Math.round(Number(input.participants ?? 1)) || 1));
-      if (!serviceId || !eventId || !clientName) {
+      if (!claimedServiceId || !eventId || !clientName) {
         return JSON.stringify({ error: "invalid_arguments" });
       }
 
@@ -1344,6 +1345,26 @@ export async function executeTool(
       if (input.client_declined_verification !== true) {
         const pending = await links.getOpen(client.id);
         if (verificationBlocksPayment(pending, new Date())) return VERIFICATION_PENDING_RESULT;
+      }
+
+      // The offered slot is the server authority for the service. The model may
+      // repeat a human-readable alias, but it cannot change the class or price:
+      // both come from the client-scoped slot cache populated by availability.
+      const cached = await repo.getCachedSlot(client.id, eventId);
+      if (!cached) {
+        return JSON.stringify({
+          error: "unknown_slot",
+          message: "This slot was not offered to the client. Re-run check_availability and pick from its results.",
+        });
+      }
+      const serviceId = cached.service_id;
+      if (claimedServiceId !== serviceId) {
+        console.warn("Service id mismatch recovered from offered slot", {
+          tool: name,
+          clientId: client.id,
+          claimedServiceId,
+          canonicalServiceId: serviceId,
+        });
       }
 
       // 0b. Multi-session commitment gating. While a commitment is ACTIVE for
@@ -1403,13 +1424,6 @@ export async function executeTool(
 
       // 1. The event_id must be one we served this client (prompt-injection
       //    stance). Accepts the short choice_id alias too (interactive clicks).
-      const cached = await repo.getCachedSlot(client.id, eventId);
-      if (!cached || cached.service_id !== serviceId) {
-        return JSON.stringify({
-          error: "unknown_slot",
-          message: "This slot was not offered to the client. Re-run check_availability and pick from its results.",
-        });
-      }
       const resolvedEventId = cached.event_id;
       await trackFunnel({
         clientId: client.id,
@@ -1751,30 +1765,29 @@ export async function executeTool(
     }
 
     case "start_multi_session_commitment": {
-      const serviceId = String(input.service_id ?? "");
+      const claimedServiceId = String(input.service_id ?? "");
       const clientName = String(input.client_name ?? "").slice(0, 80).trim();
       const rawSlots = Array.isArray(input.slots) ? input.slots : [];
-      if (!serviceId || !clientName || rawSlots.length < 2) {
+      if (!claimedServiceId || !clientName || rawSlots.length < 2) {
         return JSON.stringify({ error: "invalid_arguments" });
       }
 
-      const service = await wix.getService(serviceId);
-      if (!service) return JSON.stringify({ error: "unknown_service_id" });
-
       // Resolve every choice_id server-side (prompt-injection stance): each must
-      // be a slot we served this client, for THIS class, still in the future.
+      // be a slot we served this client, for ONE class, still in the future.
       const resolved: { eventId: string; slotStart: string }[] = [];
+      let serviceId: string | null = null;
       for (const raw of rawSlots) {
         const choiceId = String((raw as any)?.event_id ?? "");
         const cached = await repo.getCachedSlot(client.id, choiceId);
-        if (!cached || cached.service_id !== serviceId) {
+        if (!cached || (serviceId !== null && cached.service_id !== serviceId)) {
           return JSON.stringify({
             error: "unknown_slot",
             message:
-              "One of the sessions wasn't a slot offered to this client for this class. Re-run check_availability " +
+              "One of the sessions wasn't offered to this client for the same class. Re-run check_availability " +
               "and rebuild the list from its results.",
           });
         }
+        serviceId ??= cached.service_id;
         const slotStart = (cached.slot_json as any)?.startDate ?? "";
         if (!slotStart || Date.parse(slotStart) <= Date.now()) {
           return JSON.stringify({
@@ -1784,6 +1797,17 @@ export async function executeTool(
         }
         resolved.push({ eventId: cached.event_id, slotStart });
       }
+      if (!serviceId) return JSON.stringify({ error: "unknown_slot" });
+      if (claimedServiceId !== serviceId) {
+        console.warn("Service id mismatch recovered from offered slots", {
+          tool: name,
+          clientId: client.id,
+          claimedServiceId,
+          canonicalServiceId: serviceId,
+        });
+      }
+      const service = await wix.getService(serviceId);
+      if (!service) return JSON.stringify({ error: "unknown_service_id" });
 
       await repo.updateClientName(client.id, clientName);
       const result = await commitments.startCommitment({
@@ -2948,20 +2972,29 @@ export async function executeTool(
     }
 
     case "book_with_membership": {
-      const serviceId = String(input.service_id ?? "");
+      const claimedServiceId = String(input.service_id ?? "");
       const eventId = String(input.event_id ?? "");
       const clientName = String(input.client_name ?? "").slice(0, 80).trim();
       const participants = Math.min(10, Math.max(1, Math.round(Number(input.participants ?? 1)) || 1));
-      if (!serviceId || !eventId || !clientName) {
+      if (!claimedServiceId || !eventId || !clientName) {
         return JSON.stringify({ error: "invalid_arguments" });
       }
 
       // Same server-side validations as the Wave flow (choice_id accepted too).
       const cached = await repo.getCachedSlot(client.id, eventId);
-      if (!cached || cached.service_id !== serviceId) {
+      if (!cached) {
         return JSON.stringify({
           error: "unknown_slot",
           message: "This slot was not offered to the client. Re-run check_availability first.",
+        });
+      }
+      const serviceId = cached.service_id;
+      if (claimedServiceId !== serviceId) {
+        console.warn("Service id mismatch recovered from offered slot", {
+          tool: name,
+          clientId: client.id,
+          claimedServiceId,
+          canonicalServiceId: serviceId,
         });
       }
       const resolvedEventId = cached.event_id;
@@ -3697,17 +3730,38 @@ export async function executeTool(
     }
 
     case "join_waitlist": {
-      const serviceId = String(input.service_id ?? "");
+      const claimedServiceId = String(input.service_id ?? "");
       const rawId = String(input.event_id ?? "");
-      const slotStart = String(input.slot_start ?? "");
-      if (!serviceId || !rawId || Number.isNaN(Date.parse(slotStart))) {
+      const claimedSlotStart = String(input.slot_start ?? "");
+      if (!claimedServiceId || !rawId || Number.isNaN(Date.parse(claimedSlotStart))) {
         return JSON.stringify({ error: "invalid_arguments" });
       }
-      // The model only sees choice_ids now; resolve it back to the real Wix
-      // event_id via the slot cache (falls back to rawId if it was already the
-      // full id, e.g. a legacy interactive payload).
+      // A waitlist entry is valid only for a slot actually served to this
+      // client. The cache also decides the canonical service.
       const cachedFull = await repo.getCachedSlot(client.id, rawId);
-      const eventId = cachedFull?.event_id ?? rawId;
+      if (!cachedFull) {
+        return JSON.stringify({
+          error: "unknown_slot",
+          message: "This slot was not offered to the client. Re-run check_availability first.",
+        });
+      }
+      const eventId = cachedFull.event_id;
+      const serviceId = cachedFull.service_id;
+      const slotStart = String((cachedFull.slot_json as any)?.startDate ?? "");
+      if (!slotStart || Number.isNaN(Date.parse(slotStart))) {
+        return JSON.stringify({
+          error: "unknown_slot",
+          message: "The cached slot is incomplete. Re-run check_availability first.",
+        });
+      }
+      if (claimedServiceId !== serviceId) {
+        console.warn("Service id mismatch recovered from offered slot", {
+          tool: name,
+          clientId: client.id,
+          claimedServiceId,
+          canonicalServiceId: serviceId,
+        });
+      }
       const service = await wix.getService(serviceId);
       if (!service) return JSON.stringify({ error: "unknown_service_id" });
 
@@ -3752,7 +3806,24 @@ export async function executeTool(
     }
 
     case "leave_waitlist": {
-      const serviceId = String(input.service_id ?? "").trim() || undefined;
+      const claimedServiceId = String(input.service_id ?? "").trim();
+      let serviceId: string | undefined;
+      if (claimedServiceId) {
+        const exact = await wix.getService(claimedServiceId);
+        if (exact) {
+          serviceId = exact.id;
+        } else {
+          const services = await wix.listServices();
+          serviceId = resolveServiceAlias(claimedServiceId, services) ?? undefined;
+          if (!serviceId) {
+            return JSON.stringify({
+              error: "unknown_service_id",
+              removed: 0,
+              message: "The class could not be identified. Re-run list_classes before confirming removal.",
+            });
+          }
+        }
+      }
       const removed = await repo.leaveWaitlist(client.id, serviceId);
       return JSON.stringify({
         removed,
@@ -4371,6 +4442,12 @@ export async function executeTool(
         });
       }
       const kind = await sendInteractive(client.wa_phone, body, buttonLabel, options);
+      await repo.savePresentedChoices(
+        client.id,
+        options.map((option) => ({ id: option.id, title: option.title })),
+      ).catch((error) =>
+        console.error("Failed to persist presented choices after delivery:", error),
+      );
       // Log what the client saw, so rebuilt history stays coherent.
       await repo.addTurn(
         client.id,
