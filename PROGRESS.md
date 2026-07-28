@@ -3654,3 +3654,28 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
 - Cette règle remplace le rendu antérieur « Coach A & Coach B ». Une régression
   couvre le cas Reformer avec deux coachs et vérifie l’attribution exacte de
   chaque horaire.
+
+## 2026-07-28 — Lancement public des Clés de la Maison
+
+- Babakar a masqué dans Wix le Pack Découverte et les formules legacy Reformer,
+  puis arrêté l'ancien funnel Meta à 10 000 F avant la bascule.
+- `AWA_SELLABLE_PLAN_IDS` ne contient désormais que les six offres
+  hors-Reformer conservées (Mat, Aquafitness, carnets Aquabike/Natation) et les
+  trois nouvelles Clés. Aucun Pack ni plan legacy Reformer ne reste vendable
+  par Awa.
+- `KEYS_AUTOMATION_ENABLED=true` en production : provisionnement automatique
+  des cours en plus, registre/invitations, continuité legacy et cycle de relance
+  sont actifs. Les cinq templates Meta Clés sont approuvés et configurés sous
+  leur code de langue exact `en`.
+- Déploiement Railway de bascule
+  `ed5c9b3e-4aa3-405b-b823-77a3950f5024` en `SUCCESS`; démarrage propre et
+  `/healthz` retourne `{"ok":true}`. Préflight : build TypeScript et 796 tests
+  unitaires verts.
+- Smoke test production sur `Baba Test` : `list_plans` a renvoyé exactement les
+  six offres hors-Reformer et les trois Clés, puis Awa a présenté L'Invitée
+  (30 000 F / 21 j), L'Habituée (72 000 F / 30 j) et La Résidente
+  (144 000 F / 60 j), sans proposer le Pack ni un ancien abonnement.
+- Le post Instagram de lancement a été publié. Relicat ops non bloquant pour le
+  flux WhatsApp : la page statique Wix `/memberships` affiche encore l'ancienne
+  gamme et doit être mise à jour manuellement dans l'éditeur Wix ; aucun accès
+  d'édition de cette page n'existe dans le dépôt Resabot.
