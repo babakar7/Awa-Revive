@@ -177,3 +177,59 @@ describe("reschedule_booking", () => {
     ).toBe("BOOKED");
   });
 });
+
+describe("cancel_booking no-refund policy", () => {
+  it("keeps a direct-paid booking intact until the client explicitly accepts no refund", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, {
+      status: "BOOKED",
+      wix_booking_id: "wb_non_refundable",
+      payment_method: "wave",
+      wave_session_id: "cos_paid",
+      slot_start: inHours(30),
+      slot_end: inHours(31),
+    });
+
+    const out = JSON.parse(
+      await executeTool(asClient(client), "cancel_booking", { booking_id: booking.id }),
+    );
+
+    expect(out.error).toBe("no_refund_confirmation_required");
+    expect(out.message).toMatch(/reschedule|transfer/i);
+    expect(mock.calls.some((call) => call.url.endsWith("/cancel"))).toBe(false);
+    const after = (
+      await pool.query(`select status, forfeited_at from pending_bookings where id=$1`, [booking.id])
+    ).rows[0];
+    expect(after.status).toBe("BOOKED");
+    expect(after.forfeited_at).toBeNull();
+  });
+
+  it("releases a direct-paid seat without creating a refund after explicit acceptance", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, {
+      status: "BOOKED",
+      wix_booking_id: "wb_non_refundable",
+      payment_method: "orange_money",
+      wave_session_id: "om_paid",
+      slot_start: inHours(30),
+      slot_end: inHours(31),
+    });
+
+    const out = JSON.parse(
+      await executeTool(asClient(client), "cancel_booking", {
+        booking_id: booking.id,
+        acknowledge_no_refund: true,
+      }),
+    );
+
+    expect(out).toMatchObject({ cancelled: true, non_refundable: true });
+    expect(out).not.toHaveProperty("refund");
+    expect(out).not.toHaveProperty("refund_within_hours");
+    expect(mock.calls.some((call) => call.url.endsWith("/cancel"))).toBe(true);
+    const after = (
+      await pool.query(`select status, forfeited_at from pending_bookings where id=$1`, [booking.id])
+    ).rows[0];
+    expect(after.status).toBe("CANCELLED");
+    expect(after.forfeited_at).toBeInstanceOf(Date);
+  });
+});

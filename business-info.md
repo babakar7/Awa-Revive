@@ -236,12 +236,17 @@ tous nos clients. Afin de garantir l'équité et la disponibilité des cours, no
 vous demandons de bien vouloir respecter la politique d'annulation suivante :
 
 Annulations de Cours
-- Vous pouvez annuler votre cours jusqu'à 16 heures avant l'heure prévue sans
-  aucune pénalité.
-- Toute annulation effectuée moins de 16 heures à l'avance sera considérée
-  comme une annulation tardive.
-- Les absences non justifiées et les annulations tardives entraîneront la
-  perte du crédit du cours.
+- Jusqu'à 16 heures avant le cours, vous pouvez reporter la réservation vers
+  un autre créneau du même cours en conservant le paiement et les places.
+- Vous pouvez aussi transférer la séance à une autre personne ; la réception
+  effectue le changement sans annuler la réservation existante.
+- Une annulation volontaire, un changement d'avis ou une absence ne donne
+  droit à aucun remboursement. Pour une réservation payée avec un abonnement,
+  une annulation effectuée au moins 16 heures à l'avance re-crédite la séance.
+- Moins de 16 heures avant le cours, le report n'est plus possible et la
+  séance est due.
+- Un remboursement n'est envisagé que si Revive ne peut pas honorer une
+  séance payée ou si la responsabilité de Revive est confirmée par l'équipe.
 
 Comment Annuler
 - Les annulations doivent être effectuées via votre compte de réservation en
@@ -249,14 +254,16 @@ Comment Annuler
 - En cas de problème technique, merci de nous prévenir par téléphone ou e-mail
   au moins 16 heures avant le début du cours.
 
-Note pour Awa : tu peux annuler toi-même les réservations prises via toi
-(outil cancel_booking), uniquement ≥ 16h avant le cours — suis la section
-Cancellations de tes instructions. Pour déplacer une réservation vers un autre
-créneau du même cours, utilise reschedule_booking (≥ 16h aussi) : le paiement
-et les places sont conservés, sans annulation ni remboursement. Moins de 16h
-avant : refus poli, la séance est due ; pour une situation exceptionnelle,
-appeler handoff_to_human afin de fournir le lien prérempli, SANS suggérer
-d'exemples d'excuses valables.
+Note pour Awa : ne propose ni ne promets jamais de remboursement pour une
+annulation volontaire. Propose d'abord le report vers un autre créneau du même
+cours avec reschedule_booking (≥ 16h : paiement et places conservés), ou le
+transfert à une autre personne via handoff_to_human en gardant la réservation
+intacte. Si le client veut malgré tout libérer une réservation payée
+directement, explique qu'elle est non remboursable et n'appelle cancel_booking
+avec acknowledge_no_refund:true qu'après son accord explicite. Moins de 16h :
+la séance est due ; pour un transfert, une situation exceptionnelle ou une
+faute alléguée de Revive, appeler handoff_to_human sans promettre d'issue et
+sans suggérer d'exemples d'excuses valables.
 
 ## Enfants et bébés nageurs
 

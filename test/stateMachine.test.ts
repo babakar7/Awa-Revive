@@ -42,9 +42,9 @@ describe("pending_bookings state machine (SPEC §5, §10.9)", () => {
     }
   });
 
-  it("BOOKED → CANCELLED (Wix/reception or Awa) or REFUND_NEEDED (Awa cancels a Wave-paid booking ≥16h) and nothing else", () => {
+  it("BOOKED → CANCELLED only; a fulfilled booking cannot become a refund", () => {
     for (const to of ALL) {
-      expect(canTransition("BOOKED", to)).toBe(to === "CANCELLED" || to === "REFUND_NEEDED");
+      expect(canTransition("BOOKED", to)).toBe(to === "CANCELLED");
     }
   });
 

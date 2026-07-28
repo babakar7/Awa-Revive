@@ -1,9 +1,10 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **28 juillet 2026** — fiabilisation Awa après
-> l'incident Riche Aubambi : service canonique, coupe-circuit, attribution
-> humain/Awa et alertes cuisine iPad-only. Avant : contact de remise des
+> Dernière mise à jour : **28 juillet 2026** — politique d’annulation
+> non remboursable, report et transfert de séance. Avant : fiabilisation Awa
+> après l'incident Riche Aubambi : service canonique, coupe-circuit,
+> attribution humain/Awa et alertes cuisine iPad-only ; contact de remise des
 > livraisons et alertes dédiées (§6.29), livraisons programmées
 > avec activation durable (§6.27), fiabilisation des alertes
 > livraison + mode commande de test (§6.26), refonte premium et UX de
@@ -12,6 +13,31 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Politique annulation / report / transfert (28 juillet 2026)
+
+- Une annulation volontaire, un changement d’avis ou une absence ne déclenche
+  plus jamais de remboursement. Le remboursement `PAID → REFUND_NEEDED` reste
+  réservé aux paiements que Revive n’a pas pu honorer (créneau perdu, échec
+  technique ou faute Revive confirmée).
+- À ≥16 h, Awa propose d’abord le report natif vers un autre créneau du même
+  cours (`reschedule_booking`) : paiement et places conservés. Le changement de
+  cours et le transfert à une autre personne passent par `handoff_to_human`,
+  avec la réservation existante laissée intacte.
+- Pour une réservation Awa payée directement, `cancel_booking` exige
+  `acknowledge_no_refund:true`, uniquement après acceptation explicite du
+  client. La place est libérée, le statut devient `CANCELLED` avec
+  `forfeited_at`, et aucun dossier de remboursement n’est créé. Une séance
+  d’abonnement annulée dans les temps continue d’être re-créditée.
+- Une réservation comptoir/site a un mode de paiement inconnu d’Awa : sa
+  dernière annulation passe désormais par la réception, sans mutation Wix par
+  Awa et sans promesse de remboursement ou de re-crédit.
+- Garde supplémentaire : `BOOKED → REFUND_NEEDED` a été retiré de la machine
+  d’état. Les paiements conservés restent visibles dans les factures et le
+  chiffre d’affaires via `forfeited_at`.
+- Régressions : contrat du prompt/outils, machine d’état et intégration
+  `cancel_booking` (refus sans consentement, annulation finale sans
+  remboursement, ancienne réservation intacte jusqu’au consentement).
 
 ## Ops PWA — efficacité cuisine/service (28 juillet 2026)
 
@@ -72,9 +98,9 @@ réservation de cours, qui conserve la réservation, le paiement et les places.
   comptoir/site : celles-ci sont revalidées sur la fiche Wix du numéro avant
   mutation. Les résas Awa mettent ensuite à jour la même ligne locale en
   conservant statut `BOOKED`, paiement, montant, participants et extras.
-- Changement de cours = hors du report direct : flux existant
-  annulation/remboursement + nouvelle réservation après accord explicite.
-  Échec d'un report Wix = ancienne résa inchangée.
+- Changement de cours = hors du report direct : handoff réception, ancienne
+  réservation laissée intacte pour préserver sa valeur. Échec d'un report Wix
+  = ancienne résa inchangée.
 - Régression : `test/integration/rescheduleBooking.test.ts` vérifie le report
   Wave direct, la garde 16 h et le refus inter-cours. Le remboursement déjà
   créé pour Memona reste à traiter : elle a effectivement payé une seconde
@@ -117,7 +143,7 @@ Flux validés en conditions réelles (argent réel / site Wix réel) :
 | Rattachement contact CRM par téléphone | ✅ | e164 unique, tiebreak prénom si doublons, sinon null (prudence) |
 | Client non relié → demande d'email en chat + email réception | ✅ | one-shot par client ; le client répond DANS le chat (jamais "envoie à la réception") |
 | Abonnements : détection auto + résa sans paiement | ✅ 05-06/07 | voir §4 — Benefit Programs, PAS le checkout eCommerce |
-| Annulation par Awa (règle 16h) | ✅ 06/07 | abonnement → re-crédit auto ; paiement Awa → remboursement enregistré sous 24h, réception prévenue |
+| Annulation par Awa (règle 16h) | ✅ 28/07 | report même cours ou transfert proposés d’abord ; abonnement → re-crédit ; paiement direct → non remboursable avec accord explicite |
 | Handoffs (« je peux vous appeler ? », plaintes…) | ✅ | lien `wa.me` prénom + motif + email auto ; numéro brut ajouté seulement pour un appel explicite |
 | Notifications réception (email Brevo + WhatsApp) | ✅ | dual-channel non-bloquant, voir §4.6 |
 | Annulation côté réception (dashboard Wix) | ✅ | sweep 5 min = synchro **silencieuse** ; Wix notifie le client lui-même |
@@ -134,7 +160,7 @@ src/
   db/schema.ts        SCHEMA_SQL idempotent (create + alter if not exists)
   domain/
     stateMachine.ts   DRAFT→AWAITING_PAYMENT→PAID→BOOKED ; EXPIRED→PAID (paiement tardif) ;
-                      BOOKED→CANCELLED | REFUND_NEEDED ; REFUND_NEEDED→REFUNDED.
+                      BOOKED→CANCELLED ; REFUND_NEEDED n’est accessible que depuis PAID ; REFUND_NEEDED→REFUNDED.
                       transition() = UPDATE atomique WHERE status=ANY(sources)
     repo.ts           accès DB (clients, bookings, conversations, handoffs, slot_cache)
     cancellationSync.ts  sweep 5 min : BOOKED vs statuts Wix → CANCELLED silencieux (pas de message client)
@@ -224,15 +250,17 @@ test/integration/     34 tests d'intégration (15 Wave + 15 OM/Max It + 1 health
    synchro DB. Conséquence : le chantier webhooks Wix (`WIX-WEBHOOK-PLAN.md`)
    est EN VEILLE — la fraîcheur temps réel n'a plus d'usage visible
    (`get_my_bookings` re-vérifie les statuts Wix en direct à chaque demande).
-8. **Annulation par Awa (06/07)** : outil `cancel_booking`, uniquement les
-   résas prises via Awa, ≥ 16h avant le cours (recalculé côté serveur à la
-   consultation ET à l'exécution — le modèle ne peut pas contourner).
-   Abonnement → revert automatique du crédit ; paiement Awa (Wave/OM/Max It) →
-   `REFUND_NEEDED`, remboursement enregistré pour traitement sous 24h +
-   réception prévenue en parallèle (le client ne répète pas sa demande).
-   < 16h → refus poli, sans
+8. **Annulation par Awa (mis à jour 28/07)** : outil `cancel_booking`, ≥ 16h
+   avant le cours (recalculé côté serveur). Awa propose d’abord un report du
+   même cours ou un transfert. Abonnement → revert automatique du crédit ;
+   paiement Awa (Wave/OM/Max It) → annulation non remboursable uniquement après
+   accord explicite (`acknowledge_no_refund:true`), statut `CANCELLED` +
+   `forfeited_at`. Les résas comptoir/site restent intactes et passent en
+   handoff car Awa ne connaît pas leur mode de paiement. < 16h → refus poli, sans
    JAMAIS suggérer d'exemples d'excuses valables (consigne explicite de
-   Babakar). Le report et les annulations partielles de groupe = handoff.
+   Babakar). Transfert, changement de cours et annulations partielles = handoff
+   sans annuler la réservation. Aucun `BOOKED → REFUND_NEEDED` : ce dernier
+   statut est réservé à un paiement que Revive n’a pas pu honorer.
 9. **Emojis** : teinte de peau medium-dark (🏾) partout — codé en dur dans les
    templates + règle de style dans le prompt.
 10. **Détection de langue** : scoring de stopwords fr/en/wo (accents

@@ -454,6 +454,9 @@ export function makeFetchMock(): FetchMock {
     if (url.includes("/_api/bookings-service/v2/bookings/") && url.endsWith("/reschedule")) {
       return json(200, { booking: { status: "CONFIRMED", revision: "2" } });
     }
+    if (url.includes("/_api/bookings-service/v2/bookings/") && url.endsWith("/cancel")) {
+      return json(200, { booking: { status: "CANCELED", revision: "2" } });
+    }
 
     // --- Wix eCommerce order required by the custom-checkout flow ---
     if (url.endsWith("/ecom/v1/orders/search") && method === "POST") {

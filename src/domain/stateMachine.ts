@@ -15,7 +15,7 @@ import type pg from "pg";
  * DRAFT ──client paid before setAwaiting─────► PAID  (orphan draft: session
  *   existed with clientReference=draft.id; webhook-verified money wins)
  * BOOKED ──cancelled in Wix (reception)──────► CANCELLED  (synced lazily)
- * BOOKED ──cancelled by Awa, Wave-paid ≥16h──► REFUND_NEEDED (manual refund owed)
+ * BOOKED ──voluntary cancellation by client──► CANCELLED  (never refunded)
  * REFUND_NEEDED ──manual refund done in Wave─► REFUNDED   (npm run refund:done)
  */
 export type BookingStatus =
@@ -35,9 +35,9 @@ export const TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
   AWAITING_PAYMENT: ["PAID", "EXPIRED"],
   EXPIRED: ["PAID"], // late payment after TTL — honor it
   PAID: ["BOOKED", "REFUND_NEEDED"],
-  // CANCELLED: cancellation via Wix dashboard or by Awa (membership re-credited)
-  // REFUND_NEEDED: cancelled by Awa ≥16h before a Wave-paid class — refund owed
-  BOOKED: ["CANCELLED", "REFUND_NEEDED"],
+  // Once fulfilled, a voluntary cancellation can only release the seat. A
+  // refund is reserved for a PAID booking Revive could not fulfill.
+  BOOKED: ["CANCELLED"],
   REFUND_NEEDED: ["REFUNDED"], // manual refund processed in the Wave portal
   REFUNDED: [],
   CANCELLED: [],

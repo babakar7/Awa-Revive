@@ -469,10 +469,10 @@ export async function adminReport(periodDays: 1 | 7 | 30): Promise<AdminReport> 
        (select count(distinct client_id) from conversations,bounds where role='user' and created_at>=previous_start and created_at<current_start)::int as previous_active_clients,
        (select count(*) from pending_bookings,bounds where status='BOOKED' and updated_at>=current_start)::int as bookings,
        (select count(*) from pending_bookings,bounds where status='BOOKED' and updated_at>=previous_start and updated_at<current_start)::int as previous_bookings,
-       coalesce((select sum(amount_xof) from pending_bookings,bounds where status='BOOKED' and payment_method<>'membership' and updated_at>=current_start),0)::int as booking_revenue,
+       coalesce((select sum(amount_xof) from pending_bookings,bounds where (status='BOOKED' or forfeited_at is not null) and payment_method<>'membership' and updated_at>=current_start),0)::int as booking_revenue,
        coalesce((select sum(amount_xof) from pending_plan_orders,bounds where status in ('PAID','ACTIVATED') and updated_at>=current_start),0)::int as plan_revenue,
        coalesce((select sum(amount_xof) from pending_cafe_orders,bounds where status='PAID' and updated_at>=current_start),0)::int as cafe_revenue,
-       (coalesce((select sum(amount_xof) from pending_bookings,bounds where status='BOOKED' and payment_method<>'membership' and updated_at>=previous_start and updated_at<current_start),0)
+       (coalesce((select sum(amount_xof) from pending_bookings,bounds where (status='BOOKED' or forfeited_at is not null) and payment_method<>'membership' and updated_at>=previous_start and updated_at<current_start),0)
         + coalesce((select sum(amount_xof) from pending_plan_orders,bounds where status in ('PAID','ACTIVATED') and updated_at>=previous_start and updated_at<current_start),0)
         + coalesce((select sum(amount_xof) from pending_cafe_orders,bounds where status='PAID' and updated_at>=previous_start and updated_at<current_start),0))::int as previous_revenue,
        ((select count(*) from handoffs where status='OPEN') + (select count(*) from conversation_reviews where status='OPEN'))::int as open_follow_ups,

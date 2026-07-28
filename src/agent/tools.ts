@@ -14,7 +14,7 @@ import { renderInvoicePdf } from "../lib/invoicePdf.js";
 import * as invoices from "../domain/invoiceRepo.js";
 import { recordInvoiceLog } from "../domain/notificationRepo.js";
 import { orderedPaymentMethodOptions, paymentMethodLabel } from "../lib/paymentMethod.js";
-import { receptionWhatsAppLink, clientOutreachLink } from "../lib/receptionContact.js";
+import { clientOutreachLink } from "../lib/receptionContact.js";
 import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
 import {
   computeExtras,
@@ -604,8 +604,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     description:
       "List this client's upcoming confirmed bookings. Returns { bookings: [...] }: each has booked_via " +
       "'awa' (taken through this chat) or 'studio' (booked at the counter or on the website, matched by the " +
-      "client's WhatsApp number). Both carry a booking_id usable with cancel_booking (16h rule for all) — " +
-      "for 'studio' ones Awa doesn't know the payment method, so refunds/re-credits go through reception. " +
+      "client's WhatsApp number). Both carry a booking_id usable for rescheduling or cancellation. " +
+      "A voluntary cancellation is never refundable; offer a same-class move or transfer first. " +
       "Use it before answering about existing bookings and before any cancel/reschedule.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
@@ -614,18 +614,23 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     description:
       "Cancel one of THIS client's upcoming bookings (all its spots). Only allowed 16 hours or more " +
       "before the class start — the server enforces this and refuses otherwise. Membership-paid bookings: " +
-      "the plan session is automatically re-credited. Wave-paid bookings: the client will be refunded " +
-      "manually by reception (they are notified automatically). Studio bookings (booking_id starting with " +
-      "'studio:'): cancelled in Wix, but any refund/re-credit goes through reception (payment method unknown " +
-      "to Awa). Also the first step of a reschedule (cancel, then book the new slot in the same turn). Call " +
-      "ONLY after get_my_bookings gave you the booking_id AND the client explicitly confirmed they want to " +
-      "cancel that specific class.",
+      "the plan session is automatically re-credited. Direct-paid bookings are NON-REFUNDABLE when the client " +
+      "cancels voluntarily. Studio/site bookings require handoff because their payment type is unknown. Offer " +
+      "reschedule_booking for the same class or a reception-handled transfer first. For a final direct " +
+      "cancellation, call ONLY after the client explicitly accepts " +
+      "that payment is lost, and pass acknowledge_no_refund:true. Never use cancellation as part of a reschedule.",
     input_schema: {
       type: "object",
       properties: {
         booking_id: {
           type: "string",
           description: "booking_id of the booking to cancel, from get_my_bookings",
+        },
+        acknowledge_no_refund: {
+          type: "boolean",
+          description:
+            "Set true only after a direct-paid client explicitly accepted that this voluntary cancellation " +
+            "releases the seat without any refund. Omit for membership bookings; studio/site cancellations require handoff.",
         },
       },
       required: ["booking_id"],
@@ -783,8 +788,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "handoff_to_human",
     description:
       "Escalate the conversation to the human reception team. Triggers: the client wants to call or speak to " +
-      "a person (e.g. \"je peux vous appeler ?\"), complaints, refunds beyond what cancel_booking handles, " +
-      "cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
+      "a person (e.g. \"je peux vous appeler ?\"), complaints, alleged Revive-fault refund claims, session " +
+      "transfers, different-class changes, cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
       "medical questions, factures needing special legal mentions or covering payments send_invoice " +
       "doesn't list, anything off-script. Records the handoff, notifies reception with a one-tap link to " +
       "message the client, and the client is simply told reception will reach out to them — they send nothing.",
@@ -3458,7 +3463,7 @@ export async function executeTool(
         paid_with: paymentMethodLabel(b.payment_method),
         booked_via: "awa",
         status: "confirmed",
-        cancellable_free_of_charge: hoursUntil(b.slot_start) >= 16 || undefined,
+        changeable_before_cutoff: hoursUntil(b.slot_start) >= 16 || undefined,
         cafe_order:
           b.extras_amount_xof > 0
             ? {
@@ -3470,10 +3475,9 @@ export async function executeTool(
       }));
 
       // Also surface bookings the client made at the counter or on the Wix
-      // website (identified by their WhatsApp number → CRM contact). Awa can
-      // cancel these too (16h rule) via the "studio:" booking_id — but she has
-      // no local payment context, so any refund/re-credit goes through
-      // reception. Dedupe against the Wix ids Awa already created.
+      // website (identified by their WhatsApp number → CRM contact). They use
+      // the same 16h change rule and voluntary cancellations are non-refundable.
+      // Dedupe against the Wix ids Awa already created.
       const external: unknown[] = [];
       // Track whether this number resolves to a unique Wix contact. When it
       // does NOT and we found nothing to show, the client may well have an
@@ -3502,6 +3506,7 @@ export async function executeTool(
               participants: wb.participants,
               booked_via: "studio", // counter or website
               status: "confirmed",
+              changeable_before_cutoff: hoursUntil(wb.startDate) >= 16 || undefined,
             });
           }
         }
@@ -3513,10 +3518,9 @@ export async function executeTool(
         bookings: [...own, ...external],
         note:
           external.length > 0
-            ? "booked_via 'studio' bookings were made at the counter/website. cancel_booking works on them " +
-              "(same 16h rule) via their studio: booking_id, but Awa does not know how they were paid — after " +
-              "cancelling, any refund or session re-credit is handled by reception (the client contacts them; " +
-              "reception is also notified automatically)."
+            ? "booked_via 'studio' bookings were made at the counter/website. Offer a same-class move or " +
+              "transfer first. Because Awa cannot see their payment type, a final cancellation requires " +
+              "handoff_to_human and the booking must stay unchanged until reception handles it."
             : undefined,
         // No bookings AND this number is on no Wix account: their account (and
         // its bookings/abonnement) may be under another number. Invite linking
@@ -3676,10 +3680,8 @@ export async function executeTool(
       if (!bookingId) return JSON.stringify({ error: "invalid_arguments" });
 
       // Bookings made at the counter/website ("studio:<wix id>" from
-      // get_my_bookings): Awa can cancel them in Wix (same 16h rule), but she
-      // has no payment context (cash? OM? plan via the site?), so the money
-      // side is ALWAYS reception's — client gets a prefilled click-to-chat
-      // link and reception gets a notification to check refund/re-credit.
+      // get_my_bookings) have no trusted local payment type. Awa therefore
+      // keeps them intact and hands final cancellation to reception.
       if (bookingId.startsWith("studio:")) {
         const wixId = bookingId.slice("studio:".length);
         const protectedBenefit = await keyRepo.protectedBenefitForWixBooking(wixId);
@@ -3717,34 +3719,15 @@ export async function executeTool(
               "Do NOT suggest examples of valid excuses.",
           });
         }
-        await wix.cancelBooking(wixId);
-        const receptionContact = receptionWhatsAppLink(
-          config.RECEPTION_PHONE,
-          client.name,
-          `l'annulation de ma réservation ${wb.serviceName} du ${fmtDakar(wb.startDate)} — vérifier le remboursement ou le re-crédit`,
-        );
-        notifyReception(
-          "ℹ️ Annulation d'une résa studio via Awa — vérifier remboursement/re-crédit",
-          `Awa a annulé (≥ 16h avant le cours) une réservation prise au comptoir ou sur le site :\n` +
-            `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
-            `  Cours : ${wb.serviceName} — ${fmtDakar(wb.startDate)} (${wb.participants} place(s))\n` +
-            `  Booking Wix : ${wixId}\n\n` +
-            `Awa ne connaît pas le mode de paiement de cette résa : vérifier dans Wix s'il y a un ` +
-            `remboursement ou un re-crédit de séance à faire. Le client a été invité à vous contacter.`,
-        );
         return JSON.stringify({
-          cancelled: true,
+          error: "studio_cancellation_requires_reception",
           class: wb.serviceName,
           slot_start_dakar: fmtDakar(wb.startDate),
           booked_via: "studio",
-          reception_whatsapp: config.RECEPTION_PHONE,
-          reception_whatsapp_url: receptionContact.url,
-          reception_prefilled_message: receptionContact.message,
           note:
-            "Cancelled in Wix. This booking was made at the counter/website, so Awa does not know how it was " +
-            "paid: tell the client the cancellation is done and that for any refund or session re-credit they " +
-            "should OPEN reception_whatsapp_url. Say that the message is already prepared and they only need to " +
-            "send it. Reception has also been notified. Do not promise a refund amount, a re-credit, or a delay.",
+            "Keep this booking unchanged and call handoff_to_human. Reception must identify whether it used " +
+            "money or a plan credit, apply the no-cash-refund policy, and contact the client here. Do not " +
+            "promise a refund or re-credit.",
         });
       }
 
@@ -3781,6 +3764,19 @@ export async function executeTool(
             "Politely explain the 16h rule. If they insist on an exceptional situation, call handoff_to_human " +
             "and reception will reach out to them. " +
             "Do NOT suggest examples of valid excuses.",
+        });
+      }
+
+      if (
+        booking.payment_method !== "membership" &&
+        input.acknowledge_no_refund !== true
+      ) {
+        return JSON.stringify({
+          error: "no_refund_confirmation_required",
+          message:
+            "Do not cancel yet. Explain that a voluntary cancellation is non-refundable, and offer a " +
+            "same-class reschedule or a transfer to another person. Retry with acknowledge_no_refund:true " +
+            "only after the client explicitly accepts losing the payment.",
         });
       }
 
@@ -3826,45 +3822,19 @@ export async function executeTool(
         });
       }
 
-      // Awa-paid (Wave / OM / Max It): refund is owed and already enters the
-      // reception queue. The client must not be asked to repeat the request.
-      await repo.markRefundNeeded(bookingId);
-      // This path returns an explicit cancellation/refund confirmation in the
-      // same turn. Mark it handled so the generic REFUND_NEEDED sweep cannot
-      // later claim that the slot was taken during payment.
-      await repo.markRefundNotified(bookingId);
-      const paymentLabel = paymentMethodLabel(booking.payment_method);
-      notifyReception(
-        `💸 REMBOURSEMENT à faire (annulation client) — ${booking.amount_xof} FCFA`,
-        `Un client a annulé via Awa (≥ 16h avant le cours) — remboursement à traiter via ${paymentLabel} :\n` +
-          `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
-          `  Cours : ${booking.service_name} — ${fmtDakar(String(booking.slot_start))}\n` +
-          `  Montant : ${booking.amount_xof} FCFA (${booking.participants} place(s))\n` +
-          (booking.extras_amount_xof > 0
-            ? `  Dont commande bar : ${booking.extras_amount_xof} FCFA (${formatExtrasOneLine(
-                extrasFromJson(booking.extras_json),
-              )}) — vérifier qu'elle n'a pas déjà été servie.\n`
-            : "") +
-          `  Session ${paymentLabel} : ${booking.wave_session_id ?? "?"}\n` +
-          `  Booking id : ${bookingId}\n\n` +
-          `Après remboursement via ${paymentLabel}, clôturer avec :\n` +
-          `  npm run refund:done -- ${bookingId}`,
-      );
+      await repo.markCancelledWithoutRefund(bookingId);
       return JSON.stringify({
         cancelled: true,
         class: booking.service_name,
         slot_start_dakar: fmtDakar(String(booking.slot_start)),
-        refund: "recorded_reception_processes",
-        refund_within_hours: 24,
-        amount_fcfa: booking.amount_xof,
-        cafe_order_refund_note:
+        non_refundable: true,
+        cafe_order_note:
           booking.extras_amount_xof > 0
-            ? `The refund total includes their bar order (${booking.extras_amount_xof} FCFA) — mention it.`
+            ? `The paid bar order (${booking.extras_amount_xof} FCFA) is unchanged and is not refunded.`
             : undefined,
         note:
-          "Cancelled. Tell the client: cancellation done ✅, the refund is recorded and will be processed " +
-          "within 24 hours by the team; reception has already been notified. Do NOT ask the client to contact " +
-          "reception or repeat the request.",
+          "Cancelled after explicit no-refund acceptance. Confirm that the seat was released and the payment " +
+          "is not refunded. Do not mention reception or any refund process.",
       });
     }
 

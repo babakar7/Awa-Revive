@@ -185,7 +185,7 @@ export async function recentPaidCandidates(): Promise<InvoiceCandidate[]> {
       `select b.id, b.service_name, b.slot_start, b.amount_xof, b.wave_session_id,
               b.payment_method, b.updated_at, b.created_at, c.name as client_name, c.wa_phone
          from pending_bookings b join clients c on c.id = b.client_id
-        where b.status = 'BOOKED' and b.amount_xof > 0
+        where (b.status = 'BOOKED' or b.forfeited_at is not null) and b.amount_xof > 0
           and b.updated_at > now() - interval '30 days'
         order by b.updated_at desc limit 10`,
     ),

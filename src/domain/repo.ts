@@ -48,6 +48,7 @@ export interface PendingBooking {
   wix_booking_id: string | null;
   payer_phone: string | null;
   payment_method: string;
+  forfeited_at: Date | null;
   benefit_transaction_id: string | null;
   extras_json: unknown;
   extras_amount_xof: number;
@@ -953,8 +954,9 @@ export async function countUpcomingBooked(clientId: string): Promise<number> {
 
 /**
  * Recent paid items eligible for an on-demand receipt image (server-sourced
- * amounts only). Includes Wave class bookings (BOOKED, amount > 0), activated
- * plan orders, and paid bar orders — last 90 days, max 10 each type.
+ * amounts only). Includes fulfilled Wave class bookings and voluntary
+ * non-refunded cancellations, activated plan orders, and paid bar orders —
+ * last 90 days, max 10 each type.
  */
 export type ReceiptCandidate = {
   kind: "booking" | "plan" | "cafe";
@@ -972,7 +974,7 @@ export async function recentReceiptCandidates(clientId: string): Promise<Receipt
     pool.query(
       `select id, service_name, slot_start, amount_xof, wave_session_id, payment_method, updated_at, created_at
          from pending_bookings
-        where client_id = $1 and status = 'BOOKED'
+        where client_id = $1 and (status = 'BOOKED' or forfeited_at is not null)
           and (payment_method = 'wave' or amount_xof > 0)
           and updated_at > now() - interval '90 days'
         order by updated_at desc limit 10`,
@@ -1070,9 +1072,9 @@ export async function markCancelled(bookingId: string): Promise<void> {
   await transition(pool, bookingId, "CANCELLED");
 }
 
-/** Awa-initiated cancellation of a Wave-paid booking — a refund is now owed. */
-export async function markRefundNeeded(bookingId: string): Promise<void> {
-  await transition(pool, bookingId, "REFUND_NEEDED");
+/** Voluntary direct-payment cancellation: release the seat, retain the payment. */
+export async function markCancelledWithoutRefund(bookingId: string): Promise<void> {
+  await transition(pool, bookingId, "CANCELLED", { forfeited_at: new Date() });
 }
 
 /** Persist a successful Wix direct reschedule without touching its payment. */

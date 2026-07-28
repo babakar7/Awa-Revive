@@ -43,6 +43,13 @@ alter table pending_bookings
 alter table pending_bookings
   add column if not exists payment_method text not null default 'wave';
 
+-- Voluntary cancellation of a mobile-money booking: the seat is released but
+-- the payment is retained under the studio's no-refund policy. This marker
+-- distinguishes it from a reception/Wix cancellation that may have another
+-- accounting outcome.
+alter table pending_bookings
+  add column if not exists forfeited_at timestamptz;
+
 -- Benefit Programs transaction of a membership redemption — needed to
 -- re-credit the plan session if the booking is later cancelled.
 alter table pending_bookings
