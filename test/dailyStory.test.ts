@@ -100,13 +100,16 @@ describe("mergeClassVariants", () => {
     expect(out.map((c) => c.name)).toEqual(["Bébé Nageur", "Natation Enfant", "Yoga Doux", "Yoga Flow"]);
   });
 
-  it("shows both coaches when the variants have different ones", () => {
+  it("keeps different coaches on separate lines with their own slots", () => {
     const out = mergeClassVariants([
       cls("Pilates Reformer Sculpt", "Marieme", ["08H00"]),
       cls("Pilates Reformer Foundation", "Awa", ["10H15"]),
     ]);
-    expect(out).toHaveLength(1);
-    expect(out[0].coach).toBe("Marieme & Awa");
+    expect(out).toHaveLength(2);
+    expect(out.map((c) => c.name)).toEqual(["Pilates Reformer", "Pilates Reformer"]);
+    expect(out.map((c) => c.coach)).toEqual(["Marieme", "Awa"]);
+    expect(out[0].slots.map((s) => s.time)).toEqual(["08H00"]);
+    expect(out[1].slots.map((s) => s.time)).toEqual(["10H15"]);
   });
 
   it("absorbs the bare trunk name into the merged section", () => {
@@ -143,6 +146,24 @@ describe("buildStoryData", () => {
     expect(data.classes.map((c) => c.name)).toEqual(["Reformer", "Aquabike"]);
     expect(data.classes[0].slots.map((s) => s.time)).toEqual(["08H15", "09H15"]);
     expect(data.classes[0].coach).toBe("Yass");
+  });
+
+  it("creates one Reformer line per coach with only that coach's times", () => {
+    const data = buildStoryData(
+      [
+        slot({ serviceId: "s_ref", startDate: "2026-07-21T08:15:00Z", coach: "Marieme" }),
+        slot({ serviceId: "s_ref", startDate: "2026-07-21T09:15:00Z", coach: "Awa" }),
+        slot({ serviceId: "s_ref", startDate: "2026-07-21T12:30:00Z", coach: "Marieme" }),
+      ],
+      services,
+      staff,
+      now,
+    );
+
+    expect(data.classes.map((c) => c.name)).toEqual(["Reformer", "Reformer"]);
+    expect(data.classes.map((c) => c.coach)).toEqual(["Marieme", "Awa"]);
+    expect(data.classes[0].slots.map((s) => s.time)).toEqual(["08H15", "12H30"]);
+    expect(data.classes[1].slots.map((s) => s.time)).toEqual(["09H15"]);
   });
 
   it("drops APPOINTMENT services but keeps unknown types", () => {

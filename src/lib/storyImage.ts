@@ -10,10 +10,11 @@ import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
  * places restantes. Reprend la charte des Canva de Babakar (fond prune, titre
  * Noto Serif Display Extra Condensed, reste en Montserrat), validée le 20/07.
  *
- * Les cours sont regroupés (un cours = un bloc), avec une rangée de pastilles
- * horaires colorées — la couleur est déterministe par NOM de cours, donc un
- * même cours garde sa couleur d'un jour à l'autre. Jamais de nom de cours en
- * dur : tout vient de `StoryData` (construit depuis Wix live).
+ * Les cours sont regroupés par cours et coach (un coach = un bloc), avec une
+ * rangée de pastilles horaires colorées — la couleur est déterministe par NOM
+ * de cours, donc un même cours garde sa couleur d'un bloc à l'autre et d'un
+ * jour à l'autre. Jamais de nom de cours en dur : tout vient de `StoryData`
+ * (construit depuis Wix live).
  *
  * Fonts bundlées dans assets/fonts/ (OFL) → rendu identique en local, en CI et
  * sur Railway quelle que soit la police du conteneur.
@@ -34,7 +35,7 @@ export interface StoryClass {
 export interface StoryData {
   dayLabel: string; // "MARDI"
   dateLabel: string; // "21 juillet"
-  classes: StoryClass[]; // regroupés par cours, ordonnés par 1er créneau
+  classes: StoryClass[]; // regroupés par cours + coach, ordonnés par 1er créneau
 }
 
 // ---------- charte ----------

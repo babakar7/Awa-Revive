@@ -3611,3 +3611,15 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   complet « Clés de la Maison » et une mise en page A4 imprimable est fournie.
 - Régression unitaire : contenu métier complet, absence de formulaire et état
   actif de la navigation.
+
+## 2026-07-28 — Story : créneaux séparés par coach
+
+- Quand plusieurs coachs animent le même cours le lendemain, la story génère
+  désormais un bloc distinct par coach au lieu de fusionner leurs noms sur une
+  seule ligne.
+- Chaque bloc contient uniquement les horaires de la coach affichée. Les
+  variantes Wix d’un même cours conservent leur tronc commun et leur couleur,
+  mais ne mélangent plus les créneaux de coachs différentes.
+- Cette règle remplace le rendu antérieur « Coach A & Coach B ». Une régression
+  couvre le cas Reformer avec deux coachs et vérifie l’attribution exacte de
+  chaque horaire.

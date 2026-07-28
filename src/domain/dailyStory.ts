@@ -95,52 +95,19 @@ export function storyWindowOpen(now: Date, startHour = 18, cutoffHour = STORY_CU
   return h >= startHour && h < cutoffHour;
 }
 
-/** Coach majoritaire d'un cours (égalité → premier vu). null si aucun. */
-function pickCoach(votes: Map<string, number>): string | null {
-  let best: string | null = null;
-  let bestN = 0;
-  for (const [name, n] of votes) {
-    if (n > bestN) {
-      best = name;
-      bestN = n;
-    }
-  }
-  return best;
-}
-
 /**
- * Fusionne les variantes d'un même cours en une seule section : deux cours dont
+ * Fusionne les variantes d'un même cours par coach : deux cours dont
  * les noms partagent leurs deux premiers mots (« Pilates Reformer Sculpt » /
  * « Pilates Reformer Foundation ») sont regroupés sous leur tronc commun
- * (« Pilates Reformer »), tous horaires confondus, triés par heure (demande
- * Babakar 21/07). Règle purement lexicale — aucun nom de cours en dur.
- * Coachs de la section fusionnée : un seul → affiché, deux → « X & Y »,
- * au-delà → ligne coach omise.
+ * (« Pilates Reformer »). Les créneaux de chaque coach restent toutefois dans
+ * une section séparée afin que la story indique sans ambiguïté qui anime chaque
+ * cours. Règle purement lexicale — aucun nom de cours en dur.
  */
 export function mergeClassVariants(classes: StoryClass[]): StoryClass[] {
   const words = classes.map((c) => c.name.trim().split(/\s+/));
   const twoWordKey = (w: string[]): string => w.slice(0, 2).join(" ").toLowerCase();
   const keyCount = new Map<string, number>();
   for (const w of words) keyCount.set(twoWordKey(w), (keyCount.get(twoWordKey(w)) ?? 0) + 1);
-
-  interface Merged {
-    memberWords: string[][];
-    coaches: string[];
-    slots: StorySlot[];
-  }
-  const merged = new Map<string, Merged>(); // clé = tronc 2 mots (ou nom entier si seul)
-  classes.forEach((c, i) => {
-    const shared = words[i].length >= 2 && (keyCount.get(twoWordKey(words[i])) ?? 0) > 1;
-    const key = shared ? twoWordKey(words[i]) : c.name.toLowerCase();
-    let m = merged.get(key);
-    if (!m) {
-      m = { memberWords: [], coaches: [], slots: [] };
-      merged.set(key, m);
-    }
-    m.memberWords.push(words[i]);
-    m.slots.push(...c.slots);
-    if (c.coach && !m.coaches.includes(c.coach)) m.coaches.push(c.coach);
-  });
 
   // Nom affiché = plus long préfixe de mots commun à toutes les variantes
   // (casse du premier membre) — « Pilates Reformer Sculpt » + « … Foundation »
@@ -156,9 +123,43 @@ export function mergeClassVariants(classes: StoryClass[]): StoryClass[] {
     return first.slice(0, n).join(" ");
   };
 
+  const baseKeys = words.map((w, i) =>
+    w.length >= 2 && (keyCount.get(twoWordKey(w)) ?? 0) > 1
+      ? twoWordKey(w)
+      : classes[i].name.toLowerCase(),
+  );
+  const wordsByBase = new Map<string, string[][]>();
+  words.forEach((w, i) => {
+    const members = wordsByBase.get(baseKeys[i]) ?? [];
+    members.push(w);
+    wordsByBase.set(baseKeys[i], members);
+  });
+
+  interface Merged {
+    name: string;
+    coach: string | null;
+    slots: StorySlot[];
+  }
+  const merged = new Map<string, Merged>(); // clé = tronc du cours + coach
+  classes.forEach((c, i) => {
+    const coach = c.coach?.trim() || null;
+    const coachKey = coach?.toLocaleLowerCase("fr") ?? "";
+    const key = `${baseKeys[i]}\u0000${coachKey}`;
+    let m = merged.get(key);
+    if (!m) {
+      m = {
+        name: commonPrefix(wordsByBase.get(baseKeys[i]) ?? [words[i]]),
+        coach,
+        slots: [],
+      };
+      merged.set(key, m);
+    }
+    m.slots.push(...c.slots);
+  });
+
   return [...merged.values()].map((m) => ({
-    name: commonPrefix(m.memberWords),
-    coach: m.coaches.length === 1 ? m.coaches[0] : m.coaches.length === 2 ? m.coaches.join(" & ") : null,
+    name: m.name,
+    coach: m.coach,
     slots: [...m.slots].sort((a, b) => a.time.localeCompare(b.time)),
   }));
 }
@@ -182,7 +183,7 @@ export function buildStoryData(
 
   interface Group {
     name: string;
-    coachVotes: Map<string, number>;
+    coach: string | null;
     slots: Array<StorySlot & { ms: number }>;
     earliest: number;
   }
@@ -197,10 +198,12 @@ export function buildStoryData(
     const d = new Date(slot.startDate);
     if (Number.isNaN(d.getTime())) continue;
 
-    let g = groups.get(slot.serviceId);
+    const coach = (slot.coach ?? (slot.coachId ? staffById.get(slot.coachId) ?? null : null))?.trim() || null;
+    const groupKey = `${slot.serviceId}\u0000${coach?.toLocaleLowerCase("fr") ?? ""}`;
+    let g = groups.get(groupKey);
     if (!g) {
-      g = { name: svc.name, coachVotes: new Map(), slots: [], earliest: Infinity };
-      groups.set(slot.serviceId, g);
+      g = { name: svc.name, coach, slots: [], earliest: Infinity };
+      groups.set(groupKey, g);
     }
     g.slots.push({
       time: `${pad(d.getUTCHours())}H${pad(d.getUTCMinutes())}`,
@@ -209,9 +212,6 @@ export function buildStoryData(
       ms: d.getTime(),
     });
     g.earliest = Math.min(g.earliest, d.getTime());
-
-    const coachName = slot.coach ?? (slot.coachId ? staffById.get(slot.coachId) ?? null : null);
-    if (coachName) g.coachVotes.set(coachName, (g.coachVotes.get(coachName) ?? 0) + 1);
   }
 
   const classes: StoryClass[] = mergeClassVariants(
@@ -219,7 +219,7 @@ export function buildStoryData(
       .sort((a, b) => a.earliest - b.earliest)
       .map((g) => ({
         name: g.name,
-        coach: pickCoach(g.coachVotes),
+        coach: g.coach,
         slots: g.slots
           .sort((a, b) => a.ms - b.ms)
           .map(({ ms: _ms, ...s }) => s),
