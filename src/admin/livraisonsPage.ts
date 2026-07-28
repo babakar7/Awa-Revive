@@ -12,7 +12,10 @@ import {
   type OpenDeliveryOrder,
   type RecentDeliveryClient,
 } from "../domain/deliveryRepo.js";
-import { formatDakarDateTime } from "../domain/deliveryRules.js";
+import {
+  DELIVERY_KITCHEN_LEAD_OPTIONS,
+  formatDakarDateTime,
+} from "../domain/deliveryRules.js";
 import {
   DELIVERY_GROUP_ORDER,
   groupDeliveryOrders,
@@ -45,6 +48,7 @@ const BANNERS: Record<string, string> = {
   cancelled: "Commande annulée.",
   renotified: "Cuisine renotifiée.",
   reprogrammed: "Livraison reprogrammée — le nouvel horaire est enregistré.",
+  "activated-now": "Commande affichée immédiatement dans Cuisine.",
   cash: "Paiement en espèces enregistré — le départ est autorisé.",
   recipient: "Contact de remise mis à jour.",
   "recipient-removed": "Contact de remise supprimé — la cliente redevient le contact à appeler.",
@@ -99,6 +103,23 @@ function inlineForm(action: string, label: string, confirm?: string, variant = "
   return `<form method="post" action="${esc(action)}" class="inline"${confirmation}><button class="act act--sm${cls}" type="submit">${esc(label)}</button></form>`;
 }
 
+function kitchenLeadLabel(minutes: number): string {
+  const hours = minutes / 60;
+  return `${hours} ${hours === 1 ? "heure" : "heures"} avant l’arrivée`;
+}
+
+function kitchenLeadOptions(selectedMinutes: number): string {
+  const selected = DELIVERY_KITCHEN_LEAD_OPTIONS.includes(
+    selectedMinutes as (typeof DELIVERY_KITCHEN_LEAD_OPTIONS)[number],
+  )
+    ? selectedMinutes
+    : 60;
+  return DELIVERY_KITCHEN_LEAD_OPTIONS.map(
+    (minutes) =>
+      `<option value="${minutes}"${selected === minutes ? " selected" : ""}>${kitchenLeadLabel(minutes)}</option>`,
+  ).join("");
+}
+
 function scheduledEditor(o: DeliveryOrder): string {
   const base = `/admin/livraisons/${o.id}`;
   const arrival = o.scheduled_for ? dakarInputValue(o.scheduled_for) : "";
@@ -109,19 +130,21 @@ function scheduledEditor(o: DeliveryOrder): string {
             60000,
         )
       : 60;
-  const presetLead = [30, 60, 90].includes(lead);
-  return `<form method="post" action="${esc(base)}/reschedule" class="delivery-secondary-form">
-  <b>Reprogrammer</b>
+  return `<div class="delivery-editor-panel">
+<form method="post" action="${esc(base)}/reschedule" class="delivery-editor-form">
   <label>Nouvelle arrivée (Dakar)<input name="scheduled_for" type="datetime-local" required value="${esc(arrival)}"></label>
-  <label>Alerter la cuisine
+  <label>Afficher dans Cuisine
     <select name="kitchen_lead_minutes">
-      ${[30, 60, 90].map((n) => `<option value="${n}"${lead === n ? " selected" : ""}>${n} min avant</option>`).join("")}
-      <option value="custom"${presetLead ? "" : " selected"}>Autre délai…</option>
+      ${kitchenLeadOptions(lead)}
     </select>
   </label>
-  <label>Délai personnalisé <span class="muted">(1 à 90 min avant)</span><input name="kitchen_lead_custom" type="number" min="1" max="90" step="1" inputmode="numeric" value="${presetLead ? "" : esc(lead)}" placeholder="Ex. 45"></label>
   <button class="act act--sm act--ghost" type="submit">Enregistrer le nouvel horaire</button>
-</form>`;
+</form>
+<form method="post" action="${esc(base)}/activate-now" class="delivery-activate-now" data-confirm="Afficher cette commande dans Cuisine maintenant ? Elle ne pourra ensuite plus être reprogrammée.">
+  <button class="act act--sm" type="submit">🔔 Alerter maintenant</button>
+  <span class="muted">Conserve l’heure d’arrivée promise et affiche immédiatement la commande en cuisine.</span>
+</form>
+</div>`;
 }
 
 function paymentCell(o: DeliveryOrder): string {
@@ -189,13 +212,12 @@ function recipientBlock(o: DeliveryOrder): string {
 }
 
 function recipientEditor(o: DeliveryOrder): string {
-  return `<form method="post" action="/admin/livraisons/${esc(o.id)}/recipient" class="delivery-secondary-form">
-  <b>Modifier le contact de remise</b>
+  return `<div class="delivery-editor-panel"><form method="post" action="/admin/livraisons/${esc(o.id)}/recipient" class="delivery-editor-form">
   <label>Nom<input name="recipient_name" maxlength="120" value="${esc(o.recipient_name ?? "")}" placeholder="Ex. Fatou, assistante"></label>
   <label>Téléphone<input name="recipient_phone" type="tel" inputmode="tel" value="${esc(o.recipient_phone ?? "")}" placeholder="77 123 45 67 ou +221…"></label>
   <span class="muted">Videz les deux champs pour supprimer ce contact.</span>
   <button class="act act--sm act--ghost" type="submit">Enregistrer le contact</button>
-</form>`;
+</form></div>`;
 }
 
 function dueBlock(p: DeliveryPresentation, now: Date): string {
@@ -248,7 +270,14 @@ function primaryAction(p: DeliveryPresentation): string {
   return "";
 }
 
-function secondaryActions(p: DeliveryPresentation): string {
+function editorButton(label: string, content: string): string {
+  return `<details class="delivery-editor" data-refresh-pause>
+<summary class="act act--sm act--ghost">${esc(label)}</summary>
+${content}
+</details>`;
+}
+
+function cardTools(p: DeliveryPresentation): string {
   const o = p.order;
   const base = `/admin/livraisons/${o.id}`;
   const kitchenBad =
@@ -256,8 +285,10 @@ function secondaryActions(p: DeliveryPresentation): string {
     (o.status === "IN_KITCHEN" &&
       !!o.activated_at &&
       !["NEW", "PREPARING", "READY"].includes(o.kitchen_ticket_status ?? ""));
-  const parts: string[] = [recipientEditor(o)];
-  if (isWaitingForActivation(o)) parts.push(scheduledEditor(o));
+  const parts: string[] = [editorButton("Modifier le contact", recipientEditor(o))];
+  if (isWaitingForActivation(o)) {
+    parts.push(editorButton("Reprogrammer", scheduledEditor(o)));
+  }
   if (kitchenBad && o.status === "IN_KITCHEN" && o.activated_at) {
     parts.push(
       inlineForm(
@@ -278,10 +309,7 @@ function secondaryActions(p: DeliveryPresentation): string {
       "danger",
     ),
   );
-  return `<details class="delivery-secondary" data-refresh-pause>
-<summary>Actions secondaires</summary>
-<div class="delivery-secondary-body">${parts.join("")}</div>
-</details>`;
+  return `<div class="delivery-card-tools">${parts.join("")}</div>`;
 }
 
 function orderDetails(o: OpenDeliveryOrder): string {
@@ -319,7 +347,7 @@ ${p.blockingReason ? `<div class="delivery-block" role="alert"><b>Intervention r
 ${orderDetails(o)}
 <footer class="delivery-card-actions">
   ${primaryAction(p)}
-  ${secondaryActions(p)}
+  ${cardTools(p)}
 </footer>
 </article>`;
 }
@@ -451,11 +479,11 @@ export function renderLivraisonsBoard(
 .delivery-facts{display:grid;grid-template-columns:1.15fr .7fr 1fr;gap:.55rem;padding:.7rem;border-radius:10px;background:var(--cream-25)}.delivery-facts>div{display:flex;flex-direction:column;gap:.12rem;min-width:0}.delivery-facts>div>span:first-child{color:var(--ink-500);font-size:.7rem;font-weight:750;text-transform:uppercase;letter-spacing:.04em}
 .delivery-destination{display:grid;gap:.45rem}.delivery-destination>div{display:flex;align-items:baseline;gap:.35rem;flex-wrap:wrap}.delivery-destination>div>span:first-child{flex-basis:100%}.delivery-contact-line .ok,.delivery-contact-line .muted,.delivery-contact-line .danger-text{flex-basis:100%}
 .delivery-block{display:grid;gap:.16rem;padding:.65rem .72rem;border:1px solid var(--danger-border);border-radius:10px;background:var(--danger-bg);color:var(--danger)}.delivery-block span{font-size:.86rem;line-height:1.45}
-.delivery-order-details>summary,.delivery-secondary>summary,.delivery-history>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--brand);font-size:.88rem;font-weight:650}.delivery-order-detail{margin-top:.45rem;padding:.65rem;border-radius:9px;background:var(--cream-25);font-size:.88rem}.delivery-order-detail p{margin:.55rem 0 0}
-.delivery-card a[href^="tel:"]{display:inline-flex;align-items:center;min-height:44px}.delivery-card input,.delivery-card select{min-height:44px}.delivery-card-actions{display:flex;align-items:center;justify-content:space-between;gap:.65rem;flex-wrap:wrap;margin-top:auto;padding-top:.7rem;border-top:1px solid var(--border-soft)}.delivery-card .act{min-height:44px!important}.delivery-secondary{position:relative;margin-left:auto}.delivery-secondary-body{position:absolute;right:0;z-index:7;width:min(310px,85vw);display:grid;gap:.8rem;padding:.8rem;border:1px solid var(--border);border-radius:12px;background:var(--surface-raised);box-shadow:var(--shadow-2)}.delivery-secondary-form{display:grid;gap:.5rem;padding-bottom:.7rem;border-bottom:1px solid var(--border-soft)}.delivery-secondary-body>form.inline{display:block}.delivery-secondary-body>form.inline .act{width:100%}
+.delivery-order-details>summary,.delivery-history>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--brand);font-size:.88rem;font-weight:650}.delivery-order-detail{margin-top:.45rem;padding:.65rem;border-radius:9px;background:var(--cream-25);font-size:.88rem}.delivery-order-detail p{margin:.55rem 0 0}
+.delivery-card a[href^="tel:"]{display:inline-flex;align-items:center;min-height:44px}.delivery-card input,.delivery-card select{min-height:44px}.delivery-card-actions{display:flex;align-items:center;justify-content:space-between;gap:.65rem;flex-wrap:wrap;margin-top:auto;padding-top:.7rem;border-top:1px solid var(--border-soft)}.delivery-card .act{min-height:44px!important}.delivery-card-tools{display:flex;align-items:center;justify-content:flex-end;gap:.45rem;flex:1;flex-wrap:wrap}.delivery-editor{position:relative}.delivery-editor>summary{list-style:none;display:inline-flex;align-items:center;cursor:pointer}.delivery-editor>summary::-webkit-details-marker{display:none}.delivery-editor[open]{flex-basis:100%;order:10}.delivery-editor[open]>summary{margin-bottom:.55rem}.delivery-editor-panel{display:grid;gap:.75rem;padding:.8rem;border:1px solid var(--border);border-radius:12px;background:var(--cream-25)}.delivery-editor-form{display:grid;gap:.55rem}.delivery-activate-now{display:grid;gap:.35rem;padding-top:.75rem;border-top:1px solid var(--border-soft)}.delivery-activate-now .act{justify-self:start}
 .delivery-history{margin-top:1.2rem}.delivery-history>summary{justify-content:space-between;padding:.8rem 1rem;border:1px solid var(--border);border-radius:12px;background:var(--surface)}.delivery-history[open]>summary{margin-bottom:.65rem}
-@media(max-width:900px){.delivery-counters{grid-template-columns:repeat(2,minmax(0,1fr))}.delivery-facts{grid-template-columns:1fr 1fr}.delivery-facts>div:last-child{grid-column:1/-1}.delivery-card-head{align-items:flex-start}.delivery-secondary-body{position:fixed;left:.75rem;right:.75rem;bottom:.75rem;width:auto;max-height:70vh;overflow:auto}}
-@media(max-width:430px){.delivery-card{padding:.85rem}.delivery-card-head{display:grid}.delivery-due{justify-items:start;text-align:left}.delivery-card-actions{align-items:stretch}.delivery-primary,.delivery-primary form,.delivery-primary .act{width:100%}.delivery-secondary{margin-left:0}.delivery-counters{gap:.45rem}.delivery-counter{min-height:60px;padding:.65rem}}
+@media(max-width:900px){.delivery-counters{grid-template-columns:repeat(2,minmax(0,1fr))}.delivery-facts{grid-template-columns:1fr 1fr}.delivery-facts>div:last-child{grid-column:1/-1}.delivery-card-head{align-items:flex-start}}
+@media(max-width:430px){.delivery-card{padding:.85rem}.delivery-card-head{display:grid}.delivery-due{justify-items:start;text-align:left}.delivery-card-actions{align-items:stretch}.delivery-primary,.delivery-primary form,.delivery-primary .act{width:100%}.delivery-card-tools{justify-content:flex-start}.delivery-editor>summary{width:100%;justify-content:center}.delivery-editor{flex:1 1 calc(50% - .45rem)}.delivery-editor[open]{flex-basis:100%}.delivery-counters{gap:.45rem}.delivery-counter{min-height:60px;padding:.65rem}}
 </style>
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar</span><h2>Livraisons</h2><p>Suivez le délai cuisine, le choix de paiement et le départ de chaque commande.</p></div><div class="page-header-actions"><a href="/admin/livraisons/new" class="act">Nouvelle commande</a></div></header>
 <div class="delivery-refresh">
@@ -537,7 +565,6 @@ export interface LivraisonPrefill {
   delivery_mode?: string;
   scheduled_for?: string;
   kitchen_lead_minutes?: string;
-  kitchen_lead_custom?: string;
   is_test?: string;
   qty?: Record<string, number>;
   choice?: Record<string, string>;
@@ -629,11 +656,7 @@ ${optionSelect}</div>`;
   const sla = prefill.sla_minutes ?? String(config.DELIVERY_SLA_MINUTES);
   const deliveryMode = prefill.delivery_mode === "scheduled" ? "scheduled" : "now";
   const submittedLead = String(prefill.kitchen_lead_minutes ?? "60");
-  const presetLead = [30, 60, 90].includes(Number(submittedLead));
-  const kitchenLead = presetLead ? Number(submittedLead) : "custom";
-  const customKitchenLead =
-    prefill.kitchen_lead_custom ??
-    (submittedLead !== "custom" && !presetLead ? submittedLead : "");
+  const kitchenLead = Number(submittedLead);
   const scheduleMin = dakarInputValue(new Date(Date.now() + 60_000));
   const hasWixClient = !!prefill.wix_contact_id;
   const hasRecipient = !!(prefill.recipient_name || prefill.recipient_phone);
@@ -712,16 +735,12 @@ ${optionSelect}</div>`;
           <input name="scheduled_for" type="datetime-local" min="${esc(scheduleMin)}" value="${esc(prefill.scheduled_for ?? "")}"${deliveryMode === "scheduled" ? " required" : ""}${fieldState("scheduled_for")}>
           ${fieldError("scheduled_for")}
         </label>
-        <label>Alerter la cuisine
+        <label>Afficher dans Cuisine
           <select name="kitchen_lead_minutes">
-            ${[30, 60, 90].map((n) => `<option value="${n}"${kitchenLead === n ? " selected" : ""}>${n} minutes avant l'arrivée</option>`).join("")}
-            <option value="custom"${kitchenLead === "custom" ? " selected" : ""}>Autre délai à renseigner manuellement…</option>
+            ${kitchenLeadOptions(kitchenLead)}
           </select>
         </label>
-        <label>Délai personnalisé <span class="muted">(1 à 90 minutes avant l’arrivée)</span>
-          <input name="kitchen_lead_custom" type="number" min="1" max="90" step="1" inputmode="numeric" value="${esc(customKitchenLead)}" placeholder="Ex. 45"${fieldState("kitchen_lead_minutes")}>
-          ${fieldError("kitchen_lead_minutes")}
-        </label>
+        ${fieldError("kitchen_lead_minutes")}
         <span class="muted">Si ce délai est déjà atteint, la commande sera activée immédiatement.</span>
       </div>
     </fieldset>

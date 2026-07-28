@@ -80,39 +80,37 @@ describe("renderLivraisonForm — stepper & UX", () => {
     expect(test).toContain("exclue des statistiques");
   });
 
-  it("offers immediate or scheduled arrival in Dakar with a 60-minute default", () => {
+  it("offers immediate or scheduled arrival with a 1-to-12-hour kitchen dropdown", () => {
     const html = renderLivraisonForm(menu(), "");
     expect(html).toContain(`name="delivery_mode" type="radio" value="now" checked`);
     expect(html).toContain(`name="delivery_mode" type="radio" value="scheduled"`);
     expect(html).toContain(`name="scheduled_for" type="datetime-local"`);
     expect(html).toContain("Arrivée promise au client (heure de Dakar)");
-    expect(html).toContain(`<option value="60" selected>60 minutes avant`);
-    expect(html).toContain(`<option value="30">30 minutes avant`);
-    expect(html).toContain(`<option value="90">90 minutes avant`);
-    expect(html).toContain(`<option value="custom">Autre délai à renseigner manuellement`);
-    expect(html).toContain(`name="kitchen_lead_custom" type="number" min="1" max="90"`);
+    expect(html).toContain(`<option value="60" selected>1 heure avant`);
+    expect(html).toContain(`<option value="720">12 heures avant`);
+    expect(html.match(/<option value="\d+">(?:\d+ heures?) avant/g)).toHaveLength(11);
+    expect(html).not.toContain(`name="kitchen_lead_custom"`);
   });
 
   it("preserves scheduled fields after a validation error", () => {
     const html = renderLivraisonForm(menu(), "", [], {
       delivery_mode: "scheduled",
       scheduled_for: "2026-08-04T14:30",
-      kitchen_lead_minutes: "90",
+      kitchen_lead_minutes: "720",
     });
     expect(html).toContain(`value="scheduled" checked`);
     expect(html).toContain(`value="2026-08-04T14:30" required`);
-    expect(html).toContain(`<option value="90" selected>`);
+    expect(html).toContain(`<option value="720" selected>12 heures avant`);
   });
 
-  it("preserves a manually entered kitchen lead after a validation error", () => {
+  it("falls back to the 1-hour option if a stale custom delay is submitted", () => {
     const html = renderLivraisonForm(menu(), "", [], {
       delivery_mode: "scheduled",
       scheduled_for: "2026-08-04T14:30",
-      kitchen_lead_minutes: "custom",
-      kitchen_lead_custom: "45",
+      kitchen_lead_minutes: "45",
     });
-    expect(html).toContain(`<option value="custom" selected>`);
-    expect(html).toContain(`name="kitchen_lead_custom" type="number" min="1" max="90" step="1" inputmode="numeric" value="45"`);
+    expect(html).toContain(`<option value="60" selected>1 heure avant`);
+    expect(html).not.toContain(`value="45"`);
   });
 
   it("prefills client fields on error re-render, escaping HTML", () => {

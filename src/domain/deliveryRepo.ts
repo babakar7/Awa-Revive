@@ -407,6 +407,36 @@ export async function reprogramDeliveryOrder(
   return { order: row as DeliveryOrder, token, arrivalChanged: arrival_changed };
 }
 
+/**
+ * Reception bypass for a future scheduled order: keep the promised arrival but
+ * expose it to cuisine immediately. The guarded UPDATE makes repeated taps and
+ * a concurrent scheduled sweep harmless.
+ */
+export async function activateScheduledDeliveryNow(
+  id: string,
+): Promise<DeliveryOrder | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update delivery_orders
+        set kitchen_notify_at=now(),
+            activated_at=now(),
+            kitchen_notify_status='pending',
+            kitchen_notified_at=null,
+            kitchen_notify_attempts=0,
+            activation_notify_status='pending',
+            activation_notified_at=null,
+            activation_notify_attempts=0,
+            activation_notify_wamid=null,
+            alerted_at=null,
+            updated_at=now()
+      where id=$1 and status='IN_KITCHEN' and scheduled_for is not null
+        and activated_at is null
+      returning *`,
+    [id],
+  );
+  return (res.rows[0] as DeliveryOrder) ?? null;
+}
+
 // ---------- payment choice + provider attempts ----------
 
 export interface DeliveryPaymentAttempt {

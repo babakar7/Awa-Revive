@@ -281,12 +281,11 @@ describe("delivery order creation → kitchen notify", () => {
 });
 
 describe("scheduled deliveries", () => {
-  it("accepts a manual kitchen lead between 1 and 90 minutes", async () => {
+  it("accepts whole-hour kitchen leads from 1 to 12 hours", async () => {
     const id = await createOrder({
       delivery_mode: "scheduled",
       scheduled_for: dakarInputIn(24 * 60),
-      kitchen_lead_minutes: "custom",
-      kitchen_lead_custom: "45",
+      kitchen_lead_minutes: "720",
     });
     const row = (
       await pool.query(
@@ -299,7 +298,7 @@ describe("scheduled deliveries", () => {
         (new Date(row.scheduled_for).getTime() - new Date(row.kitchen_notify_at).getTime()) /
           60_000,
       ),
-    ).toBe(45);
+    ).toBe(720);
 
     const invalid = await app.inject({
       method: "POST",
@@ -311,14 +310,13 @@ describe("scheduled deliveries", () => {
         address: "Almadies",
         delivery_mode: "scheduled",
         scheduled_for: dakarInputIn(24 * 60),
-        kitchen_lead_minutes: "custom",
-        kitchen_lead_custom: "91",
+        kitchen_lead_minutes: "780",
         qty_SMOOTHIE_JANT_BI: "1",
       }).toString(),
     });
     expect(invalid.statusCode).toBe(200);
-    expect(invalid.body).toContain("entre 1 et 90 minutes");
-    expect(invalid.body).toContain('value="91"');
+    expect(invalid.body).toContain("entre 1 et 12 heures");
+    expect(invalid.body).not.toContain('value="780"');
   });
 
   it("rejects a past arrival and activates immediately when the kitchen deadline is already due", async () => {
@@ -390,7 +388,11 @@ describe("scheduled deliveries", () => {
       headers: { authorization: AUTH },
     });
     expect(board.body).toContain("Programmées");
+    expect(board.body).toContain("Modifier le contact");
     expect(board.body).toContain("Reprogrammer");
+    expect(board.body).toContain(`/admin/livraisons/${id}/activate-now`);
+    expect(board.body).toContain("Alerter maintenant");
+    expect(board.body).not.toContain("Actions secondaires");
     expect(board.body).not.toContain(`/admin/livraisons/${id}/depart`);
 
     const client = await clientRepo.upsertClient("221770009988");
@@ -406,6 +408,60 @@ describe("scheduled deliveries", () => {
         .payment_status,
     ).toBe("CASH_DUE");
     expect(mock.waTextsTo("221770000099")).toHaveLength(0);
+  });
+
+  it("can bypass the schedule and display a future order in Cuisine now", async () => {
+    await seedKitchenContact();
+    const id = await createOrder({
+      delivery_mode: "scheduled",
+      scheduled_for: dakarInputIn(24 * 60),
+      kitchen_lead_minutes: "60",
+    });
+    const promisedBefore = (
+      await pool.query(`select scheduled_for from delivery_orders where id=$1`, [id])
+    ).rows[0].scheduled_for;
+
+    const activated = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/activate-now`,
+      headers: { authorization: AUTH },
+    });
+    expect(activated.statusCode).toBe(303);
+    expect(activated.headers.location).toContain("done=activated-now");
+
+    const order = (
+      await pool.query(
+        `select scheduled_for, kitchen_notify_at, activated_at
+           from delivery_orders where id=$1`,
+        [id],
+      )
+    ).rows[0];
+    expect(new Date(order.scheduled_for).toISOString()).toBe(
+      new Date(promisedBefore).toISOString(),
+    );
+    expect(order.activated_at).not.toBeNull();
+    expect(
+      Math.abs(new Date(order.kitchen_notify_at).getTime() - Date.now()),
+    ).toBeLessThan(10_000);
+    expect(
+      (await pool.query(`select status from kitchen_tickets where delivery_order_id=$1`, [id]))
+        .rows[0].status,
+    ).toBe("NEW");
+
+    const repeated = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/activate-now`,
+      headers: { authorization: AUTH },
+    });
+    expect(repeated.headers.location).toContain("err=");
+    expect(
+      (
+        await pool.query(
+          `select count(*)::int as n from kitchen_tickets where delivery_order_id=$1`,
+          [id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
   });
 
   it("activates after restart, alerts kitchen/reception once, and resists concurrent sweeps", async () => {
@@ -489,7 +545,7 @@ describe("scheduled deliveries", () => {
       headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
       payload: new URLSearchParams({
         scheduled_for: secondArrival,
-        kitchen_lead_minutes: "90",
+        kitchen_lead_minutes: "180",
       }).toString(),
     });
     expect(moved.statusCode).toBe(303);
@@ -528,21 +584,20 @@ describe("scheduled deliveries", () => {
       headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
       payload: new URLSearchParams({
         scheduled_for: secondArrival,
-        kitchen_lead_minutes: "30",
+        kitchen_lead_minutes: "120",
       }).toString(),
     });
     expect(leadOnly.headers.location).toContain("done=reprogrammed");
-    const customLead = await app.inject({
+    const twelveHourLead = await app.inject({
       method: "POST",
       url: `/admin/livraisons/${id}/reschedule`,
       headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
       payload: new URLSearchParams({
         scheduled_for: secondArrival,
-        kitchen_lead_minutes: "custom",
-        kitchen_lead_custom: "45",
+        kitchen_lead_minutes: "720",
       }).toString(),
     });
-    expect(customLead.headers.location).toContain("done=reprogrammed");
+    expect(twelveHourLead.headers.location).toContain("done=reprogrammed");
     const timing = (
       await pool.query(
         `select scheduled_for, kitchen_notify_at from delivery_orders where id=$1`,
@@ -555,7 +610,7 @@ describe("scheduled deliveries", () => {
           new Date(timing.kitchen_notify_at).getTime()) /
           60_000,
       ),
-    ).toBe(45);
+    ).toBe(720);
     await sweepDeliveries(noopLog);
     expect(await rescheduleCount()).toBe(1);
   });
