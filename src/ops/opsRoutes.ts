@@ -22,6 +22,7 @@ import {
   setTicketUrgent,
   ticketStatsToday,
   ticketsForSession,
+  listRecentClosedTickets,
 } from "../domain/kitchenTicketRepo.js";
 import { onOpsEvent, opsEventsSince, latestOpsEventId, type OpsEvent } from "../domain/opsEvents.js";
 import { ACCUEIL_CHANNEL, CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
@@ -32,6 +33,8 @@ import {
   listOpenSessions,
   closeSession,
   closeEmptyOpenSessions,
+  publishOpenSessionUpdate,
+  listRecentClosedSessions,
 } from "../domain/serviceSessionRepo.js";
 import { getCafeMenu, computeExtras } from "../lib/cafeMenu.js";
 import { savePushSubscription } from "../domain/pushRepo.js";
@@ -241,6 +244,14 @@ export function registerOps(app: FastifyInstance): void {
     return reply.type("application/json").send({ ok: !!t });
   });
 
+  // Read-only recall: today's served/cancelled tickets (no actions).
+  app.get(`${BASE}/recent`, async (req, reply) => {
+    const device = await requireCuisine(req, reply);
+    if (!device) return reply;
+    reply.header("Cache-Control", "no-store");
+    return reply.type("application/json").send({ tickets: await listRecentClosedTickets(30) });
+  });
+
   // ── SSE stream (cuisine channel) ──
   app.get(`${BASE}/events`, async (req, reply) => {
     const device = await deviceFromReq(req, "cuisine");
@@ -343,6 +354,7 @@ function buildServiceMenu(): Array<{ category: string; items: unknown[] }> {
       price: it.priceXof,
       optionLabel: it.optionLabel,
       choices: it.optionChoices ?? [],
+      fav: Boolean(it.favourite),
     });
   }
   return cats;
@@ -506,16 +518,22 @@ function registerServiceRoutes(app: FastifyInstance): void {
       isTest: false,
       takeaway,
     });
+    // Refresh the spot's live subtotal on the reception boards (aggregate isn't
+    // carried by the ticket event). Best-effort — never fails the order.
+    await publishOpenSessionUpdate(session.id).catch(() => {});
     return reply.type("application/json").send({ ok: true, session_id: session.id, id: ticket.id });
   });
 
   // A table auto-clears once its LAST open ticket leaves (served or cancelled) —
   // no manual "Libérer". Closing an already-empty session frees the spot back to
   // "tap to order". Best-effort: a close hiccup never fails the serve/cancel.
+  // Returns whether the session survived (still open) so the caller can refresh
+  // its subtotal only when it's still on the board.
   const autoCloseIfEmpty = async (sessionId: string | null, by: string | null): Promise<void> => {
     if (!sessionId) return;
     const remaining = await ticketsForSession(sessionId);
     if (remaining.length === 0) await closeSession(sessionId, by);
+    else await publishOpenSessionUpdate(sessionId).catch(() => {});
   };
 
   app.post(`${SERVICE_BASE}/tickets/:id/take`, async (req, reply) => {
@@ -574,6 +592,15 @@ function registerServiceRoutes(app: FastifyInstance): void {
     if (!device) return reply;
     reply.header("Cache-Control", "no-store");
     return reply.type("application/json").send(await serviceBootData());
+  });
+
+  // Read-only recent history: today's closed sessions + their indicative subtotal
+  // (the "addition" a client asks for after the table was auto-freed). No actions.
+  app.get(`${SERVICE_BASE}/recent`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    reply.header("Cache-Control", "no-store");
+    return reply.type("application/json").send({ sessions: await listRecentClosedSessions(20) });
   });
 
   // ── SSE stream (accueil channel) ──

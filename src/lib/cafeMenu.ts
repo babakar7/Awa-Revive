@@ -29,6 +29,8 @@ export interface CafeMenuItem {
   optionChoices?: string[];
   /** Every independent choice requested for this item, in display order. */
   optionGroups?: MenuOptionGroup[];
+  /** Studio "incontournable" — surfaced as a Favoris shortcut in the order picker. */
+  favourite?: boolean;
 }
 
 /** Parse the pipe-separated option_choices column into a clean list. */
@@ -237,6 +239,7 @@ export function setCafeMenu(rows: CafeMenuRow[]): void {
       optionLabel: r.optionLabel,
       optionChoices: r.optionChoices,
       optionGroups: r.optionGroups,
+      favourite: r.favourite,
     });
   }
   snapshot = { items, promptText: buildPromptText(rows) };

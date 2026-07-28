@@ -53,6 +53,24 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("/urgent");
   });
 
+  it("offers a ⭐ Favoris shortcut via the __FAV__ sentinel category", () => {
+    expect(SERVICE_APP_JS).toContain("Favoris");
+    expect(SERVICE_APP_JS).toContain("__FAV__");
+    // Favourite is a server flag read off the menu item, never a client decision.
+    expect(SERVICE_APP_JS).toContain("it.fav");
+  });
+
+  it("shows an indicative running subtotal on an occupied tile", () => {
+    expect(SERVICE_APP_JS).toContain("Sous-total — indicatif");
+    expect(SERVICE_APP_JS).toContain("s.total_xof");
+  });
+
+  it("has a read-only recent-tables history the SW never caches", () => {
+    expect(SERVICE_APP_JS).toContain("Tables récentes");
+    expect(SERVICE_APP_JS).toContain("/recent");
+    expect(SERVICE_SW).not.toContain("/recent");
+  });
+
   it("app.js parses as valid JavaScript (no syntax errors in the big string)", () => {
     expect(() => new Function(SERVICE_APP_JS)).not.toThrow();
   });

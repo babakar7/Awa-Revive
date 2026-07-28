@@ -13,6 +13,42 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Ops PWA — efficacité cuisine/service (28 juillet 2026)
+
+Audit UX des PWAs cuisine (KDS tablette) et service (accueil iPhone), livré en un
+lot front + petit ajout serveur, **sans migration** (colonnes existantes). Bumps
+d'assets : cuisine `v11→v12`, service `v12→v13`.
+
+- **[P0] Notes par article visibles en cuisine.** `ExtraLine.note` (« sans sucre »)
+  arrivait au ticket mais la carte cuisine et la voix l'ignoraient. Un helper client
+  unique (`lineLabel`/`linePicked`) formate choix + note pour la carte, la carte
+  compacte, le bandeau et `itemsSpeech()` — corrige au passage la voix qui oubliait
+  les options multiples (`selections`).
+- **Sous-total indicatif par table** sur la tuile occupée. `OpenSession.total_xof`
+  = somme des tickets TABLE non annulés (**servis inclus**, cast `::integer`),
+  ré-émis en live via `publishOpenSessionUpdate()` après commande / Servie / annulation
+  (seulement si la session survit à l'auto-close). Libellé « Sous-total — indicatif » :
+  **le POS reste la caisse**, ce n'est pas une addition finale.
+- **Bandeau « À préparer ensemble »** (cuisine) : agrège les préparations réellement
+  identiques (signature `id + selections + note normalisée`) présentes dans **≥ 2
+  tickets** ouverts distincts → batching.
+- **Chip ⭐ Favoris** au composeur service : `cafe_menu_items.favourite` (déjà en DB)
+  désormais recopié dans le snapshot (`CafeMenuItem.favourite`) et exposé `fav` par
+  `buildServiceMenu` ; catégorie sentinelle `__FAV__`.
+- **Cartes READY compactées** (cuisine) : items en une ligne pour dégager l'écran en
+  rush — **jamais** un ticket portant une note par article (l'instruction reste lisible).
+- **Historique « Récent » (lecture seule, borné au jour)** : bouton 🕐 sur les deux
+  apps. Service → tables fermées du jour + leur sous-total (« l'addition » après
+  l'auto-close). Cuisine → tickets servis/annulés (recall d'une instruction / annonce
+  ratée / litige). Endpoints `GET /ops/{cuisine,service}/recent` (auth par rôle,
+  jamais mis en cache par le SW). Aucune action : le board reste forward-only.
+- Backlog assumé : retour-arrière cuisine, « ↻ La même », 86 depuis le téléphone,
+  cycle « servie → réglée » (persistance du sous-total jusqu'au paiement). Livraisons
+  côté service = hors périmètre (un autre agent y travaille).
+- Régression : `test/opsCuisineAssets` + `opsServiceAssets` (marqueurs + version cache)
+  et `test/integration/serviceSessions` (total_xof servi/annulé, `session_update`,
+  `/state` `fav:true`, `/recent` des deux apps + rejet de rôle). 794 purs + 241 intégration verts.
+
 ## Correctif en cours — report direct du même cours (24 juillet 2026)
 
 Le cas Memona a exposé une règle produit erronée : pour déplacer un Aquabike

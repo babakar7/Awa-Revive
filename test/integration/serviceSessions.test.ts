@@ -15,6 +15,8 @@ import {
   getOpenSession,
   closeSession,
   closeEmptyOpenSessions,
+  publishOpenSessionUpdate,
+  listRecentClosedSessions,
 } from "../../src/domain/serviceSessionRepo.js";
 import {
   createTableTicket,
@@ -27,6 +29,7 @@ import {
   ticketStatsToday,
   ticketsForSession,
   listOpenKitchenTickets,
+  listRecentClosedTickets,
   claimStaleServeEscalations,
 } from "../../src/domain/kitchenTicketRepo.js";
 import {
@@ -214,6 +217,80 @@ describe("createTableTicket", () => {
   });
 });
 
+describe("session subtotal (indicative)", () => {
+  it("total_xof sums non-cancelled tickets — served included, cancelled excluded", async () => {
+    const s = await seat(canapeSpot);
+    const a = await makeTableTicket(s.id, s.short_code); // 6000
+    const b = await makeTableTicket(s.id, s.short_code); // 6000
+    expect((await getOpenSession(s.id))!.total_xof).toBe(12000);
+    // Serving keeps it in the running subtotal (the client can't recompute it).
+    await advanceTicketByCuisine(a.id, "READY", "iPad Cuisine");
+    await serveTableTicket(a.id, "Fatou");
+    expect((await getOpenSession(s.id))!.total_xof).toBe(12000);
+    // Cancelling drops it out.
+    await cancelTableTicket(b.id, "erreur");
+    expect((await getOpenSession(s.id))!.total_xof).toBe(6000);
+  });
+
+  it("publishOpenSessionUpdate emits session_update carrying the fresh total", async () => {
+    const s = await seat(canapeSpot);
+    await makeTableTicket(s.id, s.short_code);
+    const before = await latestOpsEventId("accueil");
+    await publishOpenSessionUpdate(s.id);
+    const upd = (await opsEventsSince("accueil", before)).find((e) => e.kind === "session_update");
+    expect(upd).toBeTruthy();
+    expect((upd!.payload as any).total_xof).toBe(6000);
+  });
+
+  it("publishOpenSessionUpdate is a silent no-op once the session is closed", async () => {
+    const s = await seat(canapeSpot); // empty → closeable
+    await closeSession(s.id, "Accueil 1");
+    const before = await latestOpsEventId("accueil");
+    await publishOpenSessionUpdate(s.id);
+    expect(await opsEventsSince("accueil", before)).toHaveLength(0);
+  });
+});
+
+describe("recent history (read-only)", () => {
+  it("listRecentClosedSessions returns today's closed tables with subtotal + all lines", async () => {
+    const s = await seat(canapeSpot, "Awa");
+    const a = await makeTableTicket(s.id, s.short_code);
+    const b = await makeTableTicket(s.id, s.short_code);
+    await advanceTicketByCuisine(a.id, "READY", "iPad Cuisine");
+    await serveTableTicket(a.id, "Fatou");
+    await cancelTableTicket(b.id, "erreur");
+    expect((await closeSession(s.id, "Accueil 1")).ok).toBe(true);
+    const recent = await listRecentClosedSessions(20);
+    const found = recent.find((r) => r.id === s.id);
+    expect(found).toBeTruthy();
+    expect(found!.short_code).toBe("Canapé");
+    expect(found!.first_name).toBe("Awa");
+    // Served counted, cancelled excluded from the subtotal — but both lines shown.
+    expect(found!.total_xof).toBe(6000);
+    expect(found!.tickets).toHaveLength(2);
+    expect(found!.tickets.find((t) => t.status === "CANCELLED")!.cancel_reason).toBe("erreur");
+  });
+
+  it("listRecentClosedTickets returns today's served/cancelled tickets with finished_at + reason", async () => {
+    const s = await seat(terrasseSpot);
+    const a = await makeTableTicket(s.id, s.short_code);
+    const b = await makeTableTicket(s.id, s.short_code);
+    await advanceTicketByCuisine(a.id, "READY", "iPad Cuisine");
+    await serveTableTicket(a.id, "Fatou");
+    await cancelTableTicket(b.id, "erreur");
+    const rows = await listRecentClosedTickets(30);
+    expect(rows).toHaveLength(2);
+    const cancelled = rows.find((r) => r.id === b.id)!;
+    expect(cancelled.status).toBe("CANCELLED");
+    expect(cancelled.cancel_reason).toBe("erreur");
+    expect(cancelled.finished_at).toBeTruthy();
+    // Still-open tickets never appear.
+    const s2 = await seat(canapeSpot);
+    await makeTableTicket(s2.id, s2.short_code);
+    expect((await listRecentClosedTickets(30)).some((r) => r.status === "NEW")).toBe(false);
+  });
+});
+
 describe("accueil serve flow", () => {
   it("Je prends is an atomic single-winner claim, only when READY", async () => {
     const s = await seat(canapeSpot);
@@ -357,6 +434,28 @@ describe("service PWA over HTTP", () => {
     return String(pair.headers["set-cookie"]).split(";")[0];
   }
 
+  async function pairCuisine(): Promise<string> {
+    const code = newPairCode();
+    await createPairingDevice("iPad Cuisine", "cuisine", hashOpsToken(code), new Date(Date.now() + 60_000));
+    const pair = await app.inject({
+      method: "POST", url: "/ops/cuisine/pair",
+      payload: `code=${code}`, headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    expect(pair.statusCode).toBe(303);
+    return String(pair.headers["set-cookie"]).split(";")[0];
+  }
+
+  // Order at a spot, drive it READY, serve it → the table closes. Returns cookie.
+  async function orderServeClose(cookie: string, spot: string, reqSuffix: string): Promise<void> {
+    const ordered = await app.inject({
+      method: "POST", url: `/ops/service/spots/${spot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: `req-${reqSuffix}` },
+    });
+    const id = JSON.parse(ordered.body).id;
+    await advanceTicketByCuisine(id, "READY", "iPad Cuisine");
+    await app.inject({ method: "POST", url: `/ops/service/tickets/${id}/served`, headers: { cookie } });
+  }
+
   it("serves the manifest scoped to /ops/service/ and boots with spots", async () => {
     const m = await app.inject({ method: "GET", url: "/ops/service/manifest.webmanifest" });
     expect(JSON.parse(m.body).scope).toBe("/ops/service/");
@@ -437,5 +536,35 @@ describe("service PWA over HTTP", () => {
   it("rejects spot/ticket actions without a device cookie", async () => {
     const denied = await app.inject({ method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, payload: { items: [] } });
     expect(denied.statusCode).toBe(401);
+  });
+
+  it("/state exposes the favourite flag so the picker can build its ⭐ shortcut", async () => {
+    const cookie = await pairAccueil();
+    const st = await app.inject({ method: "GET", url: "/ops/service/state", headers: { cookie } });
+    const menu = JSON.parse(st.body).menu as Array<{ items: any[] }>;
+    const item = menu.flatMap((c) => c.items).find((i) => i.id === "JANTBI");
+    expect(item.fav).toBe(true);
+  });
+
+  it("service /recent returns today's closed tables with their subtotal; 401 unpaired", async () => {
+    const cookie = await pairAccueil();
+    await orderServeClose(cookie, canapeSpot, "srec-1");
+    const recent = await app.inject({ method: "GET", url: "/ops/service/recent", headers: { cookie } });
+    expect(recent.statusCode).toBe(200);
+    const sessions = JSON.parse(recent.body).sessions as any[];
+    expect(sessions.length).toBeGreaterThanOrEqual(1);
+    expect(sessions[0].total_xof).toBeGreaterThan(0);
+    expect((await app.inject({ method: "GET", url: "/ops/service/recent" })).statusCode).toBe(401);
+  });
+
+  it("cuisine /recent lists closed tickets and enforces the cuisine role", async () => {
+    const accueil = await pairAccueil();
+    const cuisine = await pairCuisine();
+    await orderServeClose(accueil, terrasseSpot, "crec-1");
+    const rec = await app.inject({ method: "GET", url: "/ops/cuisine/recent", headers: { cookie: cuisine } });
+    expect(rec.statusCode).toBe(200);
+    expect((JSON.parse(rec.body).tickets as any[]).length).toBeGreaterThanOrEqual(1);
+    // An accueil cookie must NOT reach the cuisine recall (role mismatch → 401).
+    expect((await app.inject({ method: "GET", url: "/ops/cuisine/recent", headers: { cookie: accueil } })).statusCode).toBe(401);
   });
 });

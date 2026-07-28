@@ -669,6 +669,35 @@ export async function getKitchenTicket(id: string): Promise<KitchenTicket | null
   return (res.rows[0] as KitchenTicket) ?? null;
 }
 
+/** A ticket that already left the board — for the cuisine recent-history recall. */
+export interface RecentClosedTicket extends KitchenTicketView {
+  /** completed_at, else updated_at — when it left the board. */
+  finished_at: Date | string;
+  cancel_reason: string | null;
+}
+
+/**
+ * Today's served/cancelled tickets, most recently gone first. READ-ONLY, bounded
+ * to the current day and `limit` — a recall aid (re-check an instruction, a missed
+ * announcement, a dispute), not reporting. Dakar = UTC+0 so `current_date` is local.
+ */
+export async function listRecentClosedTickets(limit = 30): Promise<RecentClosedTicket[]> {
+  const cap = Math.min(80, Math.max(1, Math.floor(limit)));
+  const res = await pool.query(
+    `select * from kitchen_tickets
+      where status in ('COMPLETED','CANCELLED')
+        and coalesce(completed_at, updated_at)::date = current_date
+      order by coalesce(completed_at, updated_at) desc
+      limit $1`,
+    [cap],
+  );
+  return (res.rows as KitchenTicket[]).map((t) => ({
+    ...kitchenTicketView(t),
+    finished_at: t.completed_at ?? t.updated_at,
+    cancel_reason: t.cancel_reason,
+  }));
+}
+
 /** Owner supervision KPIs (indicative — the POS remains the ledger). Today's
  *  counts + average prep time. Dakar is UTC+0 so the server `current_date`
  *  matches the local day. `avgPrepSecs` is null before any ticket is READY. */

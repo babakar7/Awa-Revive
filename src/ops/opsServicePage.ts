@@ -29,7 +29,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v12";
+const ASSET_VERSION = "v13";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -110,6 +110,25 @@ button.add{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 #bell{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border);border-radius:999px;
 min-height:2.75rem;padding:.45rem .9rem;font-size:.85rem;font-weight:700}
 #bell[hidden]{display:none}
+#hist{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
+min-height:2.75rem;padding:.45rem .8rem;font-size:1rem;font-weight:700}
+/* Occupied-tile indicative subtotal (a service aid; the POS is the ledger). */
+.subtot{display:flex;align-items:baseline;gap:.5rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border-soft)}
+.subtot .sl{font-size:.8rem;color:var(--ink-500)}
+.subtot .sv{margin-left:auto;font-weight:800;font-size:1.02rem;color:var(--plum-700)}
+.chip.fav{background:var(--warn-bg);border-color:transparent;color:var(--warn)}
+.chip.fav.sel{background:var(--warn);border-color:var(--warn);color:#fff}
+/* Recent-history rows (read-only): today's closed tables + indicative subtotal. */
+.hempty{text-align:center;color:var(--ink-500);font-style:italic;font-family:var(--serif);padding:2rem 0}
+.hsess{border:1px solid var(--border-soft);border-radius:var(--radius);padding:.6rem .75rem;background:var(--surface-raised)}
+.hsh{display:flex;align-items:baseline;gap:.5rem;margin-bottom:.35rem}
+.hsh .hnm{font-family:var(--serif);font-size:1.1rem;font-weight:600}
+.hsh .hwho{font-size:.85rem;color:var(--plum-600)}
+.hsh .htime{margin-left:auto;font-size:.82rem;color:var(--ink-500)}
+.hline{font-size:.95rem;color:var(--ink-700);padding:.1rem 0}
+.hline.cx{color:var(--danger);text-decoration:line-through}
+.htot{display:flex;align-items:baseline;gap:.5rem;margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border-soft);font-size:.82rem;color:var(--ink-500)}
+.htot .htotv{margin-left:auto;font-weight:800;font-size:1rem;color:var(--plum-700)}
 /* Overlay (order composer) */
 .ov{position:fixed;inset:0;z-index:20;background:rgba(33,25,33,.45);display:flex;align-items:flex-end;justify-content:center;
 animation:ov-in .2s var(--ease)}
@@ -182,7 +201,7 @@ export function serviceBoardPage(bootJson: string): string {
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Salle")}<title>Salle Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
-<header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="bell" hidden>🔔 Alertes</button><span class="count" id="count"></span></header>
+<header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="hist" aria-label="Tables récentes">🕐</button><button id="bell" hidden>🔔 Alertes</button><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
 <script>window.__BOOT__=${bootJson}</script>
@@ -323,6 +342,11 @@ export const SERVICE_APP_JS = String.raw`(function(){
     var h=el('div','sh'); h.appendChild(el('span','nm',sp.label)); var cap=capLabel(sp); if(cap)h.appendChild(el('span','cap',cap)); c.appendChild(h);
     if(s.first_name) c.appendChild(el('div','who','👤 '+s.first_name));
     tks.forEach(function(t){ c.appendChild(ticketCard(t)); });
+    // Indicative running subtotal (served tickets included) — answers "combien
+    // je dois ?" during service. The POS remains the ledger. Hidden at 0.
+    if(s.total_xof>0){ var st=el('div','subtot');
+      st.appendChild(el('span','sl','Sous-total — indicatif'));
+      st.appendChild(el('span','sv',s.total_xof+' F')); c.appendChild(st); }
     var sa=el('div','sacts');
     var add=el('button','sec add','＋ Ajouter une commande'); add.onclick=function(){ openOrder(sp,s,add); }; sa.appendChild(add);
     c.appendChild(sa);
@@ -399,6 +423,11 @@ export const SERVICE_APP_JS = String.raw`(function(){
     var chips=el('div','chips');
     function setCat(c){ state.cat=c; state.cartOnly=false; renderList(); }
     var chipAll=el('button','chip','Tout'); chipAll.onclick=function(){ setCat('__ALL__'); }; chips.appendChild(chipAll);
+    // ⭐ Favoris — the studio "incontournables" (server-flagged), a shortcut to the
+    // most-ordered items. Rendered only when at least one favourite exists.
+    var anyFav=MENU.some(function(c){ return c.items.some(function(it){ return it.fav; }); });
+    var chipFav=anyFav?el('button','chip fav','⭐ Favoris'):null;
+    if(chipFav){ chipFav.onclick=function(){ setCat('__FAV__'); }; chips.appendChild(chipFav); }
     var catChips={};
     MENU.forEach(function(cat){ var ch=el('button','chip',cat.category); ch.onclick=(function(name){return function(){ setCat(name); };})(cat.category); catChips[cat.category]=ch; chips.appendChild(ch); });
     cartChip=el('button','chip cart','🛒 Panier'); cartChip.onclick=function(){ state.cartOnly=!state.cartOnly; if(state.cartOnly){state.q='';search.value='';} renderList(); };
@@ -451,6 +480,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
     function renderList(){
       // sync chip highlight
       chipAll.classList.toggle('sel',state.cat==='__ALL__'&&!state.q&&!state.cartOnly);
+      if(chipFav) chipFav.classList.toggle('sel',state.cat==='__FAV__'&&!state.q&&!state.cartOnly);
       Object.keys(catChips).forEach(function(k){ catChips[k].classList.toggle('sel',state.cat===k&&!state.q&&!state.cartOnly); });
       cartChip.classList.toggle('sel',state.cartOnly);
       listEl.textContent='';
@@ -460,6 +490,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
         var items=cat.items.filter(function(it){
           if(state.cartOnly) return (draft[it.id]&&draft[it.id].qty>0);
           if(q) return normalize(it.name).indexOf(q)>=0;
+          if(state.cat==='__FAV__') return !!it.fav;
           if(state.cat!=='__ALL__') return cat.category===state.cat;
           return true;
         });
@@ -549,6 +580,48 @@ export const SERVICE_APP_JS = String.raw`(function(){
       });
     });
   };
+
+  // ---- Recent history (read-only): today's closed tables + indicative subtotal ----
+  // The "addition" a client asks for after their table was auto-freed on the last
+  // serve. No actions — closing/serving is done live, the board is forward-only.
+  var histBtn=document.getElementById('hist');
+  function hhmm(iso){ var d=new Date(iso); return (d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); }
+  function rPicked(l){ return Array.isArray(l.selections)&&l.selections.length>1
+    ? l.selections.map(function(s){return s.label+' : '+s.value;}).join(' · ')
+    : (l.choice||''); }
+  function rLine(l){ var p=rPicked(l); return l.qty+'× '+l.name+(p?' ('+p+')':'')+(l.note?' — '+l.note:''); }
+  function recentSession(s){
+    var card=el('div','hsess');
+    var h=el('div','hsh'); h.appendChild(el('span','hnm',s.short_code));
+    if(s.first_name) h.appendChild(el('span','hwho','👤 '+s.first_name));
+    h.appendChild(el('span','htime',hhmm(s.closed_at))); card.appendChild(h);
+    (s.tickets||[]).forEach(function(t){ var cx=t.status==='CANCELLED';
+      (t.items||[]).forEach(function(l){ card.appendChild(el('div','hline'+(cx?' cx':''),rLine(l)+(cx?' — annulé':''))); });
+      if(t.note) card.appendChild(el('div','hline','📝 '+t.note));
+    });
+    var tot=el('div','htot'); tot.appendChild(el('span',null,'Sous-total — indicatif'));
+    tot.appendChild(el('span','htotv',s.total_xof+' F')); card.appendChild(tot);
+    return card;
+  }
+  function openRecent(){
+    unlock();
+    var ov=el('div','ov'); var sh=el('div','sheet');
+    sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true'); sh.setAttribute('aria-label','Tables récentes');
+    var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); document.body.style.overflow=prevOverflow; if(histBtn&&histBtn.focus){try{histBtn.focus();}catch(e){}} }
+    ov.onclick=function(e){ if(e.target===ov) close(); };
+    var x=el('button','close-x','×'); x.setAttribute('aria-label','Fermer'); x.onclick=close; sh.appendChild(x);
+    sh.appendChild(el('h2','Tables récentes'));
+    var list=el('div','list'); list.appendChild(el('p','hempty','Chargement…')); sh.appendChild(list);
+    ov.appendChild(sh); document.body.appendChild(ov);
+    fetch(BASE+'/recent',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+      list.textContent='';
+      var rows=(d&&d.sessions)||[];
+      if(!rows.length){ list.appendChild(el('p','hempty','Aucune table fermée aujourd’hui.')); return; }
+      rows.forEach(function(s){ list.appendChild(recentSession(s)); });
+    }).catch(function(){ list.textContent=''; list.appendChild(el('p','hempty','Erreur de chargement.')); });
+  }
+  if(histBtn) histBtn.onclick=openRecent;
 
   render();
   refreshState();

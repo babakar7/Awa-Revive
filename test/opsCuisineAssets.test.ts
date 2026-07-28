@@ -57,6 +57,40 @@ describe("cuisine PWA assets", () => {
     expect(CUISINE_APP_JS).toContain("cuisine.sound");
   });
 
+  it("renders per-item notes on the card AND reads them in the voice", () => {
+    // The P0 fix: a per-line instruction ("sans sucre") must reach the kitchen.
+    expect(CUISINE_APP_JS).toContain("lnote");
+    // The shared line helper folds choice + note into display, banner and speech.
+    expect(CUISINE_APP_JS).toContain("function lineLabel");
+    expect(CUISINE_APP_JS).toContain("function itemsSpeech");
+    // itemsSpeech now appends the note (…+(l.note? …)) and the picked option(s).
+    expect(CUISINE_APP_JS).toContain("linePicked");
+    expect(CUISINE_APP_JS).toMatch(/itemsSpeech[\s\S]*l\.note/);
+  });
+
+  it("shows a batching banner keyed on item+options+note across ≥2 tickets", () => {
+    expect(CUISINE_APP_JS).toContain("À préparer ensemble");
+    expect(CUISINE_APP_JS).toContain("function batchGroups");
+    // Signature includes the id and the normalized note (so "sans sucre" ≠ normal).
+    expect(CUISINE_APP_JS).toContain("function lineSig");
+    expect(CUISINE_APP_JS).toContain("normNote");
+    // Only groups spanning ≥2 distinct tickets qualify.
+    expect(CUISINE_APP_JS).toContain("n>=2");
+  });
+
+  it("compacts READY cards but never one carrying a per-item note", () => {
+    expect(CUISINE_APP_JS).toContain("hasItemNotes");
+    expect(CUISINE_APP_JS).toContain("compact");
+    // The guard: compact only when READY AND no line note.
+    expect(CUISINE_APP_JS).toMatch(/compact\s*=\s*t\.status===['"]READY['"]\s*&&\s*!hasItemNotes/);
+  });
+
+  it("has a read-only recent-history recall that the SW never caches", () => {
+    expect(CUISINE_APP_JS).toContain("Commandes récentes");
+    expect(CUISINE_APP_JS).toContain("/recent");
+    expect(CUISINE_SW).not.toContain("/recent");
+  });
+
   it("app.js parses as valid JavaScript (no syntax errors in the big string)", () => {
     // new Function only parses (doesn't run), so undefined browser globals are fine.
     expect(() => new Function(CUISINE_APP_JS)).not.toThrow();

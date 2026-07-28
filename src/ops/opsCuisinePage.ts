@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v11";
+const ASSET_VERSION = "v12";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -83,8 +83,19 @@ padding:.22rem .6rem;border-radius:999px;background:var(--info-bg);color:var(--i
 ul.items{list-style:none;margin:.1rem 0;padding:0;display:flex;flex-direction:column;gap:.2rem}
 ul.items li{font-size:1.08rem}
 ul.items .q{font-weight:800;color:var(--plum-600)}
+.lnote{color:var(--warn);font-weight:600}
 .note{font-size:.92rem;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-border);
 border-radius:var(--radius-sm);padding:.45rem .6rem}
+/* Compact READY card: one-line items instead of the full list (never when a line
+   carries a note — the instruction must stay visible). */
+.card.compact{gap:.35rem;padding:.7rem .9rem}
+.cline{font-size:.9rem;color:var(--ink-500)}
+/* Batching banner: identical preparations spread across ≥2 open tickets. */
+.batch{grid-column:1/-1;background:var(--plum-50);border:1px solid var(--plum-200);border-radius:var(--radius-lg);
+padding:.7rem .9rem;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+.batch .blab{font-family:var(--serif);font-size:.95rem;font-weight:600;color:var(--plum-700);margin-right:.3rem}
+.batch .bchip{background:#fff;border:1px solid var(--plum-200);border-radius:999px;padding:.25rem .7rem;
+font-size:1rem;font-weight:700;color:var(--ink-700)}
 .pill{align-self:flex-start;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
 padding:.25rem .65rem;border-radius:999px;background:var(--plum-50);color:var(--plum-700)}
 .pill.preparing{background:var(--warn-bg);color:var(--warn)}
@@ -98,12 +109,31 @@ button.ready{background:var(--ok-strong)}
 .sndbtn{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
 min-height:2.5rem;padding:.3rem .7rem;font-size:1rem;font-weight:700}
 .sndbtn.off{background:var(--cream-100);color:var(--ink-500);border-color:var(--border)}
-.empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:20vh;font-family:var(--serif);font-size:1.3rem;font-style:italic}`;
+.histbtn{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
+min-height:2.5rem;padding:.3rem .7rem;font-size:1rem;font-weight:700}
+.empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:20vh;font-family:var(--serif);font-size:1.3rem;font-style:italic}
+/* Recent-history panel (read-only): today's served/cancelled tickets. */
+.ov{position:fixed;inset:0;z-index:20;background:rgba(33,25,33,.45);display:flex;align-items:flex-start;justify-content:center;animation:arrive .2s var(--ease)}
+.sheet{position:relative;display:flex;flex-direction:column;background:var(--surface);width:100%;max-width:36rem;
+max-height:88vh;max-height:88dvh;overflow:hidden;margin-top:3vh;border-radius:var(--radius-xl);box-shadow:var(--shadow-2);padding:1rem 1.1rem}
+.sheet h2{font-family:var(--serif);font-size:1.3rem;font-weight:600;letter-spacing:-.02em;margin:.1rem 0 .7rem}
+.sheet .list{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;gap:.5rem}
+.close-x{position:absolute;top:.55rem;right:.7rem;background:none;border:none;color:var(--ink-500);font-size:1.7rem;line-height:1;min-width:2.75rem;min-height:2.75rem}
+.hrow{border:1px solid var(--border-soft);border-radius:var(--radius);padding:.55rem .7rem;display:flex;flex-direction:column;gap:.2rem}
+.hrow.cancelled{background:var(--danger-bg);border-color:var(--danger-border)}
+.hrow .htop{display:flex;align-items:baseline;gap:.5rem;font-size:.85rem;color:var(--ink-500)}
+.hrow .hh{font-weight:700;color:var(--ink-700)}
+.hrow .hres{margin-left:auto;font-weight:700}
+.hrow .hres.ok{color:var(--ok-strong)}
+.hrow .hres.ko{color:var(--danger)}
+.hrow .hitems{font-size:.92rem;color:var(--ink-700)}
+.hempty{text-align:center;color:var(--ink-500);font-style:italic;font-family:var(--serif);padding:2rem 0}`;
 
 export function cuisineKitchenPage(bootJson: string): string {
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Cuisine")}<title>Cuisine Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Cuisine</h1><span id="clock"></span><span class="spacer"></span>
+<button id="hist" class="histbtn" aria-label="Commandes récentes">🕐</button>
 <button id="snd" class="sndbtn" aria-label="Activer/couper le son">🔊</button><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <div id="offline">Hors ligne — reconnexion…</div>
@@ -197,7 +227,17 @@ export const CUISINE_APP_JS = String.raw`(function(){
     var u=new SpeechSynthesisUtterance(text); u.lang='fr-FR'; var v=frVoice(); if(v) u.voice=v;
     if(urgent){ u.rate=1.05; u.pitch=1.1; }
     speechSynthesis.speak(u); }catch(e){} }
-  function itemsSpeech(t){ return (t.items||[]).map(function(l){ return l.qty+' '+l.name+(l.choice?' '+l.choice:''); }).join(', '); }
+  // ---- one place to format an order line (choice + note) ----
+  // Reused by the normal card, the compact READY card, the batching banner AND
+  // the voice — so multi-option selections and per-line notes are never dropped
+  // by one path while shown by another.
+  function linePicked(l){ return Array.isArray(l.selections)&&l.selections.length>1
+    ? l.selections.map(function(s){return s.label+' : '+s.value;}).join(' · ')
+    : (l.choice||''); }
+  function lineLabel(l){ var p=linePicked(l); return l.name+(p?' ('+p+')':'')+(l.note?' — '+l.note:''); }
+  function lineText(l){ return l.qty+'× '+lineLabel(l); }
+  function itemsSpeech(t){ return (t.items||[]).map(function(l){ var p=linePicked(l);
+    return l.qty+' '+l.name+(p?', '+p:'')+(l.note?', '+l.note:''); }).join('. '); }
   function newSpeech(t){ var w=t.heading||'';
     var lead;
     if(t.source==='DELIVERY') lead='Nouvelle livraison';
@@ -220,7 +260,11 @@ export const CUISINE_APP_JS = String.raw`(function(){
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
 
   function card(t){
-    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
+    // Compact a READY card to a single items line to free the board in a rush —
+    // but NEVER when a line carries a note (the instruction must stay readable).
+    var hasItemNotes=(t.items||[]).some(function(l){return !!l.note;});
+    var compact=t.status==='READY' && !hasItemNotes;
+    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(compact?' compact':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
     c.dataset.id=t.id;
     var top=el('div','top');
     // Urgent escalation stands out first, then the fulfilment-mode badge.
@@ -244,13 +288,18 @@ export const CUISINE_APP_JS = String.raw`(function(){
     c.appendChild(top);
     c.appendChild(el('div','heading',t.heading||'—'));
     if(t.subheading) c.appendChild(el('div','sub',t.subheading));
-    var ul=el('ul','items');
-    (t.items||[]).forEach(function(l){ var li=el('li'); li.appendChild(el('span','q',l.qty+'× '));
-      var picked=Array.isArray(l.selections)&&l.selections.length>1
-        ? l.selections.map(function(s){return s.label+' : '+s.value;}).join(' · ')
-        : l.choice||'';
-      li.appendChild(document.createTextNode(l.name+(picked?' ('+picked+')':''))); ul.appendChild(li); });
-    c.appendChild(ul);
+    if(compact){
+      // One line, choices + (no) notes here since compact only runs without notes.
+      c.appendChild(el('div','cline',(t.items||[]).map(lineText).join(' · ')));
+    } else {
+      var ul=el('ul','items');
+      (t.items||[]).forEach(function(l){ var li=el('li'); li.appendChild(el('span','q',l.qty+'× '));
+        var picked=linePicked(l);
+        li.appendChild(document.createTextNode(l.name+(picked?' ('+picked+')':'')));
+        if(l.note) li.appendChild(el('span','lnote',' — '+l.note));
+        ul.appendChild(li); });
+      c.appendChild(ul);
+    }
     if(t.note) c.appendChild(el('div','note','📝 '+t.note));
     if(t.status==='READY'){
       c.appendChild(el('span','pill ready','Prête — à récupérer'));
@@ -266,6 +315,25 @@ export const CUISINE_APP_JS = String.raw`(function(){
     return c;
   }
 
+  // Batching: identical preparations (same item + same options + same note)
+  // that appear across ≥2 distinct still-to-make tickets (NEW/PREPARING). A
+  // banner lets the kitchen make them together. Groups spanning a single ticket
+  // carry no batching value, so they're excluded.
+  function normNote(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim(); }
+  function lineSig(l){ var sel=Array.isArray(l.selections)&&l.selections.length
+      ? l.selections.map(function(s){return s.label+'='+s.value;}).join('|')
+      : (l.choice||''); return l.id+'§'+sel+'§'+normNote(l.note); }
+  function batchGroups(list){
+    var by={}, order=[];
+    list.forEach(function(t){ if(t.status!=='NEW'&&t.status!=='PREPARING') return;
+      (t.items||[]).forEach(function(l){ var sig=lineSig(l);
+        if(!by[sig]){ by[sig]={qty:0,tickets:{},sample:l}; order.push(sig); }
+        by[sig].qty+=l.qty; by[sig].tickets[t.id]=true; }); });
+    return order.map(function(s){return by[s];})
+      .filter(function(g){ var n=0; for(var k in g.tickets) n++; return n>=2; })
+      .sort(function(a,b){ return b.qty-a.qty; });
+  }
+
   function render(){
     // Urgents first (accueil-escalated), then oldest-first within each group.
     var list=Array.from(model.values()).sort(function(x,y){
@@ -273,6 +341,12 @@ export const CUISINE_APP_JS = String.raw`(function(){
       return u || (new Date(x.created_at)-new Date(y.created_at));
     });
     board.textContent='';
+    var groups=batchGroups(list);
+    if(groups.length){
+      var bn=el('div','batch'); bn.appendChild(el('span','blab','À préparer ensemble'));
+      groups.forEach(function(g){ bn.appendChild(el('span','bchip',g.qty+'× '+lineLabel(g.sample))); });
+      board.appendChild(bn);
+    }
     if(!list.length){ board.appendChild(el('p','empty','Aucun ticket en cours ✅')); }
     else list.forEach(function(t){ board.appendChild(card(t)); });
     countEl.textContent=list.length? list.length+(list.length>1?' tickets':' ticket') : '';
@@ -285,6 +359,44 @@ export const CUISINE_APP_JS = String.raw`(function(){
 
   function ack(id){ fetch(BASE+'/tickets/'+id+'/ack',{method:'POST',headers:{'X-Requested-With':'fetch'}}).catch(function(){}); }
   function ackAll(){ model.forEach(function(t){ack(t.id);}); }
+
+  // ---- Recent history (read-only): today's served/cancelled tickets ----
+  // A recall for a ticket that already left the board — re-check an instruction,
+  // a missed voice announcement, a dispute. No actions: the board is forward-only.
+  var histBtn=document.getElementById('hist');
+  function hhmm(iso){ var d=new Date(iso); return (d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); }
+  function histBadge(t){ return t.source==='DELIVERY'?'🛵 Livraison':t.source==='BAR'?'☕ Bar':t.takeaway?'📦 À emporter':'🍽️ Sur place'; }
+  function histRow(t){
+    var cancelled=t.status==='CANCELLED';
+    var r=el('div','hrow'+(cancelled?' cancelled':''));
+    var top=el('div','htop');
+    top.appendChild(el('span',null,hhmm(t.finished_at||t.created_at)));
+    top.appendChild(el('span','hh',t.heading||'—'));
+    top.appendChild(el('span',null,histBadge(t)));
+    if(t.is_test) top.appendChild(el('span',null,'Test'));
+    if(cancelled){ top.appendChild(el('span','hres ko','Annulée'+(t.cancel_reason?' · '+t.cancel_reason:''))); }
+    else { var secs=t.ready_at?betweenSecs(t.created_at,t.ready_at):null; top.appendChild(el('span','hres ok',secs!=null?'✓ '+fmtSecs(secs):'✓ Servie')); }
+    r.appendChild(top);
+    r.appendChild(el('div','hitems',(t.items||[]).map(lineText).join(' · ')));
+    if(t.note) r.appendChild(el('div','hitems','📝 '+t.note));
+    return r;
+  }
+  function openHistory(){
+    var ov=el('div','ov'); var sh=el('div','sheet');
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); }
+    ov.onclick=function(e){ if(e.target===ov) close(); };
+    var x=el('button','close-x','×'); x.setAttribute('aria-label','Fermer'); x.onclick=close; sh.appendChild(x);
+    sh.appendChild(el('h2','Commandes récentes'));
+    var list=el('div','list'); list.appendChild(el('p','hempty','Chargement…')); sh.appendChild(list);
+    ov.appendChild(sh); document.body.appendChild(ov);
+    fetch(BASE+'/recent',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+      list.textContent='';
+      var rows=(d&&d.tickets)||[];
+      if(!rows.length){ list.appendChild(el('p','hempty','Aucune commande terminée aujourd’hui.')); return; }
+      rows.forEach(function(t){ list.appendChild(histRow(t)); });
+    }).catch(function(){ list.textContent=''; list.appendChild(el('p','hempty','Erreur de chargement.')); });
+  }
+  if(histBtn) histBtn.onclick=openHistory;
 
   // The SSE stream blips routinely (network switch, sleep) and EventSource
   // auto-reconnects within ~3s. Only cry "hors ligne" after the link has really
