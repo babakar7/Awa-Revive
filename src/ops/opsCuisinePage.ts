@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v10";
+const ASSET_VERSION = "v11";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -196,10 +196,12 @@ export const CUISINE_APP_JS = String.raw`(function(){
     var u=new SpeechSynthesisUtterance(text); u.lang='fr-FR'; var v=frVoice(); if(v) u.voice=v;
     if(urgent){ u.rate=1.05; u.pitch=1.1; }
     speechSynthesis.speak(u); }catch(e){} }
-  function ticketSpeech(t,urgent){ var w=t.heading||'';
-    if(urgent) return 'Commande urgente'+(w?', '+w:'');
-    if(t.source!=='TABLE') return 'Nouvelle livraison';
-    return 'Nouvelle commande'+(t.takeaway?' à emporter':'')+(w?', '+w:''); }
+  function itemsSpeech(t){ return (t.items||[]).map(function(l){ return l.qty+' '+l.name+(l.choice?' '+l.choice:''); }).join(', '); }
+  function newSpeech(t){ var w=t.heading||'';
+    var lead=t.source!=='TABLE'?'Nouvelle livraison':('Nouvelle commande'+(t.takeaway?' à emporter':''));
+    var it=itemsSpeech(t); return lead+(w?', '+w:'')+(it?'. '+it:''); }
+  function urgentSpeech(t){ return 'Commande urgente'+(t.heading?', '+t.heading:''); }
+  function cancelSpeech(t){ var it=itemsSpeech(t); return 'Commande annulée'+(t.heading?', '+t.heading:'')+(it?'. '+it:''); }
 
   // Prep timer (MM:SS): counts up while the kitchen prepares, colored by urgency
   // (green < 5 min, amber 5–10, red pulsing ≥ 10), and FREEZES when the ticket is
@@ -299,9 +301,9 @@ export const CUISINE_APP_JS = String.raw`(function(){
   var es=new EventSource(BASE+'/events?since='+cursor);
   es.onopen=function(){setOnline(true);};
   es.onerror=function(){setOnline(false);};
-  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); speak(ticketSpeech(t,false),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
-  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(ticketSpeech(t,true),true); } });
-  es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); });
+  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); speak(newSpeech(t),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
+  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(urgentSpeech(t),true); } });
+  es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); var prev=model.get(d.id); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); if(d.status==='CANCELLED'){ beep(); speak(cancelSpeech(prev||{heading:''}),true); } });
 
   // Keep the kitchen screen awake while the board is open (kiosk). The Wake Lock
   // is dropped when the page is hidden, so re-acquire it whenever it returns to
