@@ -42,7 +42,14 @@ d'assets : cuisine `v11→v12`, service `v12→v13`.
   l'auto-close). Cuisine → tickets servis/annulés (recall d'une instruction / annonce
   ratée / litige). Endpoints `GET /ops/{cuisine,service}/recent` (auth par rôle,
   jamais mis en cache par le SW). Aucune action : le board reste forward-only.
-- Backlog assumé : retour-arrière cuisine, « ↻ La même », 86 depuis le téléphone,
+- **Annulation locale du « Prête » (cuisine v12→v13).** Un tap « Prête » ne poste
+  plus tout de suite : pendant 5 s la carte affiche « ↩ Annuler (N) » (contour ambre).
+  Sans annulation → le POST `/tickets/:id/ready` part normalement ; annulé → **rien**
+  n'atteint le serveur (pas de changement de statut, pas de fausse alerte accueil).
+  100 % client (`startPendingReady`/`commitReady`), l'endpoint et le forward-only sont
+  intacts ; un reload ou une annulation SSE (`clearPendingReady`) purge le commit en
+  attente. Choisi contre un vrai retour-arrière serveur (qui casserait le forward-only).
+- Backlog assumé : « ↻ La même », 86 depuis le téléphone,
   cycle « servie → réglée » (persistance du sous-total jusqu'au paiement). Livraisons
   côté service = hors périmètre (un autre agent y travaille).
 - Régression : `test/opsCuisineAssets` + `opsServiceAssets` (marqueurs + version cache)

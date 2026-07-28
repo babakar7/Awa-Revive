@@ -91,6 +91,19 @@ describe("cuisine PWA assets", () => {
     expect(CUISINE_SW).not.toContain("/recent");
   });
 
+  it("gives 'Prête' a local undo grace before the server call (no false ready)", () => {
+    // The tap sets a pending timer + countdown "Annuler" instead of POSTing now.
+    expect(CUISINE_APP_JS).toContain("startPendingReady");
+    expect(CUISINE_APP_JS).toContain("cancelPendingReady");
+    expect(CUISINE_APP_JS).toContain("READY_DELAY_MS");
+    expect(CUISINE_APP_JS).toContain("↩ Annuler");
+    // Undo is purely client-side: the commit still hits the SAME /ready endpoint,
+    // and only after the grace — no new server transition, no bespoke undo route.
+    expect(CUISINE_APP_JS).toMatch(/commitReady[\s\S]*\/tickets\/'\+id\+'\/ready/);
+    // A cancellation while pending must drop the queued commit.
+    expect(CUISINE_APP_JS).toContain("clearPendingReady");
+  });
+
   it("app.js parses as valid JavaScript (no syntax errors in the big string)", () => {
     // new Function only parses (doesn't run), so undefined browser globals are fine.
     expect(() => new Function(CUISINE_APP_JS)).not.toThrow();

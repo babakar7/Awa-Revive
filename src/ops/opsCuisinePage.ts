@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v12";
+const ASSET_VERSION = "v13";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -105,6 +105,11 @@ padding:.25rem .65rem;border-radius:999px;background:var(--plum-50);color:var(--
 button.act{flex:1;padding:.9rem;font-size:1.05rem;font-weight:800;border:none;border-radius:var(--radius);color:#fff;box-shadow:var(--shadow-1)}
 button.prep{background:var(--plum-600)}
 button.ready{background:var(--ok-strong)}
+/* "Prête" is committed after a short grace so a mis-tap can be undone locally
+   (no server call, no false reception alert) — the card wears a warn outline
+   and the button becomes a countdown cancel. */
+.card.pending{border-color:var(--warn);border-left-color:var(--warn);box-shadow:0 0 0 3px var(--warn-bg)}
+button.act.undo{background:var(--warn)}
 #clock{font-variant-numeric:tabular-nums;font-weight:600;font-size:.95rem;color:var(--ink-500)}
 .sndbtn{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
 min-height:2.5rem;padding:.3rem .7rem;font-size:1rem;font-weight:700}
@@ -259,12 +264,41 @@ export const CUISINE_APP_JS = String.raw`(function(){
 
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
 
+  // ---- "Prête" with a local undo grace ----
+  // Tapping "Prête" doesn't POST immediately: for READY_DELAY_MS the card shows a
+  // countdown "Annuler". If undone in time, NOTHING reaches the server (no status
+  // change, no reception "commande prête" push). Purely client-side — the /ready
+  // endpoint is untouched, so the forward-only invariant holds. A page reload or
+  // a cancellation drops any pending commit (safer than a false ready).
+  var READY_DELAY_MS=5000;
+  var pendingReady={};   // id -> { until:epochMs, timer:id }
+  function remainSecs(id){ var p=pendingReady[id]; if(!p) return 0; return Math.max(0,Math.ceil((p.until-Date.now())/1000)); }
+  function startPendingReady(id){
+    if(pendingReady[id]) return;
+    pendingReady[id]={ until:Date.now()+READY_DELAY_MS, timer:setTimeout(function(){ commitReady(id); },READY_DELAY_MS) };
+    render();
+  }
+  function cancelPendingReady(id){
+    var p=pendingReady[id]; if(!p) return;
+    clearTimeout(p.timer); delete pendingReady[id]; render();
+  }
+  function commitReady(id){
+    var p=pendingReady[id]; if(!p) return;
+    clearTimeout(p.timer); delete pendingReady[id];
+    // Fire the real transition now; the SSE ticket_update re-renders as READY. On a
+    // failed POST, re-render so the normal buttons come back (the cook can retry).
+    fetch(BASE+'/tickets/'+id+'/ready',{method:'POST',headers:{'X-Requested-With':'fetch'}})
+      .then(function(r){ if(!r.ok) render(); }).catch(function(){ render(); });
+  }
+  function clearPendingReady(id){ var p=pendingReady[id]; if(p){ clearTimeout(p.timer); delete pendingReady[id]; } }
+
   function card(t){
     // Compact a READY card to a single items line to free the board in a rush —
     // but NEVER when a line carries a note (the instruction must stay readable).
     var hasItemNotes=(t.items||[]).some(function(l){return !!l.note;});
     var compact=t.status==='READY' && !hasItemNotes;
-    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(compact?' compact':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
+    var isPending=!!pendingReady[t.id];
+    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(compact?' compact':'')+(isPending?' pending':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
     c.dataset.id=t.id;
     var top=el('div','top');
     // Urgent escalation stands out first, then the fulfilment-mode badge.
@@ -308,8 +342,16 @@ export const CUISINE_APP_JS = String.raw`(function(){
     else {
       if(t.status==='PREPARING') c.appendChild(el('span','pill preparing','En préparation'));
       var acts=el('div','actions');
-      if(t.status==='NEW'){ var p=el('button','act prep','Commencer'); p.onclick=function(){move(t.id,'preparing',p);}; acts.appendChild(p); }
-      var r=el('button','act ready','Prête'); r.onclick=function(){move(t.id,'ready',r);}; acts.appendChild(r);
+      if(isPending){
+        // A mis-tap window: the "Prête" POST hasn't fired yet — one tap undoes it.
+        var un=el('button','act undo'); un.dataset.pending=t.id;
+        un.textContent='↩ Annuler ('+remainSecs(t.id)+')';
+        un.onclick=function(){ cancelPendingReady(t.id); };
+        acts.appendChild(un);
+      } else {
+        if(t.status==='NEW'){ var p=el('button','act prep','Commencer'); p.onclick=function(){move(t.id,'preparing',p);}; acts.appendChild(p); }
+        var r=el('button','act ready','Prête'); r.onclick=function(){startPendingReady(t.id);}; acts.appendChild(r);
+      }
       c.appendChild(acts);
     }
     return c;
@@ -412,8 +454,13 @@ export const CUISINE_APP_JS = String.raw`(function(){
     clockEl.textContent=(d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); }
 
   // Tick the elapsed timers + the header clock every second, without a full re-render.
-  setInterval(function(){ tickClock(); document.querySelectorAll('[data-age]').forEach(function(a){
-    a.textContent=fmtElapsed(a.dataset.age); a.className=ageClass(a.dataset.age); }); },1000);
+  setInterval(function(){ tickClock();
+    document.querySelectorAll('[data-age]').forEach(function(a){
+      a.textContent=fmtElapsed(a.dataset.age); a.className=ageClass(a.dataset.age); });
+    // Count the "Prête" undo window down in place (the timeout does the commit).
+    document.querySelectorAll('[data-pending]').forEach(function(u){
+      u.textContent='↩ Annuler ('+remainSecs(u.dataset.pending)+')'; });
+  },1000);
   tickClock();
 
   render(); ackAll();
@@ -422,8 +469,8 @@ export const CUISINE_APP_JS = String.raw`(function(){
   es.onopen=function(){setOnline(true);};
   es.onerror=function(){setOnline(false);};
   es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); speak(newSpeech(t),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
-  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(urgentSpeech(t),true); } });
-  es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); var prev=model.get(d.id); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); if(d.status==='CANCELLED'){ beep(); speak(cancelSpeech(prev||{heading:''}),true); } });
+  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(urgentSpeech(t),true); } });
+  es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); var prev=model.get(d.id); clearPendingReady(d.id); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); if(d.status==='CANCELLED'){ beep(); speak(cancelSpeech(prev||{heading:''}),true); } });
 
   // Keep the kitchen screen awake while the board is open (kiosk). The Wake Lock
   // is dropped when the page is hidden, so re-acquire it whenever it returns to
