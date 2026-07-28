@@ -453,9 +453,9 @@ export async function sendTypingIndicator(inboundMessageId: string): Promise<voi
 export interface InboundMessage {
   from: string; // client phone (wa_id)
   id: string; // WhatsApp message id (dedupe key)
-  type: string; // 'text' | 'interactive' | 'audio' | 'image' | 'sticker' | ...
-  text?: string; // body text, or the clicked option's title for interactive replies
-  interactiveId?: string; // clicked option id (list_reply / button_reply)
+  type: string; // 'text' | 'interactive' | 'button' | 'audio' | 'image' | 'sticker' | ...
+  text?: string; // body text, or the clicked option's visible label
+  interactiveId?: string; // clicked option id/payload (interactive or template quick reply)
   mediaId?: string; // Meta media id for audio (voice notes) and image messages
   caption?: string; // client-typed caption on an image message
   reactionEmoji?: string; // the emoji of a 'reaction' message (empty = reaction removed)
@@ -547,17 +547,22 @@ export function parseInboundMessages(payload: any): InboundMessage[] {
         // messages by the Cloud API, but guard anyway (SPEC §8).
         if (typeof msg.from !== "string") continue;
         const contact = contacts.find((c) => c?.wa_id === msg.from);
-        // Interactive replies (client tapped a list row or a reply button).
+        // Session interactive replies (client tapped a list row or a reply
+        // button sent by present_options).
         const reply =
           msg.type === "interactive"
             ? (msg.interactive?.list_reply ?? msg.interactive?.button_reply)
             : undefined;
+        // Template quick-reply buttons use a different Cloud API shape:
+        // type:"button" + button.text/button.payload. Treat them like any
+        // other client choice instead of falling through as unsupported media.
+        const templateButton = msg.type === "button" ? msg.button : undefined;
         out.push({
           from: msg.from,
           id: msg.id,
           type: msg.type,
-          text: msg.type === "text" ? msg.text?.body : reply?.title,
-          interactiveId: reply?.id,
+          text: msg.type === "text" ? msg.text?.body : (reply?.title ?? templateButton?.text),
+          interactiveId: reply?.id ?? templateButton?.payload,
           mediaId:
             msg.type === "audio"
               ? msg.audio?.id

@@ -118,9 +118,9 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
               profileName: msg.profileName,
               referral: msg.referral,
             });
-          } else if (msg.type === "interactive" && msg.text) {
+          } else if ((msg.type === "interactive" || msg.type === "button") && msg.text) {
             // A tapped option is a user message like any other — formatted so
-            // the model sees both the label and the exact option id.
+            // the model sees both the label and the exact option id/payload.
             await handleInboundText({
               waPhone: msg.from,
               text: `[choix cliqué] ${msg.text}${msg.interactiveId ? ` (id: ${msg.interactiveId})` : ""}`,

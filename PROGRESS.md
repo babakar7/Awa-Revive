@@ -3585,3 +3585,14 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   idempotente (`member_id` → ACTIF) et la notification manuelle unique sans
   membre.
 - Documentation mise à jour : l'ancien no-go `createMember` est supersédé.
+
+## 2026-07-28 — Réponses rapides des templates WhatsApp
+
+- Les boutons envoyés par `present_options` arrivent en `type:"interactive"`,
+  mais les réponses rapides des templates Meta arrivent sous une forme
+  distincte : `type:"button"` avec `button.text` et `button.payload`.
+- Le parseur entrant accepte désormais les deux formes et injecte un clic de
+  template dans la conversation comme `[choix cliqué] <texte> (id: <payload>)`.
+  Les boutons des relances Clés ne tombent donc plus dans le repli « type de
+  message non pris en charge ».
+- Régression unitaire ajoutée avec la forme exacte du webhook Cloud API.

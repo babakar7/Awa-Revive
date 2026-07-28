@@ -151,6 +151,23 @@ describe("parseInboundMessages — interactive replies", () => {
     expect(msg).toMatchObject({ type: "interactive", text: "C'est tout ✅", interactiveId: "done" });
   });
 
+  it("extracts a template quick-reply button as text + payload", () => {
+    const [msg] = parseInboundMessages(
+      envelope({
+        from: "221771234567",
+        id: "wamid.template-button",
+        type: "button",
+        button: { payload: "L'Habituée", text: "L'Habituée" },
+      }),
+    );
+    expect(msg).toMatchObject({
+      type: "button",
+      text: "L'Habituée",
+      interactiveId: "L'Habituée",
+      profileName: "Fatou",
+    });
+  });
+
   it("still parses plain text messages unchanged", () => {
     const [msg] = parseInboundMessages(
       envelope({ from: "221771234567", id: "wamid.3", type: "text", text: { body: "salut" } }),
