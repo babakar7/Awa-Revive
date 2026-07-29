@@ -14,6 +14,37 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Fix vente L'Invitée : « chez Revive », pas « le Pilates en général » (29 juillet 2026)
+
+**Bug prod (conversation Céline Abeln).** Awa a refusé de vendre **L'Invitée —
+Clé 3 séances** à une prospecte qui avait pratiqué le Pilates **ailleurs**. La
+règle métier est pourtant « nouvelles clientes **Revive** uniquement » : seul un
+passé Pilates/Reformer **chez Revive** disqualifie.
+
+- **Cause** : la question de qualification était écrite sans portée — « As-tu
+  déjà pratiqué le Pilates Reformer ? » (`business-info.md` + prompt système
+  `CLÉS DE LA MAISON`), avec « si oui → propose L'Habituée / La Résidente ».
+  Une cliente expérimentée ailleurs répondait « oui » → Awa la sortait de
+  L'Invitée. Le serveur, lui, était déjà correct : `create_plan_payment_link`
+  ne bloque que sur `hasAnyPastReviveBooking` ou un ancien order Pack/Invitée
+  (`invitee_not_eligible`, [src/agent/tools.ts](src/agent/tools.ts)). C'était
+  donc un refus **inventé par le prompt**, jamais par le serveur — le même
+  piège que le Pack Découverte avait déjà documenté (« À REVIVE »).
+- **Fix** : question re-scopée « … **chez Revive** ? » des deux côtés, plus une
+  règle d'éligibilité explicite calquée sur celle du Pack Découverte : pratiquer
+  ailleurs ne disqualifie JAMAIS ; refus uniquement si (1) la cliente dit
+  explicitement avoir pratiqué à Revive, ou (2) le serveur renvoie
+  `invitee_not_eligible` ; une phrase ambiguë (« j'ai déjà fait du Pilates »)
+  ne suffit pas, pas d'interrogatoire, le doute profite à la cliente.
+- **Anti-régression secondaire** : une cliente expérimentée ailleurs garde
+  L'Invitée **et** peut réserver directement un cours Sculpt (pas de renvoi en
+  Foundation) ; L'Habituée / La Résidente restent proposables en option, jamais
+  en remplacement. Précisé aussi que le « never compare with *ailleurs* » du
+  prompt est une règle marketing, pas un critère d'éligibilité.
+- **Garde-fou** : [test/inviteeEligibilityPrompt.test.ts](test/inviteeEligibilityPrompt.test.ts)
+  verrouille le contrat (portée Revive, non-disqualification de l'extérieur,
+  deux seuls motifs de refus, pas de downgrade Foundation).
+
 ## Commande client par QR — page /commander (28 juillet 2026)
 
 Nouvelle **app client web** (QR dans les vestiaires → `menu.revive.sn/commander`)
