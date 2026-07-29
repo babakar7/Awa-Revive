@@ -1140,6 +1140,53 @@ ${
         );
       });
 
+      // Staff acknowledges they've phoned the client after an automatic WhatsApp
+      // notification failed → clears the "appeler la cliente" intervention.
+      admin.post("/livraisons/:id/notify-handled", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const order = await delivery.markClientNotifyHandled(id);
+        if (!order) {
+          return reply.redirect(
+            `/admin/livraisons?err=${encodeURIComponent("commande introuvable ou clôturée")}`,
+            303,
+          );
+        }
+        req.log.info({ order: id, by: req.adminUser }, "Delivery client notify marked handled");
+        return reply.redirect("/admin/livraisons?done=notify-handled", 303);
+      });
+
+      // Correct the client name/number (e.g. an international number whose country
+      // code was dropped) → re-sends the confirmation to the corrected number.
+      admin.post("/livraisons/:id/client", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const b = (req.body ?? {}) as Record<string, string>;
+        const name = String(b.client_name ?? "").trim().slice(0, 120);
+        const phone = normalizeDeliveryPhone(String(b.client_phone ?? ""));
+        if (!name) {
+          return reply.redirect(`/admin/livraisons?err=${encodeURIComponent("le nom de la cliente est requis")}`, 303);
+        }
+        if (!phone) {
+          return reply.redirect(
+            `/admin/livraisons?err=${encodeURIComponent("numéro invalide — mets l'indicatif pays (+221, +1…)")}`,
+            303,
+          );
+        }
+        const result = await delivery.updateDeliveryClientContact(id, name, phone);
+        if (!result) {
+          return reply.redirect(
+            `/admin/livraisons?err=${encodeURIComponent("cliente non modifiable sur une commande clôturée")}`,
+            303,
+          );
+        }
+        if (result.changed) {
+          await refreshDeliveryTicketContact(result.order).catch((error) =>
+            req.log.error({ err: error, order: id }, "Delivery client saved but kitchen ticket refresh failed"),
+          );
+          req.log.info({ order: id, by: req.adminUser }, "Delivery client contact corrected");
+        }
+        return reply.redirect("/admin/livraisons?done=client", 303);
+      });
+
       admin.post("/livraisons/:id/reschedule", async (req, reply) => {
         const { id } = req.params as { id: string };
         const b = (req.body ?? {}) as Record<string, string>;

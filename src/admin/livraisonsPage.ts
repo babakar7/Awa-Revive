@@ -52,6 +52,8 @@ const BANNERS: Record<string, string> = {
   cash: "Paiement en espèces enregistré — le départ est autorisé.",
   recipient: "Contact de remise mis à jour.",
   "recipient-removed": "Contact de remise supprimé — la cliente redevient le contact à appeler.",
+  "notify-handled": "Noté — la cliente a été prévenue par téléphone.",
+  client: "Cliente corrigée — la confirmation est renvoyée au nouveau numéro.",
 };
 
 export function livraisonsBanner(done?: string, err?: string): string {
@@ -216,6 +218,17 @@ function recipientEditor(o: DeliveryOrder): string {
 </form></div>`;
 }
 
+/** Correct the CLIENT (name + number) — e.g. an international number whose country
+ *  code was dropped. Saving re-sends the confirmation to the corrected number. */
+function clientEditor(o: DeliveryOrder): string {
+  return `<div class="delivery-editor-panel"><form method="post" action="/admin/livraisons/${esc(o.id)}/client" class="delivery-editor-form">
+  <label>Nom<input name="client_name" maxlength="120" value="${esc(o.client_name ?? "")}" required></label>
+  <label>Téléphone<input name="client_phone" type="tel" inputmode="tel" value="+${esc(o.client_phone ?? "")}" placeholder="+221 77… ou +1 301…" required></label>
+  <span class="muted">Mets l'indicatif pays (+221 Sénégal, +1 USA/Canada, …). La confirmation sera renvoyée au nouveau numéro.</span>
+  <button class="act act--sm act--ghost" type="submit">Enregistrer la cliente</button>
+</form></div>`;
+}
+
 function dueBlock(p: DeliveryPresentation, now: Date): string {
   const o = p.order;
   if (o.status === "OUT_FOR_DELIVERY") {
@@ -291,7 +304,25 @@ function cardTools(p: DeliveryPresentation): string {
       )}</div>`,
     );
   }
+  // A client-facing WhatsApp notification failed (bad/unreachable number, or the
+  // 24h window closed) → let staff acknowledge after phoning the client.
+  const clientNotifyBad =
+    o.created_notify_status === "failed" ||
+    o.route_notify_status === "failed" ||
+    o.recipient_route_notify_status === "failed" ||
+    (!!o.scheduled_for && !o.activated_at && o.reschedule_notify_status === "failed");
+  if (clientNotifyBad) {
+    parts.push(
+      inlineForm(
+        `${base}/notify-handled`,
+        "✅ Cliente prévenue",
+        "Confirmer que tu as prévenu la cliente par téléphone ? L'alerte disparaîtra.",
+        "ghost",
+      ),
+    );
+  }
   parts.push(editorButton("Modifier le contact", recipientEditor(o)));
+  parts.push(editorButton("Corriger la cliente", clientEditor(o)));
   if (isWaitingForActivation(o)) {
     parts.push(editorButton("Reprogrammer", scheduledEditor(o)));
   }

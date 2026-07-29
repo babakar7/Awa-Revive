@@ -27,7 +27,10 @@ export type NotifyStatus =
   | "sent_template"
   | "partial"
   | "fallback_reception"
-  | "failed";
+  | "failed"
+  /** Staff handled the client contact by phone after an automatic send failed —
+   *  clears the "appeler la cliente" intervention without lying that WhatsApp sent. */
+  | "manual";
 
 export type DeliveryPaymentStatus =
   | "PENDING_CHOICE"
@@ -286,6 +289,61 @@ export async function updateDeliveryRecipient(
   const updated = changed.rows[0] as DeliveryOrder | undefined;
   if (updated) return { order: updated, changed: true };
 
+  const current = await findDeliveryOrder(id);
+  if (!current || !["IN_KITCHEN", "OUT_FOR_DELIVERY"].includes(current.status)) return null;
+  return { order: current, changed: false };
+}
+
+/**
+ * Mark the client-facing notification incidents as handled by hand (staff called
+ * the client after an automatic WhatsApp send failed). Flips only the columns that
+ * are 'failed' to 'manual' so the "appeler la cliente" intervention clears without
+ * pretending WhatsApp reached her. Open orders only.
+ */
+export async function markClientNotifyHandled(id: string): Promise<DeliveryOrder | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update delivery_orders set
+        created_notify_status = case when created_notify_status='failed' then 'manual' else created_notify_status end,
+        route_notify_status = case when route_notify_status='failed' then 'manual' else route_notify_status end,
+        recipient_route_notify_status = case when recipient_route_notify_status='failed' then 'manual' else recipient_route_notify_status end,
+        reschedule_notify_status = case when reschedule_notify_status='failed' then 'manual' else reschedule_notify_status end,
+        updated_at = now()
+      where id = $1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+      returning *`,
+    [id],
+  );
+  return (res.rows[0] as DeliveryOrder) ?? null;
+}
+
+/**
+ * Correct the CLIENT name/phone on an open delivery (a wrong number — e.g. an
+ * international one whose country code was dropped). Resets the creation-confirmation
+ * outbox to 'pending' so the sweep re-sends the confirmation to the corrected number.
+ * Returns {changed:false} when nothing actually changed. Open orders only.
+ */
+export async function updateDeliveryClientContact(
+  id: string,
+  clientName: string,
+  clientPhone: string,
+): Promise<{ order: DeliveryOrder; changed: boolean } | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const changed = await pool.query(
+    `update delivery_orders
+        set client_name = $2,
+            client_phone = $3,
+            created_notify_status = 'pending',
+            created_notified_at = null,
+            created_notify_attempts = 0,
+            created_notify_wamid = null,
+            updated_at = now()
+      where id = $1 and status in ('IN_KITCHEN','OUT_FOR_DELIVERY')
+        and (client_name is distinct from $2 or client_phone is distinct from $3)
+      returning *`,
+    [id, clientName, clientPhone],
+  );
+  const updated = changed.rows[0] as DeliveryOrder | undefined;
+  if (updated) return { order: updated, changed: true };
   const current = await findDeliveryOrder(id);
   if (!current || !["IN_KITCHEN", "OUT_FOR_DELIVERY"].includes(current.status)) return null;
   return { order: current, changed: false };

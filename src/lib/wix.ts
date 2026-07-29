@@ -847,8 +847,12 @@ export function wixDeliveryClientFromContact(contact: any): WixDeliveryClient | 
       .map((part) => String(part ?? "").trim())
       .filter(Boolean)
       .join(", ");
+  // Prefer the CANONICAL international form (e164Phone, always "+<country>…") over
+  // primaryInfo.phone, which is the display value and for a foreign contact often
+  // omits the country code (a US "+1 301…" shows as "301…"). Taking the display
+  // value dropped the "+1" and stored an unreachable "+301…" number.
   const phone = String(
-    contact?.primaryInfo?.phone ?? phoneItem?.e164Phone ?? phoneItem?.phone ?? "",
+    phoneItem?.e164Phone ?? contact?.primaryInfo?.phone ?? phoneItem?.phone ?? "",
   ).trim();
   const email = String(contact?.primaryInfo?.email ?? emailItem?.email ?? "").trim();
   const name = wixContactFullName(contact) || email || phone || "Client Wix";

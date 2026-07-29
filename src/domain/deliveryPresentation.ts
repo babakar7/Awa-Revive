@@ -52,7 +52,7 @@ function notificationIncident(order: OpenDeliveryOrder): string | null {
         : "Échec d’envoi du ticket cuisine : renvoi nécessaire.";
   }
   if (!isSent(order.created_notify_status) && order.created_notify_status === "failed") {
-    return `Confirmation client échouée : appeler le +${order.client_phone}.`;
+    return `Awa n'a pas pu confirmer la commande à la cliente par WhatsApp (numéro injoignable ou fenêtre 24 h fermée). Vérifie le numéro +${order.client_phone}, appelle la cliente, puis marque « Cliente prévenue ».`;
   }
   if (
     order.scheduled_for &&

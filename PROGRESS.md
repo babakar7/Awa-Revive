@@ -81,6 +81,30 @@ passé Pilates/Reformer **chez Revive** disqualifie.
   verrouille le contrat (portée Revive, non-disqualification de l'extérieur,
   deux seuls motifs de refus, pas de downgrade Foundation).
 
+## Livraisons — numéro international + intervention notif client (29 juillet 2026)
+
+Incident Rebecca Sharp : une cliente **+1** (USA) s'affichait **+3018253162** dans
+l'admin (indicatif pays perdu) → la confirmation WhatsApp échouait → bandeau
+« Confirmation client échouée : appeler le +… » sans moyen de le résoudre. Quatre
+correctifs :
+
+1. **Racine** ([wix.ts](src/lib/wix.ts) `wixDeliveryClientFromContact`) : préférer
+   `e164Phone` (canonique international) à `primaryInfo.phone` (affichage, qui pour un
+   contact étranger omet l'indicatif). Le `+1` (ou tout indicatif) n'est plus perdu.
+2. **Message plus clair** ([deliveryPresentation.ts](src/domain/deliveryPresentation.ts)) :
+   explique la cause (numéro injoignable / fenêtre 24 h) et l'action (vérifier le numéro,
+   appeler, marquer « Cliente prévenue »).
+3. **Bouton « ✅ Cliente prévenue »** (carte livraison) → `POST /livraisons/:id/notify-handled`
+   → passe les statuts de notif client `failed` à **`manual`** (nouveau `NotifyStatus`),
+   ce qui efface l'intervention sans prétendre que WhatsApp est parti.
+4. **Éditeur « Corriger la cliente »** (nom + numéro) → `POST /livraisons/:id/client`
+   (`updateDeliveryClientContact`) : corrige `client_name`/`client_phone` sur une livraison
+   ouverte, ré-arme la confirmation (`created_notify_status='pending'`) vers le bon numéro,
+   et rafraîchit le ticket cuisine. Avant, l'éditeur ne changeait que le contact de remise.
+
+Tests : `wixDeliveryClientPhone` (pur) + `deliveryOrders` intégration (notify-handled →
+manual, correction numéro → +1 conservé + re-arm, validations). 825 purs verts.
+
 ## Commande client par QR — page /commander (28 juillet 2026)
 
 Nouvelle **app client web** (QR dans les vestiaires → `menu.revive.sn/commander`)

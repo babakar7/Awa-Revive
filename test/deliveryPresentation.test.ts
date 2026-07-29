@@ -115,7 +115,7 @@ describe("delivery reception presentation", () => {
     ).toMatchObject({
       group: "intervention",
       primaryAction: null,
-      blockingReason: expect.stringContaining("appeler"),
+      blockingReason: expect.stringContaining("Cliente prévenue"),
     });
 
     expect(

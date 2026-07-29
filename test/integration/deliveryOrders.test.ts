@@ -1628,3 +1628,60 @@ describe("async delivery-failure correction (statuses webhook)", () => {
     expect(mock.waTextsTo("221780001122")).toHaveLength(2);
   });
 });
+
+describe("client-notify intervention: acknowledge + correct the number", () => {
+  it("marks a failed client confirmation as handled ('manual'), clearing the alert", async () => {
+    const id = await createOrder();
+    await settle(400); // let the background creation-notify finish before we force 'failed'
+    await pool.query(`update delivery_orders set created_notify_status='failed' where id=$1`, [id]);
+    const res = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/notify-handled`,
+      headers: { authorization: AUTH },
+    });
+    expect(res.statusCode).toBe(303);
+    expect(res.headers.location).toContain("done=notify-handled");
+    const row = await pool.query(`select created_notify_status from delivery_orders where id=$1`, [id]);
+    expect(row.rows[0].created_notify_status).toBe("manual");
+  });
+
+  it("corrects the client number and re-arms the confirmation to the new number", async () => {
+    const id = await createOrder({ client_name: "Rebecca Sharp", client_phone: "3018253162" });
+    await settle(400);
+    // Wrong number stored (US +1 dropped) → confirmation failed.
+    await pool.query(`update delivery_orders set created_notify_status='failed' where id=$1`, [id]);
+    const res = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/client`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ client_name: "Rebecca Sharp", client_phone: "+13018253162" }).toString(),
+    });
+    expect(res.statusCode).toBe(303);
+    expect(res.headers.location).toContain("done=client");
+    const row = await pool.query(
+      `select client_phone, created_notify_status, created_notify_attempts from delivery_orders where id=$1`,
+      [id],
+    );
+    expect(row.rows[0].client_phone).toBe("13018253162"); // +1 preserved
+    expect(row.rows[0].created_notify_status).toBe("pending"); // re-armed
+    expect(row.rows[0].created_notify_attempts).toBe(0);
+  });
+
+  it("rejects an empty name or an invalid number", async () => {
+    const id = await createOrder();
+    const noName = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/client`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ client_name: "", client_phone: "+221770000000" }).toString(),
+    });
+    expect(noName.headers.location).toContain("err=");
+    const badPhone = await app.inject({
+      method: "POST",
+      url: `/admin/livraisons/${id}/client`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ client_name: "X", client_phone: "12" }).toString(),
+    });
+    expect(badPhone.headers.location).toContain("err=");
+  });
+});
