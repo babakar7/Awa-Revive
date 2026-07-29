@@ -1,7 +1,13 @@
 import { config } from "../config.js";
 import { sendTemplate, sendText } from "./whatsapp.js";
-import { recordNewChatLog, recordReceptionLog } from "../domain/notificationRepo.js";
+import {
+  phoneDigits,
+  recordNewChatLog,
+  recordOwnerAlertLog,
+  recordReceptionLog,
+} from "../domain/notificationRepo.js";
 import { STAFF_FOOTER } from "../domain/notificationRules.js";
+import { formatOwnerAlert, shouldAlertOwner } from "../domain/ownerAlertRules.js";
 
 /**
  * Automatic notifications to the reception team — handoffs, refunds,
@@ -17,6 +23,13 @@ import { STAFF_FOOTER } from "../domain/notificationRules.js";
  *    last 24h, otherwise Meta rejects with error 131047. When that happens and
  *    WA_RECEPTION_TEMPLATE is set, we retry with the approved Utility template
  *    (templates go through outside the window, billed per message).
+ *
+ * Troisième canal, indépendant lui aussi : dès qu'une alerte demande une
+ * INTERVENTION humaine (voir domain/ownerAlertRules.ts), une copie part sur le
+ * WhatsApp du propriétaire (OWNER_PHONE), template EN PREMIER — son numéro
+ * n'écrit jamais à Awa, donc sa fenêtre 24 h est fermée en permanence et seul
+ * un template garantit la remise. Il part en parallèle de la réception : une
+ * réception injoignable n'emporte jamais l'alerte du gérant avec elle.
  */
 
 const BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
@@ -155,12 +168,16 @@ export async function sendWhatsAppNotificationDetailed(
   toPhone: string,
   subject: string,
   body: string,
-  opts: { preferTemplate?: boolean } = {},
+  opts: { preferTemplate?: boolean; template?: string; templateLang?: string } = {},
 ): Promise<WhatsAppSendResult> {
   // The Cloud API expects a wa_id-style number (digits only, no "+").
   const to = toPhone.replace(/\D/g, "");
+  // Callers may route through their own approved Utility template (owner
+  // alerts); everything else keeps the reception one. Same 2-variable shape.
+  const templateName = opts.template || config.WA_RECEPTION_TEMPLATE;
+  const templateLang = opts.templateLang || config.WA_RECEPTION_TEMPLATE_LANG;
   const templateParams = () =>
-    sendTemplate(to, config.WA_RECEPTION_TEMPLATE, config.WA_RECEPTION_TEMPLATE_LANG, [
+    sendTemplate(to, templateName, templateLang, [
       toTemplateParam(subject, 120),
       toTemplateParam(stripStaffFooter(body)),
     ]);
@@ -168,7 +185,7 @@ export async function sendWhatsAppNotificationDetailed(
   // 24h window, and free-text out-of-window can be accepted (200) then dropped
   // asynchronously — an invisible miss. For them we send the template FIRST;
   // only if it fails do we try free-text (window might actually be open).
-  if (opts.preferTemplate && config.WA_RECEPTION_TEMPLATE) {
+  if (opts.preferTemplate && templateName) {
     try {
       const waMessageId = await templateParams();
       return { path: "sent_template", waMessageId };
@@ -180,9 +197,9 @@ export async function sendWhatsAppNotificationDetailed(
     const waMessageId = await sendText(to, `🔔 *[Awa] ${subject}*\n\n${body}`);
     return { path: "sent", waMessageId };
   } catch (err) {
-    if (!config.WA_RECEPTION_TEMPLATE || !String(err).includes("131047")) throw err;
+    if (!templateName || !String(err).includes("131047")) throw err;
     console.warn(
-      `[notify] 24h window closed for ${to} — falling back to template "${config.WA_RECEPTION_TEMPLATE}"`,
+      `[notify] 24h window closed for ${to} — falling back to template "${templateName}"`,
     );
     const waMessageId = await templateParams();
     return { path: "sent_template", waMessageId };
@@ -268,6 +285,33 @@ export function notifyNewConversation(args: NewConversationNotificationArgs): vo
     });
 }
 
+/**
+ * Copie propriétaire d'une alerte qui demande une intervention. Toujours
+ * template-first : le numéro du gérant n'écrit jamais à Awa, sa fenêtre 24 h
+ * est fermée, et Meta accepte (200) puis jette silencieusement un free-text
+ * hors fenêtre. Fire-and-forget, journalisé source='owner_alert'.
+ */
+function alertOwner(subject: string, body: string): void {
+  if (!config.OWNER_ALERT_ENABLED || config.OWNER_PHONE === "") return;
+  // La réception et le gérant partagent parfois le même numéro : une seule alerte.
+  if (phoneDigits(config.OWNER_PHONE) === phoneDigits(config.RECEPTION_PHONE)) return;
+  const alert = formatOwnerAlert(subject, body);
+  const logBody = `${alert.subject}\n${alert.body}`;
+  sendWhatsAppNotificationDetailed(config.OWNER_PHONE, alert.subject, alert.body, {
+    preferTemplate: true,
+    template: config.WA_OWNER_ALERT_TEMPLATE,
+    templateLang: config.WA_OWNER_ALERT_TEMPLATE_LANG,
+  })
+    .then(({ path, waMessageId }) => {
+      console.log(`[notify] Owner alerted (${path}): ${subject}`);
+      void recordOwnerAlertLog(config.OWNER_PHONE, logBody, path, null, waMessageId);
+    })
+    .catch((err) => {
+      console.error(`[notify] Failed to alert owner (${subject}):`, err);
+      void recordOwnerAlertLog(config.OWNER_PHONE, logBody, "failed", String(err).slice(0, 300));
+    });
+}
+
 export interface NotifyReceptionOpts {
   /**
    * Café/bar orders: reception lives on WhatsApp, so make WhatsApp the primary
@@ -284,6 +328,13 @@ export interface NotifyReceptionOpts {
    * the window is known-open and the richer free-text form is preferred.
    */
   preferTemplate?: boolean;
+  /**
+   * Copie WhatsApp au propriétaire. Par défaut, ownerAlertVerdict() décide sur
+   * le sujet : toute alerte qui demande une action humaine part aussi chez le
+   * gérant. `true` force la copie pour un sujet à formulation inédite, `false`
+   * la coupe pour une notification purement informative.
+   */
+  ownerAlert?: boolean;
 }
 
 /**
@@ -304,6 +355,11 @@ export function notifyReception(
   // miss that left a "client planté" handoff undelivered. So template-first by
   // DEFAULT here; a caller that knows the window is open can pass preferTemplate:false.
   const preferTemplate = opts.preferTemplate ?? true;
+
+  // Le propriétaire est prévenu en parallèle, jamais en cascade : une réception
+  // injoignable (fenêtre fermée, template refusé) ne doit pas emporter l'alerte
+  // du gérant avec elle. C'est tout l'intérêt d'un second canal.
+  if (shouldAlertOwner(subject, opts.ownerAlert)) alertOwner(subject, body);
 
   if (opts.whatsappFirst) {
     // WhatsApp primary; email only as a safety net if WhatsApp fails.

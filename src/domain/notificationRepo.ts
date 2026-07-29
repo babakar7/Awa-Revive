@@ -326,6 +326,30 @@ export async function recordNewChatLog(
 }
 
 /**
+ * Owner intervention alert (source='owner_alert', no dedup key). The copy of a
+ * reception alert that requires a human action, sent to OWNER_PHONE. Kept
+ * separate from 'reception' so /admin/notifications shows at a glance whether
+ * the owner really got woken up. Same best-effort contract — never throws.
+ */
+export async function recordOwnerAlertLog(
+  recipientPhone: string,
+  body: string,
+  status: LogStatus,
+  error: string | null,
+  waMessageId: string | null = null,
+): Promise<void> {
+  try {
+    await pool.query(
+      `insert into notification_log (source, recipient_phone, body, status, error, wa_message_id)
+       values ('owner_alert', $1, $2, $3, $4, $5)`,
+      [recipientPhone, body, status, error, waMessageId],
+    );
+  } catch {
+    /* logging must never break a notification */
+  }
+}
+
+/**
  * Delivery-order notification log entry (source='delivery', no dedup key). Same
  * best-effort contract as recordReceptionLog — never throws. The order is
  * referenced inside `body` (e.g. "[livraison abcd1234] …") so these are

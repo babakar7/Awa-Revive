@@ -168,6 +168,22 @@ export const config = {
   // AND here, so the owner sees stranded orders. Template-first send (this
   // number ~never messages Awa, its 24h window is closed).
   OWNER_PHONE: optional("OWNER_PHONE", "+221774982711"),
+  // Copie propriétaire de TOUTE alerte qui demande une intervention humaine
+  // (remboursement, activation manuelle, handoff, conversation plantée…).
+  // Classement dans domain/ownerAlertRules.ts ; envoi template-first vers
+  // OWNER_PHONE. "false" coupe la copie sans toucher aux alertes réception.
+  OWNER_ALERT_ENABLED: optional("OWNER_ALERT_ENABLED", "true") === "true",
+  // Template Utility dédié aux alertes propriétaire. Vide ⇒ on réutilise le
+  // template réception (2 variables : titre, corps), déjà approuvé par Meta —
+  // c'est ce qui garantit la livraison hors fenêtre 24 h.
+  WA_OWNER_ALERT_TEMPLATE: optional(
+    "WA_OWNER_ALERT_TEMPLATE",
+    optional("WA_RECEPTION_TEMPLATE", ""),
+  ),
+  WA_OWNER_ALERT_TEMPLATE_LANG: optional(
+    "WA_OWNER_ALERT_TEMPLATE_LANG",
+    optional("WA_RECEPTION_TEMPLATE_LANG", "fr"),
+  ),
   // WhatsApp number to ping whenever someone STARTS a conversation with Awa
   // (a new lead, or a returning client after a quiet gap). Empty = disabled.
   // Free-text lands only inside the 24h window; outside it we fall back to the

@@ -126,7 +126,12 @@ import { renderNotificationsPage } from "./notificationsPage.js";
 import * as nrepo from "../domain/notificationRepo.js";
 import { cachedCoachNames } from "../domain/notificationSweep.js";
 import { renderMessage, STAFF_FOOTER } from "../domain/notificationRules.js";
-import { notifyReception, sendWhatsAppNotification } from "../lib/notify.js";
+import {
+  notifyReception,
+  sendWhatsAppNotification,
+  sendWhatsAppNotificationDetailed,
+} from "../lib/notify.js";
+import { formatOwnerAlert } from "../domain/ownerAlertRules.js";
 import { ago, badge, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
 import { layout } from "./layout.js";
 import { emptyNavBadges, loadNavBadges } from "./navBadges.js";
@@ -2839,6 +2844,43 @@ ${photoSection}
         } catch (e) {
           await nrepo.recordTestLog(phone, body, "failed", String(e).slice(0, 300));
           req.log.error({ err: e, ruleId: rule.id }, "Notification test send failed");
+          return reply.redirect("/admin/notifications?done=test-failed", 303);
+        }
+      });
+
+      // Vérifie de bout en bout la copie propriétaire : même chemin que les
+      // vraies interventions (template d'abord vers OWNER_PHONE), journalisée
+      // source='owner_alert' pour se relire dans le journal ci-dessous.
+      admin.post("/notifications/owner-test", async (req, reply) => {
+        const phone = config.OWNER_PHONE;
+        if (!config.OWNER_ALERT_ENABLED || !phone) {
+          return reply.redirect(
+            `/admin/notifications?err=${encodeURIComponent("alertes gérant désactivées (OWNER_ALERT_ENABLED / OWNER_PHONE)")}`,
+            303,
+          );
+        }
+        const alert = formatOwnerAlert(
+          "🧪 Test alerte gérant",
+          "Ceci est un test envoyé depuis /admin/notifications. Si tu lis ce message, " +
+            "les alertes d'intervention arrivent bien sur ton WhatsApp.",
+        );
+        const logBody = `${alert.subject}\n${alert.body}`;
+        try {
+          const { path, waMessageId } = await sendWhatsAppNotificationDetailed(
+            phone,
+            alert.subject,
+            alert.body,
+            {
+              preferTemplate: true,
+              template: config.WA_OWNER_ALERT_TEMPLATE,
+              templateLang: config.WA_OWNER_ALERT_TEMPLATE_LANG,
+            },
+          );
+          await nrepo.recordOwnerAlertLog(phone, logBody, path, null, waMessageId);
+          return reply.redirect("/admin/notifications?done=tested", 303);
+        } catch (e) {
+          await nrepo.recordOwnerAlertLog(phone, logBody, "failed", String(e).slice(0, 300));
+          req.log.error({ err: e }, "Owner alert test send failed");
           return reply.redirect("/admin/notifications?done=test-failed", 303);
         }
       });

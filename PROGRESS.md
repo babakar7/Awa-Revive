@@ -14,6 +14,42 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Alerte propriétaire sur WhatsApp dès qu'une intervention est à faire (29 juillet 2026)
+
+Demande gérant : « quand il y a une intervention à faire, je dois être alerté
+directement sur WhatsApp, **par template**, pour toujours avoir l'alerte ».
+
+- **Pourquoi un template** : le numéro du gérant n'écrit jamais à Awa → sa
+  fenêtre 24 h est fermée en permanence, et Meta **accepte (200) puis jette**
+  un free-text hors fenêtre (131047 asynchrone). Le template est le seul envoi
+  garanti. On envoie donc **template d'abord**, free-text seulement en secours
+  si le template échoue — l'inverse du chemin client.
+- **Qui décide** : [src/domain/ownerAlertRules.ts](src/domain/ownerAlertRules.ts),
+  module pur. Classement **sur le sujet seul** (le corps contient des « en
+  attente » qui n'engagent personne) : commande de test → jamais ; liste
+  informative (nouvelle livraison, départ autorisé, espèces choisies, récap du
+  jour, message pendant un relais humain) → jamais ; marqueur d'intervention
+  (⚠ 💸 🔴 🚨 🙋 🛡 🔀 🔗) ou verbe d'action (« à faire », « à vérifier »,
+  « manuelle », « remboursement », « planté »…) → **le gérant est réveillé**.
+  Un sujet inconnu ne réveille pas : une alerte inutile répétée finit ignorée,
+  et c'est comme ça qu'on rate la vraie.
+- **Filet anti-oubli** : le test balaie les 44 sujets réellement passés à
+  `notifyReception()` dans `src/` et **échoue** tant qu'un sujet n'est rangé ni
+  côté intervention ni côté information. Un futur appel doit choisir son camp
+  (marqueur, liste informative, ou `ownerAlert: true/false` explicite).
+- **Envoi** : `notifyReception()` fanne vers `OWNER_PHONE` **en parallèle** de
+  la réception — une réception injoignable n'emporte plus l'alerte du gérant
+  avec elle. Jamais de doublon si `OWNER_PHONE == RECEPTION_PHONE`. Journalisé
+  `notification_log` source `owner_alert` (visible dans /admin/notifications,
+  libellé « alerte gérant »), donc un échec de template se voit.
+- **Config** : `OWNER_ALERT_ENABLED` (défaut true), `WA_OWNER_ALERT_TEMPLATE`
+  (**vide ⇒ réutilise `WA_RECEPTION_TEMPLATE`**, déjà approuvé — rien à faire
+  chez Meta pour démarrer), `WA_OWNER_ALERT_TEMPLATE_LANG`.
+- **Vérification** : bouton **« Tester l'alerte gérant »** sur
+  /admin/notifications — même chemin que les vraies alertes, journalisé
+  pareil. À cliquer une fois après le déploiement : c'est la seule preuve que
+  la chaîne template → WhatsApp du gérant fonctionne.
+
 ## Fix vente L'Invitée : « chez Revive », pas « le Pilates en général » (29 juillet 2026)
 
 **Bug prod (conversation Céline Abeln).** Awa a refusé de vendre **L'Invitée —

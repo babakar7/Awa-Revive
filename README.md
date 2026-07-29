@@ -92,6 +92,7 @@ modifie la base de production.
 | `DATABASE_URL` | Postgres connection string |
 | `BASE_URL` | Public HTTPS URL of this service (tunnel URL in local dev) |
 | `RECEPTION_PHONE` | Human handoff destination; used to build contextual `wa.me` links with a prefilled message |
+| `OWNER_PHONE` | Owner's WhatsApp — receives a copy of every alert that needs a human intervention (template-first, so it lands outside the 24h window). `OWNER_ALERT_ENABLED=false` disables the copy; `WA_OWNER_ALERT_TEMPLATE` overrides the template (defaults to `WA_RECEPTION_TEMPLATE`). Which alerts qualify: `src/domain/ownerAlertRules.ts` |
 | `PAYMENT_LINK_TTL_MINUTES` | Wave link validity (default 20) |
 | `STUDIO_ADDRESS` | Shown in booking confirmations |
 

@@ -55,11 +55,13 @@ const LOG_CLASSES: Record<string, string> = {
 /** Human labels for notification_log.source — raw key stays the title attribute. */
 const SOURCE_LABELS: Record<string, string> = {
   reception: "réception",
+  owner_alert: "alerte gérant",
   new_chat: "nouvelle conv",
   delivery: "livraison",
   invoice: "facture",
   gift_card: "carte cadeau",
   staff_planning: "planning staff",
+  ops_ticket: "ticket salle",
   test: "test",
   rule: "règle",
 };
@@ -317,10 +319,21 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
 <input type="hidden" name="value" value="1">
 <button class="act act--sm act--ghost">Tout mettre en pause</button></form></div>`;
 
+  // Copie propriétaire des interventions : l'état + un bouton pour vérifier
+  // que le template arrive VRAIMENT (la fenêtre 24h du gérant est fermée en
+  // permanence, donc seul un envoi réel prouve la chaîne de bout en bout).
+  const ownerAlertCard = !config.OWNER_ALERT_ENABLED
+    ? `<div class="card warn"><b>Alertes gérant désactivées</b><div class="muted">Les interventions ne partent qu’à la réception (<code>OWNER_ALERT_ENABLED=false</code>).</div></div>`
+    : !config.OWNER_PHONE
+      ? `<div class="card warn"><b>Alertes gérant sans destinataire</b><div class="muted">Renseignez <code>OWNER_PHONE</code> pour recevoir les interventions.</div></div>`
+      : `<div class="card row between"><div><b>Alertes gérant</b><div class="muted">Toute alerte demandant une intervention part aussi sur WhatsApp au <b>+${esc(config.OWNER_PHONE.replace(/^\+/, ""))}</b>, template d’abord (<code>${esc(config.WA_OWNER_ALERT_TEMPLATE || "aucun template configuré")}</code>).</div></div><form class="inline" method="post" action="/admin/notifications/owner-test">
+<button class="act act--sm act--ghost">Tester l’alerte gérant</button></form></div>`;
+
   return `
 ${d.banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Configuration</span><h2>Notifications staff</h2><p>Configurez les règles, destinataires et contrôlez chaque tentative d’envoi.</p></div><div class="page-header-actions"><span class="badge ${d.alertsPaused ? "badge--amber" : "badge--green"}">${d.alertsPaused ? "En pause" : "Actives"}</span></div></header>
 ${masterSwitch}
+${ownerAlertCard}
 ${templateNote}
 <nav class="jump-nav" aria-label="Sections notifications">
   <a href="#regles">Règles</a>

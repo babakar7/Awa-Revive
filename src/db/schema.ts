@@ -741,9 +741,11 @@ alter table notification_rules
 alter table notification_rules
   add column if not exists service_id text;
 
--- Journal de tout envoi. source ∈ rule | reception | new_chat | delivery |
--- invoice | gift_card | staff_planning | test. new_chat = ping owner
--- (NEW_CHAT_NOTIFY_PHONE) uniquement — ne pas confondre avec reception.
+-- Journal de tout envoi. source ∈ rule | reception | owner_alert | new_chat |
+-- delivery | invoice | gift_card | staff_planning | ops_ticket | test.
+-- new_chat = ping owner (NEW_CHAT_NOTIFY_PHONE) uniquement — ne pas confondre
+-- avec reception. owner_alert = copie OWNER_PHONE d'une alerte réception qui
+-- demande une intervention humaine (domain/ownerAlertRules.ts).
 -- dedup_key = clé de claim (unique partiel) : une occurrence n'est jamais
 -- envoyée deux fois, même après redémarrage ou sweeps concurrents. status :
 --   claimed → réservé, envoi pas encore confirmé (reclaimable après 2 min si

@@ -61,4 +61,23 @@ describe("notifications admin — exact course selector", () => {
     });
     expect(html).toContain("Tous les cours / utiliser les filtres ci-dessous");
   });
+
+  it("shows the owner-alert destination and its end-to-end test button", () => {
+    const html = renderNotificationsPage({
+      rules: [],
+      contacts: [],
+      log: [],
+      lastByRule: new Map(),
+      coachHints: [],
+      serviceOptions: [],
+      editRule: null,
+      banner: "",
+      testPhone: "221770000000",
+      alertsPaused: false,
+    });
+
+    expect(html).toContain("Alertes gérant");
+    expect(html).toContain(`action="/admin/notifications/owner-test"`);
+    expect(html).toContain("Tester l’alerte gérant");
+  });
 });
