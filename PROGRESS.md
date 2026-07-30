@@ -14,6 +14,78 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Revue de 20 conversations prod → 4 lots de correctifs UX (30 juillet 2026)
+
+Analyse des 20 dernières vraies conversations clientes (dump prod, `is_test=false`).
+Le tunnel marche (4 réservations payées propres) mais des frictions récurrentes
+coûtaient des conversions (12/20 classées `dropoff`). Quatre lots livrés :
+
+- **Lot 1 — garde-fous confiance (`cf0fe66`, `6e20951`).**
+  - **Lien de paiement fabriqué (incident réel 25/07)** : le modèle avait émis en
+    clair une fausse imitation `[outil] create_payment_link(...) -> {...}` avec un
+    lien Wave inventé ; cliente plantée. Nouveau `lintOutboundReply()`
+    ([src/agent/outboundLint.ts](src/agent/outboundLint.ts)) : garde de sortie sur
+    CHAQUE message du modèle — bloque tout URL de paiement pas exactement issu d'un
+    vrai `create_*_payment_link` ce tour-ci (ou d'un enregistrement de paiement
+    actif en base) et toute syntaxe d'appel d'outil. Sur blocage : une relance
+    corrective SANS outils, contrainte aux liens approuvés ; si ça re-bloque →
+    fallback technique + alerte réception (jamais de faux lien). Marqueur de
+    rejeu d'outil renommé `[outil]` → `⟦trace⟧`, que le modèle ne doit jamais émettre.
+  - **`present_options`** rejette tout id d'option `slot_` non canonique / absent
+    du `slot_cache` (incident `slot_placeholder2/3/4`).
+  - **Garde couverture abonnement** dans `create_payment_link` : refuse un lien à
+    la carte quand le plan actif du client couvre la classe avec assez de séances
+    (→ `book_with_membership`) ; ne boucle pas (ne se déclenche que si
+    `remaining >= participants`).
+- **Lot 2 — conversion + persona (`e34035f`).**
+  - **Persona conseil, pas vendeur pressant** (demande explicite de Babakar) :
+    répondre d'abord et complètement aux questions d'info sans CTA collé,
+    recommander UNE option adaptée, ne closer que sur signal d'achat, un seul
+    « next step » par sujet et jamais après un refus. Paires bon/mauvais exemples
+    dans le prompt.
+  - **Question de qualification L'Invitée** posée en boutons `present_options`
+    (`key_revive_yes/no`) au lieu d'une question ouverte (là où ~6/20 mouraient),
+    formulation canonique unique.
+  - **Pack Découverte RETIRÉ** (décision Babakar) : c'est l'ancien nom de
+    L'Invitée. business-info reformulé (jamais dire à un détenteur qu'il n'y a
+    « pas droit », couverture toujours via `covers_classes`). Campagne étape-1 à
+    10 000 F morte.
+  - **Objections paiement** : script ferme-mais-chaleureux, réponse diaspora
+    (« transfère le lien à un proche au Sénégal »), handoff après 2 refus — sans
+    jamais laisser entendre qu'une exception existe (réception seule, règles
+    internes non divulguées).
+  - **Vérif e-mail** annoncée d'avance + fallback pay-first proposé si hésitation.
+  - **STT** biaisé FR/Wolof/EN + vocabulaire studio.
+- **Lot 3 — qualité de conversation (`1e66a2b`).**
+  - **Réactions 👍** : un 👍/OK sur la DERNIÈRE question d'Awa est routé comme un
+    « oui » (wamid stockés sur les tours assistant/interactif ;
+    [src/agent/reactionIntent.ts](src/agent/reactionIntent.ts)). Non contraignant :
+    le prompt interdit qu'une réaction autorise seule un paiement/annulation/résa.
+  - **Upsell bar** : cooldown 24h → **7 jours** (client récurrent upsellé 3× en
+    2 semaines).
+  - **Note de silence** : quand ≥24h séparent deux échanges, le contexte indique
+    l'écart et interdit de reprendre une offre expirée / une date passée.
+- **Lot 4 — connaissances & ops (`324f3b2`).**
+  - **Fermetures studio** éditables sans redéploiement (`/admin/fermetures`,
+    table `studio_closures`, intervalle `[début, fin)`), appliquées côté serveur
+    partout : `check_availability` filtre les créneaux fermés + renvoie
+    `closed_dates`, `create_payment_link` et `book_with_membership` refusent un
+    créneau fermé, et les fermetures des ~30 prochains jours sont injectées au
+    contexte (Awa les annonce). Incident déclencheur : Awa a dit « on n'est pas
+    fermé » alors que fermé le lundi pour le Maggal de Touba.
+  - **Base FAQ Awa** (`/admin/faq`, table `faq_entries`) : « Enregistrer la
+    réponse en FAQ » dans le formulaire de résolution d'un handoff (même
+    transaction) ; seules les entrées `published`+`enabled` sont injectées au
+    prompt comme DONNÉES (jamais des instructions), plafonnées. Évite les 3
+    handoffs pour la même question (cas télétravail).
+  - **Reste à faire** : la garde fermeture au niveau de la réconciliation
+    webhook Wave (fermeture créée alors qu'un lien est déjà vivant → chemin de
+    remboursement) n'est pas encore posée — bloquée à la création du lien seulement.
+
+Plan complet et revue archivés hors repo (`~/.claude/plans/`). Le marqueur
+`⟦trace⟧` remplace `[outil]` — si tu vois encore `[outil]` dans un prompt/test,
+c'est un oubli à corriger.
+
 ## Awa dit toujours bonjour au 1er message, même pour L'Invitée (30 juillet 2026)
 
 Sur la conversation d'Anissa, Awa entrait direct dans le pitch L'Invitée sans dire
