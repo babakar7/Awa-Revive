@@ -14,6 +14,19 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Awa dit toujours bonjour au 1er message, même pour L'Invitée (30 juillet 2026)
+
+Sur la conversation d'Anissa, Awa entrait direct dans le pitch L'Invitée sans dire
+bonjour. Cause : pour un 1er message à intention claire, le prompt rendait la
+salutation *optionnelle* ([systemPrompt.ts](src/agent/systemPrompt.ts) : « weaving
+in one brief introduction line such as… »), et la consigne Pack Découverte ne la
+rappelait pas → Awa la sautait. Correctif (prompt only) : la salutation +
+présentation brève (« Salut ! Moi c'est Awa, je suis une assistante automatisée de
+Revive 😊 ») est désormais **obligatoire sur tout 1er message**, y compris L'Invitée /
+Pack Découverte — on ne coupe que le « Comment je peux t'aider ? » et le long pitch
+générique. Renforcé aux 3 endroits : règle persona, consigne Pack Découverte, et le
+contexte dynamique FIRST CONTACT. Garde-fou : `discoveryAdFlowPrompt.test`.
+
 ## Alerte propriétaire sur WhatsApp dès qu'une intervention est à faire (29 juillet 2026)
 
 Demande gérant : « quand il y a une intervention à faire, je dois être alerté

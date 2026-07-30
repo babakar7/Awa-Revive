@@ -24,6 +24,15 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(systemPrompt()).toMatch(/at most ONE information request per client-facing message/);
   });
 
+  it("requires the greeting on any first message, even a clear-intent / L'Invitée opener", () => {
+    const prompt = systemPrompt();
+    // Static persona rule: a first message never skips the greeting, even with clear intent.
+    expect(prompt).toMatch(/A first message must NEVER skip the greeting/i);
+    expect(prompt).toMatch(/even for a Pack Découverte \/ L'Invitée opener/i);
+    // The Pack Découverte instruction reiterates: greet before the pitch.
+    expect(prompt).toMatch(/still open with the brief greeting.*before the pitch/i);
+  });
+
   it("confirms that teleworking is welcome during opening hours", () => {
     expect(systemPrompt()).toMatch(/clients peuvent télétravailler chez Revive pendant les heures\s+d'ouverture/i);
   });
@@ -45,6 +54,8 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(context).toMatch(/introduce Awa up front as an automated assistant/);
     expect(context).toContain("Moi c'est Awa, je suis une assistante automatisée de Revive");
     expect(context).toContain('exact words "je suis une assistante automatisée"');
+    // The greeting stays mandatory even when the opener is a Pack Découverte / L'Invitée pitch.
+    expect(context).toMatch(/mandatory even for a Pack Découverte \/ L'Invitée opener/i);
   });
 
   it("states the Meta-campaign pack economics without double-counting the first session", () => {
