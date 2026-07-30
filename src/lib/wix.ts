@@ -1991,14 +1991,24 @@ async function getBookingRevision(bookingId: string): Promise<string> {
 /**
  * Cancel a booking (client removed from the class session). Our own 16h rule
  * is enforced by the caller; ignoreCancellationPolicy bypasses any stricter
- * Wix-side policy. No Wix notification — Awa is already talking to the client.
+ * Wix-side policy. Membership bookings MUST request Wix's native refund so
+ * the Booking/Payment view and the Benefit Programs balance stay in sync.
+ * No Wix notification — Awa is already talking to the client.
  */
-export async function cancelBooking(bookingId: string): Promise<void> {
+export async function cancelBooking(
+  bookingId: string,
+  options: { refundMembership?: boolean } = {},
+): Promise<void> {
   const revision = await getBookingRevision(bookingId);
   await wixPost(`/_api/bookings-service/v2/bookings/${bookingId}/cancel`, {
     revision,
     participantNotification: { notifyParticipants: false },
-    flowControlSettings: { ignoreCancellationPolicy: true },
+    flowControlSettings: {
+      ignoreCancellationPolicy: true,
+      ...(options.refundMembership
+        ? { withRefund: true, waiveCancellationFee: true }
+        : {}),
+    },
   });
 }
 
@@ -2023,6 +2033,58 @@ export async function revertBenefitTransaction(transactionId: string): Promise<v
   await wixPost(`/benefit-programs/v1/balances/changes/${transactionId}/revert`, {
     idempotencyKey: `awa-revert-${transactionId}`,
   });
+}
+
+/**
+ * True when Wix recorded a completed credit returning the original redemption
+ * to AVAILABLE. Native pricing-plan cancellation and our legacy/manual
+ * fallback both create this relationship.
+ */
+export async function isBenefitTransactionReverted(transactionId: string): Promise<boolean> {
+  const data = await wixPost("/benefit-programs/v1/transactions/query", {
+    query: {
+      filter: { relatedTransactionId: { $eq: transactionId } },
+      paging: { limit: 20 },
+    },
+  });
+  return (data?.transactions ?? []).some(
+    (transaction: any) =>
+      transaction?.id !== transactionId &&
+      transaction?.status === "COMPLETED" &&
+      transaction?.source === "EXTERNAL" &&
+      transaction?.target === "AVAILABLE",
+  );
+}
+
+const MEMBERSHIP_REFUND_POLL_MS =
+  process.env.NODE_ENV === "test" ? [0] : [0, 250, 750];
+
+/**
+ * Verify Wix's native pricing-plan refund after Cancel Booking. Older Awa
+ * bookings used a custom Benefit Programs redemption, so keep a guarded
+ * manual fallback: it runs only if no related refund transaction appears.
+ * Re-checking after a fallback error handles the race where Wix completed the
+ * native refund between our last query and the fallback call.
+ */
+export async function ensureBenefitTransactionReverted(
+  transactionId: string,
+): Promise<"native" | "fallback"> {
+  for (const delayMs of MEMBERSHIP_REFUND_POLL_MS) {
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+    if (await isBenefitTransactionReverted(transactionId)) return "native";
+  }
+
+  try {
+    await revertBenefitTransaction(transactionId);
+    return "fallback";
+  } catch (error) {
+    // A native refund may have won the race. Only suppress the fallback error
+    // when the authoritative transaction ledger now proves the credit exists.
+    if (await isBenefitTransactionReverted(transactionId)) return "native";
+    throw error;
+  }
 }
 
 /** Look up one booking's current status (used to verify membership confirmation). */

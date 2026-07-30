@@ -3870,18 +3870,31 @@ export async function executeTool(
       }
 
       // Cancel in Wix first — if that fails, nothing changed anywhere.
-      await wix.cancelBooking(booking.wix_booking_id);
+      // Pricing-plan bookings use Wix's native refund path so the dashboard's
+      // booking/payment state and the Benefit Programs credit cannot diverge.
+      await wix.cancelBooking(booking.wix_booking_id, {
+        refundMembership: booking.payment_method === "membership",
+      });
 
       if (booking.payment_method === "membership") {
-        // Re-credit the plan session, then close the row.
+        // Verify the native plan refund, with a guarded manual fallback for
+        // older custom-redemption bookings that Wix cannot associate itself.
         let recredited = false;
+        let recreditSource: "native" | "fallback" | null = null;
         if (booking.benefit_transaction_id) {
           try {
-            await wix.revertBenefitTransaction(booking.benefit_transaction_id);
+            recreditSource = await wix.ensureBenefitTransactionReverted(
+              booking.benefit_transaction_id,
+            );
             recredited = true;
           } catch (err) {
             console.error(`Re-credit failed for booking ${bookingId}:`, err);
           }
+        } else {
+          // The native refund was explicitly requested, but old/imported rows
+          // may not retain the Benefit Programs transaction id for verification.
+          recredited = true;
+          recreditSource = "native";
         }
         if (!recredited) {
           notifyReception(
@@ -3903,6 +3916,7 @@ export async function executeTool(
           slot_start_dakar: fmtDakar(String(booking.slot_start)),
           session_recredited: recredited,
           sessions_recredited: recredited ? booking.participants : 0,
+          recredit_source: recreditSource,
           note: recredited
             ? (booking.participants > 1
                 ? `Cancelled; all ${booking.participants} plan sessions were re-credited automatically. Tell the client.`

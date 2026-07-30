@@ -53,6 +53,10 @@ export interface WixState {
   /** Benefit Programs fixture used by membership-booking tests. */
   membershipEligible: boolean;
   membershipAvailable: number;
+  /** Native withRefund cancellation creates the related credit transaction. */
+  nativeRefundRecreditsBenefit: boolean;
+  /** Original redemption transaction ids re-credited by the fallback route. */
+  revertedBenefitTransactionIds: string[];
   /** Ids handed out by eCommerce Create Order. */
   createdOrderIds: string[];
   ordersByExternalId: Record<string, string>;
@@ -178,6 +182,8 @@ export function makeFetchMock(): FetchMock {
     failOfflinePlanOrder: false,
     membershipEligible: true,
     membershipAvailable: 5,
+    nativeRefundRecreditsBenefit: true,
+    revertedBenefitTransactionIds: [],
     createdOrderIds: [],
     ordersByExternalId: {},
     orderPayments: {},
@@ -466,6 +472,38 @@ export function makeFetchMock(): FetchMock {
 
     if (url.includes("/benefit-programs/v1/benefits/redeem")) {
       return json(200, { transactionId: `benefit_tx_${calls.length}` });
+    }
+
+    if (url.includes("/benefit-programs/v1/transactions/query")) {
+      const originalId = body?.query?.filter?.relatedTransactionId?.$eq;
+      const reverted =
+        typeof originalId === "string" &&
+        (
+          wix.nativeRefundRecreditsBenefit ||
+          wix.revertedBenefitTransactionIds.includes(originalId)
+        );
+      return json(200, {
+        transactions: reverted
+          ? [{
+              id: `refund_${originalId}`,
+              relatedTransactionId: originalId,
+              status: "COMPLETED",
+              source: "EXTERNAL",
+              target: "AVAILABLE",
+            }]
+          : [],
+      });
+    }
+
+    if (
+      url.includes("/benefit-programs/v1/balances/changes/") &&
+      url.endsWith("/revert")
+    ) {
+      const originalId = decodeURIComponent(
+        url.split("/balances/changes/")[1].split("/revert")[0],
+      );
+      wix.revertedBenefitTransactionIds.push(originalId);
+      return json(200, { transactionId: `refund_${originalId}` });
     }
 
     // --- Wix create booking ---

@@ -179,6 +179,69 @@ describe("reschedule_booking", () => {
 });
 
 describe("cancel_booking no-refund policy", () => {
+  it("uses Wix native refund for a membership cancellation and does not double-credit", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, {
+      status: "BOOKED",
+      wix_booking_id: "wb_membership",
+      payment_method: "membership",
+      benefit_transaction_id: "benefit_original",
+      slot_start: inHours(30),
+      slot_end: inHours(31),
+    });
+
+    const out = JSON.parse(
+      await executeTool(asClient(client), "cancel_booking", { booking_id: booking.id }),
+    );
+
+    expect(out).toMatchObject({
+      cancelled: true,
+      session_recredited: true,
+      sessions_recredited: 1,
+      recredit_source: "native",
+    });
+    const cancel = mock.calls.find((call) => call.url.endsWith("/cancel"));
+    expect(cancel?.body.flowControlSettings).toMatchObject({
+      ignoreCancellationPolicy: true,
+      withRefund: true,
+      waiveCancellationFee: true,
+    });
+    expect(
+      mock.calls.some((call) => call.url.includes("/balances/changes/benefit_original/revert")),
+    ).toBe(false);
+    expect(
+      (await pool.query(`select status from pending_bookings where id=$1`, [booking.id]))
+        .rows[0].status,
+    ).toBe("CANCELLED");
+  });
+
+  it("falls back to an idempotent Benefit Programs reversal when Wix records no native refund", async () => {
+    mock.wix.nativeRefundRecreditsBenefit = false;
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, {
+      status: "BOOKED",
+      wix_booking_id: "wb_membership_legacy",
+      payment_method: "membership",
+      benefit_transaction_id: "benefit_legacy",
+      slot_start: inHours(30),
+      slot_end: inHours(31),
+    });
+
+    const out = JSON.parse(
+      await executeTool(asClient(client), "cancel_booking", { booking_id: booking.id }),
+    );
+
+    expect(out).toMatchObject({
+      cancelled: true,
+      session_recredited: true,
+      recredit_source: "fallback",
+    });
+    expect(mock.wix.revertedBenefitTransactionIds).toEqual(["benefit_legacy"]);
+    expect(
+      mock.calls.filter((call) => call.url.includes("/balances/changes/benefit_legacy/revert")),
+    ).toHaveLength(1);
+  });
+
   it("keeps a direct-paid booking intact until the client explicitly accepts no refund", async () => {
     const client = await seedClient();
     const booking = await seedBooking(client.id, {
@@ -226,6 +289,10 @@ describe("cancel_booking no-refund policy", () => {
     expect(out).not.toHaveProperty("refund");
     expect(out).not.toHaveProperty("refund_within_hours");
     expect(mock.calls.some((call) => call.url.endsWith("/cancel"))).toBe(true);
+    const cancel = mock.calls.find((call) => call.url.endsWith("/cancel"));
+    expect(cancel?.body.flowControlSettings).toEqual({
+      ignoreCancellationPolicy: true,
+    });
     const after = (
       await pool.query(`select status, forfeited_at from pending_bookings where id=$1`, [booking.id])
     ).rows[0];
