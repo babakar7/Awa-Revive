@@ -514,6 +514,22 @@ export function makeFetchMock(): FetchMock {
       return json(200, { booking: { id } });
     }
 
+    // --- Wix update booking (contact repair / refunded payment marker) ---
+    if (url.includes("/bookings/v2/bookings/") && method === "PATCH") {
+      const id = decodeURIComponent(url.split("/bookings/v2/bookings/")[1].split("?")[0]);
+      const wrapper = wix.attendanceBookings[id] ?? { booking: { id } };
+      const current = wrapper.booking ?? { id };
+      const revision = String(Number(body?.booking?.revision ?? current.revision ?? 1) + 1);
+      const booking = {
+        ...current,
+        ...body?.booking,
+        id,
+        revision,
+      };
+      wix.attendanceBookings[id] = { ...wrapper, booking };
+      return json(200, { booking });
+    }
+
     // --- Wix confirm booking ---
     if (url.includes(":confirmOrDecline")) {
       return json(200, { booking: { status: "CONFIRMED" } });
@@ -523,7 +539,20 @@ export function makeFetchMock(): FetchMock {
       return json(200, { booking: { status: "CONFIRMED", revision: "2" } });
     }
     if (url.includes("/_api/bookings-service/v2/bookings/") && url.endsWith("/cancel")) {
-      return json(200, { booking: { status: "CANCELED", revision: "2" } });
+      const id = decodeURIComponent(
+        url.split("/_api/bookings-service/v2/bookings/")[1].split("/cancel")[0],
+      );
+      const wrapper = wix.attendanceBookings[id] ?? { booking: { id } };
+      const current = wrapper.booking ?? { id };
+      const booking = {
+        ...current,
+        id,
+        status: "CANCELED",
+        paymentStatus: current.paymentStatus ?? "PAID",
+        revision: String(Number(body?.revision ?? current.revision ?? 1) + 1),
+      };
+      wix.attendanceBookings[id] = { ...wrapper, booking };
+      return json(200, { booking });
     }
 
     // --- Wix eCommerce order required by the custom-checkout flow ---
@@ -613,6 +642,8 @@ export function makeFetchMock(): FetchMock {
       wix.failOfflinePlanOrder = false;
       wix.membershipEligible = true;
       wix.membershipAvailable = 5;
+      wix.nativeRefundRecreditsBenefit = true;
+      wix.revertedBenefitTransactionIds.length = 0;
       wix.createdOrderIds.length = 0;
       wix.ordersByExternalId = {};
       wix.orderPayments = {};

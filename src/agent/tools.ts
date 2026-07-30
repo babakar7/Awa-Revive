@@ -3896,6 +3896,26 @@ export async function executeTool(
           recredited = true;
           recreditSource = "native";
         }
+        let refundMarkerSynced = false;
+        if (recredited) {
+          try {
+            // Native cancellation can restore the plan credit but leave Wix's
+            // booking/payment view at PAID. Keep both authoritative views aligned.
+            await wix.markCancelledBookingRefunded(booking.wix_booking_id);
+            refundMarkerSynced = true;
+          } catch (err) {
+            console.error(`Refund marker sync failed for booking ${bookingId}:`, err);
+            notifyReception(
+              "⚠️ Statut de remboursement Wix à synchroniser",
+              `La séance d'abonnement a bien été annulée et re-créditée, mais Wix affiche encore ` +
+                `potentiellement la réservation comme payée.\n  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
+                `  Cours : ${booking.service_name} — ${fmtDakar(String(booking.slot_start))}\n` +
+                `  Booking Wix : ${booking.wix_booking_id}\n\n` +
+                `À faire : marquer le paiement de cette réservation annulée comme REMBOURSÉ dans Wix. ` +
+                `Ne pas ajouter de séance : le crédit a déjà été restauré.`,
+            );
+          }
+        }
         if (!recredited) {
           notifyReception(
             "⚠️ Séance(s) d'abonnement à re-créditer manuellement",
@@ -3917,6 +3937,7 @@ export async function executeTool(
           session_recredited: recredited,
           sessions_recredited: recredited ? booking.participants : 0,
           recredit_source: recreditSource,
+          wix_payment_status_synced: refundMarkerSynced,
           note: recredited
             ? (booking.participants > 1
                 ? `Cancelled; all ${booking.participants} plan sessions were re-credited automatically. Tell the client.`

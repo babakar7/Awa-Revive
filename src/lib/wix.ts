@@ -2013,6 +2013,43 @@ export async function cancelBooking(
 }
 
 /**
+ * Wix can restore a pricing-plan benefit after a cancellation while leaving
+ * the cancelled booking's paymentStatus as PAID. That makes the Wix dashboard
+ * show the stale pre-refund state even though the Benefit Programs ledger is
+ * correct. Reconcile the booking marker once the caller has verified that the
+ * benefit credit was actually restored.
+ *
+ * PATCH Bookings V2 is the same deliberately guarded endpoint used by the
+ * contact repair above. Callers must treat a failure as non-fatal and alert
+ * reception: the cancellation and restored credit remain valid.
+ */
+export async function markCancelledBookingRefunded(bookingId: string): Promise<void> {
+  const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+    query: { filter: { id: { $in: [bookingId] } } },
+  });
+  const booking = data?.extendedBookings?.[0]?.booking;
+  if (!booking?.revision) {
+    throw new Error(`Cannot reconcile refund marker: booking ${bookingId} was not found`);
+  }
+  if (booking.status !== "CANCELED") {
+    throw new Error(
+      `Cannot reconcile refund marker for ${bookingId}: status is ${booking.status ?? "unknown"}`,
+    );
+  }
+  if (booking.paymentStatus === "REFUNDED") return;
+
+  const updated = await wixPatch(`/bookings/v2/bookings/${bookingId}`, {
+    booking: {
+      revision: String(booking.revision),
+      paymentStatus: "REFUNDED",
+    },
+  });
+  if (updated?.booking?.paymentStatus !== "REFUNDED") {
+    throw new Error(`Wix did not confirm the REFUNDED marker for booking ${bookingId}`);
+  }
+}
+
+/**
  * Move a confirmed class booking to another session of the SAME service.
  * Payment, participant count and booking id stay intact in Wix. The caller
  * owns the 16h, ownership, service-match and fresh-availability checks.

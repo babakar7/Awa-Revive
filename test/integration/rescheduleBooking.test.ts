@@ -199,6 +199,7 @@ describe("cancel_booking no-refund policy", () => {
       session_recredited: true,
       sessions_recredited: 1,
       recredit_source: "native",
+      wix_payment_status_synced: true,
     });
     const cancel = mock.calls.find((call) => call.url.endsWith("/cancel"));
     expect(cancel?.body.flowControlSettings).toMatchObject({
@@ -209,6 +210,15 @@ describe("cancel_booking no-refund policy", () => {
     expect(
       mock.calls.some((call) => call.url.includes("/balances/changes/benefit_original/revert")),
     ).toBe(false);
+    const paymentMarker = mock.calls.find(
+      (call) =>
+        call.method === "PATCH" &&
+        call.url.endsWith("/bookings/v2/bookings/wb_membership"),
+    );
+    expect(paymentMarker?.body.booking).toMatchObject({
+      revision: "2",
+      paymentStatus: "REFUNDED",
+    });
     expect(
       (await pool.query(`select status from pending_bookings where id=$1`, [booking.id]))
         .rows[0].status,
@@ -235,6 +245,7 @@ describe("cancel_booking no-refund policy", () => {
       cancelled: true,
       session_recredited: true,
       recredit_source: "fallback",
+      wix_payment_status_synced: true,
     });
     expect(mock.wix.revertedBenefitTransactionIds).toEqual(["benefit_legacy"]);
     expect(
@@ -293,6 +304,13 @@ describe("cancel_booking no-refund policy", () => {
     expect(cancel?.body.flowControlSettings).toEqual({
       ignoreCancellationPolicy: true,
     });
+    expect(
+      mock.calls.some(
+        (call) =>
+          call.method === "PATCH" &&
+          call.url.endsWith("/bookings/v2/bookings/wb_non_refundable"),
+      ),
+    ).toBe(false);
     const after = (
       await pool.query(`select status, forfeited_at from pending_bookings where id=$1`, [booking.id])
     ).rows[0];
