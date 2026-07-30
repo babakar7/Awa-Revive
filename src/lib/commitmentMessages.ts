@@ -104,11 +104,12 @@ export async function sendCommitmentProgress(args: {
     if (args.showLink) {
       options.push({ id: `ms_link:${args.commitmentId}`, title: copy.linkLabel });
     }
-    const kind = await sendInteractive(args.waPhone, copy.body, "", options);
+    const { kind, wamid } = await sendInteractive(args.waPhone, copy.body, "", options);
     await repo.addTurn(
       args.clientId,
       "assistant",
       `${copy.body}\n[message interactif ${kind} — options : ${options.map((o) => o.title).join(" · ")}]`,
+      wamid ?? undefined,
     );
   } catch (err) {
     if (args.log) args.log.error({ err, clientId: args.clientId }, "Commitment progress send failed (non-blocking)");

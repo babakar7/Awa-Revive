@@ -15,6 +15,7 @@ import {
   normalizeUrl,
   TOOL_TRACE_MARKER,
 } from "./outboundLint.js";
+import { shouldRouteReactionAsReply } from "./reactionIntent.js";
 import { capabilityMenuKind, isVagueOpener } from "../lib/capabilityMenu.js";
 import {
   receptionLinkInstruction,
@@ -781,6 +782,18 @@ export async function handleInboundText(args: {
 
   const history = await repo.lastTurnsForReplay(client.id, 30);
   const currentConversationHistory = turnsAfterConversationGap(history);
+  // If a long silence split the thread, tell the model how stale the prior
+  // exchange is so it never resumes an expired offer or a past-date pitch
+  // (prod: a 9-day-later "Bonjour" got "on en était à ton créneau du 16 juillet").
+  let conversationGapDays: number | null = null;
+  if (currentConversationHistory.length > 0 && currentConversationHistory.length < history.length) {
+    const boundary = history.length - currentConversationHistory.length;
+    const prev = new Date(history[boundary - 1].created_at).getTime();
+    const curr = new Date(history[boundary].created_at).getTime();
+    if (Number.isFinite(prev) && Number.isFinite(curr) && curr > prev) {
+      conversationGapDays = Math.max(1, Math.round((curr - prev) / 86_400_000));
+    }
+  }
   const packDiscoveryLead = await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
   // Once the Keys launch, new and returning discovery leads go through
   // L'Invitée. Existing paid step-1 orders remain fulfillable from their own
@@ -860,6 +873,7 @@ export async function handleInboundText(args: {
         activeCommitment,
         packDiscoveryCampaign,
         packDiscoveryMetaNewLead,
+        conversationGapDays,
       }),
     },
   ];
@@ -1147,8 +1161,10 @@ export async function handleInboundText(args: {
   }
 
   if (replyText) {
-    await sendText(args.waPhone, replyText);
-    await repo.addTurn(client.id, "assistant", replyText);
+    // Keep the outbound wamid so a 👍 reaction to this message can be matched
+    // to the question it answers.
+    const wamid = await sendText(args.waPhone, replyText);
+    await repo.addTurn(client.id, "assistant", replyText, wamid ?? undefined);
   }
 
   // NOTE: no proactive account-linking invitation here anymore. Pushing "do you
@@ -1205,12 +1221,30 @@ export async function handleReaction(
   waMessageId: string,
   emoji: string | null | undefined,
   profileName?: string,
+  reactedToMessageId?: string,
 ): Promise<void> {
   const client = await repo.upsertClient(waPhone);
   await maybeStoreWhatsAppProfileName(client, profileName);
   const label = emoji ? `[réaction ${emoji}]` : "[réaction retirée]";
   await repo.addTurn(client.id, "user", label, waMessageId);
-  if (isHumanTakeoverActive(client)) notifyHumanTakeoverInbound(client, label);
+  if (isHumanTakeoverActive(client)) {
+    notifyHumanTakeoverInbound(client, label);
+    return;
+  }
+  // A 👍/OK reaction to Awa's last QUESTION is an affirmative answer — route it
+  // into the model so the conversation progresses instead of stalling (prod:
+  // a client answered a question with 👍 and the turn died). Non-affirmative
+  // reactions (❤️, 🙏, 😂…) stay logged-only. The model prompt keeps a reaction
+  // from authorizing any irreversible action on its own.
+  const lastAssistant = await repo.latestAssistantTurn(client.id);
+  if (shouldRouteReactionAsReply(emoji, reactedToMessageId, lastAssistant)) {
+    await handleInboundText({
+      waPhone,
+      text: "[réaction 👍 — oui, en réponse à ta dernière question]",
+      waMessageId,
+      profileName,
+    });
+  }
 }
 
 /** Polite reply for stickers / documents / other unreadable media (SPEC §8). */

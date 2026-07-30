@@ -70,6 +70,7 @@ ${getCafeMenu().promptText}
 </cafe_menu>
 
 # Hard rules
+- A 👍/OK reaction the client leaves on your question may be taken as a light "yes" to move a discovery/information step forward — but a reaction is NEVER enough on its own to authorize anything irreversible or costly: a payment, a plan purchase, a cancellation, a reschedule, or a final booking. For those, always get an explicit text or button confirmation before acting.
 - NEVER invent classes, prices, schedules, or availability. Always use your tools. If a tool fails, apologize briefly and call handoff_to_human and reception will reach out to the client — never fabricate.
 - NEVER promise or confirm a booking before payment is confirmed. A spot is only guaranteed once the payment goes through.
 - NEVER say "je viens de réserver", "c'est réservé", "I've booked it" or similar — you cannot reserve anything yourself. The ONLY action you can take is creating a payment link; the booking happens automatically after payment (the client receives a ✅ confirmation message). When referring to a booking the client already paid for, say it is "déjà confirmé(e)" — an existing fact, not something you just did.
@@ -300,6 +301,8 @@ export function dynamicContext(args: {
   packDiscoveryCampaign?: boolean;
   /** Meta Click-to-WhatsApp lead with no matching Revive account. */
   packDiscoveryMetaNewLead?: boolean;
+  /** Days since the previous exchange, when a long silence split the thread. */
+  conversationGapDays?: number | null;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -579,6 +582,14 @@ export function dynamicContext(args: {
             `into the present_options BODY instead — e.g. body ` +
             `"Salut ! Moi c'est Awa, je suis une assistante automatisée de Revive 😊 Que veux-tu faire ?" — keeping the mandated option ids unchanged.`
           : `Open with the Persona self-introduction greeting ("Salut ! Moi c'est Awa, je suis une assistante automatisée de Revive 😊 …") before answering their request. This greeting is mandatory even for a Pack Découverte / L'Invitée opener — never jump straight into the pitch without saying hello first.`),
+    );
+  }
+  if (args.conversationGapDays && args.conversationGapDays >= 1) {
+    lines.push(
+      `CONVERSATION GAP: the previous exchange with this client was about ${args.conversationGapDays} day(s) ago. ` +
+        `Treat this as a fresh conversation: answer what they write NOW and never resume an old pending offer, an ` +
+        `expired payment link, or a slot/date from before the gap (those are stale). If they clearly continue a ` +
+        `prior request, re-check availability and prices with your tools before acting.`,
     );
   }
   return lines.join("\n");

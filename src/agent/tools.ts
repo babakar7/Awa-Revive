@@ -4571,18 +4571,20 @@ export async function executeTool(
             "Re-run check_availability and pass ONLY the choice_ids it returns. Nothing was sent.",
         });
       }
-      const kind = await sendInteractive(client.wa_phone, body, buttonLabel, options);
+      const { kind, wamid } = await sendInteractive(client.wa_phone, body, buttonLabel, options);
       await repo.savePresentedChoices(
         client.id,
         options.map((option) => ({ id: option.id, title: option.title })),
       ).catch((error) =>
         console.error("Failed to persist presented choices after delivery:", error),
       );
-      // Log what the client saw, so rebuilt history stays coherent.
+      // Log what the client saw, so rebuilt history stays coherent. Keep the
+      // outbound wamid so a reaction to this message can be matched to it.
       await repo.addTurn(
         client.id,
         "assistant",
         `${body}\n[message interactif ${kind} — options : ${options.map((o) => o.title).join(" · ")}]`,
+        wamid ?? undefined,
       );
       // Once-per-conversation window for vague-opener capability menus.
       if (options.some((o) => isCapabilityOptionId(o.id))) {

@@ -185,7 +185,7 @@ export async function markCapabilityMenuShown(clientId: string): Promise<void> {
 export async function claimCafeOffer(clientId: string): Promise<boolean> {
   const res = await pool.query(
     `update clients set cafe_offer_at = now(), updated_at = now()
-      where id = $1 and (cafe_offer_at is null or cafe_offer_at < now() - interval '24 hours')
+      where id = $1 and (cafe_offer_at is null or cafe_offer_at < now() - interval '7 days')
       returning id`,
     [clientId],
   );
@@ -324,6 +324,20 @@ export async function lastTurns(clientId: string, n = 20): Promise<Turn[]> {
     [clientId, n],
   );
   return res.rows;
+}
+
+/** Awa's most recent outbound turn (text or interactive) with its wamid, for
+ *  matching a reaction to the message it targets. */
+export async function latestAssistantTurn(
+  clientId: string,
+): Promise<{ content: string; wa_message_id: string | null } | null> {
+  const res = await pool.query(
+    `select content, wa_message_id from conversations
+      where client_id = $1 and role = 'assistant'
+      order by created_at desc limit 1`,
+    [clientId],
+  );
+  return res.rows[0] ?? null;
 }
 
 export async function recentTranscriptExcerpt(clientId: string, n = 6): Promise<string> {

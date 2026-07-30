@@ -182,8 +182,15 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
               await handleUnsupportedMedia(msg.from, msg.id, "[sticker]", msg.profileName);
             }
           } else if (msg.type === "reaction") {
-            // Emoji reaction — logged for the admin thread, never replied to.
-            await handleReaction(msg.from, msg.id, msg.reactionEmoji, msg.profileName);
+            // Emoji reaction — logged for the admin thread. A 👍/OK reaction to
+            // Awa's last question is routed as an affirmative (handleReaction).
+            await handleReaction(
+              msg.from,
+              msg.id,
+              msg.reactionEmoji,
+              msg.profileName,
+              msg.reactionMessageId,
+            );
           } else {
             await handleUnsupportedMedia(msg.from, msg.id, unsupportedMediaLabel(msg), msg.profileName);
           }

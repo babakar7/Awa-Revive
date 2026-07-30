@@ -26,13 +26,14 @@ export async function sendCafeMenuOffer(args: {
     // must not get the identical list after every payment confirmation.
     if (!(await repo.claimCafeOffer(args.clientId))) return;
     const { body, button } = cafeMenuOfferCopy(args.lang);
-    const kind = await sendInteractive(args.waPhone, body, button, options);
+    const { kind, wamid } = await sendInteractive(args.waPhone, body, button, options);
     // Log what the client saw so the rebuilt history stays coherent (same
     // format the present_options tool uses).
     await repo.addTurn(
       args.clientId,
       "assistant",
       `${body}\n[message interactif ${kind} — options : ${options.map((o) => o.title).join(" · ")}]`,
+      wamid ?? undefined,
     );
   } catch (err) {
     if (args.log) args.log.error({ err, clientId: args.clientId }, "Bar menu offer failed (non-blocking)");

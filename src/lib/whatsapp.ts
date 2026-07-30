@@ -415,10 +415,10 @@ export async function sendInteractive(
   body: string,
   buttonLabel: string,
   options: InteractiveOption[],
-): Promise<"buttons" | "list"> {
+): Promise<{ kind: "buttons" | "list"; wamid: string | null }> {
   const { kind, payload } = buildInteractivePayload(to, body, buttonLabel, options);
-  await postMessage(payload);
-  return kind;
+  const wamid = await postMessage(payload);
+  return { kind, wamid };
 }
 
 /**
@@ -459,6 +459,7 @@ export interface InboundMessage {
   mediaId?: string; // Meta media id for audio (voice notes) and image messages
   caption?: string; // client-typed caption on an image message
   reactionEmoji?: string; // the emoji of a 'reaction' message (empty = reaction removed)
+  reactionMessageId?: string; // wamid of the message that was reacted to (for matching)
   filename?: string; // original filename of a 'document' message
   profileName?: string;
   /** Meta Click-to-WhatsApp attribution, normally present only on the first ad message. */
@@ -573,6 +574,7 @@ export function parseInboundMessages(payload: any): InboundMessage[] {
                   : undefined,
           caption: msg.type === "image" ? msg.image?.caption : undefined,
           reactionEmoji: msg.type === "reaction" ? msg.reaction?.emoji : undefined,
+          reactionMessageId: msg.type === "reaction" ? msg.reaction?.message_id : undefined,
           filename: msg.type === "document" ? msg.document?.filename : undefined,
           profileName: contact?.profile?.name,
           referral: msg.referral
