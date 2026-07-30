@@ -14,6 +14,37 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Clé nommée = on répond sur CETTE Clé (30 juillet 2026)
+
+Incident prod (cliente Fary-Seune, 30/07) : « Je suis intéressée par votre offre
+« l'Habituee » ». Awa a posé la qualification (« avez-vous déjà pratiqué le
+Pilates Reformer chez Revive ? »), a reçu « Non », puis a déroulé **tout le
+pitch de L'Invitée** — sans jamais parler de L'Habituée, la Clé explicitement
+demandée. Faute de confiance : la cliente demande A, on lui vend B.
+
+- **Cause** : pas un bug de données (`list_plans` renvoie bien les trois Clés
+  distinctes de Wix). Le funnel de vente codé en dur dans
+  [src/agent/systemPrompt.ts](src/agent/systemPrompt.ts) (règle CLÉS DE LA MAISON)
+  et son miroir [business-info.md](business-info.md) imposait : toute marque
+  d'intérêt Clés → question de qualification → « Non → recommander L'Invitée ».
+  Aucun garde-fou pour une cliente ayant nommé une Clé précise. Le funnel, écrit
+  pour les demandes génériques (« je veux découvrir »), écrasait la demande
+  explicite. (Introduit par `e34035f` — one-tap Clé qualification.)
+- **Correctif** : nouvelle règle **EXPLICIT KEY REQUEST WINS** en tête de la
+  section, prioritaire sur le funnel. Si la cliente nomme une Clé (y compris mal
+  orthographiée / sans accent / nom poétique seul / « Clé 6/12 séances ») → on
+  présente et vend **cette** Clé depuis `list_plans`, jamais une autre. Pour
+  L'Habituée / La Résidente : **pas** de question de qualification et **aucune
+  mention de L'Invitée** (décision Babakar 30/07 : « never mention unless
+  asked ») — L'Invitée ne revient que si la cliente demande elle-même l'offre
+  découverte. Le funnel « Non → L'Invitée / Oui → trois horizons » ne s'applique
+  plus qu'à une demande générique sans Clé nommée. La protection symétrique
+  existait déjà en sens inverse (ligne « L'Habituée/La Résidente never as a
+  replacement » pour L'Invitée) ; on a ajouté le sens manquant.
+- **Pas de changement serveur** : le garde `plan_id` + `plan_name_confirm`
+  empêchait déjà de *payer* la mauvaise Clé ; le bug était purement dans ce
+  qu'Awa *dit*.
+
 ## Paiements coachs — récupération des occurrences Wix annulées (30 juillet 2026)
 
 `Query Events` de Calendar V3 est une projection : une occurrence récurrente
