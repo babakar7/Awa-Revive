@@ -84,6 +84,54 @@ export interface WixCalendarEvent {
   raw: unknown;
 }
 
+function calendarEventFromRaw(event: any): WixCalendarEvent | null {
+  const startDate =
+    event?.adjustedStart?.localDate ??
+    event?.start?.utcDate ??
+    event?.start?.localDate;
+  const endDate =
+    event?.adjustedEnd?.localDate ??
+    event?.end?.utcDate ??
+    event?.end?.localDate;
+  if (!event?.id || !startDate || !endDate) return null;
+  const totalCapacity =
+    typeof event.totalCapacity === "number" ? event.totalCapacity : Number.NaN;
+  const remainingCapacity =
+    typeof event.remainingCapacity === "number"
+      ? event.remainingCapacity
+      : Number.NaN;
+  const participantCount =
+    Number.isInteger(totalCapacity) &&
+    totalCapacity >= 0 &&
+    Number.isInteger(remainingCapacity) &&
+    remainingCapacity >= 0 &&
+    remainingCapacity <= totalCapacity
+      ? totalCapacity - remainingCapacity
+      : null;
+  return {
+    id: String(event.id),
+    serviceId:
+      typeof event.externalScheduleId === "string"
+        ? event.externalScheduleId
+        : null,
+    serviceName: String(event.scheduleName ?? event.title ?? ""),
+    title: String(event.title ?? event.scheduleName ?? "Cours"),
+    type: String(event.type ?? "").toUpperCase(),
+    status: String(event.status ?? "").toUpperCase(),
+    startDate: String(startDate),
+    endDate: String(endDate),
+    participantCount,
+    resources: (Array.isArray(event.resources) ? event.resources : [])
+      .filter((r: any) => r?.id)
+      .map((r: any) => ({
+        id: String(r.id),
+        name: String(r.name ?? ""),
+        type: typeof r.type === "string" ? r.type : null,
+      })),
+    raw: event,
+  };
+}
+
 /**
  * Query concrete calendar occurrences over local Dakar bounds. Calendar V3 is
  * used intentionally: the retired Availability endpoint is unsuitable for
@@ -112,42 +160,8 @@ export async function queryCalendarEventsV3(
       },
     });
     for (const event of Array.isArray(data?.events) ? data.events : []) {
-      const startDate =
-        event?.adjustedStart?.localDate ?? event?.start?.utcDate ?? event?.start?.localDate;
-      const endDate = event?.adjustedEnd?.localDate ?? event?.end?.utcDate ?? event?.end?.localDate;
-      if (!event?.id || !startDate || !endDate) continue;
-      const totalCapacity =
-        typeof event.totalCapacity === "number" ? event.totalCapacity : Number.NaN;
-      const remainingCapacity =
-        typeof event.remainingCapacity === "number" ? event.remainingCapacity : Number.NaN;
-      const participantCount =
-        Number.isInteger(totalCapacity) &&
-        totalCapacity >= 0 &&
-        Number.isInteger(remainingCapacity) &&
-        remainingCapacity >= 0 &&
-        remainingCapacity <= totalCapacity
-          ? totalCapacity - remainingCapacity
-          : null;
-      out.push({
-        id: String(event.id),
-        serviceId:
-          typeof event.externalScheduleId === "string" ? event.externalScheduleId : null,
-        serviceName: String(event.scheduleName ?? event.title ?? ""),
-        title: String(event.title ?? event.scheduleName ?? "Cours"),
-        type: String(event.type ?? "").toUpperCase(),
-        status: String(event.status ?? "").toUpperCase(),
-        startDate: String(startDate),
-        endDate: String(endDate),
-        participantCount,
-        resources: (Array.isArray(event.resources) ? event.resources : [])
-          .filter((r: any) => r?.id)
-          .map((r: any) => ({
-            id: String(r.id),
-            name: String(r.name ?? ""),
-            type: typeof r.type === "string" ? r.type : null,
-          })),
-        raw: event,
-      });
+      const normalized = calendarEventFromRaw(event);
+      if (normalized) out.push(normalized);
     }
     const next = data?.pagingMetadata?.cursors?.next;
     if (typeof next !== "string" || !next || seenCursors.has(next)) break;
@@ -155,6 +169,135 @@ export async function queryCalendarEventsV3(
     cursor = next;
   }
   return out;
+}
+
+export interface CancelledBookingEventDiscovery {
+  eventIds: string[];
+  pages: number;
+  scannedBookings: number;
+  elapsedMs: number;
+}
+
+function localDateKey(value: unknown): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  // A local Wix timestamp intentionally has no offset. Its leading date is
+  // already expressed in the studio timezone and must not be reinterpreted.
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw) && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(raw)) {
+    return raw.slice(0, 10);
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: config.TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  const key = `${part("year")}-${part("month")}-${part("day")}`;
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : null;
+}
+
+function bookingSlot(booking: any): any {
+  return (
+    booking?.bookedEntity?.item?.slot ??
+    booking?.bookedEntity?.slot ??
+    booking?.bookedEntity?.item?.schedule ??
+    booking?.bookedEntity?.schedule ??
+    {}
+  );
+}
+
+/**
+ * Cancelled client bookings are discovery hints only. Wix's date filters have
+ * returned false-empty responses in production, so status is filtered by Wix
+ * while the requested payroll month is filtered locally.
+ */
+export async function listCancelledBookingEventIds(
+  fromLocalDate: string,
+  toLocalDate: string,
+): Promise<CancelledBookingEventDiscovery> {
+  const startedAt = Date.now();
+  const eventIds = new Set<string>();
+  let pages = 0;
+  let scannedBookings = 0;
+  for (let offset = 0;; offset += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: {
+        filter: { status: { $eq: "CANCELED" } },
+        paging: { limit: 100, offset },
+      },
+    });
+    pages += 1;
+    const batch: any[] = Array.isArray(data?.extendedBookings)
+      ? data.extendedBookings
+      : [];
+    scannedBookings += batch.length;
+    for (const entry of batch) {
+      const booking = entry?.booking ?? entry;
+      const slot = bookingSlot(booking);
+      const startDate =
+        booking?.startDate ??
+        slot?.startDate ??
+        slot?.firstSessionStart;
+      const dateKey = localDateKey(startDate);
+      if (!dateKey || dateKey < fromLocalDate || dateKey >= toLocalDate) continue;
+      const eventId = String(slot?.eventId ?? slot?.sessionId ?? "").trim();
+      if (eventId) eventIds.add(eventId);
+    }
+    if (batch.length < 100) break;
+  }
+  return {
+    eventIds: [...eventIds],
+    pages,
+    scannedBookings,
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
+async function getCalendarEventV3(eventId: string): Promise<WixCalendarEvent> {
+  const data = await wixGet(
+    `/calendar/v3/events/${encodeURIComponent(eventId)}?timeZone=${encodeURIComponent(config.TIMEZONE)}`,
+  );
+  const event = calendarEventFromRaw(data?.event ?? data);
+  if (!event) throw new Error(`Wix Calendar event ${eventId} is missing`);
+  return event;
+}
+
+/**
+ * Resolve concrete occurrences which Query Events may have dropped. List
+ * Events is efficient and confirmed live for cancelled EXCEPTION occurrences;
+ * each omitted id is verified with Get Event so a projection gap never becomes
+ * a false "0 annulée".
+ */
+export async function resolveCalendarEventsV3ByIds(
+  eventIds: string[],
+): Promise<WixCalendarEvent[]> {
+  const ids = [...new Set(eventIds.map(String).filter(Boolean))];
+  const resolved = new Map<string, WixCalendarEvent>();
+  for (let index = 0; index < ids.length; index += 50) {
+    const batch = ids.slice(index, index + 50);
+    const query = new URLSearchParams({ timeZone: config.TIMEZONE });
+    for (const id of batch) query.append("eventIds", id);
+    let listed: any[] = [];
+    try {
+      const data = await wixGet(`/calendar/v3/events?${query.toString()}`);
+      listed = Array.isArray(data?.events) ? data.events : [];
+    } catch {
+      // Get Event is the deliberately tested fallback for a failed batch too.
+      listed = [];
+    }
+    for (const raw of listed) {
+      const event = calendarEventFromRaw(raw);
+      if (event) resolved.set(event.id, event);
+    }
+    for (const id of batch) {
+      if (!resolved.has(id)) resolved.set(id, await getCalendarEventV3(id));
+    }
+  }
+  return ids.map((id) => resolved.get(id)!);
 }
 
 async function wixPatch(path: string, body: unknown): Promise<any> {

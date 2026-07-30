@@ -14,7 +14,13 @@ import {
 } from "../domain/coachPaymentRules.js";
 import { coachPaymentPdfFilename, renderCoachPaymentPdf } from "../lib/coachPaymentPdf.js";
 import { emailNotificationsEnabled, sendEmail } from "../lib/notify.js";
-import { listServices, listStaffResources, queryCalendarEventsV3 } from "../lib/wix.js";
+import {
+  listCancelledBookingEventIds,
+  listServices,
+  listStaffResources,
+  queryCalendarEventsV3,
+  resolveCalendarEventsV3ByIds,
+} from "../lib/wix.js";
 import { ownerPaymentsAuthHook } from "./coachPaymentsAuth.js";
 import {
   coachPaymentBanner,
@@ -73,16 +79,42 @@ async function fetchEligibleCourses(
   profile: payments.CoachPaymentProfile,
   month: string,
   now = new Date(),
+  knownEventIds: string[] = [],
+  onDiscovery?: (metrics: {
+    pages: number;
+    scannedBookings: number;
+    candidateEvents: number;
+    elapsedMs: number;
+  }) => void,
 ) {
   if (!profile.wix_resource_id) throw new payments.CoachPaymentError("Aucune ressource Wix associée à cette coach");
   const bounds = calendarLocalBounds(month);
-  const [services, events] = await Promise.all([
+  const [services, queriedEvents, discovery] = await Promise.all([
     listServices(),
     queryCalendarEventsV3(bounds.fromLocalDate, bounds.toLocalDate),
+    listCancelledBookingEventIds(bounds.fromLocalDate, bounds.toLocalDate),
   ]);
+  onDiscovery?.({
+    pages: discovery.pages,
+    scannedBookings: discovery.scannedBookings,
+    candidateEvents: discovery.eventIds.length,
+    elapsedMs: discovery.elapsedMs,
+  });
   if (reformerServices(services).length === 0) {
     throw new payments.CoachPaymentError("Aucun service Reformer identifiable dans Wix");
   }
+  const queriedIds = new Set(queriedEvents.map((event) => event.id));
+  const missingCandidateIds = [...new Set([...discovery.eventIds, ...knownEventIds])]
+    .filter((id) => !queriedIds.has(id));
+  const recovered = missingCandidateIds.length
+    ? await resolveCalendarEventsV3ByIds(missingCandidateIds)
+    : [];
+  // Booking cancellations only discover event ids. The authoritative session
+  // status comes from Calendar, and only true cancellations are merged.
+  const events = [
+    ...queriedEvents,
+    ...recovered.filter((event) => event.status === "CANCELLED"),
+  ];
   return selectEligibleReformerEvents({
     events,
     services,
@@ -174,7 +206,13 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
         let syncError: string | null = profile.wix_resource_id ? null : "Aucune ressource Wix associée à cette coach";
         if (profile.wix_resource_id) {
           try {
-            courses = await fetchEligibleCourses(profile, month);
+            courses = await fetchEligibleCourses(
+              profile,
+              month,
+              new Date(),
+              [],
+              (metrics) => req.log.info(metrics, "Coach payment cancelled-booking discovery"),
+            );
           } catch (error) {
             syncStatus = "failed";
             syncError = message(error);
@@ -222,7 +260,13 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
         }
         const profileForSnapshot = { ...detail.profile, wix_resource_id: resourceId };
         try {
-          const courses = await fetchEligibleCourses(profileForSnapshot, storedMonthKey(detail.statement.month));
+          const courses = await fetchEligibleCourses(
+            profileForSnapshot,
+            storedMonthKey(detail.statement.month),
+            new Date(),
+            detail.courses.flatMap((course) => course.wix_event_id ? [course.wix_event_id] : []),
+            (metrics) => req.log.info(metrics, "Coach payment cancelled-booking discovery"),
+          );
           await payments.replaceWixSnapshot(id, courses);
           req.log.info({ statement: id, courses: courses.length, by: req.adminUser }, "Coach payment Wix snapshot synced");
           return reply.redirect(statementUrl(id, "done", "synced"), 303);
@@ -316,7 +360,13 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
               );
             }
             try {
-              const courses = await fetchEligibleCourses(detail.profile, month);
+              const courses = await fetchEligibleCourses(
+                detail.profile,
+                month,
+                new Date(),
+                detail.courses.flatMap((course) => course.wix_event_id ? [course.wix_event_id] : []),
+                (metrics) => req.log.info(metrics, "Coach payment cancelled-booking discovery"),
+              );
               await payments.replaceWixSnapshot(id, courses);
             } catch (error) {
               await payments.recordSyncFailure(id, message(error));

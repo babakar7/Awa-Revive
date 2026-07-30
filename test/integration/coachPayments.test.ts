@@ -87,6 +87,25 @@ function calendarEvent(id: string, start: string, overrides: Record<string, unkn
   };
 }
 
+function cancelledBooking(id: string, eventId: string, startDate: string) {
+  return {
+    booking: {
+      id,
+      status: "CANCELED",
+      startDate: `${startDate}Z`,
+      bookedEntity: {
+        item: {
+          slot: {
+            eventId,
+            serviceId: "svc_1",
+            startDate: `${startDate}Z`,
+          },
+        },
+      },
+    },
+  };
+}
+
 async function createJuneDraft(cookie: string, profileId: string): Promise<string> {
   const response = await post(`${BASE}/etats`, { profile_id: profileId, month: "2026-06" }, cookie);
   expect(response.statusCode).toBe(303);
@@ -115,6 +134,92 @@ describe("owner payment authorization", () => {
 });
 
 describe("monthly statement lifecycle", () => {
+  it("recovers a cancelled occurrence omitted by Calendar Query without treating client cancellations as a session cancellation", async () => {
+    const cookie = await loginAsOwner();
+    const profileId = await configureYass();
+    const confirmed = calendarEvent("event-1015", "2026-06-16T10:15:00");
+    const cancelled = calendarEvent("event-1230", "2026-06-16T12:30:00", {
+      status: "CANCELLED",
+      remainingCapacity: 10,
+    });
+    mock.wix.calendarEvents = [confirmed];
+    mock.wix.calendarEventsById = {
+      "event-1015": confirmed,
+      "event-1230": cancelled,
+    };
+    mock.wix.cancelledBookings = [
+      cancelledBooking("booking-1015-a", "event-1015", "2026-06-16T10:15:00"),
+      cancelledBooking("booking-1230-a", "event-1230", "2026-06-16T12:30:00"),
+    ];
+    // Exercise the verified Get Event fallback, not only the happy batch.
+    mock.wix.calendarListOmitIds = ["event-1230"];
+
+    const id = await createJuneDraft(cookie, profileId);
+    let statement = (await pool.query(
+      `select * from coach_payment_statements where id=$1`,
+      [id],
+    )).rows[0];
+    expect(statement.course_count).toBe(1);
+    expect(statement.total_xof).toBe(9_524);
+    let rows = (await pool.query(
+      `select wix_event_id, wix_status, included, manual_decision
+         from coach_payment_courses where statement_id=$1 order by starts_at`,
+      [id],
+    )).rows;
+    expect(rows).toEqual([
+      {
+        wix_event_id: "event-1015",
+        wix_status: "CONFIRMED",
+        included: true,
+        manual_decision: false,
+      },
+      {
+        wix_event_id: "event-1230",
+        wix_status: "CANCELLED",
+        included: false,
+        manual_decision: false,
+      },
+    ]);
+    expect(mock.calls.some((call) =>
+      call.url.includes("/calendar/v3/events/event-1230?")
+    )).toBe(true);
+
+    const page = await app.inject({
+      method: "GET",
+      url: `${BASE}/etats/${id}`,
+      headers: { cookie },
+    });
+    expect(page.body).toContain("1 séance à vérifier · 1 annulée · 0 vide");
+
+    const cancelledId = (await pool.query(
+      `select id from coach_payment_courses
+        where statement_id=$1 and wix_event_id='event-1230'`,
+      [id],
+    )).rows[0].id;
+    await post(`${BASE}/etats/${id}/cours/${cancelledId}/toggle`, {}, cookie);
+    mock.wix.calendarListOmitIds = [];
+    await post(`${BASE}/etats/${id}/synchroniser`, {}, cookie);
+    const validated = await post(`${BASE}/etats/${id}/valider`, {}, cookie);
+    expect(validated.headers.location).toContain("done=validated");
+
+    statement = (await pool.query(
+      `select * from coach_payment_statements where id=$1`,
+      [id],
+    )).rows[0];
+    expect(statement.course_count).toBe(2);
+    rows = (await pool.query(
+      `select wix_event_id, wix_status, included, manual_decision
+         from coach_payment_courses where statement_id=$1 order by starts_at`,
+      [id],
+    )).rows;
+    expect(rows[1]).toEqual({
+      wix_event_id: "event-1230",
+      wix_status: "CANCELLED",
+      included: true,
+      manual_decision: true,
+    });
+  });
+
   it("snapshots Wix, edits, validates, emails a PDF, marks paid and creates a correction", async () => {
     const cookie = await loginAsOwner();
     const profileId = await configureYass();

@@ -14,6 +14,28 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Paiements coachs — récupération des occurrences Wix annulées (30 juillet 2026)
+
+`Query Events` de Calendar V3 est une projection : une occurrence récurrente
+annulée peut en disparaître entièrement. Cas réel Yass du 16/07 : 10h15 restait
+`CONFIRMED` avec deux participantes, tandis que 12h30, annulée au niveau séance,
+n'apparaissait plus et produisait à tort « 0 annulée ».
+
+- La synchronisation pagine désormais les bookings `CANCELED` comme simples
+  pistes de découverte, filtre leurs dates localement (les filtres temporels
+  Bookings Reader ont déjà renvoyé de faux résultats vides), puis relit les
+  `eventId` absents de Query Events avec List Events et Get Event en repli.
+- Seul le statut Calendar réel `CANCELLED` ajoute une séance annulée : annuler
+  des réservations clientes ne suffit jamais à annuler le cours.
+- Les IDs déjà présents dans le brouillon sont revérifiés, les décisions
+  manuelles restent conservées, et une panne de découverte fait échouer la
+  synchronisation au lieu d'afficher un faux zéro.
+- Spike production sur l'ID réel de 12h30 : List Events et Get Event répondent
+  tous deux 200 avec `CANCELLED` et `recurrenceType=EXCEPTION`.
+- Les volumes du scan (pages, bookings, candidats, durée) sont journalisés pour
+  rendre visible sa croissance. Le registre webhook des annulations sans aucun
+  booking est le second lot du même chantier.
+
 ## Revue de 20 conversations prod → 4 lots de correctifs UX (30 juillet 2026)
 
 Analyse des 20 dernières vraies conversations clientes (dump prod, `is_test=false`).

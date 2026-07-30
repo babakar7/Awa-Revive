@@ -62,6 +62,10 @@ export interface WixState {
   /** Calendar Events V3 data used by coach-payment snapshots. */
   calendarEvents: any[];
   failCalendar: boolean;
+  calendarEventsById: Record<string, any>;
+  calendarListOmitIds: string[];
+  failCalendarEventGet: boolean;
+  cancelledBookings: any[];
   staffResources: Array<{ id: string; name: string; email?: string; phone?: string; tags?: string[] }>;
   /** Attendance API fixture for the client leaderboard. */
   attendanceRecords: any[];
@@ -181,6 +185,10 @@ export function makeFetchMock(): FetchMock {
     failAddPayment: false,
     calendarEvents: [],
     failCalendar: false,
+    calendarEventsById: {},
+    calendarListOmitIds: [],
+    failCalendarEventGet: false,
+    cancelledBookings: [],
     staffResources: [],
     attendanceRecords: [],
     attendanceBookings: {},
@@ -340,6 +348,21 @@ export function makeFetchMock(): FetchMock {
       if (wix.failCalendar) return json(503, { message: "calendar unavailable" });
       return json(200, { events: wix.calendarEvents, pagingMetadata: {} });
     }
+    if (url.includes("/calendar/v3/events?") && method === "GET") {
+      if (wix.failCalendar) return json(503, { message: "calendar unavailable" });
+      const ids = new URL(url).searchParams.getAll("eventIds");
+      return json(200, {
+        events: ids
+          .filter((id) => !wix.calendarListOmitIds.includes(id))
+          .flatMap((id) => wix.calendarEventsById[id] ? [wix.calendarEventsById[id]] : []),
+      });
+    }
+    if (url.includes("/calendar/v3/events/") && method === "GET") {
+      if (wix.failCalendarEventGet) return json(503, { message: "event unavailable" });
+      const id = decodeURIComponent(url.split("/calendar/v3/events/")[1].split("?")[0]);
+      const event = wix.calendarEventsById[id];
+      return event ? json(200, { event }) : json(404, { message: "not found" });
+    }
 
     // --- Wix Bookings resources (coach association + email prefill) ---
     if (url.includes("/bookings/v1/resources/query")) {
@@ -354,6 +377,13 @@ export function makeFetchMock(): FetchMock {
     // --- Wix booking reader (revision required by cancel/reschedule) ---
     if (url.includes("/_api/bookings-reader/v2/extended-bookings/query")) {
       const ids: string[] = body?.query?.filter?.id?.$in ?? [];
+      if (ids.length === 0 && body?.query?.filter?.status?.$eq === "CANCELED") {
+        const offset = Number(body?.query?.paging?.offset ?? 0);
+        const limit = Number(body?.query?.paging?.limit ?? 100);
+        return json(200, {
+          extendedBookings: wix.cancelledBookings.slice(offset, offset + limit),
+        });
+      }
       if (ids.length === 0 && body?.query?.filter?.status?.$eq === "CONFIRMED") {
         return json(200, { extendedBookings: wix.confirmedBookings });
       }
@@ -552,6 +582,10 @@ export function makeFetchMock(): FetchMock {
       wix.failAddPayment = false;
       wix.calendarEvents = [];
       wix.failCalendar = false;
+      wix.calendarEventsById = {};
+      wix.calendarListOmitIds = [];
+      wix.failCalendarEventGet = false;
+      wix.cancelledBookings = [];
       wix.staffResources = [];
       wix.attendanceRecords = [];
       wix.attendanceBookings = {};
