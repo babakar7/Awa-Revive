@@ -53,6 +53,15 @@ export async function transcribeAudio(data: Buffer, mimeType: string): Promise<s
   const ext = mimeType.includes("mpeg") ? "mp3" : mimeType.includes("mp4") ? "m4a" : "ogg";
   form.append("file", new Blob([new Uint8Array(data)], { type: mimeType.split(";")[0] }), `note.${ext}`);
   form.append("model", config.TRANSCRIPTION_MODEL);
+  // Bias the model toward the real acoustic + lexical context (prod 30/07: a
+  // French/Wolof note came back as gibberish). A natural-language hint beats a
+  // hard `language=fr` here — clients code-switch FR/Wolof/English mid-note.
+  form.append(
+    "prompt",
+    "Message vocal WhatsApp d'un client d'un studio de sport et bien-être à Dakar, " +
+      "principalement en français, parfois en wolof ou en anglais. Vocabulaire courant : " +
+      "Pilates Reformer, Aquabike, Bébé Nageur, réservation, créneau, abonnement, Wave, Orange Money.",
+  );
 
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
