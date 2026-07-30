@@ -16,6 +16,7 @@ import { recordInvoiceLog } from "../domain/notificationRepo.js";
 import { orderedPaymentMethodOptions, paymentMethodLabel } from "../lib/paymentMethod.js";
 import { clientOutreachLink } from "../lib/receptionContact.js";
 import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
+import { invalidSlotOptionIds } from "./slotOptions.js";
 import {
   computeExtras,
   extrasFromJson,
@@ -4551,6 +4552,23 @@ export async function executeTool(
           message:
             "present_options needs a body and 1-10 options, each with a UNIQUE id and a title. " +
             "Fix the input and retry, or fall back to plain text.",
+        });
+      }
+      // Slot option ids must be real choice_ids from a fresh check_availability,
+      // never composed by the model (prod 29/07: slot_placeholder2/3/4 shipped
+      // as options next to one real slot). Send nothing on any miss so the model
+      // must re-fetch.
+      const badSlotIds = await invalidSlotOptionIds(
+        options.map((o) => o.id),
+        (id) => repo.getCachedSlot(client.id, id),
+      );
+      if (badSlotIds.length > 0) {
+        return JSON.stringify({
+          error: "unknown_slot_option",
+          message:
+            "Every slot_ option id must be a choice_id returned by a FRESH check_availability " +
+            `in this conversation. Invented or expired ids: ${badSlotIds.join(", ")}. ` +
+            "Re-run check_availability and pass ONLY the choice_ids it returns. Nothing was sent.",
         });
       }
       const kind = await sendInteractive(client.wa_phone, body, buttonLabel, options);

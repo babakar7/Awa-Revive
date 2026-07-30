@@ -10,7 +10,7 @@ import {
 // code and re-sent payment buttons because it couldn't see what it had done.
 
 describe("buildHistoryMessages", () => {
-  it("folds tool turns into the following assistant turn as [outil] lines", () => {
+  it("folds tool turns into the following assistant turn as ⟦trace⟧ lines", () => {
     const msgs = buildHistoryMessages([
       { role: "user", content: "je veux réserver" },
       { role: "tool", content: "list_classes({}) -> [...]" },
@@ -21,7 +21,7 @@ describe("buildHistoryMessages", () => {
     expect(msgs[0]).toEqual({ role: "user", content: "je veux réserver" });
     expect(msgs[1].role).toBe("assistant");
     expect(msgs[1].content).toBe(
-      "[outil] list_classes({}) -> [...]\n[outil] check_availability({}) -> {slot}\nvoici un créneau",
+      "⟦trace⟧ list_classes({}) -> [...]\n⟦trace⟧ check_availability({}) -> {slot}\nvoici un créneau",
     );
   });
 
@@ -60,7 +60,7 @@ describe("buildHistoryMessages", () => {
       { role: "user", content: "u2" },
     ]);
     expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
-    expect(msgs[1].content).toBe("[outil] t1 -> ok\n[outil] t2 -> ok");
+    expect(msgs[1].content).toBe("⟦trace⟧ t1 -> ok\n⟦trace⟧ t2 -> ok");
   });
 
   it("caps each replayed tool result at the given length", () => {
@@ -72,8 +72,8 @@ describe("buildHistoryMessages", () => {
       ],
       10,
     );
-    // "[outil] " prefix + 10 chars of the result.
-    expect(msgs[1].content).toBe(`[outil] ${"x".repeat(10)}`);
+    // "⟦trace⟧ " prefix + 10 chars of the result.
+    expect(msgs[1].content).toBe(`⟦trace⟧ ${"x".repeat(10)}`);
   });
 
   it("returns an empty array for empty history (caller supplies the current message)", () => {

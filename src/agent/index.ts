@@ -9,6 +9,12 @@ import { findContactByPhone } from "../lib/wix.js";
 import { getCafeMenu } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { systemPrompt, dynamicContext } from "./systemPrompt.js";
+import {
+  lintOutboundReply,
+  correctiveLintInstruction,
+  normalizeUrl,
+  TOOL_TRACE_MARKER,
+} from "./outboundLint.js";
 import { capabilityMenuKind, isVagueOpener } from "../lib/capabilityMenu.js";
 import {
   receptionLinkInstruction,
@@ -176,7 +182,9 @@ export function buildHistoryMessages(
   for (const turn of turns) {
     const role: "user" | "assistant" = turn.role === "user" ? "user" : "assistant";
     const content =
-      turn.role === "tool" ? `[outil] ${turn.content.slice(0, toolReplayMaxLen)}` : turn.content;
+      turn.role === "tool"
+        ? `${TOOL_TRACE_MARKER} ${turn.content.slice(0, toolReplayMaxLen)}`
+        : turn.content;
     if (messages.length === 0 && role !== "user") continue;
     const last = messages[messages.length - 1];
     if (last && last.role === role && typeof last.content === "string") {
@@ -859,6 +867,17 @@ export async function handleInboundText(args: {
   let replyText: string | null = null;
   let interactiveSent = false;
   let usedTechnicalFallback = false;
+  // Allowlist for the outbound payment-link guard (prod 25/07 fabricated link):
+  // exact URLs the SERVER issued — active DB payment records + any link a real
+  // payment tool returns this turn (added in the loop below).
+  const approvedPaymentUrls = new Set<string>();
+  for (const rec of [activeBooking, activePlanOrder, activeCafeOrder]) {
+    if (rec?.payment_link) approvedPaymentUrls.add(normalizeUrl(rec.payment_link));
+  }
+  for (const d of deliveryOrders ?? []) {
+    const link = (d as { payment_link?: string | null }).payment_link;
+    if (link) approvedPaymentUrls.add(normalizeUrl(link));
+  }
   // Book-first, menu-after (abonnement flow): a successful book_with_membership
   // this turn means the SERVER sends the incontournables list right after the
   // model's confirmation — deterministic, never left to the model's judgment
@@ -950,6 +969,17 @@ export async function handleInboundText(args: {
           console.error(`Tool ${block.name} failed:`, err);
         }
         await repo.addTurn(client.id, "tool", `${block.name}(${JSON.stringify(block.input)}) -> ${result.slice(0, 2000)}`);
+        // Trust the link ONLY when a real payment tool minted it this turn.
+        if (!isError && block.name.startsWith("create_") && block.name.endsWith("payment_link")) {
+          try {
+            const parsed = JSON.parse(result) as { payment_link?: unknown };
+            if (typeof parsed.payment_link === "string" && parsed.payment_link) {
+              approvedPaymentUrls.add(normalizeUrl(parsed.payment_link));
+            }
+          } catch {
+            /* non-JSON result — nothing to allow */
+          }
+        }
         results.push({
           type: "tool_result",
           tool_use_id: block.id,
@@ -1058,6 +1088,46 @@ export async function handleInboundText(args: {
   // never leak to the client; the normal technical fallback handles that case.
   replyOutcome = classifyReplyOutcome(replyText, interactiveSent);
   if (replyOutcome !== "deliver") replyText = null;
+
+  // Outbound payment-link guard (prod 25/07). Only model-authored text reaches
+  // here as deliverable; the fallbacks below are fixed server strings. On a
+  // block, retry ONCE without tools (so no side effect can repeat) constrained
+  // to server-approved links; if it still fails, drop to the technical fallback
+  // (which also alerts reception) rather than ever send a fabricated link.
+  if (replyText) {
+    const lint = lintOutboundReply(replyText, approvedPaymentUrls);
+    if (!lint.ok) {
+      console.warn(`Outbound reply blocked (${lint.reason}: ${lint.detail ?? ""}) — corrective retry`);
+      try {
+        const corrected = await withOverloadRetry(
+          () =>
+            anthropic.messages.create({
+              model: config.CLAUDE_MODEL,
+              max_tokens: REPLY_MAX_TOKENS,
+              output_config: { effort: "low" },
+              system: [
+                ...system,
+                { type: "text", text: correctiveLintInstruction(approvedPaymentUrls) },
+              ],
+              messages,
+            }),
+          () => void sendTypingIndicator(args.waMessageId),
+        );
+        const retried = extractText(corrected);
+        if (retried && lintOutboundReply(retried, approvedPaymentUrls).ok) {
+          replyText = retried;
+        } else {
+          replyText = null;
+          loopError = loopError ?? new Error(`outbound_lint_failed:${lint.reason}`);
+        }
+      } catch (err) {
+        console.error("Corrective lint retry failed:", err);
+        replyText = null;
+        loopError = loopError ?? new Error("outbound_lint_retry_error");
+      }
+    }
+  }
+
   if (!replyText && !interactiveSent) {
     const modelSilence = loopError instanceof Error && /^model returned /.test(loopError.message);
     replyText = modelSilence
