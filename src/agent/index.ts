@@ -398,6 +398,10 @@ function notifyHumanTakeoverInbound(client: repo.Client, preview: string): void 
     "Nouveau message pendant un relais humain",
     `${client.name ?? "Client"} (+${client.wa_phone.replace(/^\+/, "")}) a répondu : « ${preview.replace(/\s+/g, " ").trim().slice(0, 180)} »\n` +
       `Ouvrir : ${config.BASE_URL.replace(/\/+$/, "")}/admin/conversations/${client.id}`,
+    // During a takeover Awa is deliberately silent: the owner must know that
+    // the client is waiting for the human who took over, even though generic
+    // "relais humain" notifications are otherwise informational.
+    { ownerAlert: true },
   );
 }
 

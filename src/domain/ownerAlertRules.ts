@@ -38,8 +38,9 @@ const INFORMATIONAL_SUBJECT_PATTERNS: RegExp[] = [
   /départ autorisé/i,
   /espèces choisies/i,
   /récap du jour/i,
-  // Le relais humain a déjà déclenché son alerte au moment du handoff ; les
-  // messages suivants du client relanceraient le gérant à chaque phrase.
+  // Les événements de relais sont informatifs par défaut. Le message entrant
+  // pendant un relais force explicitement la copie propriétaire à l'appel,
+  // car Awa reste silencieuse et le client attend une réponse humaine.
   /relais humain/i,
 ];
 

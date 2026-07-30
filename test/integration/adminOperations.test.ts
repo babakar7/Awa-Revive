@@ -115,6 +115,14 @@ describe("shared follow-up and human takeover", () => {
     await settle();
     expect(mock.waTextsTo(client.wa_phone)).toEqual([]);
     expect(Number((await pool.query(`select count(*) from conversations where client_id=$1 and role='user'`, [client.id])).rows[0].count)).toBe(2);
+    const ownerPhone = config.OWNER_PHONE.replace(/\D/g, "");
+    expect(
+      mock.waCalls().some(
+        (call) =>
+          call.body?.to === ownerPhone &&
+          JSON.stringify(call.body).includes("Nouveau message pendant un relais humain"),
+      ),
+    ).toBe(true);
 
     const requestKey = crypto.randomUUID();
     const first = await post(`/admin/conversations/${client.id}/reply`, {
