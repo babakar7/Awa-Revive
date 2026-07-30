@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatKeyOverlapAlert } from "../src/webhooks/wix.js";
+import {
+  formatKeyOverlapAlert,
+  shouldAlertKeyOverlap,
+} from "../src/webhooks/wix.js";
 
 describe("Wix Key overlap alert", () => {
   const overlap = {
@@ -39,5 +42,23 @@ describe("Wix Key overlap alert", () => {
     expect(body).toContain("Cliente : Cliente Wix");
     expect(body).toContain("Contact Wix : wix-contact");
     expect(body).not.toContain("/admin/conversations/");
+  });
+
+  it("does not alert when the new Key starts on the previous plan's expiry day", () => {
+    expect(
+      shouldAlertKeyOverlap(
+        new Date("2026-07-30T00:00:00.000Z"),
+        new Date("2026-07-30T23:59:59.000Z"),
+      ),
+    ).toBe(false);
+  });
+
+  it("alerts when the new Key starts on an earlier calendar day", () => {
+    expect(
+      shouldAlertKeyOverlap(
+        new Date("2026-07-29T23:59:59.000Z"),
+        new Date("2026-07-30T00:00:00.000Z"),
+      ),
+    ).toBe(true);
   });
 });

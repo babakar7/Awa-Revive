@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import * as repo from "../domain/repo.js";
 import { registerAndEnsureKey } from "../domain/keyProvisioning.js";
-import { keyMappingForPlan } from "../domain/keyRules.js";
+import { dakarDateKey, keyMappingForPlan } from "../domain/keyRules.js";
 import {
   keyPurchaseContinuityDecision,
   resolveContinuitySource,
@@ -27,6 +27,10 @@ function cleanAlertName(value: unknown): string {
     .trim()
     .slice(0, 100)
     .trim();
+}
+
+export function shouldAlertKeyOverlap(newStart: Date, previousEnd: Date): boolean {
+  return dakarDateKey(newStart) < dakarDateKey(previousEnd);
 }
 
 export function formatKeyOverlapAlert(args: {
@@ -143,10 +147,7 @@ export function registerWixWebhook(app: FastifyInstance): void {
         purchasedAt,
         source: continuity,
       });
-      if (
-        continuity &&
-        start.getTime() < continuity.expiresAt.getTime() - 60_000
-      ) {
+      if (continuity && shouldAlertKeyOverlap(start, continuity.expiresAt)) {
         notifyReception(
           "⚠️ Clé comptoir démarrée avant la fin de l'abonnement",
           formatKeyOverlapAlert({
