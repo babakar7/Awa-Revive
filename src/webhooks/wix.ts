@@ -20,6 +20,45 @@ function orderFromEvent(event: WixWebhookEvent): any {
   return event.actionEvent?.body?.order ?? null;
 }
 
+function cleanAlertName(value: unknown): string {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100)
+    .trim();
+}
+
+export function formatKeyOverlapAlert(args: {
+  newOrderId: string;
+  newStart: Date;
+  previousKind: "KEY" | "LEGACY_REFORMER";
+  previousOrderId: string;
+  previousEnd: Date;
+  clientName?: string | null;
+  clientPhone?: string | null;
+  clientId?: string | null;
+  wixContactId?: string | null;
+  baseUrl?: string;
+}): string {
+  const name = cleanAlertName(args.clientName) || "Cliente Wix";
+  const phone = String(args.clientPhone ?? "").replace(/\D/g, "");
+  const clientLine = `Cliente : ${name}${phone ? ` (+${phone})` : ""}`;
+  const baseUrl = String(args.baseUrl ?? "").replace(/\/+$/, "");
+  const lookupLine =
+    args.clientId && baseUrl
+      ? `Ouvrir la conversation : ${baseUrl}/admin/conversations/${encodeURIComponent(args.clientId)}`
+      : args.wixContactId
+        ? `Contact Wix : ${args.wixContactId}`
+        : null;
+  const overlap =
+    `La Clé Wix ${args.newOrderId} démarre le ${args.newStart.toISOString().slice(0, 10)}, ` +
+    `mais ${args.previousKind === "KEY" ? "la Clé précédente" : "l'abonnement Fondatrice"} ` +
+    `${args.previousOrderId} se termine le ${args.previousEnd.toISOString().slice(0, 10)}. ` +
+    `La commande Wix est conservée : vérifier les dates avec la cliente.`;
+  return [clientLine, overlap, lookupLine].filter(Boolean).join("\n");
+}
+
 export function registerWixWebhook(app: FastifyInstance): void {
   app.post("/webhooks/wix", async (req: FastifyRequest, reply) => {
     if (!config.WIX_WEBHOOK_SHARED_SECRET && !config.WIX_WEBHOOK_PUBLIC_KEY) {
@@ -79,12 +118,18 @@ export function registerWixWebhook(app: FastifyInstance): void {
       }
       const contactId = String(order?.buyer?.contactId ?? "") || null;
       let clientId: string | null = null;
+      let clientName: string | null = null;
+      let clientPhone: string | null = null;
       if (contactId) {
         const contact = await wix.getContactById(contactId);
+        const wixClient = wix.wixDeliveryClientFromContact(contact);
         const phones = (contact?.info?.phones?.items ?? [])
           .map((phone: any) => String(phone?.e164Phone ?? phone?.phone ?? ""))
           .filter(Boolean);
-        clientId = (await repo.findClientByPhone(phones))?.id ?? null;
+        const client = await repo.findClientByPhone(phones);
+        clientId = client?.id ?? null;
+        clientName = wixClient?.name ?? client?.name ?? null;
+        clientPhone = wixClient?.phone ?? client?.wa_phone ?? phones[0] ?? null;
       }
       const continuity = await resolveContinuitySource({
         clientId,
@@ -104,10 +149,18 @@ export function registerWixWebhook(app: FastifyInstance): void {
       ) {
         notifyReception(
           "⚠️ Clé comptoir démarrée avant la fin de l'abonnement",
-          `La Clé Wix ${event.entityId} démarre le ${start.toISOString().slice(0, 10)}, ` +
-            `mais ${continuity.kind === "KEY" ? "la Clé précédente" : "l'abonnement Fondatrice"} ` +
-            `${continuity.orderId} se termine le ${continuity.expiresAt.toISOString().slice(0, 10)}. ` +
-            `La commande Wix est conservée : vérifier les dates avec la cliente.`,
+          formatKeyOverlapAlert({
+            newOrderId: event.entityId,
+            newStart: start,
+            previousKind: continuity.kind,
+            previousOrderId: continuity.orderId,
+            previousEnd: continuity.expiresAt,
+            clientName,
+            clientPhone,
+            clientId,
+            wixContactId: contactId,
+            baseUrl: config.BASE_URL,
+          }),
         );
       }
       if (
