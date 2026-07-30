@@ -32,6 +32,11 @@ export function resolutionForm(item: Pick<AdminQueueItem, "id" | "source">, next
     <input type="hidden" name="next" value="${esc(next)}">
     <label>Résultat<select name="outcome" required><option value="">Choisir…</option>${RESOLUTION_OUTCOMES.map((outcome) => `<option value="${outcome}">${esc(RESOLUTION_LABELS[outcome])}</option>`).join("")}</select></label>
     <label>Note interne <span class="muted">(optionnel)</span><textarea name="note" maxlength="500" placeholder="Contexte utile pour l’équipe…"></textarea></label>
+    ${item.source === "handoff"
+      ? `<fieldset class="faq-capture"><legend>Enregistrer la réponse en FAQ <span class="muted">(optionnel — Awa pourra répondre seule la prochaine fois)</span></legend>
+    <label>Question<input name="faq_question" maxlength="240" placeholder="Avez-vous un espace de télétravail ?"></label>
+    <label>Réponse<textarea name="faq_answer" maxlength="1000" placeholder="Oui, dans le jardin (terrasse + pergola)…"></textarea></label></fieldset>`
+      : ""}
     <button class="act act--ok act--sm" type="submit">Confirmer la clôture</button>
   </form>
 </details>`;

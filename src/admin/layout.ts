@@ -78,6 +78,8 @@ const NAV: NavSection[] = [
       { href: "/admin/bookings", label: "Réservations", icon: "booking" },
       { href: "/admin/cles", label: "Clés de la Maison", icon: "key" },
       { href: "/admin/staff", label: "Équipe", icon: "team" },
+      { href: "/admin/fermetures", label: "Fermetures", icon: "home" },
+      { href: "/admin/faq", label: "FAQ Awa", icon: "chat" },
       { href: "/admin/paiements-coachs", label: "Paiements coachs", icon: "wallet" },
     ],
   },

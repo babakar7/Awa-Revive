@@ -32,6 +32,10 @@ import { recordOpsEvent } from "../domain/opsEvents.js";
 import { CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
 import { hashOpsToken, newPairCode, PAIR_CODE_TTL_MS } from "../ops/opsAuth.js";
 import { renderDevicesPage } from "./devicesPage.js";
+import { renderClosuresPage } from "./closuresPage.js";
+import { renderFaqPage } from "./faqPage.js";
+import * as closures from "../domain/closuresRepo.js";
+import * as faq from "../domain/faqRepo.js";
 import {
   attemptActivationNotify,
   attemptCreatedNotify,
@@ -625,6 +629,21 @@ export function registerAdmin(app: FastifyInstance): void {
         const updated = source === "handoff"
           ? await adminOps.resolveHandoff(id, identity, outcome, note)
           : await adminOps.resolveReview(id, identity, outcome, note);
+        // Same transaction as the resolution: optionally capture the answer as a
+        // published FAQ so Awa can handle the same question without a handoff.
+        if (updated && source === "handoff") {
+          const faqQ = String(body.faq_question ?? "").trim();
+          const faqA = String(body.faq_answer ?? "").trim();
+          if (faqQ && faqA) {
+            await faq.createFaqEntry({
+              question: faqQ.slice(0, 240),
+              answer: faqA.slice(0, 1000),
+              status: "published",
+              sourceHandoff: id,
+              createdBy: req.adminUser ?? null,
+            }).catch((err) => req.log.error({ err }, "FAQ capture on handoff resolve failed"));
+          }
+        }
         return reply.redirect(`${next}${next.includes("?") ? "&" : "?"}${updated ? "done=resolved" : `err=${encodeURIComponent("Ce suivi était déjà clôturé")}`}`, 303);
       });
 
@@ -2570,6 +2589,85 @@ ${photoSection}
         const { id } = req.params as { id: string };
         const ok = await staffPlan.deleteSchedule(id);
         return reply.redirect(ok ? "/admin/staff?done=deleted" : "/admin/staff?err=seul un brouillon peut être supprimé", 303);
+      });
+
+      // ---- Fermetures studio ----
+      admin.get("/fermetures", async (req, reply) => {
+        const q = req.query as any;
+        const body = renderClosuresPage({
+          closures: await closures.listClosures(),
+          notice: q?.done ? "Fermeture enregistrée." : null,
+          error: q?.err ? String(q.err) : null,
+        });
+        reply.type("text/html").send(await layout("Fermetures", "/admin/fermetures", body, { subtitle: "Jours fériés, Maggal, travaux" }));
+      });
+
+      admin.post("/fermetures", async (req, reply) => {
+        const b = req.body as any;
+        const reason = String(b?.reason ?? "").trim();
+        const startsAt = new Date(String(b?.starts_at ?? ""));
+        const endsAt = new Date(String(b?.ends_at ?? ""));
+        if (!reason || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || endsAt <= startsAt) {
+          return reply.redirect("/admin/fermetures?err=Motif+et+intervalle+valide+requis+(fin+après+début)", 303);
+        }
+        await closures.createClosure({
+          startsAt,
+          endsAt,
+          reason,
+          note: String(b?.note ?? "").trim() || null,
+          createdBy: req.adminUser ?? null,
+        });
+        return reply.redirect("/admin/fermetures?done=1", 303);
+      });
+
+      admin.post("/fermetures/:id/toggle", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const list = await closures.listClosures();
+        const current = list.find((c) => c.id === id);
+        if (current) await closures.setClosureEnabled(id, !current.enabled, req.adminUser ?? null);
+        return reply.redirect("/admin/fermetures?done=1", 303);
+      });
+
+      // ---- FAQ Awa ----
+      admin.get("/faq", async (req, reply) => {
+        const q = req.query as any;
+        const body = renderFaqPage({
+          entries: await faq.listFaqEntries(),
+          notice: q?.done ? "Entrée enregistrée." : null,
+          error: q?.err ? String(q.err) : null,
+        });
+        reply.type("text/html").send(await layout("FAQ Awa", "/admin/faq", body, { subtitle: "Réponses connues injectées au prompt" }));
+      });
+
+      admin.post("/faq", async (req, reply) => {
+        const b = req.body as any;
+        const question = String(b?.question ?? "").trim();
+        const answer = String(b?.answer ?? "").trim();
+        if (!question || !answer) return reply.redirect("/admin/faq?err=Question+et+réponse+requises", 303);
+        await faq.createFaqEntry({
+          question,
+          answer,
+          status: b?.op === "publish" ? "published" : "draft",
+          createdBy: req.adminUser ?? null,
+        });
+        return reply.redirect("/admin/faq?done=1", 303);
+      });
+
+      admin.post("/faq/:id", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const b = req.body as any;
+        const op = String(b?.op ?? "save");
+        const update: Parameters<typeof faq.updateFaqEntry>[1] = { updatedBy: req.adminUser ?? null };
+        if (op === "publish") update.status = "published";
+        else if (op === "unpublish") update.enabled = false;
+        else {
+          update.question = String(b?.question ?? "").trim() || undefined;
+          update.answer = String(b?.answer ?? "").trim() || undefined;
+        }
+        // Re-enable when (re)publishing.
+        if (op === "publish") update.enabled = true;
+        await faq.updateFaqEntry(id, update);
+        return reply.redirect("/admin/faq?done=1", 303);
       });
 
       admin.post("/staff/:id/grid", async (req, reply) => {

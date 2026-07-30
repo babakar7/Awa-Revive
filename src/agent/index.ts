@@ -25,6 +25,8 @@ import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
 import { isAwaDisengaged, isHumanTakeoverActive } from "../domain/adminOperations.js";
 import * as deliveries from "../domain/deliveryRepo.js";
 import * as commitments from "../domain/commitments.js";
+import * as closuresRepo from "../domain/closuresRepo.js";
+import * as faqRepo from "../domain/faqRepo.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
 import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
@@ -848,6 +850,16 @@ export async function handleInboundText(args: {
     messages.push({ role: "user", content: text });
   }
 
+  // Studio closures in the next ~30 days + the known-answers FAQ, so Awa states
+  // closures proactively and answers repeat questions without a handoff.
+  const nowMs = Date.now();
+  const [studioClosures, faqEntries] = await Promise.all([
+    closuresRepo
+      .closuresInWindow(new Date(nowMs), new Date(nowMs + 30 * 86_400_000))
+      .catch(() => []),
+    faqRepo.publishedFaqEntries().catch(() => []),
+  ]);
+
   const system: Anthropic.TextBlockParam[] = [
     // Stable prefix — cached.
     { type: "text", text: systemPrompt(), cache_control: { type: "ephemeral" } },
@@ -874,6 +886,8 @@ export async function handleInboundText(args: {
         packDiscoveryCampaign,
         packDiscoveryMetaNewLead,
         conversationGapDays,
+        studioClosures,
+        faqEntries,
       }),
     },
   ];

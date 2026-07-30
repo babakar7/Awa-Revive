@@ -1802,4 +1802,42 @@ create table if not exists wix_attendance_sync_state (
 insert into wix_attendance_sync_state (singleton)
   values (true)
   on conflict (singleton) do nothing;
+
+-- Fermetures studio (jours fériés, Maggal, travaux…). Éditables via /admin/closures
+-- sans redéploiement (précédent cafe_menu_items). Wix garde les créneaux ces
+-- jours-là ; le serveur les filtre à partir d'ici. Demi-journée possible via
+-- l'intervalle [starts_at, ends_at). Soft-disable (enabled=false), jamais de
+-- suppression destructive.
+create table if not exists studio_closures (
+  id uuid primary key default gen_random_uuid(),
+  starts_at timestamptz not null,
+  ends_at timestamptz not null,
+  reason text not null,                       -- ex. « Maggal de Touba » (montré au client)
+  note text,                                  -- interne, jamais envoyé au client
+  enabled boolean not null default true,
+  created_by text,
+  updated_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint studio_closures_range check (ends_at > starts_at)
+);
+create index if not exists idx_studio_closures_window on studio_closures (starts_at, ends_at) where enabled;
+
+-- Base de connaissances FAQ, alimentée depuis la résolution d'un handoff (évite
+-- 3 handoffs pour la même question). Seules les entrées published+enabled sont
+-- injectées au prompt, comme des données factuelles délimitées (jamais des
+-- instructions). Éditable via /admin/faq.
+create table if not exists faq_entries (
+  id uuid primary key default gen_random_uuid(),
+  question text not null,
+  answer text not null,
+  status text not null default 'draft' check (status in ('draft','published')),
+  enabled boolean not null default true,
+  source_handoff uuid references handoffs(id),
+  created_by text,
+  updated_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_faq_published on faq_entries (status, enabled);
 `;

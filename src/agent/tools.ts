@@ -34,6 +34,7 @@ import type { LinkRequest } from "../domain/linkRequests.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
 import * as commitments from "../domain/commitments.js";
+import * as closuresRepo from "../domain/closuresRepo.js";
 import { recordBookingFunnelEvent } from "../domain/bookingFunnel.js";
 import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
 import { createClientPaymentSession } from "../domain/paymentSession.js";
@@ -1330,13 +1331,22 @@ export async function executeTool(
         metadata: { service_id: serviceId, date_from: dateFrom, date_to: dateTo },
       });
 
+      // Studio closures (Maggal, holidays…): Wix keeps the slots on those days,
+      // so the server drops any slot that starts inside a closure — covering the
+      // requested window plus the fallback next-seven-day window.
+      const closures = await closuresRepo
+        .closuresInWindow(new Date(dateFrom), new Date(Date.parse(dateTo) + 8 * 86_400_000))
+        .catch(() => [] as closuresRepo.StudioClosure[]);
+      const isSlotClosed = (s: wix.WixSlot) =>
+        closures.length > 0 && closuresRepo.isClosedAt(new Date(s.startDate), closures) !== null;
+
       // Slots whose class already started must never be offered nor cached —
       // a link sold for a started class can only end in a refund.
       const now = Date.now();
       let requestedSlots: wix.WixSlot[];
       try {
         requestedSlots = (await wix.queryAvailability(serviceId, dateFrom, dateTo))
-          .filter((s) => Date.parse(s.startDate) > now)
+          .filter((s) => Date.parse(s.startDate) > now && !isSlotClosed(s))
           .slice(0, 30);
       } catch (error) {
         await trackFunnel({
@@ -1364,7 +1374,7 @@ export async function executeTool(
             alternativeWindow.dateFrom,
             alternativeWindow.dateTo,
           ))
-            .filter((s) => Date.parse(s.startDate) > now)
+            .filter((s) => Date.parse(s.startDate) > now && !isSlotClosed(s))
             .slice(0, 30);
         } catch (error) {
           await trackFunnel({
@@ -1414,6 +1424,14 @@ export async function executeTool(
           : undefined,
         timezone_note:
           "start_dakar is the class time in Dakar local time — relay it verbatim. NEVER convert timezones or mention GMT/UTC.",
+        closed_dates:
+          closures.length > 0
+            ? closures.map((c) => ({
+                reason: c.reason,
+                from: c.starts_at.toISOString(),
+                to: c.ends_at.toISOString(),
+              }))
+            : undefined,
         slots: slots.map((s) => slotResult(s, alternativeSlots.includes(s))),
         ...paymentChoicePayload(preferredPaymentMethod),
         note:
@@ -1625,6 +1643,22 @@ export async function executeTool(
           message:
             "This class has already started — it can no longer be booked. " +
             "Apologize and present the fresh alternatives returned here immediately in the same response.",
+        });
+      }
+
+      // 3a-bis. Never sell a slot that falls on a studio closure created after
+      //         it was offered/cached (Maggal, holiday…). Payment-link creation
+      //         is a guarded chokepoint; a closed slot here would end in a refund.
+      const slotClosure = await closuresRepo.closureAt(new Date(slotStart)).catch(() => null);
+      if (slotClosure) {
+        const alternatives = await freshSlotAlternatives(client.id, serviceId, resolvedEventId);
+        return JSON.stringify({
+          error: "studio_closed",
+          reason: slotClosure.reason,
+          alternatives: alternatives.map((s) => slotResult(s, true)),
+          message:
+            `Le studio est fermé ce jour-là (${slotClosure.reason}) — cette séance n'est pas réservable. ` +
+            "Excuse-toi, explique la fermeture, et propose immédiatement les alternatives fournies ici.",
         });
       }
 
@@ -3212,6 +3246,22 @@ export async function executeTool(
 
       const slot = (cached.slot_json as any) ?? {};
       const slotStart: string = slot.startDate ?? String(input.slot_start ?? "");
+      // Studio closure guard on the membership path too (a plan booking would
+      // otherwise slip a free booking onto a closed day).
+      if (slotStart) {
+        const membershipSlotClosure = await closuresRepo
+          .closureAt(new Date(slotStart))
+          .catch(() => null);
+        if (membershipSlotClosure) {
+          return JSON.stringify({
+            error: "studio_closed",
+            reason: membershipSlotClosure.reason,
+            message:
+              `Le studio est fermé ce jour-là (${membershipSlotClosure.reason}) — cette séance n'est pas réservable, ` +
+              "même avec l'abonnement. Excuse-toi, explique la fermeture, et propose une autre date.",
+          });
+        }
+      }
       const fresh = await wix.isSlotStillOpen(serviceId, resolvedEventId, slotStart, participants);
       if (!fresh) {
         await trackFunnel({
