@@ -19,6 +19,8 @@ export interface EligibleCourse {
   serviceName: string;
   startsAt: Date;
   endsAt: Date;
+  participantCount: number | null;
+  wixStatus: string;
   coachResourceId: string;
   coachName: string;
   raw: unknown;
@@ -170,7 +172,7 @@ export function selectEligibleReformerEvents(args: {
   for (const event of args.events) {
     if (seen.has(event.id)) continue;
     seen.add(event.id);
-    if (event.status !== "CONFIRMED") continue;
+    if (event.status !== "CONFIRMED" && event.status !== "CANCELLED") continue;
     if (!event.resources.some((r) => r.id === args.coachResourceId)) continue;
     const serviceMatches = event.serviceId
       ? serviceIds.has(event.serviceId)
@@ -189,6 +191,8 @@ export function selectEligibleReformerEvents(args: {
       serviceName: event.serviceName || event.title || "Reformer",
       startsAt,
       endsAt,
+      participantCount: event.participantCount,
+      wixStatus: event.status,
       coachResourceId: resource.id,
       coachName: resource.name,
       raw: event.raw,

@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import PDFDocument from "pdfkit";
-import type { StatementDetail } from "../domain/coachPaymentRepo.js";
+import type {
+  CoachPaymentCourse,
+  StatementDetail,
+} from "../domain/coachPaymentRepo.js";
 import { storedMonthKey, tariffFromJson, tariffLabel } from "../domain/coachPaymentRules.js";
 
 const FONT_DIR = path.resolve(process.cwd(), "assets/fonts");
@@ -64,6 +67,13 @@ function ensureSpace(doc: PDFKit.PDFDocument, y: number, needed: number, draft: 
   doc.addPage();
   if (draft) watermark(doc);
   return MARGIN;
+}
+
+export function coachPaymentCourseSourceLabel(
+  course: Pick<CoachPaymentCourse, "source" | "wix_status">,
+): string {
+  if (course.source === "manual") return "Manuel";
+  return course.wix_status === "CANCELLED" ? "Wix · annulée" : "Wix";
 }
 
 /** Render from stored snapshots only; no Wix/profile lookup occurs here. */
@@ -143,7 +153,12 @@ export function renderCoachPaymentPdf(detail: StatementDetail): Promise<Buffer> 
     doc.text(fmtDate(course.starts_at), MARGIN + 7, y + 7, { width: 92 });
     doc.text(course.service_name, MARGIN + 104, y + 7, { width: 248 });
     if (reason) doc.fontSize(7.5).fillColor(COLORS.muted).text(reason, MARGIN + 104, y + 20, { width: 248 });
-    doc.font(BODY).fontSize(8.5).fillColor(COLORS.text).text(course.source === "wix" ? "Wix" : "Manuel", MARGIN + 360, y + 7);
+    doc.font(BODY).fontSize(8.5).fillColor(COLORS.text).text(
+      coachPaymentCourseSourceLabel(course),
+      MARGIN + 360,
+      y + 7,
+      { width: 72 },
+    );
     doc.font(course.included ? BOLD : BODY).text(course.included ? "Oui" : "Non", MARGIN + 434, y + 7);
     doc.moveTo(MARGIN, y + h).lineTo(MARGIN + CONTENT_W, y + h).lineWidth(0.5).strokeColor(COLORS.rule).stroke();
     y += h;

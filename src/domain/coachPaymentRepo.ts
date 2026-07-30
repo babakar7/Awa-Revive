@@ -67,9 +67,12 @@ export interface CoachPaymentCourse {
   service_name: string;
   starts_at: Date;
   ends_at: Date | null;
+  participant_count: number | null;
+  wix_status: string | null;
   coach_resource_id: string | null;
   coach_name: string | null;
   included: boolean;
+  manual_decision: boolean;
   manual_reason: string | null;
   raw_snapshot: unknown;
   created_at: Date;
@@ -237,14 +240,29 @@ async function insertCourses(
   client: PoolClient,
   statementId: string,
   courses: EligibleCourse[],
-  includedByEvent = new Map<string, boolean>(),
+  decisionsByEvent = new Map<string, {
+    included: boolean;
+    manualDecision: boolean;
+    wixStatus: string | null;
+  }>(),
 ): Promise<void> {
   for (const course of courses) {
+    const previous = decisionsByEvent.get(course.wixEventId);
+    // Drafts created before wix_status/manual_decision existed only persisted
+    // `included`. Preserve their explicit exclusions on the first new sync.
+    const legacyManualExclusion =
+      previous?.wixStatus === null && previous.included === false;
+    const manualDecision =
+      Boolean(previous?.manualDecision) || legacyManualExclusion;
+    const included = manualDecision
+      ? previous!.included
+      : course.wixStatus !== "CANCELLED";
     await client.query(
       `insert into coach_payment_courses
         (statement_id, source, wix_event_id, service_id, service_name, starts_at,
-         ends_at, coach_resource_id, coach_name, included, raw_snapshot)
-       values ($1,'wix',$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+         ends_at, participant_count, wix_status, coach_resource_id, coach_name,
+         included, manual_decision, raw_snapshot)
+       values ($1,'wix',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [
         statementId,
         course.wixEventId,
@@ -252,9 +270,12 @@ async function insertCourses(
         course.serviceName,
         course.startsAt,
         course.endsAt,
+        course.participantCount,
+        course.wixStatus,
         course.coachResourceId,
         course.coachName,
-        includedByEvent.get(course.wixEventId) ?? true,
+        included,
+        manualDecision,
         JSON.stringify(course.raw),
       ],
     );
@@ -346,18 +367,32 @@ export async function replaceWixSnapshot(
     if (!statement) throw new CoachPaymentError("État introuvable");
     if (statement.status !== "draft") throw new CoachPaymentError("Un état validé est immuable");
     const old = await client.query(
-      `select wix_event_id, included from coach_payment_courses
+      `select wix_event_id, included, manual_decision, wix_status
+         from coach_payment_courses
         where statement_id=$1 and source='wix'`,
       [statementId],
     );
-    const included = new Map<string, boolean>(
-      old.rows.filter((r) => r.wix_event_id).map((r) => [String(r.wix_event_id), Boolean(r.included)]),
+    const decisions = new Map<string, {
+      included: boolean;
+      manualDecision: boolean;
+      wixStatus: string | null;
+    }>(
+      old.rows
+        .filter((r) => r.wix_event_id)
+        .map((r) => [
+          String(r.wix_event_id),
+          {
+            included: Boolean(r.included),
+            manualDecision: Boolean(r.manual_decision),
+            wixStatus: r.wix_status === null ? null : String(r.wix_status),
+          },
+        ]),
     );
     await client.query(
       `delete from coach_payment_courses where statement_id=$1 and source='wix'`,
       [statementId],
     );
-    await insertCourses(client, statementId, courses, included);
+    await insertCourses(client, statementId, courses, decisions);
     await client.query(
       `update coach_payment_statements
           set sync_status='ok', sync_error=null, synced_at=now(), updated_at=now()
@@ -420,7 +455,8 @@ export async function toggleCourse(statementId: string, courseId: string): Promi
   if (!validUuid(statementId) || !validUuid(courseId)) return false;
   return transaction(async (client) => {
     const changed = await client.query(
-      `update coach_payment_courses c set included=not c.included
+      `update coach_payment_courses c
+          set included=not c.included, manual_decision=true
         from coach_payment_statements s
        where c.id=$2 and c.statement_id=$1 and s.id=c.statement_id and s.status='draft'
        returning c.id`,
@@ -579,9 +615,11 @@ export async function createCorrection(
     await client.query(
       `insert into coach_payment_courses
         (statement_id, source, wix_event_id, service_id, service_name, starts_at,
-         ends_at, coach_resource_id, coach_name, included, manual_reason, raw_snapshot)
+         ends_at, participant_count, wix_status, coach_resource_id, coach_name,
+         included, manual_decision, manual_reason, raw_snapshot)
        select $2, source, wix_event_id, service_id, service_name, starts_at,
-              ends_at, coach_resource_id, coach_name, included, manual_reason, raw_snapshot
+              ends_at, participant_count, wix_status, coach_resource_id, coach_name,
+              included, manual_decision, manual_reason, raw_snapshot
          from coach_payment_courses where statement_id=$1`,
       [source.id, copy.id],
     );

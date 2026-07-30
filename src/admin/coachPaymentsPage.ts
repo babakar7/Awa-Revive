@@ -152,7 +152,49 @@ export function renderCoachPaymentStatement(args: {
       : statement.sync_status === "failed"
         ? `Échec Wix : ${statement.sync_error ?? "erreur inconnue"}`
         : "Synchronisation en attente";
-  const courseRows = courses.map((c) => `<tr style="${c.included ? "" : "opacity:.55"}"><td>${date(c.starts_at)}<div class="muted">${c.source === "manual" ? `Manuel · ${esc(c.manual_reason)}` : `Wix · ${esc(c.wix_event_id)}`}</div></td><td>${esc(c.service_name)}</td><td>${c.included ? "Oui" : "Non"}</td>${draft ? `<td><form method="post" action="${BASE}/etats/${esc(statement.id)}/cours/${esc(c.id)}/toggle"><button class="act act--ghost act--sm" type="submit">${c.included ? "Exclure" : "Inclure"}</button></form></td>` : ""}</tr>`).join("");
+  const chronological = (a: typeof courses[number], b: typeof courses[number]) =>
+    new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime();
+  const cancelledCourses = courses
+    .filter((c) => c.source === "wix" && c.wix_status === "CANCELLED")
+    .sort(chronological);
+  const emptyCourses = courses
+    .filter(
+      (c) =>
+        c.source === "wix" &&
+        c.wix_status !== "CANCELLED" &&
+        c.participant_count === 0,
+    )
+    .sort(chronological);
+  const priorityIds = new Set([...cancelledCourses, ...emptyCourses].map((c) => c.id));
+  const priorityCourses = [...cancelledCourses, ...emptyCourses];
+  const otherCourses = courses.filter((c) => !priorityIds.has(c.id)).sort(chronological);
+  const courseRows = (rows: typeof courses, priority: boolean) => rows.map((c) => {
+    const cancelled = c.source === "wix" && c.wix_status === "CANCELLED";
+    const attendance = cancelled
+      ? `<span class="badge badge--red">Séance annulée</span>`
+      : c.source === "manual"
+        ? `<span class="badge badge--gray">Manuel</span>`
+        : c.participant_count === 0
+          ? `<span class="badge badge--amber">Séance vide · 0 participant</span>`
+          : c.participant_count === null
+            ? `<span class="badge badge--gray">Participants inconnus</span>`
+            : `<span>${c.participant_count} participant${c.participant_count > 1 ? "s" : ""}</span>`;
+    const counted = cancelled && c.included
+      ? `<span class="badge badge--green">Incluse exceptionnellement</span>`
+      : c.included ? "Oui" : "Non";
+    const action = cancelled && !c.included
+      ? "Inclure exceptionnellement"
+      : c.included ? "Exclure" : "Inclure";
+    return `<tr style="${!priority && !c.included ? "opacity:.55" : ""}"><td>${date(c.starts_at)}<div class="muted">${c.source === "manual" ? `Manuel · ${esc(c.manual_reason)}` : `Wix · ${esc(c.wix_event_id)}`}</div></td><td>${esc(c.service_name)}</td><td>${attendance}</td><td>${counted}</td>${draft ? `<td><form method="post" action="${BASE}/etats/${esc(statement.id)}/cours/${esc(c.id)}/toggle"><button class="act act--ghost act--sm" type="submit">${action}</button></form></td>` : ""}</tr>`;
+  }).join("");
+  const columns = draft ? 5 : 4;
+  const reviewSummary = priorityCourses.length
+    ? `<div class="card warn"><b>${priorityCourses.length} séance${priorityCourses.length > 1 ? "s" : ""} à vérifier · ${cancelledCourses.length} annulée${cancelledCourses.length > 1 ? "s" : ""} · ${emptyCourses.length} vide${emptyCourses.length > 1 ? "s" : ""}</b><div class="muted">Ces alertes n’empêchent pas la validation de l’état.</div></div>`
+    : `<div class="card success"><span class="ok">✓ Aucune séance annulée ou vide à vérifier.</span></div>`;
+  const priorityBlock = priorityCourses.length
+    ? `<div class="card"><h2>Séances à vérifier</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Participants Wix</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${courseRows(priorityCourses, true)}</tbody></table></div></div>`
+    : "";
+  const otherRows = courseRows(otherCourses, false);
   const adjustmentRows = adjustments.map((a) => `<tr><td>${a.kind === "bonus" ? "Prime" : "Retenue"}</td><td>${esc(a.reason)}</td><td class="right"><b>${a.kind === "bonus" ? "+" : "−"} ${xof(a.amount_xof)}</b></td>${draft ? `<td><form method="post" action="${BASE}/etats/${esc(statement.id)}/ajustements/${esc(a.id)}/supprimer"><button class="act act--ghost act--sm" type="submit">Retirer</button></form></td>` : ""}</tr>`).join("");
   const draftTools = draft ? `<div class="card"><h2>Actions sur le brouillon</h2><div class="row"><form method="post" action="${BASE}/etats/${esc(statement.id)}/synchroniser"><button class="act act--ghost" type="submit">Synchroniser Wix</button></form><form method="post" action="${BASE}/etats/${esc(statement.id)}/valider" data-confirm="Une dernière synchronisation Wix sera faite. Valider définitivement cet état ? Son contenu ne sera plus modifiable."><button class="act act--ok" type="submit"${!closed || !syncOk || statement.total_xof < 0 ? " disabled" : ""}>Valider l'état</button></form></div>${!closed ? `<p class="muted">Validation disponible après la clôture de ${esc(monthLabel(month))}.</p>` : ""}${!syncOk ? `<p class="muted">Validation bloquée tant que Wix n'est pas synchronisé après la clôture et la ressource coach associée.</p>` : ""}</div>
   <div class="card"><h2>Conditions tarifaires du brouillon</h2><p class="muted">${esc(tariffLabel(tariffFromJson(statement.tariff_json)))}</p><form method="post" action="${BASE}/etats/${esc(statement.id)}/tarif">${tariffFields(args.detail)}<button class="act act--ghost" type="submit">Mettre à jour le calcul</button></form></div>
@@ -168,7 +210,8 @@ export function renderCoachPaymentStatement(args: {
   return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">État mensuel · version ${statement.version} · Propriétaire</span><h2>${esc(statement.coach_name_snapshot)} — ${esc(monthLabel(month))}</h2><p>${esc(tariffLabel(tariffFromJson(statement.tariff_json)))}</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}?month=${esc(month)}">États du mois</a><a class="act act--ghost" href="${BASE}/etats/${esc(statement.id)}/pdf" target="_blank">PDF ${draft ? "brouillon" : "validé"}</a>${correction}</div></header>${args.banner}
   <div class="card statement-summary"><div><span class="muted">Montant de l’état</span><b>${xof(statement.total_xof)}</b></div><div>${statusBadge(statement.status)}<p class="${syncOk ? "muted" : "danger-text"}">${esc(syncLabel)}</p></div></div>
   ${draftTools}
-  <div class="card"><h2>Séances (${statement.course_count} comptées)</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${courseRows || `<tr><td colspan="4"><div class="empty"><b>Aucune séance</b><p>Synchronisez Wix ou ajoutez une séance manuelle.</p></div></td></tr>`}</tbody></table></div></div>
+  ${reviewSummary}${priorityBlock}
+  <div class="card"><h2>Autres séances (${statement.course_count} comptées au total)</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Participants Wix</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${otherRows || `<tr><td colspan="${columns}"><div class="empty"><b>Aucune autre séance</b><p>Synchronisez Wix ou ajoutez une séance manuelle.</p></div></td></tr>`}</tbody></table></div></div>
   <div class="card"><h2>Calcul</h2><div class="table-wrap"><table><tbody><tr><td>${statement.course_count} séance(s) selon la formule figée</td><td class="right"><b>${xof(statement.base_total_xof)}</b></td>${draft ? "<td></td>" : ""}</tr>${adjustmentRows}<tr><td><b>Total à payer</b></td><td class="right"><b style="font-size:1.12rem">${xof(statement.total_xof)}</b></td>${draft ? "<td></td>" : ""}</tr></tbody></table></div></div>
   ${sendBlock}${paidBlock}<div class="card"><h2>Versions</h2><ul>${versionsHtml}</ul></div><div class="card"><h2>Historique des envois</h2>${sendsHtml}</div>`;
 }

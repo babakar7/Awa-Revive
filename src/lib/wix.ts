@@ -78,6 +78,8 @@ export interface WixCalendarEvent {
   status: string;
   startDate: string;
   endDate: string;
+  /** Confirmed participant count derived from Calendar V3 capacity data. */
+  participantCount: number | null;
   resources: Array<{ id: string; name: string; type: string | null }>;
   raw: unknown;
 }
@@ -114,6 +116,18 @@ export async function queryCalendarEventsV3(
         event?.adjustedStart?.localDate ?? event?.start?.utcDate ?? event?.start?.localDate;
       const endDate = event?.adjustedEnd?.localDate ?? event?.end?.utcDate ?? event?.end?.localDate;
       if (!event?.id || !startDate || !endDate) continue;
+      const totalCapacity =
+        typeof event.totalCapacity === "number" ? event.totalCapacity : Number.NaN;
+      const remainingCapacity =
+        typeof event.remainingCapacity === "number" ? event.remainingCapacity : Number.NaN;
+      const participantCount =
+        Number.isInteger(totalCapacity) &&
+        totalCapacity >= 0 &&
+        Number.isInteger(remainingCapacity) &&
+        remainingCapacity >= 0 &&
+        remainingCapacity <= totalCapacity
+          ? totalCapacity - remainingCapacity
+          : null;
       out.push({
         id: String(event.id),
         serviceId:
@@ -124,6 +138,7 @@ export async function queryCalendarEventsV3(
         status: String(event.status ?? "").toUpperCase(),
         startDate: String(startDate),
         endDate: String(endDate),
+        participantCount,
         resources: (Array.isArray(event.resources) ? event.resources : [])
           .filter((r: any) => r?.id)
           .map((r: any) => ({

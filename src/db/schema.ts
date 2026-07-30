@@ -1240,14 +1240,23 @@ create table if not exists coach_payment_courses (
   service_name text not null,
   starts_at timestamptz not null,
   ends_at timestamptz,
+  participant_count integer check (participant_count is null or participant_count >= 0),
+  wix_status text,
   coach_resource_id text,
   coach_name text,
   included boolean not null default true,
+  manual_decision boolean not null default false,
   manual_reason text,
   raw_snapshot jsonb,
   created_at timestamptz not null default now(),
   check (source <> 'manual' or (manual_reason is not null and length(trim(manual_reason)) > 0))
 );
+alter table coach_payment_courses
+  add column if not exists participant_count integer
+  check (participant_count is null or participant_count >= 0);
+alter table coach_payment_courses add column if not exists wix_status text;
+alter table coach_payment_courses
+  add column if not exists manual_decision boolean not null default false;
 create unique index if not exists idx_coach_payment_wix_event
   on coach_payment_courses (statement_id, wix_event_id)
   where source = 'wix' and wix_event_id is not null;

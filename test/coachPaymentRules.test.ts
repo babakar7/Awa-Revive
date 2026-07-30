@@ -64,12 +64,13 @@ describe("Calendar V3 event eligibility", () => {
     status: "CONFIRMED",
     startDate: "2026-06-10T10:00:00",
     endDate: "2026-06-10T10:50:00",
+    participantCount: null,
     resources: [{ id: "coach-yass", name: "Yass", type: "staff" }],
     raw: { snapshot: true },
     ...overrides,
   });
 
-  it("keeps only finished, confirmed Reformer events assigned to the coach and deduplicates Wix ids", () => {
+  it("keeps finished confirmed and cancelled Reformer events assigned to the coach and deduplicates Wix ids", () => {
     const eligible = selectEligibleReformerEvents({
       services,
       coachResourceId: "coach-yass",
@@ -78,14 +79,35 @@ describe("Calendar V3 event eligibility", () => {
       events: [
         event(),
         event(),
-        event({ id: "cancelled", status: "CANCELLED" }),
+        event({
+          id: "cancelled",
+          status: "CANCELLED",
+          startDate: "2026-06-11T10:00:00",
+          endDate: "2026-06-11T10:50:00",
+        }),
+        event({ id: "unknown-status", status: "PENDING" }),
         event({ id: "future", startDate: "2026-06-30T23:30:00", endDate: "2026-07-01T00:20:00" }),
         event({ id: "wrong-service", serviceId: "yoga-1", serviceName: "Yoga", title: "Yoga" }),
         event({ id: "wrong-coach", resources: [{ id: "coach-leslie", name: "Leslie", type: "staff" }] }),
         event({ id: "wrong-month", startDate: "2026-07-01T00:00:00", endDate: "2026-07-01T00:50:00" }),
       ],
     });
-    expect(eligible.map((e) => e.wixEventId)).toEqual(["event-1"]);
+    expect(eligible.map((e) => [e.wixEventId, e.wixStatus])).toEqual([
+      ["event-1", "CONFIRMED"],
+      ["cancelled", "CANCELLED"],
+    ]);
+  });
+
+  it("keeps an empty session included and carries its zero-participant flag", () => {
+    const eligible = selectEligibleReformerEvents({
+      services,
+      coachResourceId: "coach-yass",
+      month: "2026-06",
+      now: new Date("2026-07-01T00:00:00Z"),
+      events: [event({ participantCount: 0 })],
+    });
+    expect(eligible).toHaveLength(1);
+    expect(eligible[0].participantCount).toBe(0);
   });
 
   it("does not count an event that has not ended yet", () => {
