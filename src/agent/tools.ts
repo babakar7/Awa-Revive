@@ -17,6 +17,8 @@ import { orderedPaymentMethodOptions, paymentMethodLabel } from "../lib/paymentM
 import { clientOutreachLink } from "../lib/receptionContact.js";
 import { isCapabilityOptionId } from "../lib/capabilityMenu.js";
 import { invalidSlotOptionIds } from "./slotOptions.js";
+import { findCoveringPlan } from "./coverageGuard.js";
+import { activeMemberships } from "../lib/membershipContext.js";
 import {
   computeExtras,
   extrasFromJson,
@@ -1465,6 +1467,39 @@ export async function executeTool(
           claimedServiceId,
           canonicalServiceId: serviceId,
         });
+      }
+
+      // 0c. Membership-coverage guard (server decides): if the client's active
+      //     plan covers THIS service with enough sessions, refuse the paid link
+      //     and route through book_with_membership — prevents double-charging a
+      //     class the plan already pays for. Uses only cached data (memberships
+      //     + services are both memoized this turn). Any lookup miss → allow
+      //     payment (never strand a booking on a flaky read). Non-looping: fires
+      //     only when remaining >= participants (see findCoveringPlan).
+      try {
+        const membership = await activeMemberships(client);
+        if (membership && membership.plans.length > 0) {
+          const services = await wix.listServices();
+          const svc = services.find((s) => s.id === serviceId);
+          const covering = findCoveringPlan(
+            serviceId,
+            svc?.pricingPlanIds,
+            membership.plans,
+            participants,
+          );
+          if (covering) {
+            return JSON.stringify({
+              error: "covered_by_membership",
+              message:
+                `Ce client a un abonnement actif « ${covering.plan} » qui couvre ce cours ` +
+                `(${covering.remaining} séance(s) restante(s)). Réserve avec book_with_membership ` +
+                `(participants=${participants}) — ne crée PAS de lien de paiement et ne facture pas ce cours en plus. ` +
+                `Si book_with_membership répond not_enough_sessions, tu pourras alors proposer le paiement de l'appoint.`,
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Membership-coverage guard skipped (lookup failed):", err);
       }
 
       // 0b. Multi-session commitment gating. While a commitment is ACTIVE for
