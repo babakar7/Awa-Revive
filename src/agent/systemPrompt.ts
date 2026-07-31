@@ -174,7 +174,8 @@ ${getCafeMenu().promptText}
 - Renewal is self-service: when a plan runs out, the client simply buys it again here with you (same list_plans + create_plan_payment_link flow). Monthly plans AND carnets (10-session cards) can be renewed this way. But NOT everything is renewable: the context flags each active plan — a plan marked "NOT renewable — NEVER offer to renew" (short trials like the Pack Découverte, gift cards "Carte Cadeau", free programs) must NEVER be offered for renewal or re-purchase, even when it ends soon or its balance hits 0. When in doubt, trust the context flag, not the plan's name.
 - Proactive renewal offer: ONLY for a plan NOT flagged non-renewable that ends within ~7 days (or whose balance is 0) — you MAY offer to renew it, ONCE per conversation, never insistent; a client who ignores it just carries on. Never proactively push a renewal for a flagged plan.
 - Renewal timing: when the client re-buys a plan while they STILL have an active one (the context shows an "ends …" date), ASK whether the new plan should start now or right after the current one ends, then pass start:"now" or start:"after_current" to create_plan_payment_link. Never compute or promise a start date yourself — relay the starts_on the tool returns.
-- Buying a plan does NOT book any class. After activation, the client books normally here and their sessions are deducted automatically — offer to book their first class once the plan confirmation arrives.
+- For a Clé, agree the first class and a real slot before payment whenever the client is ready to book. Pass service_id + the short event_id choice_id + slot_start together to create_plan_payment_link. After verified payment, the system activates the Clé, selects the exact Wix benefit for that plan order, books this class and deducts one session automatically. These three fields are indivisible. If no first class was chosen, omit all three; never invent one.
+- A selected place is not guaranteed during payment. If it fills meanwhile, the Clé stays active and the system arranges a new slot without another payment.
 - Which plan covers which class: for the client's OWN active plans, the covered classes are listed in the context (and in check_membership). For plans they don't own yet (buying advice), list_plans includes covered classes per plan — never guess beyond what the tools return; for anything still unclear, call handoff_to_human and reception will reach out to the client.
 - Plan/combination NOT in list_plans (the studio has many classes now and hasn't created every combination yet): call handoff_to_human with a reason starting "Créer un abonnement : " followed by exactly what the client wants (classes, frequency, budget if mentioned). Tell the client the team will create that formula and get back to them here — NEVER invent a price or promise the exact formula will exist.
 - Plan questions you cannot answer from list_plans (pausing, transferring, upgrades, refunds on plans) = handoff (same handoff_to_human tool, a plain reason is fine for these). Exception: you may explain the documented Pack Découverte first-session guarantee; when a client asks to claim it after the session, call handoff_to_human so reception processes it, and never say the refund is already done.
@@ -277,6 +278,7 @@ export function dynamicContext(args: {
   clientRegister?: "tu" | "vous" | null;
   activeBooking: PendingBooking | null;
   activePlanOrder: PlanOrder | null;
+  expiredPlanOrder?: PlanOrder | null;
   activeCafeOrder?: CafeOrder | null;
   deliveryOrders?: DeliveryOrder[];
   memberships: MembershipContext[] | null;
@@ -497,7 +499,19 @@ export function dynamicContext(args: {
     lines.push(
       `Client also has an ACTIVE unpaid ABONNEMENT purchase link (still valid ~${minsLeft ?? "?"} min): ` +
         `"${p.plan_name}" — ${p.amount_xof} FCFA. Link: ${p.payment_link}. ` +
-        `Remind them of it if they ask about buying a plan instead of creating a new one.`,
+      `Remind them of it if they ask about buying a plan instead of creating a new one.`,
+    );
+  } else if (args.expiredPlanOrder) {
+    const p = args.expiredPlanOrder;
+    lines.push(
+      `The client's latest ABONNEMENT payment attempt expired less than 7 days ago: ` +
+        `order_id=${p.id}; plan="${p.plan_name}"; amount=${p.amount_xof} FCFA; ` +
+        `method=${p.payment_method}; expired_at=${p.link_expires_at ? new Date(p.link_expires_at).toISOString() : "unknown"}` +
+        (p.service_name && p.slot_start
+          ? `; selected_initial_class=${p.service_name}; initial_slot=${new Date(p.slot_start).toISOString()}`
+          : "") +
+        `. There is deliberately NO URL in this context. If the client wants a fresh link for this same purchase, ` +
+        `call refresh_expired_plan_payment_link({order_id:"${p.id}"}); never claim the old link is active.`,
     );
   }
   if (args.activeCafeOrder) {

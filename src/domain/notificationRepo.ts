@@ -220,16 +220,17 @@ export async function isMutedPhone(phone: string): Promise<boolean> {
  */
 export async function claimOrReclaim(
   dedupKey: string,
-  ruleId: string,
+  ruleId: string | null,
   slot: { startDate: string; endDate: string } | null,
+  source = "rule",
 ): Promise<boolean> {
   const eventStart = slot ? slot.startDate : null;
   const eventEnd = slot ? slot.endDate : null;
   const ins = await pool.query(
     `insert into notification_log (rule_id, source, dedup_key, event_start, event_end, status)
-     values ($1, 'rule', $2, $3, $4, 'claimed')
+     values ($1, $5, $2, $3, $4, 'claimed')
      on conflict (dedup_key) where dedup_key is not null do nothing`,
-    [ruleId, dedupKey, eventStart, eventEnd],
+    [ruleId, dedupKey, eventStart, eventEnd, source],
   );
   if ((ins.rowCount ?? 0) > 0) return true;
 
@@ -245,13 +246,26 @@ export async function claimOrReclaim(
 export async function finishLog(
   dedupKey: string,
   status: LogStatus,
-  fields: { recipientPhone?: string | null; body?: string | null; error?: string | null },
+  fields: {
+    recipientPhone?: string | null;
+    body?: string | null;
+    error?: string | null;
+    waMessageId?: string | null;
+  },
 ): Promise<void> {
   await pool.query(
     `update notification_log
-        set status = $2, recipient_phone = $3, body = $4, error = $5
+        set status = $2, recipient_phone = $3, body = $4, error = $5,
+            wa_message_id = $6
       where dedup_key = $1`,
-    [dedupKey, status, fields.recipientPhone ?? null, fields.body ?? null, fields.error ?? null],
+    [
+      dedupKey,
+      status,
+      fields.recipientPhone ?? null,
+      fields.body ?? null,
+      fields.error ?? null,
+      fields.waMessageId ?? null,
+    ],
   );
 }
 

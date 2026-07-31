@@ -23,7 +23,8 @@ import {
   describeWhatsAppSticker,
   stickerTurnText,
 } from "../lib/imageInput.js";
-import { wasProcessed, markProcessed } from "../domain/repo.js";
+import { wasProcessed, markProcessed, upsertClient } from "../domain/repo.js";
+import { handleTechnicalFailure } from "../domain/technicalFailure.js";
 import { allowMessage } from "../lib/rateLimit.js";
 import { enqueue } from "../lib/serialize.js";
 
@@ -198,6 +199,19 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
           await markProcessed(dedupeId, "whatsapp");
         } catch (err) {
           req.log.error({ err, from: msg.from }, "Inbound message processing failed");
+          try {
+            const client = await upsertClient(msg.from);
+            await handleTechnicalFailure({
+              client,
+              waMessageId: msg.id,
+              stage: ["audio", "image", "sticker", "document"].includes(msg.type)
+                ? `media_handler:${msg.type}`
+                : `inbound_handler:${msg.type}`,
+              cause: err,
+            });
+          } catch (handoffError) {
+            req.log.error({ err: handoffError, from: msg.from }, "Technical handoff itself failed");
+          }
         } finally {
           inFlightMessages.delete(msg.id);
         }

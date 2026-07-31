@@ -33,6 +33,7 @@ import {
 import { keyMappingForPlan } from "./keyRules.js";
 import { createBarTicket } from "./kitchenTicketRepo.js";
 import { applyFrenchRegister } from "../lib/frenchRegister.js";
+import { handleTechnicalFailure } from "./technicalFailure.js";
 
 /**
  * Payment fulfillment — shared by Wave and Orange Money / Max It webhooks.
@@ -692,30 +693,43 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
   let activatedOrderId: string | null = order.wix_order_id;
   if (!activated && order.member_id) {
     try {
-      const wixOrderId = await wix.createOfflinePlanOrder(
-        order.plan_id,
-        order.member_id,
-        startsInFuture ? startsAt!.toISOString() : undefined,
-      );
+      // Reconcile before retrying the non-idempotent offline-order write. A
+      // previous request may have succeeded in Wix while our response was lost.
+      const expectedStart = startsAt ?? new Date(order.paid_at ?? order.created_at);
+      const existingOrderId = await wix.findPlanOrderForMember({
+        planId: order.plan_id,
+        memberId: order.member_id,
+        startDate: expectedStart,
+      });
+      const wixOrderId = existingOrderId ?? await wix.createOfflinePlanOrder(
+          order.plan_id,
+          order.member_id,
+          startsInFuture ? startsAt!.toISOString() : undefined,
+        );
       await repo.markPlanOrderActivated(order.id, wixOrderId);
       activated = true;
       activatedOrderId = wixOrderId;
       invalidateMembershipCache(order.client_id);
       log.info({ planOrderId: order.id, wixOrderId }, "Plan activated in Wix");
     } catch (err) {
-      log.error({ err, planOrderId: order.id }, "Plan activation failed — falling back to manual");
+      const message = err instanceof Error ? err.message : String(err);
+      const failures = await repo.recordPlanFulfillmentFailure(order.id, message);
+      log.error({ err, planOrderId: order.id, failures }, "Plan activation failed after reconciliation");
+      if (failures >= 2) {
+        await repo.markPlanTechnicalFailure(order.id, message);
+        await handleTechnicalFailure({
+          client,
+          kind: "plan",
+          orderId: order.id,
+          stage: "activation",
+          cause: err,
+        });
+      }
+      return;
     }
   }
 
-  // Campaign étape 1 is a one-session Wix plan tied to a slot selected before
-  // payment. Once the plan is active, immediately create a MEMBERSHIP booking
-  // and redeem its single benefit so Wix's participant view is consistent.
-  if (activated && order.campaign_code) {
-    await fulfillDiscoveryStep1Booking(order, client, lang, log);
-    return;
-  }
-
-  if (activated && activatedOrderId && order.member_id && !order.campaign_code) {
+  if (activated && activatedOrderId && order.member_id && keyMapping) {
     try {
       const contact = await wix.findContactByPhone(
         phoneDisplay,
@@ -740,6 +754,22 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
       // path and must never roll back or misrepresent the payment.
       log.error({ err, planOrderId: order.id }, "Key bonus registration failed after activation");
     }
+  }
+
+  // A plan/Key may carry a first class selected before payment. Once the plan
+  // is active (and the Key registry is durable), redeem that exact order's
+  // benefit against the persisted Wix event.
+  if (activated && order.discovery_booking_status === "PENDING" && order.event_id) {
+    const activatedOrder = { ...order, wix_order_id: activatedOrderId };
+    try {
+      await fulfillInitialPlanBooking(activatedOrder, client, lang, log);
+    } catch (error) {
+      // Availability/contact/benefit lookups happen before the booking write
+      // and may fail on their own. Keep those failures in the same durable
+      // retry/terminal path as create, redeem and confirm failures.
+      await failInitialPlanBooking(activatedOrder, client, "initial_booking", error, log);
+    }
+    return;
   }
 
   // Manual path is now reserved for explicit no-inbox/refusal fallback, or an
@@ -782,18 +812,58 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
   }
 }
 
-async function fulfillDiscoveryStep1Booking(
+async function exactPlanBenefitWithShortRetry(args: {
+  serviceId: string;
+  contactId: string;
+  planId: string;
+  orderId: string;
+}): Promise<wix.EligibleBenefit | null> {
+  for (const delay of [0, 300, 900]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    const benefit = wix.selectEligibleBenefit(
+      await wix.findEligibleBenefits(args.serviceId, args.contactId, 1),
+      { planId: args.planId, orderId: args.orderId },
+    );
+    if (benefit) return benefit;
+  }
+  return null;
+}
+
+async function failInitialPlanBooking(
   order: repo.PlanOrder,
-  client: any,
+  client: repo.Client,
+  stage: string,
+  error: unknown,
+  log: PaymentLog,
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  const failures = await repo.recordPlanFulfillmentFailure(order.id, message);
+  log.error({ err: error, planOrderId: order.id, failures }, "Initial plan booking failed");
+  if (failures < 2) return;
+  await repo.markPlanTechnicalFailure(order.id, message);
+  await repo.deferDiscoveryPlanBooking(order.id, "FAILED", message);
+  await handleTechnicalFailure({
+    client,
+    kind: "plan",
+    orderId: order.id,
+    stage,
+    cause: error,
+  });
+}
+
+async function fulfillInitialPlanBooking(
+  order: repo.PlanOrder,
+  client: repo.Client,
   lang: string,
   log: PaymentLog,
 ): Promise<void> {
   if (!order.service_id || !order.service_name || !order.event_id || !order.slot_start) {
-    await repo.deferDiscoveryPlanBooking(order.id, "FAILED", "selected slot missing from plan order");
-    notifyReception(
-      "⚠️ Pack Découverte étape 1 — réservation à terminer",
-      `Le plan ${order.plan_name} a été activé et payé, mais le créneau initial est incomplet. ` +
-        `Client : ${client?.name ?? "?"} (+${String(client?.wa_phone ?? "").replace(/^\+/, "")}).`,
+    await failInitialPlanBooking(
+      order,
+      client,
+      "initial_booking_invariant",
+      new Error("selected slot missing from plan order"),
+      log,
     );
     return;
   }
@@ -802,7 +872,7 @@ async function fulfillDiscoveryStep1Booking(
   if (Date.parse(slotStart) <= Date.now()) {
     await repo.deferDiscoveryPlanBooking(order.id, "SLOT_UNAVAILABLE", "class already started");
     const msg = applyFrenchRegister(
-      "✅ Ton Pack Découverte étape 1 est actif. Le créneau choisi a déjà commencé : réponds ici et je te propose immédiatement un autre créneau Reformer avec ton abonnement.",
+      `✅ Ton abonnement ${order.plan_name} est actif. Le créneau choisi a déjà commencé. Nous allons te proposer ici un nouveau créneau, sans nouveau paiement.`,
       lang === "fr" && client?.fr_register === "vous",
     );
     await sendText(client.wa_phone, msg).catch(() => undefined);
@@ -810,11 +880,23 @@ async function fulfillDiscoveryStep1Booking(
     return;
   }
 
-  const fresh = await wix.isSlotStillOpen(order.service_id, order.event_id, slotStart, 1);
+  const fresh: wix.WixSlot | null = order.wix_booking_id
+    ? {
+        eventId: order.event_id,
+        serviceId: order.service_id,
+        startDate: slotStart,
+        endDate: order.slot_end ? new Date(order.slot_end).toISOString() : slotStart,
+        openSpots: 0,
+        totalSpots: 0,
+        coach: null,
+        coachId: null,
+        raw: order.slot_json,
+      }
+    : await wix.isSlotStillOpen(order.service_id, order.event_id, slotStart, 1);
   if (!fresh) {
     await repo.deferDiscoveryPlanBooking(order.id, "SLOT_UNAVAILABLE", "selected slot filled while payment was pending");
     const msg = applyFrenchRegister(
-      "✅ Ton Pack Découverte étape 1 est actif. Le créneau choisi vient de se remplir pendant le paiement ; réponds ici et je te propose tout de suite les prochains créneaux Reformer, sans nouveau paiement.",
+      `✅ Ton abonnement ${order.plan_name} est actif. Le créneau choisi s’est rempli pendant le paiement. Nous allons te proposer ici un nouveau créneau, sans nouveau paiement.`,
       lang === "fr" && client?.fr_register === "vous",
     );
     await sendText(client.wa_phone, msg).catch(() => undefined);
@@ -824,48 +906,63 @@ async function fulfillDiscoveryStep1Booking(
 
   const phone = `+${String(client?.wa_phone ?? "").replace(/^\+/, "")}`;
   const contact = await wix.findContactByPhone(phone, client?.name ?? undefined);
-  const benefit = contact ? await wix.findEligibleBenefit(order.service_id, contact.id) : null;
-  if (!contact || !benefit) {
-    await repo.deferDiscoveryPlanBooking(order.id, "FAILED", "activated plan was not eligible for selected class");
-    notifyReception(
-      "⚠️ Pack Découverte étape 1 — abonnement sans décompte",
-      `Le plan ${order.plan_name} est actif mais son bénéfice n'est pas utilisable pour le créneau choisi.\n` +
-        `Client : ${client?.name ?? "?"} (${phone})\nCours : ${order.service_name}\nPlan order : ${order.id}`,
+  const benefit = contact && order.wix_order_id && !order.benefit_transaction_id
+    ? await exactPlanBenefitWithShortRetry({
+        serviceId: order.service_id,
+        contactId: contact.id,
+        planId: order.plan_id,
+        orderId: order.wix_order_id,
+      })
+    : null;
+  if (!contact || (!order.benefit_transaction_id && !benefit)) {
+    await failInitialPlanBooking(
+      order,
+      client,
+      "initial_benefit_selection",
+      new Error("exact activated plan benefit not available for selected class"),
+      log,
     );
-    const msg = applyFrenchRegister(
-      "✅ Ton Pack Découverte étape 1 est actif. L'équipe finalise la réservation du premier cours et te confirme très vite ici.",
-      lang === "fr" && client?.fr_register === "vous",
-    );
-    await sendText(client.wa_phone, msg).catch(() => undefined);
-    await repo.addTurn(order.client_id, "assistant", msg).catch(() => undefined);
     return;
   }
 
-  let wixBookingId: string | null = null;
+  let wixBookingId: string | null = order.wix_booking_id;
   try {
-    wixBookingId = await wix.createBookingRaw({
-      slot: fresh.raw,
-      name: contact.fullName || client?.name || "Client Revive",
-      phone,
-      participants: 1,
-      paymentOption: "MEMBERSHIP",
-      resolvedContact: contact,
-    });
-    const redemption = await wix.redeemMembershipForBooking({
-      wixBookingId,
-      serviceId: order.service_id,
-      benefit,
-      count: 1,
-    });
-    try {
-      await wix.confirmBookingPaid(wixBookingId);
-    } catch (err) {
-      notifyReception(
-        "⚠️ Pack Découverte étape 1 — résa à confirmer",
-        `La séance a été décomptée du plan ${redemption.membershipName}, mais la confirmation calendrier a échoué.\n` +
-          `Booking Wix : ${wixBookingId}\nClient : ${client?.name ?? "?"} (${phone})`,
-      );
+    if (!wixBookingId) {
+      wixBookingId = await wix.createBookingRaw({
+        slot: fresh.raw,
+        name: contact.fullName || client?.name || "Client Revive",
+        phone,
+        participants: 1,
+        paymentOption: "MEMBERSHIP",
+        resolvedContact: contact,
+      });
+      await repo.saveInitialPlanBookingWixId(order.id, wixBookingId);
     }
+    let transactionId = order.benefit_transaction_id;
+    if (!transactionId) {
+      const redemption = await wix.redeemMembershipForBooking({
+        wixBookingId,
+        serviceId: order.service_id,
+        benefit: benefit!,
+        count: 1,
+      });
+      transactionId = redemption.transactionId || null;
+      if (transactionId) {
+        await repo.saveInitialPlanBenefitTransaction(order.id, transactionId);
+      }
+    }
+    let confirmationError: unknown = null;
+    for (const delay of [0, 300, 900]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        await wix.confirmBookingPaid(wixBookingId);
+        confirmationError = null;
+        break;
+      } catch (error) {
+        confirmationError = error;
+      }
+    }
+    if (confirmationError) throw confirmationError;
     const booking = await repo.createMembershipBooking({
       clientId: order.client_id,
       serviceId: order.service_id,
@@ -875,12 +972,12 @@ async function fulfillDiscoveryStep1Booking(
       slotStart: fresh.startDate,
       slotEnd: fresh.endDate ?? null,
       wixBookingId,
-      benefitTransactionId: redemption.transactionId || null,
+      benefitTransactionId: transactionId,
     });
     await repo.finishDiscoveryPlanBooking({
       planOrderId: order.id,
       wixBookingId,
-      benefitTransactionId: redemption.transactionId || null,
+      benefitTransactionId: transactionId,
       bookingId: booking.id,
     });
     invalidateMembershipCache(order.client_id);
@@ -888,22 +985,21 @@ async function fulfillDiscoveryStep1Booking(
       confirmationMessage(lang, order.service_name, new Date(fresh.startDate)),
       lang === "fr" && client?.fr_register === "vous",
     );
-    await sendText(client.wa_phone, msg);
-    await repo.addTurn(order.client_id, "assistant", msg);
-    log.info({ planOrderId: order.id, wixBookingId }, "Discovery step 1 activated and booked with membership");
+    try {
+      const waMessageId = await sendText(client.wa_phone, msg);
+      await repo.addTurn(order.client_id, "assistant", msg, waMessageId ?? undefined);
+    } catch (error) {
+      await handleTechnicalFailure({
+        client,
+        kind: "plan",
+        orderId: order.id,
+        stage: "booking_confirmation_send",
+        cause: error,
+      });
+    }
+    log.info({ planOrderId: order.id, wixBookingId }, "Initial plan class activated and booked with membership");
   } catch (err) {
-    if (wixBookingId) await wix.declineBooking(wixBookingId).catch(() => undefined);
-    await repo.deferDiscoveryPlanBooking(order.id, "FAILED", err instanceof Error ? err.message : String(err));
-    notifyReception(
-      "⚠️ Pack Découverte étape 1 — réservation à terminer",
-      `Le plan ${order.plan_name} est payé et actif, mais la réservation automatique a échoué.\n` +
-        `Client : ${client?.name ?? "?"} (${phone})\nCours : ${order.service_name}\nPlan order : ${order.id}\n` +
-        `Erreur : ${err instanceof Error ? err.message : String(err)}`,
-    );
-    const msg = "✅ Ton Pack Découverte étape 1 est actif. L'équipe finalise la réservation du premier cours et te confirme très vite ici.";
-    await sendText(client.wa_phone, msg).catch(() => undefined);
-    await repo.addTurn(order.client_id, "assistant", msg).catch(() => undefined);
-    log.error({ err, planOrderId: order.id }, "Discovery step 1 booking failed after activation");
+    await failInitialPlanBooking(order, client, "initial_booking", err, log);
   }
 }
 

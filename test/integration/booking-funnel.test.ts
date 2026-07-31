@@ -197,7 +197,7 @@ describe("booking funnel persistence", () => {
     expect(failure.rows).toEqual([{ failure_code: "slot_unavailable" }]);
   });
 
-  it("uses the cached canonical service when the model repeats a human-readable alias", async () => {
+  it("rejects a service alias made only of generic Pilates/Reformer words", async () => {
     const client = await seedClient();
     const initial = JSON.parse(
       await executeTool(fullClient(client), "check_availability", {
@@ -207,32 +207,8 @@ describe("booking funnel persistence", () => {
       }),
     );
 
-    expect(initial.service_id).toBe("svc_1");
-    const result = JSON.parse(
-      await executeTool(fullClient(client), "create_payment_link", {
-        service_id: "pilates_reformer",
-        event_id: initial.slots[0].choice_id,
-        client_name: "Riche",
-        participants: 4,
-        payment_method: "wave",
-      }),
-    );
-
-    expect(result).toMatchObject({
-      payment_method: "wave",
-      participants: 4,
-      amount_fcfa: 60_000,
-      class: "Pilates Reformer",
-    });
-    const booking = await pool.query(
-      `select service_id, event_id, participants, status from pending_bookings order by created_at desc limit 1`,
-    );
-    expect(booking.rows[0]).toMatchObject({
-      service_id: "svc_1",
-      event_id: "ev_1",
-      participants: 4,
-      status: "AWAITING_PAYMENT",
-    });
+    expect(initial).toMatchObject({ error: "unknown_service_id" });
+    expect((await pool.query(`select count(*)::int as n from pending_bookings`)).rows[0].n).toBe(0);
   });
 
   it("books against an eligible membership and records the confirmed journey", async () => {

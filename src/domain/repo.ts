@@ -451,12 +451,40 @@ export async function pauseAwaForTechnicalHandoff(
   await pool.query(
     `update clients
         set human_takeover_until=now() + ($2 || ' hours')::interval,
-            human_takeover_by='awa-circuit-breaker',
+            human_takeover_by='awa-technical-failure',
             human_takeover_at=now(),
             updated_at=now()
       where id=$1`,
     [clientId, String(hours)],
   );
+}
+
+/** Create one open technical follow-up per client + equivalent failure stage. */
+export async function ensureOpenTechnicalHandoff(
+  clientId: string,
+  stage: string,
+  reason: string,
+): Promise<boolean> {
+  const excerpt = await recentTranscriptExcerpt(clientId);
+  const category = `Relais technique Awa [${stage.slice(0, 120)}]`;
+  const dedupKey = `technical:${clientId}:${stage.slice(0, 160)}`;
+  const res = await pool.query(
+    `insert into handoffs (client_id, reason, transcript_excerpt, technical_dedup_key)
+     values ($1, $2, $3, $4)
+     on conflict (technical_dedup_key)
+       where status='OPEN' and technical_dedup_key is not null do nothing
+     returning id`,
+    [clientId, `${category}: ${reason.slice(0, 700)}`, excerpt, dedupKey],
+  );
+  if ((res.rowCount ?? 0) > 0) {
+    await recordBookingFunnelEvent({
+      clientId,
+      stage: "handoff",
+      allowCreateJourney: false,
+      metadata: { reason_category: "Relais technique Awa" },
+    }).catch((error) => console.error("Failed to record technical handoff funnel event:", error));
+  }
+  return (res.rowCount ?? 0) > 0;
 }
 
 // ---------- last interactive choices ----------
@@ -1140,6 +1168,7 @@ export async function createMembershipBooking(args: {
        (client_id, service_id, service_name, event_id, slot_json, slot_start, slot_end,
         amount_xof, participants, status, payment_method, wix_booking_id, benefit_transaction_id)
      values ($1, $2, $3, $4, $5, $6, $7, 0, $10, 'BOOKED', 'membership', $8, $9)
+     on conflict (wix_booking_id) do update set wix_booking_id=excluded.wix_booking_id
      returning *`,
     [
       args.clientId,
@@ -1187,6 +1216,8 @@ export async function allUpcomingBooked(): Promise<
 
 export interface PlanOrder {
   id: string;
+  created_at: Date;
+  updated_at: Date;
   client_id: string;
   plan_id: string;
   plan_name: string;
@@ -1222,6 +1253,9 @@ export interface PlanOrder {
   continuity_expires_at: Date | null;
   continuity_remaining: number | null;
   continuity_alerted_at: Date | null;
+  retry_of_order_id: string | null;
+  fulfillment_failure_count: number;
+  technical_failure_at: Date | null;
 }
 
 /**
@@ -1271,10 +1305,11 @@ export async function createDraftPlanOrder(args: {
   continuitySourcePlanId?: string | null;
   continuityExpiresAt?: Date | null;
   continuityRemaining?: number | null;
+  retryOfOrderId?: string | null;
 }): Promise<PlanOrder> {
   const campaignCode = args.campaignCode ?? null;
   const discoveryBookingStatus: string | null =
-    campaignCode === null ? null : "PENDING";
+    args.eventId ? "PENDING" : null;
   const res = await pool.query(
     `insert into pending_plan_orders
        (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, campaign_code,
@@ -1282,9 +1317,10 @@ export async function createDraftPlanOrder(args: {
         discovery_booking_status, is_key, key_invitation_count,
         continuity_source_kind, continuity_source_order_id,
         continuity_source_plan_id, continuity_expires_at, continuity_remaining,
+        retry_of_order_id,
         status)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-             $14, $15, $16, $17, $18, $19, $20, $21, 'DRAFT') returning *`,
+             $14, $15, $16, $17, $18, $19, $20, $21, $22, 'DRAFT') returning *`,
     [
       args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null,
       campaignCode, args.serviceId ?? null, args.serviceName ?? null, args.eventId ?? null,
@@ -1297,6 +1333,7 @@ export async function createDraftPlanOrder(args: {
       args.continuitySourcePlanId ?? null,
       args.continuityExpiresAt ?? null,
       args.continuityRemaining ?? null,
+      args.retryOfOrderId ?? null,
     ],
   );
   return res.rows[0];
@@ -1329,6 +1366,54 @@ export async function deferDiscoveryPlanBooking(
             fulfilling_at=null, updated_at=now()
       where id=$1`,
     [planOrderId, status, error.slice(0, 800)],
+  );
+}
+
+export async function saveInitialPlanBookingWixId(
+  planOrderId: string,
+  wixBookingId: string,
+): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set wix_booking_id=coalesce(wix_booking_id,$2), updated_at=now()
+      where id=$1`,
+    [planOrderId, wixBookingId],
+  );
+}
+
+export async function saveInitialPlanBenefitTransaction(
+  planOrderId: string,
+  transactionId: string,
+): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set benefit_transaction_id=coalesce(benefit_transaction_id,$2), updated_at=now()
+      where id=$1`,
+    [planOrderId, transactionId],
+  );
+}
+
+export async function recordPlanFulfillmentFailure(
+  id: string,
+  error: string,
+): Promise<number> {
+  const res = await pool.query(
+    `update pending_plan_orders
+        set fulfillment_failure_count=fulfillment_failure_count+1,
+            discovery_booking_error=$2, fulfilling_at=null, updated_at=now()
+      where id=$1 returning fulfillment_failure_count`,
+    [id, error.slice(0, 800)],
+  );
+  return Number(res.rows[0]?.fulfillment_failure_count ?? 1);
+}
+
+export async function markPlanTechnicalFailure(id: string, error: string): Promise<void> {
+  await pool.query(
+    `update pending_plan_orders
+        set technical_failure_at=coalesce(technical_failure_at,now()),
+            discovery_booking_error=$2, fulfilling_at=null, updated_at=now()
+      where id=$1`,
+    [id, error.slice(0, 800)],
   );
 }
 
@@ -1406,6 +1491,8 @@ export async function markPlanOrderActivated(
   return transitionPlanOrder(id, "ACTIVATED", ["PAID", "SCHEDULED"], {
     wix_order_id: wixOrderId,
     fulfilling_at: null,
+    fulfillment_failure_count: 0,
+    discovery_booking_error: null,
   });
 }
 
@@ -1432,8 +1519,9 @@ export async function claimPlanOrderForFulfillment(id: string): Promise<PlanOrde
         and (
           (status = 'PAID' and ((member_id is not null and wix_order_id is null) or reception_notified_at is null))
           or (status = 'SCHEDULED' and starts_at <= now() and member_id is not null and wix_order_id is null)
-          or (status = 'ACTIVATED' and campaign_code is not null and discovery_booking_status = 'PENDING')
+          or (status = 'ACTIVATED' and event_id is not null and discovery_booking_status = 'PENDING')
         )
+        and technical_failure_at is null
         and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
       returning *`,
     [id],
@@ -1467,8 +1555,9 @@ export async function stuckPaidPlanOrders(
       where (
           (status = 'PAID' and ((member_id is not null and wix_order_id is null) or reception_notified_at is null))
           or (status = 'SCHEDULED' and starts_at <= now() and member_id is not null and wix_order_id is null)
-          or (status = 'ACTIVATED' and campaign_code is not null and discovery_booking_status = 'PENDING')
+          or (status = 'ACTIVATED' and event_id is not null and discovery_booking_status = 'PENDING')
         )
+        and technical_failure_at is null
         and updated_at < now() - make_interval(mins => $1)
         and (fulfilling_at is null or fulfilling_at < now() - interval '2 minutes')
       order by updated_at asc limit $2`,
@@ -1505,6 +1594,20 @@ export async function activeAwaitingPlanOrder(clientId: string): Promise<PlanOrd
       where client_id = $1 and status = 'AWAITING_PAYMENT' and link_expires_at > now()
       order by created_at desc limit 1`,
     [clientId],
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function latestRecentExpiredPlanOrder(
+  clientId: string,
+  days = 7,
+): Promise<PlanOrder | null> {
+  const res = await pool.query(
+    `select * from pending_plan_orders
+      where client_id=$1 and status='EXPIRED'
+        and coalesce(link_expires_at,updated_at) >= now() - ($2 * interval '1 day')
+      order by created_at desc limit 1`,
+    [clientId, days],
   );
   return res.rows[0] ?? null;
 }

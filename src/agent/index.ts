@@ -17,10 +17,6 @@ import {
 } from "./outboundLint.js";
 import { shouldRouteReactionAsReply } from "./reactionIntent.js";
 import { capabilityMenuKind, isVagueOpener } from "../lib/capabilityMenu.js";
-import {
-  receptionLinkInstruction,
-  receptionWhatsAppLink,
-} from "../lib/receptionContact.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
 import { isAwaDisengaged, isHumanTakeoverActive } from "../domain/adminOperations.js";
 import * as deliveries from "../domain/deliveryRepo.js";
@@ -39,6 +35,10 @@ import {
   toolResultError,
 } from "./toolCircuitBreaker.js";
 import { resolveFreeTextChoice } from "./choiceMatcher.js";
+import {
+  handleTechnicalFailure,
+  technicalClientMessage,
+} from "../domain/technicalFailure.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -137,19 +137,10 @@ export function classifyReplyOutcome(
 }
 
 export function technicalFallbackMessage(
-  clientName?: string | null,
+  _clientName?: string | null,
   formal = false,
 ): string {
-  const contact = receptionWhatsAppLink(
-    config.RECEPTION_PHONE,
-    clientName,
-    "un souci technique rencontré avec Awa",
-  );
-  return applyFrenchRegister(
-    "Désolé, j'ai un souci technique 🙏🏾 Réessaie dans un instant.\n\n" +
-      receptionLinkInstruction("fr", contact.url),
-    formal,
-  );
+  return technicalClientMessage("fr", formal);
 }
 
 /** A stale <NO_REPLY> is a model lapse, not a client-visible technical outage. */
@@ -310,8 +301,6 @@ export function deliveryPaymentMethodFromReply(
   return null;
 }
 
-const TECH_FAILURE_HANDOFF_PREFIX = "Échec technique — le client a reçu le message d'erreur";
-
 /**
  * A message is a NEW conversation when the client has never messaged
  * (lastActivityAt null) or has been silent for at least gapHours. Pure so the
@@ -420,36 +409,12 @@ export function describeLoopFailure(err: unknown): string {
   return status ? `${status} — ${msg}` : msg;
 }
 
-/**
- * The client just received the technical fallback: the agent loop crashed or produced
- * nothing. Record it in the handoffs register and tell reception (fire and
- * forget — this must never delay or break the reply path). Deduped 24h per
- * client so a retry-spam doesn't flood anyone. `reason` is the underlying
- * failure (see describeLoopFailure) so the incident stays diagnosable after
- * Railway's short log window rolls over.
- */
-async function notifyTechnicalFailure(client: repo.Client, reason?: string): Promise<void> {
-  try {
-    if (await repo.recentHandoffExists(client.id, TECH_FAILURE_HANDOFF_PREFIX, 24)) return;
-    await repo.recordHandoff(client.id, TECH_FAILURE_HANDOFF_PREFIX);
-    notifyReception(
-      "⚠️ Échec technique — un client est planté",
-      `Awa n'a pas réussi à répondre à ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")}) ` +
-        `et lui a envoyé le message d'erreur avec un lien WhatsApp prérempli vers la réception.\n\n` +
-        (reason ? `Motif technique : ${reason}\n\n` : "") +
-        `À faire : jeter un œil à sa conversation (${config.BASE_URL}/admin/conversations) et le ` +
-        `recontacter si son besoin est visible. Si ça se répète, prévenir le support technique.`,
-    );
-  } catch (err) {
-    console.error(`Technical-failure notification failed for client ${client.id}:`, err);
-  }
-}
-
 async function tripToolCircuitBreaker(args: {
   client: repo.Client;
   toolName: string;
   errorCode: string;
   resourceKey: string;
+  waMessageId: string;
 }): Promise<void> {
   const claimed = await repo.markAgentToolFailureTripped({
     clientId: args.client.id,
@@ -457,24 +422,17 @@ async function tripToolCircuitBreaker(args: {
     errorCode: args.errorCode,
     resourceKey: args.resourceKey,
   });
-  await repo.pauseAwaForTechnicalHandoff(args.client.id, 12).catch((error) =>
-    console.error("Failed to pause Awa after tool circuit breaker:", error),
-  );
   if (!claimed) return;
 
   const reason =
     `Coupe-circuit agent: ${args.toolName}/${args.errorCode} répété ` +
     `(ressource ${args.resourceKey.slice(0, 240)})`;
-  await repo.recordHandoff(args.client.id, reason).catch((error) =>
-    console.error("Failed to record tool circuit-breaker handoff:", error),
-  );
-  notifyReception(
-    "⚠️ Awa mise en pause — erreur répétée",
-    `${args.client.name ?? "Client"} (+${args.client.wa_phone.replace(/^\+/, "")}) a rencontré ` +
-      `deux fois la même erreur (${args.toolName}/${args.errorCode}). Awa est en pause 12 h et ` +
-      `la conversation attend une reprise humaine.\n\n` +
-      `Ouvrir : ${config.BASE_URL.replace(/\/+$/, "")}/admin/conversations/${args.client.id}`,
-  );
+  await handleTechnicalFailure({
+    client: args.client,
+    waMessageId: args.waMessageId,
+    stage: `tool:${args.toolName}:${args.errorCode}`,
+    cause: reason,
+  });
 }
 
 /**
@@ -598,6 +556,7 @@ function deliveryPaymentReplyText(
 async function maybeHandleDeliveryPaymentReply(args: {
   client: repo.Client;
   text: string;
+  waMessageId: string;
   deliveryOrders: deliveries.DeliveryOrder[];
   hasCompetingPaymentContext: boolean;
 }): Promise<boolean> {
@@ -626,13 +585,12 @@ async function maybeHandleDeliveryPaymentReply(args: {
         message: describeLoopFailure(err),
       })}`,
     );
-    const fallback = technicalFallbackMessage(
-      args.client.name,
-      args.client.fr_register === "vous",
-    );
-    await sendText(args.client.wa_phone, fallback);
-    await repo.addTurn(args.client.id, "assistant", fallback);
-    void notifyTechnicalFailure(args.client, `paiement livraison — ${describeLoopFailure(err)}`);
+    await handleTechnicalFailure({
+      client: args.client,
+      waMessageId: args.waMessageId,
+      stage: "delivery_payment_tool",
+      cause: err,
+    });
     return true;
   }
 
@@ -650,16 +608,12 @@ async function maybeHandleDeliveryPaymentReply(args: {
   const reply = deliveryPaymentReplyText(args.client, result);
   if (!reply) {
     console.error("Deterministic delivery payment routing returned no usable confirmation:", result);
-    const fallback = technicalFallbackMessage(
-      args.client.name,
-      args.client.fr_register === "vous",
-    );
-    await sendText(args.client.wa_phone, fallback);
-    await repo.addTurn(args.client.id, "assistant", fallback);
-    void notifyTechnicalFailure(
-      args.client,
-      `paiement livraison — résultat inattendu ${resultText.slice(0, 180)}`,
-    );
+    await handleTechnicalFailure({
+      client: args.client,
+      waMessageId: args.waMessageId,
+      stage: "delivery_payment_result",
+      cause: `résultat inattendu ${resultText.slice(0, 180)}`,
+    });
     return true;
   }
 
@@ -746,6 +700,7 @@ export async function handleInboundText(args: {
   const [
     activeBooking,
     activePlanOrder,
+    expiredPlanOrder,
     activeCafeOrder,
     memberships,
     recentRefunds,
@@ -757,6 +712,7 @@ export async function handleInboundText(args: {
   ] = await Promise.all([
     repo.activeAwaitingPayment(client.id),
     repo.activeAwaitingPlanOrder(client.id),
+    repo.latestRecentExpiredPlanOrder(client.id),
     repo.activeAwaitingCafeOrder(client.id),
     activeMemberships(client),
     repo.recentRefunds(client.id),
@@ -774,6 +730,7 @@ export async function handleInboundText(args: {
     await maybeHandleDeliveryPaymentReply({
       client,
       text: inboundText,
+      waMessageId: args.waMessageId,
       deliveryOrders,
       hasCompetingPaymentContext: !!(
         activeBooking ||
@@ -876,6 +833,7 @@ export async function handleInboundText(args: {
         clientRegister: client.fr_register,
         activeBooking,
         activePlanOrder,
+        expiredPlanOrder,
         activeCafeOrder,
         deliveryOrders,
         memberships: memberships === null ? null : memberships.plans,
@@ -898,7 +856,7 @@ export async function handleInboundText(args: {
 
   let replyText: string | null = null;
   let interactiveSent = false;
-  let usedTechnicalFallback = false;
+  let terminalHandled = false;
   // Allowlist for the outbound payment-link guard (prod 25/07 fabricated link):
   // exact URLs the SERVER issued — active DB payment records + any link a real
   // payment tool returns this turn (added in the loop below).
@@ -948,22 +906,33 @@ export async function handleInboundText(args: {
         if (response.stop_reason === "max_tokens") {
           console.warn("Model reply hit max_tokens — retrying with a larger budget");
           try {
-            const retry = await anthropic.messages.create({
-              model: config.CLAUDE_MODEL,
-              max_tokens: REPLY_MAX_TOKENS_RETRY,
-              output_config: { effort: "low" },
-              system,
-              tools: TOOL_DEFINITIONS,
-              messages,
-            });
+            const retry = await withOverloadRetry(
+              () => anthropic.messages.create({
+                model: config.CLAUDE_MODEL,
+                max_tokens: REPLY_MAX_TOKENS_RETRY,
+                output_config: { effort: "low" },
+                system,
+                tools: TOOL_DEFINITIONS,
+                messages,
+              }),
+              () => void sendTypingIndicator(args.waMessageId),
+            );
             if (retry.stop_reason !== "tool_use") {
               const retried = extractText(retry);
               if (retried) replyText = retried;
-              if (retry.stop_reason === "max_tokens")
+              if (retry.stop_reason === "max_tokens") {
                 console.error("Reply STILL truncated at the larger budget");
+                replyText = null;
+                loopError = new Error("reply_truncated_twice");
+              }
+            } else {
+              replyText = null;
+              loopError = new Error("reply_retry_requested_tool_without_execution");
             }
           } catch (err) {
-            console.error("max_tokens retry failed — keeping the partial reply:", err);
+            console.error("max_tokens retry failed:", err);
+            replyText = null;
+            loopError = err;
           }
         }
         break;
@@ -999,6 +968,14 @@ export async function handleInboundText(args: {
               "will reach out to the client.",
           });
           console.error(`Tool ${block.name} failed:`, err);
+          await handleTechnicalFailure({
+            client,
+            waMessageId: args.waMessageId,
+            stage: `tool_exception:${block.name}`,
+            cause: err,
+          });
+          terminalHandled = true;
+          circuitTripped = true;
         }
         await repo.addTurn(client.id, "tool", `${block.name}(${JSON.stringify(block.input)}) -> ${result.slice(0, 2000)}`);
         // Trust the link ONLY when a real payment tool minted it this turn.
@@ -1019,6 +996,8 @@ export async function handleInboundText(args: {
           is_error: isError || undefined,
         });
 
+        if (terminalHandled) break;
+
         const input = block.input as Record<string, unknown>;
         const resourceKey = toolResourceKey(input);
         const technicalError = toolErrorCode(result);
@@ -1035,8 +1014,9 @@ export async function handleInboundText(args: {
               toolName: block.name,
               errorCode: technicalError,
               resourceKey,
+              waMessageId: args.waMessageId,
             });
-            replyText = circuitBreakerReply(client.fr_register === "vous");
+            terminalHandled = true;
             circuitTripped = true;
             break;
           }
@@ -1056,7 +1036,7 @@ export async function handleInboundText(args: {
     // have JUST run (a payment link created, a booking made). Force ONE final
     // reply WITHOUT tools so the client gets the real outcome instead of the
     // misleading "technical issue" fallback that made Awa deny work she'd done.
-    if (!replyText && !interactiveSent && lastResponse?.stop_reason === "tool_use") {
+    if (!terminalHandled && !replyText && !interactiveSent && lastResponse?.stop_reason === "tool_use") {
       console.warn("Tool-iteration cap reached — forcing a final reply without tools");
       const final = await withOverloadRetry(
         () =>
@@ -1081,7 +1061,7 @@ export async function handleInboundText(args: {
   // with an explicit current-turn guard. This is intentionally before the
   // technical fallback: a normal "Ok merci" must never be sent to reception.
   let replyOutcome = classifyReplyOutcome(replyText, interactiveSent);
-  if (replyOutcome === "recover" && loopError == null && lastResponse) {
+  if (!terminalHandled && replyOutcome === "recover" && loopError == null && lastResponse) {
     const silenceKind = replyText?.trim() === NO_REPLY_SENTINEL ? NO_REPLY_SENTINEL : "empty reply";
     console.warn(
       `Model returned ${silenceKind} without a current-turn interactive message — forcing one reply`,
@@ -1160,22 +1140,20 @@ export async function handleInboundText(args: {
     }
   }
 
-  if (!replyText && !interactiveSent) {
-    const modelSilence = loopError instanceof Error && /^model returned /.test(loopError.message);
-    replyText = modelSilence
-      ? modelSilenceFallbackMessage(client.fr_register === "vous")
-      : technicalFallbackMessage(
-          client.name ?? args.profileName ?? null,
-          client.fr_register === "vous",
-        );
-    usedTechnicalFallback = !modelSilence;
-    // Boucle de résultat (§4.31) : le client vient de recevoir « souci
-    // technique » — la réception DOIT le savoir (avant : un console.error que
-    // personne ne lit, client planté en silence). Dédup 24h par client.
-    // On y joint le motif d'erreur réel : les logs Railway ont une fenêtre
-    // courte, donc le stocker dans le notification_log rend l'incident
-    // diagnosticable après coup (cas Zoé Dourthe 22/07 — erreur déjà défilée).
-    if (usedTechnicalFallback) void notifyTechnicalFailure(client, describeLoopFailure(loopError));
+  if (!replyText && !interactiveSent && !terminalHandled) {
+    const stage =
+      loopError instanceof Error && loopError.message.startsWith("outbound_lint")
+        ? "output_filter"
+        : loopError instanceof Error && /^model returned /.test(loopError.message)
+          ? "agent_empty_reply"
+          : "agent_call";
+    await handleTechnicalFailure({
+      client,
+      waMessageId: args.waMessageId,
+      stage,
+      cause: describeLoopFailure(loopError),
+    });
+    terminalHandled = true;
   }
 
   if (replyText) {

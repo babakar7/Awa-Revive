@@ -294,6 +294,22 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "refresh_expired_plan_payment_link",
+    description:
+      "Create a fresh auditable payment attempt for this client's own expired plan order (less than 7 days old). " +
+      "Use when the dynamic context names an expired order and the client wants a new link. The server reloads " +
+      "the plan, current price, member, eligibility and payment method. If an initial class was selected, it is " +
+      "revalidated before any payment is created.",
+    input_schema: {
+      type: "object",
+      properties: {
+        order_id: { type: "string", description: "Expired plan order id from the dynamic context." },
+      },
+      required: ["order_id"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "start_multi_session_commitment",
     description:
       "Persist a multi-session plan when a client agrees to pay for SEVERAL sessions of the SAME class à la carte " +
@@ -387,6 +403,21 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly " +
             "says they can't access that inbox or refuses verification. This keeps the manual-after-payment fallback. " +
             "Otherwise leave absent: the server requires verification before any plan payment.",
+        },
+        service_id: {
+          type: "string",
+          description:
+            "Optional first class for a Key purchase. Must be passed together with event_id and slot_start.",
+        },
+        event_id: {
+          type: "string",
+          description:
+            "The selected first class choice_id (short slot_… value). Must be passed with service_id and slot_start.",
+        },
+        slot_start: {
+          type: "string",
+          description:
+            "The exact ISO start returned with event_id. Must be passed with service_id and event_id.",
         },
       },
       required: ["plan_id", "plan_name_confirm", "client_name"],
@@ -1170,6 +1201,33 @@ async function exactBenefitWithShortRetry(args: {
     if (benefit) return benefit;
   }
   return null;
+}
+
+type ValidInitialPlanSlot = {
+  service: wix.WixService;
+  fresh: wix.WixSlot;
+  eventId: string;
+};
+
+async function validateInitialPlanSlot(args: {
+  planId: string;
+  serviceId: string;
+  eventId: string;
+  slotStart: string;
+}): Promise<ValidInitialPlanSlot | { error: "initial_slot_started" | "initial_slot_unavailable" }> {
+  if (!args.slotStart || !Number.isFinite(Date.parse(args.slotStart))) {
+    return { error: "initial_slot_unavailable" };
+  }
+  if (Date.parse(args.slotStart) <= Date.now()) return { error: "initial_slot_started" };
+  const service = await wix.getService(args.serviceId);
+  if (!service || !service.pricingPlanIds.includes(args.planId)) {
+    return { error: "initial_slot_unavailable" };
+  }
+  const closed = await closuresRepo.closureAt(new Date(args.slotStart)).catch(() => null);
+  if (closed) return { error: "initial_slot_unavailable" };
+  const fresh = await wix.isSlotStillOpen(args.serviceId, args.eventId, args.slotStart, 1);
+  if (!fresh) return { error: "initial_slot_unavailable" };
+  return { service, fresh, eventId: args.eventId };
 }
 
 async function createProtectedBenefitBooking(args: {
@@ -2583,6 +2641,52 @@ export async function executeTool(
       const keyMapping =
         config.KEYS_AUTOMATION_ENABLED ? keyMappingForPlan(plan.id) : null;
       const isKeyPlan = keyMapping !== null;
+      const initialFields = [input.service_id, input.event_id, input.slot_start];
+      const initialFieldCount = initialFields.filter(
+        (value) => typeof value === "string" && value.trim() !== "",
+      ).length;
+      if (initialFieldCount !== 0 && initialFieldCount !== 3) {
+        return JSON.stringify({
+          error: "invalid_arguments",
+          message: "service_id, event_id and slot_start form one indivisible group. Pass all three or none.",
+        });
+      }
+      let initialSlot: ValidInitialPlanSlot | null = null;
+      if (initialFieldCount === 3) {
+        const claimedServiceId = String(input.service_id);
+        const choiceId = String(input.event_id);
+        const claimedStart = String(input.slot_start);
+        const cached = await repo.getCachedSlot(client.id, choiceId);
+        const cachedStart = String((cached?.slot_json as any)?.startDate ?? "");
+        if (
+          !cached ||
+          cached.service_id !== claimedServiceId ||
+          !cachedStart ||
+          Math.abs(Date.parse(cachedStart) - Date.parse(claimedStart)) > 60_000
+        ) {
+          return JSON.stringify({
+            error: "initial_slot_unavailable",
+            message:
+              "The initial slot is absent or stale. No payment was created. Re-run check_availability and use a fresh choice_id.",
+          });
+        }
+        const checked = await validateInitialPlanSlot({
+          planId: plan.id,
+          serviceId: cached.service_id,
+          eventId: cached.event_id,
+          slotStart: cachedStart,
+        });
+        if ("error" in checked) {
+          return JSON.stringify({
+            error: checked.error,
+            message:
+              checked.error === "initial_slot_started"
+                ? "The initial class has already started. No payment was created. Re-run check_availability."
+                : "The initial class is full, closed, missing from Wix, or not covered by this plan. No payment was created. Re-run check_availability.",
+          });
+        }
+        initialSlot = checked;
+      }
       const currentKey = isKeyPlan
         ? await keyRepo.activeKeyForClient({
             clientId: client.id,
@@ -2686,6 +2790,12 @@ export async function executeTool(
         continuitySourcePlanId: continuitySource?.planId,
         continuityExpiresAt: continuitySource?.expiresAt,
         continuityRemaining: continuitySource?.remaining,
+        serviceId: initialSlot?.service.id,
+        serviceName: initialSlot?.service.name,
+        eventId: initialSlot?.eventId,
+        slotJson: initialSlot?.fresh.raw,
+        slotStart: initialSlot?.fresh.startDate,
+        slotEnd: initialSlot?.fresh.endDate ?? null,
       });
 
       let session;
@@ -2730,18 +2840,165 @@ export async function executeTool(
         payment_app: appLabel,
         amount_fcfa: plan.priceXof,
         plan: plan.name,
+        order_id: draft.id,
         billing: plan.billing,
         period: plan.periodLabel ?? undefined,
         starts_on: startsAt ? startsAt.toISOString().slice(0, 10) : "now",
         activation: activationManual ? "manual_after_payment" : "auto_after_payment",
+        initial_class: initialSlot?.service.name,
+        initial_slot_start: initialSlot?.fresh.startDate,
         expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
         note:
           `Relay the link (open in ${appLabel}). The plan is confirmed only once paid; automatic WhatsApp confirmation after payment.` +
+          (initialSlot
+            ? " After activation, the selected first class is booked automatically and one exact plan credit is redeemed. The place is guaranteed only after Wix confirms it."
+            : "") +
           startNote +
           activationNote +
           (plan.billing === "recurring"
             ? " Recurring plan: this payment covers the FIRST period; renewal is self-service — the client just buys it again here when it ends, say so."
             : ""),
+      });
+    }
+
+    case "refresh_expired_plan_payment_link": {
+      const orderId = String(input.order_id ?? "").trim();
+      if (!orderId) return JSON.stringify({ error: "invalid_arguments" });
+      const previous = await repo.findPlanOrderById(orderId);
+      if (!previous || previous.client_id !== client.id) {
+        return JSON.stringify({ error: "plan_order_not_found" });
+      }
+      if (["PAID", "ACTIVATED", "SCHEDULED"].includes(previous.status)) {
+        return JSON.stringify({ error: "plan_order_already_paid" });
+      }
+      if (previous.status !== "EXPIRED") {
+        return JSON.stringify({ error: "plan_order_not_expired" });
+      }
+      const expiredAt = previous.link_expires_at ?? previous.updated_at;
+      if (Date.now() - new Date(expiredAt).getTime() > 7 * 86_400_000) {
+        return JSON.stringify({ error: "plan_order_too_old" });
+      }
+      if (await repo.activeAwaitingPlanOrder(client.id)) {
+        return JSON.stringify({ error: "concurrent_plan_payment" });
+      }
+
+      const plan = await wix.getPlan(previous.plan_id);
+      if (!plan || !isPlanSellableByAwa(plan.id, config.AWA_SELLABLE_PLAN_IDS)) {
+        return JSON.stringify({ error: "plan_not_sellable" });
+      }
+      if (config.PACK_DISCOVERY_CONTINUATION_PLAN_IDS.includes(plan.id)) {
+        return JSON.stringify({ error: "reception_only_plan" });
+      }
+
+      const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
+      const contactId = await wix.findContactIdByPhone(phone, client.name ?? undefined);
+      const memberId = contactId ? await wix.findMemberIdByContactId(contactId) : null;
+      if (!memberId) {
+        return JSON.stringify({
+          error: "plan_member_verification_required",
+          message: "The member identity must be verified again before a replacement payment can be created.",
+        });
+      }
+      if (
+        config.KEYS_AUTOMATION_ENABLED &&
+        plan.id === config.INVITEE_PLAN_ID &&
+        contactId &&
+        ((await wix.hasAnyPastReviveBooking(contactId)) ||
+          (await wix.hasPlanOrderHistory({
+            contactId,
+            memberId,
+            planIds: config.INVITEE_HISTORY_PLAN_IDS,
+          })))
+      ) {
+        return JSON.stringify({ error: "invitee_not_eligible" });
+      }
+
+      let initialSlot: ValidInitialPlanSlot | null = null;
+      if (previous.service_id || previous.event_id || previous.slot_start) {
+        if (!previous.service_id || !previous.event_id || !previous.slot_start) {
+          return JSON.stringify({ error: "initial_slot_unavailable" });
+        }
+        const checked = await validateInitialPlanSlot({
+          planId: plan.id,
+          serviceId: previous.service_id,
+          eventId: previous.event_id,
+          slotStart: new Date(previous.slot_start).toISOString(),
+        });
+        if ("error" in checked) {
+          return JSON.stringify({
+            error: checked.error,
+            message:
+              checked.error === "initial_slot_started"
+                ? "The selected initial class has already started. No payment was created; run check_availability."
+                : "The selected initial class is no longer available. No payment was created; run check_availability.",
+          });
+        }
+        initialSlot = checked;
+      }
+
+      const pay = resolvePaymentMethod(previous.payment_method, om.isOmEnabled());
+      if (!pay.ok) return JSON.stringify({ error: pay.error, message: pay.message });
+      let draft: repo.PlanOrder;
+      try {
+        draft = await repo.createDraftPlanOrder({
+          clientId: client.id,
+          planId: plan.id,
+          planName: plan.name,
+          amountXof: plan.priceXof,
+          memberId,
+          startsAt: previous.starts_at,
+          isKey: keyMappingForPlan(plan.id) !== null,
+          keyInvitationCount: null,
+          continuitySourceKind: previous.continuity_source_kind,
+          continuitySourceOrderId: previous.continuity_source_order_id,
+          continuitySourcePlanId: previous.continuity_source_plan_id,
+          continuityExpiresAt: previous.continuity_expires_at,
+          continuityRemaining: previous.continuity_remaining,
+          serviceId: initialSlot?.service.id,
+          serviceName: initialSlot?.service.name,
+          eventId: initialSlot?.eventId,
+          slotJson: initialSlot?.fresh.raw,
+          slotStart: initialSlot?.fresh.startDate,
+          slotEnd: initialSlot?.fresh.endDate ?? null,
+          retryOfOrderId: previous.id,
+        });
+      } catch (error) {
+        if ((error as { code?: string })?.code === "23505") {
+          return JSON.stringify({ error: "concurrent_plan_payment" });
+        }
+        throw error;
+      }
+      let session;
+      try {
+        session = await createClientPaymentSession({
+          method: pay.method,
+          amountXof: plan.priceXof,
+          clientReference: draft.id,
+          name: plan.name,
+        });
+      } catch (error) {
+        await repo.expireActivePlanOrders(client.id);
+        throw error;
+      }
+      await repo.setPlanOrderAwaitingPayment(
+        draft.id,
+        session.sessionId,
+        session.paymentLink,
+        session.expiresAt,
+        session.method,
+      );
+      return JSON.stringify({
+        payment_link: session.paymentLink,
+        payment_method: session.method,
+        payment_app: paymentMethodLabel(session.method),
+        amount_fcfa: plan.priceXof,
+        plan: plan.name,
+        order_id: draft.id,
+        replaces_order_id: previous.id,
+        initial_class: initialSlot?.service.name,
+        initial_slot_start: initialSlot?.fresh.startDate,
+        expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
+        note: "Relay this new server-issued link. The previous expired order remains in the audit trail.",
       });
     }
 

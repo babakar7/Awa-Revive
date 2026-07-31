@@ -66,13 +66,11 @@ describe("WhatsApp reception contact", () => {
     }
   });
 
-  it("puts a named prefilled link in the deterministic technical fallback", () => {
+  it("keeps the deterministic technical fallback actionless and link-free", () => {
     const message = technicalFallbackMessage("Fatou");
-    const url = message.match(/https:\/\/wa\.me\/[^\s]+/)?.[0];
-
-    expect(url).toBeTruthy();
-    expect(new URL(url!).searchParams.get("text")).toContain("je suis Fatou");
-    expect(message).toContain("appuie sur Envoyer");
+    expect(message).not.toMatch(/https?:\/\/|wa\.me|\+221|réessa/i);
+    expect(message).toContain("contactera ici");
+    expect(message).toContain("rien à faire");
   });
 
   it("builds a reception-voice outreach link to write TO the client (handoff)", () => {

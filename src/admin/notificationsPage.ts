@@ -64,6 +64,7 @@ const SOURCE_LABELS: Record<string, string> = {
   ops_ticket: "ticket salle",
   test: "test",
   rule: "règle",
+  technical: "relais technique",
 };
 
 function statusBadge(status: string): string {

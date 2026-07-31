@@ -7,7 +7,8 @@ import {
 
 describe("tool circuit breaker", () => {
   it("counts only technical/invariant errors", () => {
-    expect(toolErrorCode('{"error":"unknown_slot"}')).toBe("unknown_slot");
+    expect(toolErrorCode('{"error":"tool_failed"}')).toBe("tool_failed");
+    expect(toolErrorCode('{"error":"unknown_slot"}')).toBeNull();
     expect(toolErrorCode('{"error":"not_enough_spots"}')).toBeNull();
     expect(toolErrorCode("not json")).toBeNull();
   });

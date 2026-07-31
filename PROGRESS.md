@@ -1,8 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **28 juillet 2026** — politique d’annulation
-> non remboursable, report et transfert de séance. Avant : fiabilisation Awa
+> Dernière mise à jour : **31 juillet 2026** — relais technique fiable,
+> renouvellement des paiements de plan expirés et première séance des Clés.
+> Avant : politique d’annulation non remboursable, report et transfert de séance ; fiabilisation Awa
 > après l'incident Riche Aubambi : service canonique, coupe-circuit,
 > attribution humain/Awa et alertes cuisine iPad-only ; contact de remise des
 > livraisons et alertes dédiées (§6.29), livraisons programmées
@@ -13,6 +14,37 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Relais technique fiable + Clé avec première séance (31 juillet 2026)
+
+- Les pannes terminales convergent vers `handleTechnicalFailure()` : pause Awa
+  de 12 h (`awa-technical-failure`), tâche ouverte dédupliquée, message cliente
+  fixe FR/EN/WO sans lien/numéro/action, et alertes WhatsApp réception + gérant
+  dédupliquées par incident et destinataire dans `notification_log`.
+- Les retries sûrs restent en amont du relais. Les erreurs métier structurées
+  (créneau plein/commencé, lien expiré, vérification) et les médias simplement
+  illisibles restent conversationnels ; seul un crash réel du handler média
+  déclenche le relais. Chaque nouveau message pendant les 12 h conserve
+  l’alerte de relais humain existante. Badge admin : « Relais technique Awa ».
+- Le contexte charge le dernier paiement de plan expiré depuis moins de 7 jours
+  sans exposer son ancienne URL. `refresh_expired_plan_payment_link` revérifie
+  propriétaire, état, âge, concurrence, plan/prix/membre/moyen de paiement et
+  éventuelle première séance, puis crée une nouvelle tentative liée par
+  `retry_of_order_id`. Un créneau plein ou commencé renvoie une erreur métier et
+  ne crée aucun paiement.
+- `create_plan_payment_link` accepte le groupe indivisible
+  `service_id + event_id(choice_id) + slot_start`. Le serveur résout et fige le
+  vrai événement Wix. Après paiement, il active le plan, sélectionne le bénéfice
+  exact par `planId + wixOrderId`, réserve, décompte et confirme une seule fois.
+  Si la place s’est remplie, la Clé reste active et l’équipe propose ici un autre
+  créneau sans nouveau paiement ; les échecs techniques persistants passent au
+  relais terminal.
+- Les alias de service retirent désormais les mots génériques `pilates` et
+  `reformer` des deux côtés, refusent un reste vide/collision, et n’acceptent
+  qu’une correspondance unique (`sculpt`, `reformer_sculpt`,
+  `pilates_foundation` restent valides selon le catalogue Wix).
+- Vérification : `npm run build`, **913 tests unitaires** et **283 tests
+  d’intégration** passent (28 fichiers, Postgres Docker).
 
 ## Clé nommée = on répond sur CETTE Clé (30 juillet 2026)
 

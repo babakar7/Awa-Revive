@@ -49,6 +49,8 @@ export interface WixState {
   createdMemberIds: string[];
   /** Offline Pricing Plans activation fixture. */
   offlinePlanOrderIds: string[];
+  offlinePlanIds: string[];
+  offlinePlanOrders: any[];
   failOfflinePlanOrder: boolean;
   /** Benefit Programs fixture used by membership-booking tests. */
   membershipEligible: boolean;
@@ -179,6 +181,8 @@ export function makeFetchMock(): FetchMock {
     memberContactId: null,
     createdMemberIds: [],
     offlinePlanOrderIds: [],
+    offlinePlanIds: [],
+    offlinePlanOrders: [],
     failOfflinePlanOrder: false,
     membershipEligible: true,
     membershipAvailable: 5,
@@ -338,7 +342,10 @@ export function makeFetchMock(): FetchMock {
           {
             id: wix.serviceId,
             name: "Pilates Reformer",
-            payment: { fixed: { price: { value: 15000 } } },
+            payment: {
+              fixed: { price: { value: 15000 } },
+              pricingPlanIds: wix.plans.map((plan) => String(plan.id)),
+            },
             bookingPolicy: { participantsPolicy: { enabled: true, maxParticipantsPerBooking: 6 } },
           },
         ],
@@ -452,7 +459,25 @@ export function makeFetchMock(): FetchMock {
       }
       const id = `plan_order_${wix.offlinePlanOrderIds.length + 1}`;
       wix.offlinePlanOrderIds.push(id);
+      wix.offlinePlanIds.push(String(body?.planId ?? ""));
+      wix.offlinePlanOrders.push({
+        id,
+        planId: String(body?.planId ?? ""),
+        buyer: { memberId: String(body?.memberId ?? "") },
+        memberId: String(body?.memberId ?? ""),
+        startDate: body?.startDate ?? new Date().toISOString(),
+        status: body?.startDate ? "PENDING" : "ACTIVE",
+      });
       return json(200, { order: { id, status: "ACTIVE" } });
+    }
+
+    if (url.includes("/pricing-plans/v2/orders?") && method === "GET") {
+      const parsed = new URL(url);
+      const status = parsed.searchParams.get("orderStatuses");
+      const orders = status
+        ? wix.offlinePlanOrders.filter((order) => order.status === status)
+        : wix.offlinePlanOrders;
+      return json(200, { orders, pagingMetadata: { hasNext: false } });
     }
 
     if (url.includes("/benefit-programs/v1/pools/eligible-pools")) {
@@ -465,6 +490,8 @@ export function makeFetchMock(): FetchMock {
                 displayName: "Pack Reformer",
                 balance: { available: wix.membershipAvailable },
               },
+              programDefinitionInfo: { externalId: wix.offlinePlanIds.at(-1) ?? null },
+              programInfo: { externalId: wix.offlinePlanOrderIds.at(-1) ?? null },
             }]
           : [],
       });
@@ -639,6 +666,8 @@ export function makeFetchMock(): FetchMock {
       wix.memberContactId = null;
       wix.createdMemberIds.length = 0;
       wix.offlinePlanOrderIds.length = 0;
+      wix.offlinePlanIds.length = 0;
+      wix.offlinePlanOrders.length = 0;
       wix.failOfflinePlanOrder = false;
       wix.membershipEligible = true;
       wix.membershipAvailable = 5;

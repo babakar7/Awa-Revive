@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, pool } from "../../src/db/index.js";
 import { executeTool } from "../../src/agent/tools.js";
+import { cacheSlots, slotChoiceKey } from "../../src/domain/repo.js";
 import {
   makeFetchMock,
   seedClient,
@@ -79,6 +80,23 @@ async function call(
       ...extra,
     }),
   );
+}
+
+async function expireCreatedPlanOrder(
+  client: { id: string; wa_phone: string },
+  extra: Record<string, unknown> = {},
+) {
+  mock.wix.memberId = "member-existing";
+  mock.wix.memberContactId = "contact-zeina";
+  const created = await call(client, extra);
+  expect(created.order_id).toBeTruthy();
+  await pool.query(
+    `update pending_plan_orders
+        set status='EXPIRED', link_expires_at=now() - interval '1 minute', updated_at=now()
+      where id=$1`,
+    [created.order_id],
+  );
+  return created;
 }
 
 async function insertVerification(
@@ -207,6 +225,52 @@ describe("create_plan_payment_link member self-service", () => {
     });
   });
 
+  it("persists an indivisible initial class selection on the plan order", async () => {
+    const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    await insertVerification(client.id, {
+      status: "VERIFIED",
+      linkedContactId: "contact-zeina",
+    });
+    await cacheSlots(client.id, mock.wix.serviceId, [{
+      eventId: mock.wix.eventId,
+      slot: {
+        sessionId: mock.wix.eventId,
+        serviceId: mock.wix.serviceId,
+        startDate: mock.wix.slotStart,
+        endDate: mock.wix.slotEnd,
+      },
+    }]);
+
+    const result = await call(client, {
+      service_id: mock.wix.serviceId,
+      event_id: slotChoiceKey(mock.wix.eventId),
+      slot_start: mock.wix.slotStart,
+    });
+    const stored = (await pool.query(
+      `select service_id, event_id, slot_start, discovery_booking_status
+         from pending_plan_orders where client_id=$1`,
+      [client.id],
+    )).rows[0];
+
+    expect(result).toMatchObject({
+      payment_link: expect.any(String),
+      initial_class: "Pilates Reformer",
+    });
+    expect(stored).toMatchObject({
+      service_id: mock.wix.serviceId,
+      event_id: mock.wix.eventId,
+      discovery_booking_status: "PENDING",
+    });
+    expect(new Date(stored.slot_start).toISOString()).toBe(mock.wix.slotStart);
+  });
+
+  it("rejects a partial initial-slot group before creating any payment", async () => {
+    const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    const result = await call(client, { service_id: mock.wix.serviceId });
+    expect(result.error).toBe("invalid_arguments");
+    expect((await pool.query(`select count(*)::int as n from pending_plan_orders`)).rows[0].n).toBe(0);
+  });
+
   it("does not create the member before the payment-method guard", async () => {
     const client = await seedClient({
       wa_phone: "221770000072",
@@ -241,5 +305,125 @@ describe("create_plan_payment_link member self-service", () => {
     expect(result.activation).toBe("manual_after_payment");
     expect(stored.rows[0].member_id).toBeNull();
     expect(mock.wix.createdMemberIds).toHaveLength(0);
+  });
+
+  it("refreshes a recent expired order through a new auditable payment attempt", async () => {
+    const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    const expired = await expireCreatedPlanOrder(client);
+
+    const refreshed = JSON.parse(
+      await executeTool(clientShape(client), "refresh_expired_plan_payment_link", {
+        order_id: expired.order_id,
+      }),
+    );
+    const attempts = await pool.query(
+      `select id, status, retry_of_order_id, amount_xof, payment_method
+         from pending_plan_orders where client_id=$1 order by created_at`,
+      [client.id],
+    );
+
+    expect(refreshed).toMatchObject({
+      payment_link: expect.any(String),
+      order_id: expect.any(String),
+      replaces_order_id: expired.order_id,
+      amount_fcfa: 72_000,
+      payment_method: "wave",
+    });
+    expect(refreshed.order_id).not.toBe(expired.order_id);
+    expect(attempts.rows).toEqual([
+      expect.objectContaining({ id: expired.order_id, status: "EXPIRED", retry_of_order_id: null }),
+      expect.objectContaining({
+        id: refreshed.order_id,
+        status: "AWAITING_PAYMENT",
+        retry_of_order_id: expired.order_id,
+        amount_xof: 72_000,
+        payment_method: "wave",
+      }),
+    ]);
+  });
+
+  it("refuses foreign, paid and more-than-seven-day-old plan orders", async () => {
+    const owner = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    const expired = await expireCreatedPlanOrder(owner);
+    const stranger = await seedClient({ wa_phone: "221770000073", name: "Mame" });
+
+    expect(JSON.parse(await executeTool(clientShape(stranger), "refresh_expired_plan_payment_link", {
+      order_id: expired.order_id,
+    }))).toMatchObject({ error: "plan_order_not_found" });
+
+    await pool.query(`update pending_plan_orders set status='PAID' where id=$1`, [expired.order_id]);
+    expect(JSON.parse(await executeTool(clientShape(owner), "refresh_expired_plan_payment_link", {
+      order_id: expired.order_id,
+    }))).toMatchObject({ error: "plan_order_already_paid" });
+
+    await pool.query(
+      `update pending_plan_orders
+          set status='EXPIRED', link_expires_at=now() - interval '8 days', updated_at=now() - interval '8 days'
+        where id=$1`,
+      [expired.order_id],
+    );
+    expect(JSON.parse(await executeTool(clientShape(owner), "refresh_expired_plan_payment_link", {
+      order_id: expired.order_id,
+    }))).toMatchObject({ error: "plan_order_too_old" });
+  });
+
+  it("does not create a refreshed payment when the remembered initial class filled", async () => {
+    const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    await cacheSlots(client.id, mock.wix.serviceId, [{
+      eventId: mock.wix.eventId,
+      slot: {
+        sessionId: mock.wix.eventId,
+        serviceId: mock.wix.serviceId,
+        startDate: mock.wix.slotStart,
+        endDate: mock.wix.slotEnd,
+      },
+    }]);
+    const expired = await expireCreatedPlanOrder(client, {
+      service_id: mock.wix.serviceId,
+      event_id: slotChoiceKey(mock.wix.eventId),
+      slot_start: mock.wix.slotStart,
+    });
+    const paymentCallsBefore = mock.calls.filter((item) => item.url.includes("api.wave.com")).length;
+    mock.wix.openSpots = 0;
+
+    const refreshed = JSON.parse(
+      await executeTool(clientShape(client), "refresh_expired_plan_payment_link", {
+        order_id: expired.order_id,
+      }),
+    );
+
+    expect(refreshed).toMatchObject({ error: "initial_slot_unavailable" });
+    expect(mock.calls.filter((item) => item.url.includes("api.wave.com"))).toHaveLength(paymentCallsBefore);
+    expect((await pool.query(
+      `select count(*)::int as n from pending_plan_orders where client_id=$1`,
+      [client.id],
+    )).rows[0].n).toBe(1);
+  });
+
+  it("does not create a refreshed payment when the remembered initial class started", async () => {
+    const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    const expired = await expireCreatedPlanOrder(client);
+    await pool.query(
+      `update pending_plan_orders
+          set service_id=$2, service_name='Pilates Reformer', event_id=$3,
+              slot_start=now() - interval '1 minute', slot_end=now() + interval '59 minutes',
+              slot_json=jsonb_build_object('sessionId',$3::text,'serviceId',$2::text)
+        where id=$1`,
+      [expired.order_id, mock.wix.serviceId, mock.wix.eventId],
+    );
+    const paymentCallsBefore = mock.calls.filter((item) => item.url.includes("api.wave.com")).length;
+
+    const refreshed = JSON.parse(
+      await executeTool(clientShape(client), "refresh_expired_plan_payment_link", {
+        order_id: expired.order_id,
+      }),
+    );
+
+    expect(refreshed).toMatchObject({ error: "initial_slot_started" });
+    expect(mock.calls.filter((item) => item.url.includes("api.wave.com"))).toHaveLength(paymentCallsBefore);
+    expect((await pool.query(
+      `select count(*)::int as n from pending_plan_orders where client_id=$1`,
+      [client.id],
+    )).rows[0].n).toBe(1);
   });
 });

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, pool } from "../../src/db/index.js";
 import {
   clearAgentToolFailure,
+  ensureOpenTechnicalHandoff,
   lastTurnsForReplay,
   latestPresentedChoices,
   markAgentToolFailureTripped,
@@ -60,7 +61,7 @@ describe("durable agent reliability state", () => {
         [client.id],
       )
     ).rows[0];
-    expect(paused).toMatchObject({ human_takeover_by: "awa-circuit-breaker", active: true });
+    expect(paused).toMatchObject({ human_takeover_by: "awa-technical-failure", active: true });
 
     await clearAgentToolFailure({
       clientId: client.id,
@@ -114,5 +115,17 @@ describe("durable agent reliability state", () => {
       source: "admin",
       content: "Je prends le relais",
     });
+  });
+
+  it("keeps one open task per equivalent technical incident", async () => {
+    const client = await seedClient();
+    expect(await ensureOpenTechnicalHandoff(client.id, "agent_call", "timeout one")).toBe(true);
+    expect(await ensureOpenTechnicalHandoff(client.id, "agent_call", "timeout replay")).toBe(false);
+    expect(await ensureOpenTechnicalHandoff(client.id, "output_filter", "blocked twice")).toBe(true);
+    const count = await pool.query(
+      `select count(*)::int as n from handoffs where client_id=$1 and status='OPEN'`,
+      [client.id],
+    );
+    expect(count.rows[0].n).toBe(2);
   });
 });

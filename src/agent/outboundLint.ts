@@ -18,7 +18,10 @@ export const TOOL_TRACE_MARKER = "⟦trace⟧";
 // "[outil]" marker (kept so an older cached history can't slip through), or a
 // bare tool-call written as prose. None of these belong in a client message.
 const TOOL_SYNTAX_RE =
-  /⟦trace⟧|\[outil\]|\b(?:create_(?:payment|plan_payment|cafe_payment|delivery_payment)_link|add_spots_to_booking|book_with_membership|check_availability|present_options|list_classes|list_plans|request_email_verification|submit_verification_code|create_plan_payment_link)\s*\(/i;
+  /⟦trace⟧|\[outil\]|\b(?:create_(?:payment|plan_payment|cafe_payment|delivery_payment)_link|refresh_expired_plan_payment_link|add_spots_to_booking|book_with_membership|check_availability|present_options|list_classes|list_plans|request_email_verification|submit_verification_code|create_plan_payment_link)\s*\(/i;
+
+const ACTIVE_LINK_CLAIM_RE =
+  /\b(?:ton|votre|le|ce|the|your)\s+lien(?:\s+de\s+paiement|\s+payment)?\s+(?:est|reste|is|remains)\s+(?:encore\s+)?(?:actif|active|valide|valid)|\blien\s+(?:est\s+)?toujours\s+valide\b/i;
 
 // Hosts that carry money. A URL on one of these must be an exact server-issued
 // link, never anything the model wrote.
@@ -49,7 +52,7 @@ export function isPaymentUrl(url: string): boolean {
 
 export interface OutboundLintResult {
   ok: boolean;
-  reason?: "tool_syntax" | "unapproved_payment_url";
+  reason?: "tool_syntax" | "unapproved_payment_url" | "unbacked_active_link_claim";
   detail?: string;
 }
 
@@ -68,6 +71,9 @@ export function lintOutboundReply(
   }
   const approved = new Set<string>();
   for (const u of approvedUrls) approved.add(normalizeUrl(u));
+  if (approved.size === 0 && ACTIVE_LINK_CLAIM_RE.test(text)) {
+    return { ok: false, reason: "unbacked_active_link_claim", detail: text.match(ACTIVE_LINK_CLAIM_RE)?.[0] };
+  }
   for (const url of extractUrls(text)) {
     if (isPaymentUrl(url) && !approved.has(url)) {
       return { ok: false, reason: "unapproved_payment_url", detail: url };

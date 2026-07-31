@@ -43,6 +43,12 @@ alter table pending_bookings
 alter table pending_bookings
   add column if not exists payment_method text not null default 'wave';
 
+-- A Wix booking can be observed again after a webhook/tool retry. Keeping its
+-- external id unique makes local persistence idempotent while still allowing
+-- any number of not-yet-created bookings (NULL values).
+create unique index if not exists idx_pending_bookings_wix_booking
+  on pending_bookings (wix_booking_id);
+
 -- Voluntary cancellation of a mobile-money booking: the seat is released but
 -- the payment is retained under the studio's no-refund policy. This marker
 -- distinguishes it from a reception/Wix cancellation that may have another
@@ -303,6 +309,10 @@ alter table handoffs
   add column if not exists done_at timestamptz;
 alter table handoffs add column if not exists resolution_outcome text;
 alter table handoffs add column if not exists resolution_note text;
+alter table handoffs add column if not exists technical_dedup_key text;
+create unique index if not exists idx_handoffs_open_technical_dedup
+  on handoffs (technical_dedup_key)
+  where status='OPEN' and technical_dedup_key is not null;
 
 -- Backfill one-shot (borne FIXE = idempotent) : l'historique d'avant la
 -- feature est considéré traité — seuls les handoffs neufs vivent le cycle.
@@ -332,6 +342,9 @@ create table if not exists pending_plan_orders (
 
 create index if not exists idx_plan_orders_client_status
   on pending_plan_orders (client_id, status);
+create unique index if not exists idx_plan_orders_one_live_payment
+  on pending_plan_orders (client_id)
+  where status in ('DRAFT','AWAITING_PAYMENT');
 
 -- Date de démarrage voulue du plan (renouvellement anticipé chaîné à la fin de
 -- l'abonnement actuel). NULL = démarrage immédiat. Passée à Wix comme startDate
@@ -412,6 +425,13 @@ alter table pending_plan_orders add column if not exists benefit_transaction_id 
 alter table pending_plan_orders add column if not exists linked_booking_id uuid references pending_bookings(id);
 alter table pending_plan_orders add column if not exists discovery_booking_status text;
 alter table pending_plan_orders add column if not exists discovery_booking_error text;
+-- Generic initial-session fulfillment (the historical discovery_* columns are
+-- retained to avoid a data migration, but now apply to every plan/Key sale).
+alter table pending_plan_orders add column if not exists retry_of_order_id uuid
+  references pending_plan_orders(id);
+alter table pending_plan_orders add column if not exists fulfillment_failure_count integer
+  not null default 0;
+alter table pending_plan_orders add column if not exists technical_failure_at timestamptz;
 
 alter table pending_cafe_orders
   add column if not exists fulfilling_at timestamptz;
@@ -741,7 +761,7 @@ alter table notification_rules
 alter table notification_rules
   add column if not exists service_id text;
 
--- Journal de tout envoi. source ∈ rule | reception | owner_alert | new_chat |
+-- Journal de tout envoi. source ∈ rule | reception | owner_alert | new_chat | technical |
 -- delivery | invoice | gift_card | staff_planning | ops_ticket | test.
 -- new_chat = ping owner (NEW_CHAT_NOTIFY_PHONE) uniquement — ne pas confondre
 -- avec reception. owner_alert = copie OWNER_PHONE d'une alerte réception qui

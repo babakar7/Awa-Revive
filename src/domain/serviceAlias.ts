@@ -16,11 +16,18 @@ function normalize(value: string): string {
  */
 export function resolveServiceAlias(input: string, services: ServiceIdentity[]): string | null {
   if (!/^[\p{L}\p{N}_-]+$/u.test(input)) return null;
-  const requested = normalize(input);
+  const withoutGenericTerms = (value: string) =>
+    normalize(value)
+      .replace(/\b(?:pilates|reformer)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const requested = withoutGenericTerms(input);
+  // Generic-only guesses ("reformer", "pilates_reformer") are ambiguous by
+  // construction and must never resolve to whichever Wix service comes first.
   if (!requested) return null;
   const matches = services.filter((service) => {
-    const name = normalize(service.name);
-    return name === requested || name.replace(/\breformer\b/g, "").replace(/\s+/g, " ").trim() === requested;
+    const name = withoutGenericTerms(service.name);
+    return name !== "" && name === requested;
   });
   return matches.length === 1 ? matches[0]!.id : null;
 }

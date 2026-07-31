@@ -34,6 +34,11 @@ describe("lintOutboundReply", () => {
     expect(res.reason).toBe("unapproved_payment_url");
   });
 
+  it("blocks an active-link claim when no live server order exists", () => {
+    const res = lintOutboundReply("Ton lien de paiement est encore valide.", []);
+    expect(res).toMatchObject({ ok: false, reason: "unbacked_active_link_claim" });
+  });
+
   it("blocks an Orange Money link not issued this turn", () => {
     expect(lintOutboundReply(`Paie ici ${OM}`, [WAVE]).ok).toBe(false);
   });

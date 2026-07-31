@@ -1,8 +1,5 @@
 const TECHNICAL_ERROR_CODES = new Set([
   "tool_failed",
-  "unknown_slot",
-  "unknown_service_id",
-  "invalid_arguments",
 ]);
 
 const PRIMARY_RESOURCE_FIELDS = [

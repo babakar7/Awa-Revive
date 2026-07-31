@@ -106,4 +106,28 @@ describe("createDraftPlanOrder", () => {
     expect(order.slot_start?.toISOString()).toBe(slotStart);
     expect(order.slot_end?.toISOString()).toBe(slotEnd);
   });
+
+  it("uses the existing booking state for a regular Key with an initial slot", async () => {
+    const client = await seedClient();
+    const order = await createDraftPlanOrder({
+      clientId: client.id,
+      planId: "key_habituee",
+      planName: "L'Habituée",
+      amountXof: 72_000,
+      memberId: "member_key",
+      isKey: true,
+      serviceId: "service_sculpt",
+      serviceName: "Pilates Reformer (Sculpt)",
+      eventId: "event_sculpt",
+      slotJson: { sessionId: "event_sculpt", startDate: inHours(24) },
+      slotStart: inHours(24),
+      slotEnd: inHours(25),
+    });
+    expect(order).toMatchObject({
+      campaign_code: null,
+      is_key: true,
+      discovery_booking_status: "PENDING",
+      event_id: "event_sculpt",
+    });
+  });
 });

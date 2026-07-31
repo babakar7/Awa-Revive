@@ -101,7 +101,7 @@ export function renderClientWorkspace(args: {
   }
   return `${args.banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Espace client</span><h2>${esc(client.name ?? "(sans nom)")}</h2><p>Conversation, opérations et suivis réunis au même endroit.</p></div><div class="page-header-actions"><a class="act act--ghost" href="https://wa.me/${esc(client.wa_phone)}" target="_blank" rel="noreferrer">Ouvrir WhatsApp</a>${takeoverControls}</div></header>
-${takeover ? `<div class="card warn takeover-banner"><b>Relais humain actif</b><span>Awa est en pause jusqu’au ${fmtDate(client.human_takeover_until)} · démarré par ${esc(client.human_takeover_by ?? "l’équipe")}</span></div>` : ""}
+${takeover ? `<div class="card warn takeover-banner"><b>${client.human_takeover_by === "awa-technical-failure" ? "Relais technique Awa" : "Relais humain actif"}</b><span>Awa est en pause jusqu’au ${fmtDate(client.human_takeover_until)} · démarré par ${esc(client.human_takeover_by ?? "l’équipe")}</span></div>` : ""}
 ${!takeover && disengaged ? `<div class="card warn takeover-banner"><b>Awa en pause — contact non sérieux</b><span>Awa ne répond plus à ce contact jusqu’au ${fmtDate(client.awa_disengaged_until)}${client.awa_disengaged_reason ? ` · ${esc(client.awa_disengaged_reason)}` : ""}</span></div>` : ""}
 ${followUps(args.workspace, client.id)}
 <div class="conversation-shell client-workspace-shell">
