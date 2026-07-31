@@ -23,6 +23,7 @@ import * as deliveries from "../domain/deliveryRepo.js";
 import * as commitments from "../domain/commitments.js";
 import * as closuresRepo from "../domain/closuresRepo.js";
 import * as faqRepo from "../domain/faqRepo.js";
+import * as keyRepo from "../domain/keyRepo.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
 import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
@@ -821,6 +822,16 @@ export async function handleInboundText(args: {
     faqRepo.publishedFaqEntries().catch(() => []),
   ]);
 
+  // Google-review gate state: "announce" (no gate yet — mention the condition
+  // during an early-renewal pitch), "pending" (invitations locked, awaiting her
+  // review), or null (feature off, or already activated → nothing to say).
+  let reviewGate: "announce" | "pending" | null = null;
+  if (config.KEYS_AUTOMATION_ENABLED && config.GOOGLE_REVIEW_URL) {
+    const gate = await keyRepo.reviewGateForClient(client.id).catch(() => null);
+    if (!gate) reviewGate = "announce";
+    else if (!gate.activated_at) reviewGate = "pending";
+  }
+
   const system: Anthropic.TextBlockParam[] = [
     // Stable prefix — cached.
     { type: "text", text: systemPrompt(), cache_control: { type: "ephemeral" } },
@@ -847,6 +858,8 @@ export async function handleInboundText(args: {
         activeCommitment,
         packDiscoveryCampaign,
         packDiscoveryMetaNewLead,
+        reviewGate,
+        reviewLink: config.GOOGLE_REVIEW_URL || undefined,
         conversationGapDays,
         studioClosures,
         faqEntries,

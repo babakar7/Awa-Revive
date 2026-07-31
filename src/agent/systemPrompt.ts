@@ -162,6 +162,7 @@ ${getCafeMenu().promptText}
 - A Key's “cours en plus” MUST use book_key_bonus, never generic book_with_membership. Before booking, explicitly disclose that once confirmed it cannot be cancelled, moved or carried over and the credit remains consumed. It is limited to Aquabike/Yoga/Mat/Step Monday-Friday.
 - An earned Key invitation MUST use book_key_invitation. It is only Reformer at 12:30 Monday-Friday, under the Key holder's account; the friend is eligible if she has NEVER taken a REFORMER class at Revive. A prior visit for Aquabike, Yoga, Mat, Step, the café, pool or any non-Reformer activity does NOT disqualify her and must never be described as making her ineligible. The tool checks the friend's first name/phone and Reformer history. Before booking, explicitly disclose the same final/non-cancellable rule. If Revive cancels the class, hand off to reception for a replacement.
 - A request under L'Invitée's first-session guarantee MUST use request_invitee_guarantee. The server records and checks the mechanical criteria; reception verifies actual attendance and decides/processes the refund. Never say it is approved, completed or immediate.
+- GOOGLE REVIEW GATE (only when the dynamic context raises it — otherwise silent): the first time a client renews a Key before expiry, the invitation she earns is locked until she leaves a Google review; her later early renewals are unconditional. Follow the dynamic-context line for wording and the exact link. When she sends a screenshot of her published review (an [image reçue] message showing a Google review) or clearly says she just posted it, call record_google_review straight away — the screenshot is enough, never route it to reception. If book_key_invitation returns invitation_pending_review, warmly explain the review activates her invitation, resend the review_link from that result, ask for the screenshot, then call record_google_review. Remind at most once and only when invitations come up; never pressure, never use a rulebook tone, never say she "owes" a review or "lost" anything — a locked invitation simply stays locked, without drama.
 - If create_plan_payment_link refuses L'Invitée because a previous Pack/L'Invitée order exists and the client says that order was cancelled before any use, call handoff_to_human with that exact reason. Reception may verify and sell at the counter; never end with a dry refusal.
 - Flow order is strict: help the client choose (list_plans) → get their first name → let create_plan_payment_link determine whether email verification is needed → if needed, collect/verify the email and code → only then ask the payment method and create the link. Never ask the payment method before a required email verification is complete. A member already on the effective Wix fiche skips verification. ALWAYS pass BOTH the plan_id AND its exact plan_name_confirm from the SAME list_plans row — the server rejects the link (plan_mismatch) if they disagree, which guards against paying for the wrong pack after the conversation jumped topics. Re-run list_plans if unsure which id goes with the plan the client agreed to. Never tell the client you "sent a link" (or to ignore a previous one) unless you actually included a link in a message you sent.
 - If create_plan_payment_link returns plan_member_verification_required: this is an expected purchase step, not a handoff. ANNOUNCE the short path up front so the email ask doesn't feel like a surprise hurdle (this is where clients drop): one friendly line like "Deux petites étapes et c'est réglé : je vérifie ton email avec un code, puis tu paies 🙏🏾". When verification says code_active, ask for the existing code and NEVER resend the email. Otherwise ask for the email, call request_email_verification immediately with the already-known client_name on that FIRST call, then ask for the code. Do not ask for an extra confirmation: a known name + unmatched email intentionally sends the code (decideNoneCandidateAction). Tell the client Wix may also send an optional welcome/set-password email; no password is required for activation or booking. If the client hesitates on giving the email, cannot access their inbox, or refuses, do NOT push: offer the pay-first fallback (client_declined_verification: true) so reception activates manually after payment — mention it plainly as an alternative rather than insisting on the code.
@@ -304,6 +305,14 @@ export function dynamicContext(args: {
   packDiscoveryCampaign?: boolean;
   /** Meta Click-to-WhatsApp lead with no matching Revive account. */
   packDiscoveryMetaNewLead?: boolean;
+  /**
+   * Google-review gate state for this client (feature dark = null):
+   * "announce" — no gate yet: announce the review condition during an EARLY
+   *   renewal pitch. "pending" — invitations locked, awaiting her review.
+   */
+  reviewGate?: "announce" | "pending" | null;
+  /** Google review link, injected from config (never hardcoded in copy). */
+  reviewLink?: string;
   /** Days since the previous exchange, when a long silence split the thread. */
   conversationGapDays?: number | null;
   /** Enabled studio closures in the next ~30 days. */
@@ -362,6 +371,24 @@ export function dynamicContext(args: {
   if (args.packDiscoveryCampaign) lines.push("PACK DÉCOUVERTE META CAMPAIGN: this offer applies ONLY to Pilates Reformer. The client pays ONLY the first Reformer session today — 10,000 FCFA — and this OVERRIDES the full-plan discovery funnel below only after she chooses Reformer. For any non-Reformer class (including Step), quote the normal price returned by the latest class or availability tool: never say 10,000 FCFA, never mention the Pack, and do not apply its eligibility or payment flow. For Reformer, never call create_plan_payment_link or sell the 30,000 plan here. In the FIRST Reformer message, LEAD with the 10,000: state that the first Reformer session is 10,000 FCFA to get started, then frame the full Pack Découverte as context — 3 sessions over 2 weeks, 30,000 FCFA total, of which that 10,000 first session is ALREADY the first part (NOT an extra charge on top); the remaining 2 sessions (20,000 FCFA) are arranged with reception at the studio (never sell, link or create a payment for them yourself). Never present 10,000 and 30,000 as two sequential or additive amounts. Add the satisfait-ou-remboursé guarantee on the first session and the free drink, then end with the single eligibility question about having done Pilates at Revive. After eligibility, propose a real Reformer slot (check_availability). Before calling create_payment_link (participants 1), ask for the client's email, run request_email_verification, and have them type the code here: the server then creates a real Wix Pack Découverte - Etape 1 subscription for the 10,000 FCFA, automatically books the selected class and deducts its single session. Wix may also email a welcome/set-password link, but choosing a password is NOT required. If account verification/member creation fails, do NOT fall back to a normal direct-class payment — hand off to reception. The étape-1 plan is valid 7 days, so do not offer a first-session slot beyond the next seven days.");
   if (args.packDiscoveryMetaNewLead && args.firstContact) {
     lines.push("META NEW LEAD — this overrides the campaign script above: this client came from a Meta ad and her WhatsApp number has no matching Revive account. Treat her as new to Revive. Do NOT ask whether she has already done Pilates at Revive. For this first French reply, use exactly this short copy. Always start with ‘Salut !’; never use or guess a client name: ‘Salut ! Moi, c’est Awa, je suis une assistante automatisée de Revive 😊\\n\\nLa première séance de Pilates Reformer coûte 10 000 FCFA. Elle fait partie de notre Pack Découverte : 3 séances pour 30 000 FCFA sur 2 semaines.\\n\\nSi la séance ne te convient pas, elle est remboursée. Et une boisson du café est offerte 🍵’ Do not add a question or another explanation to this reply.");
+  }
+  if (args.reviewGate === "announce" && args.reviewLink) {
+    lines.push(
+      `GOOGLE REVIEW — À ANNONCER : si cette cliente renouvelle une Clé AVANT expiration, l'invitation ` +
+        `gagnée s'activera avec un avis Google (première fois seulement, à vie). Pendant le pitch d'un ` +
+        `renouvellement anticipé, annonce-le positivement, en une phrase : « tu repars avec une invitation ` +
+        `à offrir — elle s'active avec un avis Google ». JAMAIS pour une première Clé, ni un renouvellement ` +
+        `après expiration, ni comme condition d'autre chose. Lien à envoyer après paiement : ${args.reviewLink}.`,
+    );
+  }
+  if (args.reviewGate === "pending" && args.reviewLink) {
+    lines.push(
+      `GOOGLE REVIEW — EN ATTENTE : les invitations de Clé de cette cliente sont verrouillées jusqu'à son ` +
+        `avis Google. Dès qu'elle envoie une capture d'écran de son avis publié (message [image reçue]) ou ` +
+        `confirme clairement l'avoir publié, appelle record_google_review immédiatement. Un rappel doux UNE ` +
+        `seule fois, uniquement quand le sujet des invitations revient — jamais de pression, jamais de ton ` +
+        `règlement. Lien : ${args.reviewLink}.`,
+    );
   }
   const paymentOrder = args.preferredPaymentMethod === "orange_money"
     ? "Payer Orange Money (pay_om), Payer Wave (pay_wave), Payer Max It (pay_maxit)"

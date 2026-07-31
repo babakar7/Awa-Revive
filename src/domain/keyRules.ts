@@ -48,6 +48,28 @@ export function invitationEarnings(
   return normalBenefit + continuity;
 }
 
+/**
+ * Whether THIS verified Key purchase triggers the one-time Google-review gate:
+ * its invitations are created PENDING_REVIEW until the client leaves a review.
+ * The gate changes the born-status of the invitation rows, never their count
+ * (that stays governed by invitationEarnings).
+ */
+export function reviewGateApplies(args: {
+  featureEnabled: boolean; // KEYS_AUTOMATION_ENABLED && GOOGLE_REVIEW_URL set
+  earlyRenewal: boolean; // purchasedAt < continuity source expiry
+  clientKnown: boolean; // gate is per-client; anonymous purchases never gate
+  clientAlreadyGated: boolean; // a google_review_gates row already exists
+  invitationCount: number; // from invitationEarnings, unchanged by this feature
+}): boolean {
+  return (
+    args.featureEnabled &&
+    args.earlyRenewal &&
+    args.clientKnown &&
+    !args.clientAlreadyGated &&
+    args.invitationCount > 0
+  );
+}
+
 export function isDakarWeekday(date: Date): boolean {
   const day = date.getUTCDay();
   return day >= 1 && day <= 5;

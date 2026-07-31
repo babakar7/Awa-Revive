@@ -1765,6 +1765,30 @@ create table if not exists key_invitations (
   updated_at timestamptz not null default now(),
   unique (key_id, ordinal)
 );
+-- PENDING_REVIEW: invitation earned from a client's FIRST early Key renewal,
+-- locked until she leaves a Google review (see google_review_gates). Invisible
+-- to redemption (availableInvitationForKey filters GRANTED/ASSIGNED only).
+alter table key_invitations drop constraint if exists key_invitations_status_check;
+alter table key_invitations add constraint key_invitations_status_check
+  check (status in ('GRANTED','PENDING_REVIEW','ASSIGNED','USED','VOID'));
+
+-- One-time Google-review gate: the FIRST time a client renews a Key before
+-- expiry, the invitation(s) she earns start PENDING_REVIEW and activate when
+-- she sends a screenshot of her published review. One row per client for life
+-- (PK) — subsequent early renewals grant unconditionally. Created at verified
+-- payment time; key_id is linked later at provisioning (a SCHEDULED renewal's
+-- Key row does not exist yet). Never applies to counter purchases (Wix webhook)
+-- because the condition is only announced by Awa during her sale.
+create table if not exists google_review_gates (
+  client_id uuid primary key references clients(id),
+  plan_order_id text not null,
+  key_id uuid references key_registry(id),
+  requested_at timestamptz not null default now(),
+  ask_sent_at timestamptz,
+  activated_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
 -- Once a bonus/invitation booking is confirmed, its right is consumed even if
 -- somebody later cancels it directly in Wix. Awa therefore blocks cancellation

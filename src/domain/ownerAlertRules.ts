@@ -38,6 +38,9 @@ const INFORMATIONAL_SUBJECT_PATTERNS: RegExp[] = [
   /départ autorisé/i,
   /espèces choisies/i,
   /récap du jour/i,
+  // Avis Google reçu → invitation activée automatiquement : FYI pur, aucune
+  // action réception (la capture d'écran suffit).
+  /avis google reçu/i,
   // Les événements de relais sont informatifs par défaut. Le message entrant
   // pendant un relais force explicitement la copie propriétaire à l'appel,
   // car Awa reste silencieuse et le client attend une réponse humaine.

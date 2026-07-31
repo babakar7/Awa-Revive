@@ -15,6 +15,44 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Machine à avis Google — invitation du 1er renouvellement anticipé (31 juillet 2026)
+
+- **Objectif** : la **première fois** (à vie) qu'une cliente renouvelle une Clé
+  **avant expiration**, l'invitation gagnée naît **verrouillée** (`PENDING_REVIEW`)
+  et s'active quand elle laisse un **avis Google** puis envoie une **capture
+  d'écran**. Awa active sur capture — la capture suffit, pas de validation
+  réception (celle-ci reçoit une notif FYI). Un seul avis débloque **toutes** les
+  invitations de la clé (cas Résidente : les 2). Une fois par cliente : ses
+  renouvellements anticipés suivants donnent l'invitation sans condition.
+- **Périmètre** : la condition est **annoncée dès l'argumentaire de vente** d'un
+  renouvellement anticipé (contexte dynamique `reviewGate: "announce"`). Les
+  **achats au comptoir** (webhook Wix) ne sont **jamais** gated — le provisioning
+  comptoir ne passe pas `reviewGatePlanOrderId`, seule la voie Awa/fulfillment le
+  fait. **Risque assumé par Babakar** : conditionner un avis est contraire à la
+  policy Google (avis incitatifs) ; décision produit prise en connaissance de cause.
+- **Modèle** : nouveau statut `PENDING_REVIEW` sur `key_invitations` (invisible à
+  `availableInvitationForKey`) + table `google_review_gates` (PK `client_id` =
+  règle à-vie), créée au paiement vérifié dans `finalizeVerifiedKeyContinuity`
+  (re-entrante : insert idempotent). Une clé chaînée naît plus tard, à
+  l'activation ; le gate porté par la cliente survit à ce décalage (capture avant
+  provisioning → invitations nées `GRANTED`).
+- **Décision pure** : `reviewGateApplies()` dans `keyRules.ts` (feature on +
+  early renewal + cliente connue + pas déjà gated + invitationCount > 0). Le gate
+  change le **statut de naissance** des invitations, jamais leur nombre
+  (`invitationEarnings` inchangé).
+- **Flux** : message de demande envoyé après paiement dans `processPlanPayment`
+  (`maybeSendGoogleReviewAsk`, claim atomique `ask_sent_at` → retries webhook
+  no-op, couvre Wave + OM). Outil `record_google_review` (activation atomique +
+  idempotente + notif FYI). `book_key_invitation` renvoie `invitation_pending_review`
+  + lien quand la seule invitation est verrouillée → rappel doux piloté par l'outil.
+- **Config** : `GOOGLE_REVIEW_URL` (vide = feature éteinte ; effective seulement
+  avec `KEYS_AUTOMATION_ENABLED`). Lien prod : `https://g.page/r/CQm4IE7CTYQYEBM/review`.
+  Le lien n'est pas une URL de paiement → `outboundLint` ne le bloque pas.
+- **Tests** : `test/googleReviewGate.test.ts` (table `reviewGateApplies` + copie
+  fr/en/wo), `test/integration/googleReviewGate.test.ts` (à-vie PK, invisibilité
+  redemption, activation atomique + idempotente, claim one-shot, capture avant
+  provisioning, Résidente 2 invitations).
+
 ## Relais technique fiable + Clé avec première séance (31 juillet 2026)
 
 - Les pannes terminales convergent vers `handleTechnicalFailure()` : pause Awa

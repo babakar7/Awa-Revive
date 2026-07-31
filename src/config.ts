@@ -221,6 +221,11 @@ export const config = {
   INVITEE_HISTORY_PLAN_IDS: optional("INVITEE_HISTORY_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   INVITATION_SLOT_HOUR: parseInt(optional("INVITATION_SLOT_HOUR", "12"), 10),
   INVITATION_SLOT_MINUTE: parseInt(optional("INVITATION_SLOT_MINUTE", "30"), 10),
+  // Google-review gate on a client's FIRST early Key renewal. Empty = feature
+  // dark (invitations grant unconditionally, as before). Effective only with
+  // KEYS_AUTOMATION_ENABLED. The link is sent verbatim to the client; it is not
+  // a payment URL, so outboundLint never blocks it.
+  GOOGLE_REVIEW_URL: optional("GOOGLE_REVIEW_URL", ""),
   // Clés lifecycle templates. Each feature stays dark until its exact Meta
   // template name is configured; language codes must match Meta approval.
   WA_KEY_INVITEE_J5_TEMPLATE: optional("WA_KEY_INVITEE_J5_TEMPLATE", ""),
