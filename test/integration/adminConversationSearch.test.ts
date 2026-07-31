@@ -46,6 +46,24 @@ beforeEach(async () => {
 });
 
 describe("admin conversation keyword search", () => {
+  it("uses the latest visible team reply for the list preview, count and ordering", async () => {
+    const teamLatest = await seedClient({ name: "Réponse équipe récente" });
+    const clientLatest = await seedClient({ wa_phone: "221770000002", name: "Message client récent" });
+    await message(teamLatest.id, "user", "Ancien message du client", "3 hours");
+    await teamMessage(teamLatest.id, "Tout dernier message manuel", "pending", "1 hour");
+    await message(clientLatest.id, "user", "Message client intermédiaire", "2 hours");
+
+    const result = await listClientsPage({});
+    expect(result.rows[0]).toMatchObject({
+      id: teamLatest.id,
+      last_message: "Tout dernier message manuel",
+      message_count: 2,
+    });
+
+    const response = await app.inject({ method: "GET", url: "/admin/conversations", headers: { authorization: AUTH } });
+    expect(response.body).toContain("Tout dernier message manuel");
+  });
+
   it("finds client, Awa and manual team messages, including pending and failed sends", async () => {
     const client = await seedClient({ name: "Contenu client" });
     const awa = await seedClient({ wa_phone: "221770000002", name: "Contenu Awa" });

@@ -61,13 +61,23 @@ export async function listClients(search?: string): Promise<AdminClientRow[]> {
     `select c.id, c.wa_phone, c.name, c.language, c.claimed_email, c.is_test,
             c.human_takeover_until, c.human_takeover_by, c.awa_disengaged_until,
             m.created_at as last_message_at, m.content as last_message,
-            (select count(*) from conversations cc
-              where cc.client_id = c.id and cc.role in ('user','assistant'))::int as message_count
+            ((select count(*) from conversations cc
+                where cc.client_id = c.id and cc.role in ('user','assistant'))
+             + (select count(*) from admin_outbound_messages am
+                 where am.client_id = c.id))::int as message_count
        from clients c
        left join lateral (
-         select content, created_at from conversations
-          where client_id = c.id and role in ('user','assistant')
-          order by created_at desc limit 1
+         select visible.content, visible.created_at
+           from (
+             select cm.id, cm.content, cm.created_at
+               from conversations cm
+              where cm.client_id = c.id and cm.role in ('user','assistant')
+             union all
+             select am.id, am.body, am.created_at
+               from admin_outbound_messages am
+              where am.client_id = c.id
+           ) visible
+          order by visible.created_at desc, visible.id desc limit 1
        ) m on true
        ${where}
       order by m.created_at desc nulls last
@@ -107,13 +117,23 @@ export async function listClientsPage(args: {
        select c.id, c.wa_phone, c.name, c.language, c.claimed_email, c.is_test,
               c.human_takeover_until, c.human_takeover_by, c.awa_disengaged_until,
               m.created_at as last_message_at, m.content as last_message,
-              (select count(*) from conversations cc
-                where cc.client_id = c.id and cc.role in ('user','assistant'))::int as message_count
+              ((select count(*) from conversations cc
+                  where cc.client_id = c.id and cc.role in ('user','assistant'))
+               + (select count(*) from admin_outbound_messages am
+                   where am.client_id = c.id))::int as message_count
          from clients c
          left join lateral (
-           select content, created_at from conversations
-            where client_id = c.id and role in ('user','assistant')
-            order by created_at desc limit 1
+           select visible.content, visible.created_at
+             from (
+               select cm.id, cm.content, cm.created_at
+                 from conversations cm
+                where cm.client_id = c.id and cm.role in ('user','assistant')
+               union all
+               select am.id, am.body, am.created_at
+                 from admin_outbound_messages am
+                where am.client_id = c.id
+             ) visible
+            order by visible.created_at desc, visible.id desc limit 1
          ) m on true
      )
      select latest.*, matched.content as matched_message, matched.created_at as matched_at,
