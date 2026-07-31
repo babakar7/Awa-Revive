@@ -161,6 +161,8 @@ body.nav-collapsed .sidebar a.nav-link{justify-content:center;padding-inline:0}
 .takeover-banner span{color:var(--ink-500);font-size:.875rem}
 .human-turn .bubble{border-color:var(--plum-300);background:linear-gradient(145deg,var(--plum-50),var(--plum-100))}
 .human-label{display:block;margin-bottom:.22rem;color:var(--plum-700);font-size:.7rem;font-weight:750;letter-spacing:.06em;text-transform:uppercase}
+.conversation-match mark{padding:.04em .12em;border-radius:3px;background:#f5dda1;color:inherit;font-weight:750}
+.conversation-match>.muted{margin-top:.25rem}
 .retry-send{margin-left:.35rem}
 .admin-composer{position:sticky;bottom:.6rem;z-index:7;box-shadow:var(--shadow-2)}
 .admin-composer textarea{width:100%;min-height:92px}

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { pool } from "../db/index.js";
+import { normalizeConversationSearch } from "./conversationSearch.js";
 
 /**
  * Read-only SQL for the admin dashboard. No business logic here — mutations
@@ -19,6 +20,34 @@ export interface AdminClientRow {
   human_takeover_until: Date | null;
   human_takeover_by: string | null;
   awa_disengaged_until: Date | null;
+  matched_message?: string | null;
+  matched_at?: Date | null;
+  matched_source?: "client" | "awa" | "team" | null;
+}
+
+const SEARCH_TRANSLATIONS: Array<[string, string]> = [
+  ["àáâãäåāăą", "aaaaaaaaa"],
+  ["çćč", "ccc"],
+  ["ďđð", "ddd"],
+  ["èéêëēĕėęě", "eeeeeeeee"],
+  ["ìíîïĩīĭįı", "iiiiiiiii"],
+  ["ñńň", "nnn"],
+  ["òóôõöøōŏő", "ooooooooo"],
+  ["ŕř", "rr"],
+  ["śşš", "sss"],
+  ["ťţ", "tt"],
+  ["ùúûüũūŭůűų", "uuuuuuuuuu"],
+  ["ýÿ", "yy"],
+  ["źżž", "zzz"],
+  ["ł", "l"],
+];
+
+/** Keep this equivalent to conversationSearch.ts's fold for DB-side matching. */
+function normalizedSearchSql(valueSql: string): string {
+  let expression = `lower(coalesce(${valueSql}, ''))`;
+  expression = `replace(replace(replace(replace(${expression}, 'œ', 'oe'), 'æ', 'ae'), 'ß', 'ss'), 'þ', 'th')`;
+  for (const [from, to] of SEARCH_TRANSLATIONS) expression = `translate(${expression}, '${from}', '${to}')`;
+  return `regexp_replace(${expression}, '[^a-z0-9]+', '', 'g')`;
 }
 
 export async function listClients(search?: string): Promise<AdminClientRow[]> {
@@ -64,20 +93,17 @@ export async function listClientsPage(args: {
 }): Promise<PageResult<AdminClientRow>> {
   const page = Math.max(1, Math.trunc(args.page ?? 1));
   const pageSize = Math.min(100, Math.max(10, Math.trunc(args.pageSize ?? 30)));
-  const params: unknown[] = [];
-  const where: string[] = [];
-  if (args.search?.trim()) {
-    params.push(`%${args.search.trim()}%`);
-    where.push(`(c.name ilike $${params.length} or c.wa_phone like $${params.length})`);
-  }
-  if (args.periodDays) {
-    params.push(args.periodDays);
-    where.push(`m.created_at > now() - make_interval(days => $${params.length}::int)`);
-  }
-  const clause = where.length ? `where ${where.join(" and ")}` : "";
-  params.push(pageSize, (page - 1) * pageSize);
+  const terms = normalizeConversationSearch(args.search);
+  const hasSearch = Boolean(args.search?.trim());
+  const periodDays = args.periodDays && args.periodDays > 0 ? Math.trunc(args.periodDays) : null;
+  const params: unknown[] = [terms, periodDays, pageSize, (page - 1) * pageSize, hasSearch];
+  const identitySql = normalizedSearchSql(`concat_ws(' ', latest.name, latest.wa_phone)`);
+  const messageSql = normalizedSearchSql("message.content");
+  const coverageMessageSql = normalizedSearchSql("coverage_message.content");
   const result = await pool.query(
-    `with latest as (
+    `with search_terms as (
+       select unnest($1::text[]) as term
+     ), latest as (
        select c.id, c.wa_phone, c.name, c.language, c.claimed_email, c.is_test,
               c.human_takeover_until, c.human_takeover_by, c.awa_disengaged_until,
               m.created_at as last_message_at, m.content as last_message,
@@ -89,11 +115,60 @@ export async function listClientsPage(args: {
             where client_id = c.id and role in ('user','assistant')
             order by created_at desc limit 1
          ) m on true
-         ${clause}
      )
-     select *, count(*) over()::int as total_count
-       from latest order by last_message_at desc nulls last
-      limit $${params.length - 1} offset $${params.length}`,
+     select latest.*, matched.content as matched_message, matched.created_at as matched_at,
+            matched.source as matched_source, count(*) over()::int as total_count
+       from latest
+       cross join lateral (select ${identitySql} as content) identity
+       left join lateral (
+         select message.content, message.created_at, message.source
+           from (
+             select cm.id, cm.content, cm.created_at,
+                    case when cm.role = 'user' then 'client' else 'awa' end::text as source
+               from conversations cm
+              where cm.client_id = latest.id and cm.role in ('user','assistant')
+             union all
+             select am.id, am.body, am.created_at, 'team'::text as source
+               from admin_outbound_messages am
+              where am.client_id = latest.id
+           ) message
+           cross join lateral (
+             select count(*)::int as score from search_terms st
+              where ${messageSql} like '%' || st.term || '%'
+           ) relevance
+          where relevance.score > 0
+            and ($2::int is null or message.created_at > now() - make_interval(days => $2::int))
+          order by relevance.score desc, message.created_at desc, message.id desc
+          limit 1
+       ) matched on true
+      where (
+        not $5::boolean
+        or (cardinality($1::text[]) > 0 and (select count(*)::int
+              from search_terms st
+             where identity.content like '%' || st.term || '%'
+                or exists (
+                  select 1
+                    from (
+                      select cm.content, cm.created_at
+                        from conversations cm
+                       where cm.client_id = latest.id and cm.role in ('user','assistant')
+                      union all
+                      select am.body, am.created_at
+                        from admin_outbound_messages am
+                       where am.client_id = latest.id
+                    ) coverage_message
+                   where ($2::int is null or coverage_message.created_at > now() - make_interval(days => $2::int))
+                     and ${coverageMessageSql} like '%' || st.term || '%'
+                )
+           ) = cardinality($1::text[]))
+      )
+        and (
+          $2::int is null
+          or latest.last_message_at > now() - make_interval(days => $2::int)
+          or matched.created_at is not null
+        )
+      order by last_message_at desc nulls last
+      limit $3 offset $4`,
     params,
   );
   const total = result.rows[0]?.total_count ?? 0;

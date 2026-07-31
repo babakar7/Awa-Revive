@@ -218,7 +218,7 @@ ${refresh}
     <div class="topbar-title"><h1 class="page-title">${escapeHtml(title)}</h1>${opts.subtitle ? `<span class="page-subtitle">${escapeHtml(opts.subtitle)}</span>` : ""}</div>
     <form class="topbar-search" method="get" action="/admin/conversations" role="search">
       ${uiIcon("search")}
-      <input id="global-client-search" type="search" name="q" placeholder="Rechercher un client…" aria-label="Rechercher un client par nom ou numéro" autocomplete="off">
+      <input id="global-client-search" type="search" name="q" placeholder="Nom, numéro ou mots-clés…" aria-label="Rechercher par nom, numéro ou mots-clés" autocomplete="off">
       <span class="search-key" aria-hidden="true">⌘ K</span>
     </form>
     ${opts.actions ? `<div class="topbar-actions">${opts.actions}</div>` : ""}
