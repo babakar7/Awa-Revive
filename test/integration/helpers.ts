@@ -63,6 +63,7 @@ export interface WixState {
   createdOrderIds: string[];
   ordersByExternalId: Record<string, string>;
   orderPayments: Record<string, any[]>;
+  orderStatuses: Record<string, string>;
   failCreateOrder: boolean;
   failAddPayment: boolean;
   /** Calendar Events V3 data used by coach-payment snapshots. */
@@ -191,6 +192,7 @@ export function makeFetchMock(): FetchMock {
     createdOrderIds: [],
     ordersByExternalId: {},
     orderPayments: {},
+    orderStatuses: {},
     failCreateOrder: false,
     failAddPayment: false,
     calendarEvents: [],
@@ -598,7 +600,15 @@ export function makeFetchMock(): FetchMock {
       const externalId = body?.order?.channelInfo?.externalOrderId;
       if (typeof externalId === "string") wix.ordersByExternalId[externalId] = id;
       wix.orderPayments[id] = [];
-      return json(200, { order: { id } });
+      // Like live Wix: the status is only what the caller explicitly set —
+      // an omitted status leaves the order INITIALIZED (invisible in the
+      // dashboard), which is exactly the regression the membership flow guards.
+      wix.orderStatuses[id] = body?.order?.status ?? "INITIALIZED";
+      return json(200, { order: { id, status: wix.orderStatuses[id] } });
+    }
+    if (/\/ecom\/v1\/orders\/[^/]+$/.test(url) && method === "GET") {
+      const orderId = decodeURIComponent(url.split("/ecom/v1/orders/")[1]);
+      return json(200, { order: { id: orderId, status: wix.orderStatuses[orderId] ?? "INITIALIZED" } });
     }
     if (url.includes("/ecom/v1/payments/orders/") && url.endsWith("/add-payment")) {
       if (wix.failAddPayment) return json(500, { message: "payment record exploded" });
@@ -676,6 +686,7 @@ export function makeFetchMock(): FetchMock {
       wix.createdOrderIds.length = 0;
       wix.ordersByExternalId = {};
       wix.orderPayments = {};
+      wix.orderStatuses = {};
       wix.failCreateOrder = false;
       wix.failAddPayment = false;
       wix.calendarEvents = [];

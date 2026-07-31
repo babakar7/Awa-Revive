@@ -4036,3 +4036,11 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   MEMBERSHIP natif n'a aucun paiement, balance 0) ; et le checkout eCommerce
   serveur reste impossible pour les plans (acheteur anonyme par clé API) —
   c'est bien un ordre créé directement, pas un checkout.
+- Piège découvert au premier passage prod : sans `status` explicite, Create
+  Order laisse l'ordre en `INITIALIZED` (number 0) — invisible dans le
+  dashboard (la doc Wix prétend qu'un total 0 est auto-APPROVED : faux en
+  pratique). Le payload passe donc `status: "APPROVED"`, avec filet : si
+  l'ordre n'est pas APPROVED après création (ou pour un ordre existant
+  retrouvé par externalOrderId), un paiement offline 0 F APPROVED est ajouté
+  (la transition qu'utilise déjà le chemin Wave), puis warning si toujours
+  pas APPROVED.

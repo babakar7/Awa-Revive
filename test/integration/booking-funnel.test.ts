@@ -256,6 +256,9 @@ describe("booking funnel persistence", () => {
     expect(order.lineItems[0].paymentOption).toBe("MEMBERSHIP");
     expect(order.lineItems[0].price.amount).toBe("0");
     expect(order.paymentStatus).toBe("PAID");
+    // INITIALIZED orders (the default when status is omitted) never surface in
+    // the dashboard — the whole point of this order is reception visibility.
+    expect(order.status).toBe("APPROVED");
     expect(order.buyerInfo).toMatchObject({ contactId: "contact_1", memberId: "contact_1" });
     expect(order.channelInfo.externalOrderId).toBe(result.booking_id);
     expect(mock.wixAddPaymentCalls()).toHaveLength(0);

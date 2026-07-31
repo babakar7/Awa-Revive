@@ -2233,7 +2233,7 @@ export async function createMembershipBookingOrder(args: {
   name: string;
   contactId: string;
   slotStart?: string | Date | null;
-}): Promise<string> {
+}): Promise<{ orderId: string; status: string }> {
   await paceWixEcomCall();
   const contactName = splitContactName(args.name);
   const zero = { amount: "0" };
@@ -2295,6 +2295,9 @@ export async function createMembershipBookingOrder(args: {
       currency: "XOF",
       currencyConversionDetails: { originalCurrency: "XOF", conversionRate: "1" },
       taxIncludedInPrices: true,
+      // Without an explicit APPROVED the order stays INITIALIZED (number 0)
+      // and never surfaces in the dashboard — verified live 31/07.
+      status: "APPROVED",
       paymentStatus: "PAID",
       priceSummary: {
         subtotal: zero,
@@ -2307,7 +2310,14 @@ export async function createMembershipBookingOrder(args: {
   });
   const orderId = data?.order?.id;
   if (!orderId) throw new Error(`Wix create membership order returned no id: ${JSON.stringify(data)}`);
-  return String(orderId);
+  return { orderId: String(orderId), status: String(data?.order?.status ?? "") };
+}
+
+/** Current lifecycle status of an eCommerce order (APPROVED, INITIALIZED…). */
+export async function getOrderStatus(orderId: string): Promise<string> {
+  await paceWixEcomCall();
+  const data = await wixGet(`/ecom/v1/orders/${encodeURIComponent(orderId)}`);
+  return String(data?.order?.status ?? "");
 }
 
 /** Create the eCommerce record required after a custom-checkout booking. */

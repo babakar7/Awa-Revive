@@ -432,6 +432,7 @@ export async function recordWixOrderForBooking(
     }
 
     let wixOrderId = booking.wix_order_id;
+    let membershipOrderStatus: string | null = null;
     if (!wixOrderId) {
       wixOrderId = await wix.findOrderIdByExternalId(booking.id);
       if (!wixOrderId) {
@@ -439,7 +440,7 @@ export async function recordWixOrderForBooking(
           // The MEMBERSHIP buyer must be the plan-holding member; without the
           // contact the order would not attach to them — retry on next sweep.
           if (!contact?.id) throw new Error(`No Wix contact for membership order (${phone})`);
-          wixOrderId = await wix.createMembershipBookingOrder({
+          const created = await wix.createMembershipBookingOrder({
             wixBookingId: booking.wix_booking_id!,
             externalOrderId: booking.id,
             serviceName: booking.service_name,
@@ -449,6 +450,8 @@ export async function recordWixOrderForBooking(
             contactId: contact.id,
             slotStart: booking.slot_start,
           });
+          wixOrderId = created.orderId;
+          membershipOrderStatus = created.status;
         } else {
           wixOrderId = await wix.createBookingOrder({
             wixBookingId: booking.wix_booking_id!,
@@ -470,7 +473,28 @@ export async function recordWixOrderForBooking(
       await repo.saveWixOrderId(booking.id, wixOrderId);
     }
 
-    if (!isMembership && !(await wix.hasApprovedOrderPayment(wixOrderId, booking.amount_xof))) {
+    if (isMembership) {
+      // A membership order left INITIALIZED (number 0) never shows in the
+      // dashboard. A 0-amount approved offline payment flips it to APPROVED —
+      // the same transition the paid path gets from its real payment record.
+      if (!membershipOrderStatus) {
+        membershipOrderStatus = await wix.getOrderStatus(wixOrderId);
+      }
+      if (membershipOrderStatus !== "APPROVED") {
+        await wix.addApprovedOrderPayment({
+          orderId: wixOrderId,
+          amountXof: 0,
+          paymentMethod: paymentMethodLabel(booking.payment_method),
+        });
+        const after = await wix.getOrderStatus(wixOrderId);
+        if (after !== "APPROVED") {
+          log.warn(
+            { bookingId: booking.id, wixOrderId, orderStatus: after },
+            "Membership Wix order still not APPROVED after 0-amount payment",
+          );
+        }
+      }
+    } else if (!(await wix.hasApprovedOrderPayment(wixOrderId, booking.amount_xof))) {
       await wix.addApprovedOrderPayment({
         orderId: wixOrderId,
         amountXof: booking.amount_xof,
