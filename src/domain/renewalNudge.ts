@@ -210,7 +210,7 @@ export async function sweepRenewalNudges(log: {
           "assistant",
           `[relance passage aux Clés] Ton abonnement se termine le ${endLabel}. ` +
             `Une reprise avant cette date donne une invitation Reformer avec L'Habituée, ` +
-            `deux avec La Résidente, à offrir à des personnes qui ne sont jamais venues chez Revive.`,
+            `deux avec La Résidente, à offrir à des personnes qui n'ont jamais fait de Reformer chez Revive.`,
         );
         sent += 1;
         log.info(

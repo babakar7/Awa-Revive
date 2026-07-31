@@ -515,8 +515,9 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "book_key_invitation",
     description:
       "Book an earned Clé invitation for a friend under the key holder's Wix account. Only Reformer at " +
-      "12:30 Monday-Friday is accepted. The friend must never have attended Revive; provide first name and " +
-      "phone for the server-side check. IMPORTANT: once confirmed, an invitation cannot be cancelled, moved " +
+      "12:30 Monday-Friday is accepted. The friend must never have taken a Reformer class at Revive; prior " +
+      "Aquabike, Yoga, Mat, Step or other Revive visits do not disqualify. Provide first name and phone for " +
+      "the server-side check. IMPORTANT: once confirmed, an invitation cannot be cancelled, moved " +
       "or carried over and the right remains consumed. Tell the client this before calling.",
     input_schema: {
       type: "object",
@@ -3353,10 +3354,12 @@ export async function executeTool(
       }
       if (friendResolution.kind === "one") {
         try {
-          if (await wix.hasAnyPastReviveBooking(friendResolution.contact.id)) {
+          if (await wix.hasPastReformerBooking(friendResolution.contact.id)) {
             return JSON.stringify({
               error: "friend_not_new",
-              message: "L'invitation est réservée à une personne qui n'est jamais venue chez Revive.",
+              message:
+                "L'invitation est réservée à une personne qui n'a jamais fait de Reformer chez Revive. " +
+                "Une venue pour un autre cours ou service ne la disqualifie pas.",
             });
           }
         } catch (error) {

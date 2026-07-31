@@ -115,7 +115,9 @@ remplacement).
 
 Les cours en plus sont limités à Aquabike/Yoga/Mat/Step du lundi au vendredi.
 Les invitations sont limitées au Reformer de 12h30 du lundi au vendredi, pour
-une amie qui n'est jamais venue chez Revive. **Dès qu'un cours en plus ou une
+une amie qui n'a jamais fait de Reformer chez Revive. Une venue antérieure pour
+Aquabike, Yoga, Mat, Step ou un autre service Revive ne la disqualifie pas.
+**Dès qu'un cours en plus ou une
 invitation est réservé, il ne peut être ni annulé, ni déplacé, ni reporté et le
 crédit reste consommé.** Awa l'annonce avant de réserver. Si Revive annule le
 cours, la réception traite le remplacement.
@@ -129,9 +131,9 @@ sont **Membres Fondatrices jusqu'à son échéance** : piscine les jours de séa
 bibliothèque et massage au tarif membre. L'ancien abonnement ne donne ni cours
 bonus, ni invitation normale, ni prolongation. Si elles achètent une Clé avant
 l'échéance, elle démarre à la fin de l'ancien abonnement et elles gagnent une
-invitation Reformer supplémentaire à offrir à une personne qui n'est jamais
-venue chez Revive : une invitation au total avec L'Habituée, deux avec La
-Résidente. Awa annonce toujours les séances et la validité ; elle ne promet pas
+invitation Reformer supplémentaire à offrir à une personne qui n'a jamais fait
+de Reformer chez Revive : une invitation au total avec L'Habituée, deux avec
+La Résidente. Awa annonce toujours les séances et la validité ; elle ne promet pas
 une équivalence aux clientes qui venaient strictement une fois par semaine.
 
 

@@ -146,7 +146,7 @@ Template Meta, deux variables (`prénom`, `date`) :
 > Résidente — 12 séances sur 60 jours.
 >
 > Si tu reprends ta Clé avant cette date, tu reçois des invitations Reformer à
-> offrir à des personnes de ton choix qui ne sont jamais venues chez Revive :
+> offrir à des personnes de ton choix qui n'ont jamais fait de Reformer chez Revive :
 > une avec L’Habituée, deux avec La Résidente. Elles sont valables sur notre
 > créneau calme de 12h30, du lundi au vendredi, sur réservation.
 >

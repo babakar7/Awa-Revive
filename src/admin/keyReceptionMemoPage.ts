@@ -78,7 +78,7 @@ export function renderKeyReceptionMemo(): string {
         <span>Toute invitation passe par Awa/Resabot, même si la demande est faite à l’accueil. Ne créez jamais directement une formule Invitation.</span>
       </div>
       <div class="key-check-grid" aria-label="Conditions de l’invitation">
-        <p><span aria-hidden="true">✓</span> Amie jamais venue chez Revive</p>
+        <p><span aria-hidden="true">✓</span> Amie n’ayant jamais fait de Reformer chez Revive — ses autres venues ne bloquent pas</p>
         <p><span aria-hidden="true">✓</span> Reformer à 12h30, du lundi au vendredi</p>
         <p><span aria-hidden="true">✓</span> Réservation sous le compte de la détentrice</p>
         <p><span aria-hidden="true">✓</span> Prénom et téléphone de l’amie dans la réservation</p>

@@ -15,6 +15,8 @@ describe("Clés de la Maison — mémo réception", () => {
     expect(html).toContain("Aquabike, Yoga, Mat ou Step");
     expect(html).toContain("1 pour L’Invitée et L’Habituée · 2 pour La Résidente");
     expect(html).toContain("Toute invitation passe par Awa/Resabot");
+    expect(html).toContain("Amie n’ayant jamais fait de Reformer chez Revive — ses autres venues ne bloquent pas");
+    expect(html).not.toContain("Amie jamais venue chez Revive");
     expect(html).toContain("Reformer à 12h30, du lundi au vendredi");
     expect(html).toContain("Prolongation de 7 jours");
     expect(html).toContain("avant la fin de la journée de la première séance");

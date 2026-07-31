@@ -894,7 +894,8 @@ export async function hasPastPilatesBooking(contactId: string): Promise<boolean>
 
 /**
  * Has this contact ever held a confirmed/pending booking at Revive, in any
- * discipline. This is the eligibility rule for L'Invitée and invited friends.
+ * discipline. This broad history guard is retained for L'Invitée's one-time
+ * entitlement; earned Key invitations use the Reformer-only guard below.
  * A Wix failure is deliberately surfaced to the caller: "unknown" must be
  * handed to reception, never silently treated as "new".
  */
@@ -914,6 +915,64 @@ export async function hasAnyPastReviveBooking(contactId: string): Promise<boolea
     if (batch.length < 100) return false;
   }
   return false;
+}
+
+/**
+ * Has this contact ever held a confirmed/pending Reformer booking at Revive?
+ *
+ * Key invitations are still available to someone who already came to Revive
+ * for Aquabike, Yoga, Mat, Step, the café, or the pool. Match Reformer by the
+ * launch allowlist first, then by the booking/catalogue label so older service
+ * ids remain detectable. Unlike the discovery-sale helper above, lookup
+ * failures are surfaced: invitation eligibility must be handed to reception
+ * when it cannot be established safely.
+ */
+export async function hasPastReformerBooking(contactId: string): Promise<boolean> {
+  const extendedBookings: any[] = [];
+  for (let offset = 0; offset < 500; offset += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: {
+        filter: {
+          "contactDetails.contactId": contactId,
+          status: { $in: ["CONFIRMED", "PENDING"] },
+        },
+        paging: { limit: 100, offset },
+      },
+    });
+    const batch: any[] = data?.extendedBookings ?? [];
+    extendedBookings.push(...batch);
+    if (batch.length < 100) break;
+  }
+  if (extendedBookings.length === 0) return false;
+
+  const configuredIds = new Set(config.KEY_REFORMER_SERVICE_IDS);
+  const candidates = extendedBookings.flatMap((entry) => {
+    const booking = entry?.booking;
+    if (
+      !booking?.id ||
+      !["CONFIRMED", "PENDING"].includes(String(booking.status ?? ""))
+    ) {
+      return [];
+    }
+    const slot = booking?.bookedEntity?.slot ?? booking?.bookedEntity?.schedule ?? {};
+    const serviceId = typeof slot.serviceId === "string" ? slot.serviceId : "";
+    const title = String(booking?.bookedEntity?.title ?? "");
+    return [{ serviceId, title }];
+  });
+
+  if (
+    candidates.some(
+      ({ serviceId, title }) => configuredIds.has(serviceId) || /reformer/i.test(title),
+    )
+  ) {
+    return true;
+  }
+
+  const services = await listServices();
+  const reformerIds = new Set(
+    services.filter((service) => /reformer/i.test(service.name)).map((service) => service.id),
+  );
+  return candidates.some(({ serviceId }) => reformerIds.has(serviceId));
 }
 
 // ---------- contacts ----------
