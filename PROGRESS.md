@@ -43,7 +43,7 @@
   `reformer` des deux côtés, refusent un reste vide/collision, et n’acceptent
   qu’une correspondance unique (`sculpt`, `reformer_sculpt`,
   `pilates_foundation` restent valides selon le catalogue Wix).
-- Vérification : `npm run build`, **913 tests unitaires** et **283 tests
+- Vérification : `npm run build`, **909 tests unitaires** et **282 tests
   d’intégration** passent (28 fichiers, Postgres Docker).
 
 ## Clé nommée = on répond sur CETTE Clé (30 juillet 2026)
