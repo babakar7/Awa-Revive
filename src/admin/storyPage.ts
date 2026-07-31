@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { config } from "../config.js";
 import { escapeHtml } from "./helpers.js";
 import { layout } from "./layout.js";
-import { sendImage, sendText } from "../lib/whatsapp.js";
+import { sendImageTemplate, sendText } from "../lib/whatsapp.js";
 import { renderStoryImage } from "../lib/storyImage.js";
 import {
   dayLabelFor,
@@ -91,7 +91,12 @@ export function registerStoryRoutes(admin: FastifyInstance): void {
         );
       } else {
         const png = renderStoryImage(data);
-        await sendImage(config.STORY_PHONE, png, storyCaption(dateISO));
+        await sendImageTemplate(
+          config.STORY_PHONE,
+          png,
+          config.WA_STORY_TEMPLATE,
+          config.WA_STORY_TEMPLATE_LANG,
+        );
       }
       // Marque envoyée pour que le job auto du soir ne double pas.
       await markStorySent(now.toISOString().slice(0, 10));

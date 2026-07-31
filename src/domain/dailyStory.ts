@@ -9,7 +9,7 @@ import {
   type WixSlot,
   type WixStaffResource,
 } from "../lib/wix.js";
-import { sendImage, sendText } from "../lib/whatsapp.js";
+import { sendImageTemplate, sendText } from "../lib/whatsapp.js";
 import { renderStoryImage, type StoryClass, type StoryData, type StorySlot } from "../lib/storyImage.js";
 
 /**
@@ -319,7 +319,12 @@ export async function maybeSendDailyStory(log: FastifyBaseLogger): Promise<boole
       return true;
     }
     const png = renderStoryImage(data);
-    await sendImage(config.STORY_PHONE, png, storyCaption(dateISO));
+    await sendImageTemplate(
+      config.STORY_PHONE,
+      png,
+      config.WA_STORY_TEMPLATE,
+      config.WA_STORY_TEMPLATE_LANG,
+    );
     return true;
   } catch (err) {
     await rollbackDailyStory(today, previous).catch((rbErr) =>

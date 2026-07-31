@@ -129,12 +129,8 @@ export async function sendTemplateWithUrlButton(
   });
 }
 
-/**
- * Send an image: upload the PNG to Meta's media endpoint, then send it by
- * media id (no public URL to host or protect). Throws on failure — callers
- * are expected to fall back to a text version.
- */
-export async function sendImage(to: string, png: Buffer, caption?: string): Promise<string | null> {
+/** Upload a generated PNG once and return the Meta media id. */
+async function uploadPng(png: Buffer): Promise<string> {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
   form.append("file", new Blob([new Uint8Array(png)], { type: "image/png" }), "planning.png");
@@ -149,12 +145,52 @@ export async function sendImage(to: string, png: Buffer, caption?: string): Prom
   }
   const mediaId = ((await res.json()) as { id?: string })?.id;
   if (!mediaId) throw new Error("WhatsApp media upload returned no id");
+  return mediaId;
+}
+
+/**
+ * Send an image: upload the PNG to Meta's media endpoint, then send it by
+ * media id (no public URL to host or protect). Throws on failure — callers
+ * are expected to fall back to a text version.
+ */
+export async function sendImage(to: string, png: Buffer, caption?: string): Promise<string | null> {
+  const mediaId = await uploadPng(png);
   return postMessage({
     messaging_product: "whatsapp",
     recipient_type: "individual",
     to,
     type: "image",
     image: { id: mediaId, ...(caption ? { caption: caption.slice(0, 1024) } : {}) },
+  });
+}
+
+/**
+ * Send a generated PNG as the dynamic IMAGE header of an approved template.
+ * Media templates are business-initiated messages, so this works outside the
+ * recipient's 24-hour customer-service window.
+ */
+export async function sendImageTemplate(
+  to: string,
+  png: Buffer,
+  name: string,
+  languageCode: string,
+): Promise<string | null> {
+  const mediaId = await uploadPng(png);
+  return postMessage({
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "template",
+    template: {
+      name,
+      language: { code: languageCode },
+      components: [
+        {
+          type: "header",
+          parameters: [{ type: "image", image: { id: mediaId } }],
+        },
+      ],
+    },
   });
 }
 

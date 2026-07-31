@@ -255,6 +255,10 @@ export const config = {
   // test (celui de Babakar). Vide = envoi désactivé. Heure d'envoi (Dakar == UTC).
   STORY_PHONE: optional("STORY_PHONE", optional("NOTIF_TEST_PHONE", "+221774982711")),
   STORY_HOUR: parseInt(optional("STORY_HOUR", "18"), 10),
+  // Approved media template with a dynamic IMAGE header. Unlike a plain image
+  // message, it is deliverable even when STORY_PHONE has not messaged Awa in 24h.
+  WA_STORY_TEMPLATE: optional("WA_STORY_TEMPLATE", "story_quotidienne"),
+  WA_STORY_TEMPLATE_LANG: optional("WA_STORY_TEMPLATE_LANG", "en"),
   PAYMENT_LINK_TTL_MINUTES: parseInt(optional("PAYMENT_LINK_TTL_MINUTES", "20"), 10),
   // Brand rule: the studio is "Revive" — never "Revive Pilates" in client copy.
   STUDIO_ADDRESS: optional("STUDIO_ADDRESS", "Revive, Almadies, Dakar"),
