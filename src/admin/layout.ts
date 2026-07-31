@@ -216,10 +216,11 @@ ${refresh}
     <button class="nav-toggle" id="nav-toggle" type="button" aria-controls="admin-sidebar" aria-expanded="false" aria-label="Ouvrir le menu">${uiIcon("hamburger")}</button>
     <button class="nav-collapse" id="nav-collapse" type="button" aria-controls="admin-sidebar" aria-expanded="true" aria-label="Replier la navigation">${uiIcon("panel")}</button>
     <div class="topbar-title"><h1 class="page-title">${escapeHtml(title)}</h1>${opts.subtitle ? `<span class="page-subtitle">${escapeHtml(opts.subtitle)}</span>` : ""}</div>
-    <form class="topbar-search" method="get" action="/admin/conversations" role="search">
+    <form class="topbar-search" method="get" action="/admin/conversations" role="search" data-global-search-form>
       ${uiIcon("search")}
-      <input id="global-client-search" type="search" name="q" placeholder="Nom, numéro ou mots-clés…" aria-label="Rechercher par nom, numéro ou mots-clés" autocomplete="off">
+      <input id="global-client-search" type="search" name="q" placeholder="Nom, numéro ou mots-clés…" aria-label="Rechercher par nom, numéro ou mots-clés" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="global-client-search-results">
       <span class="search-key" aria-hidden="true">⌘ K</span>
+      <div class="global-search-panel" id="global-client-search-results" data-global-search-panel role="listbox" aria-label="Conversations trouvées" hidden></div>
     </form>
     ${opts.actions ? `<div class="topbar-actions">${opts.actions}</div>` : ""}
   </header>

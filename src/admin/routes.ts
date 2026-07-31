@@ -137,7 +137,16 @@ import {
 } from "../lib/notify.js";
 import { formatOwnerAlert } from "../domain/ownerAlertRules.js";
 import { ago, badge, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
-import { highlightedConversationExcerpt, normalizeConversationSearch } from "./conversationSearch.js";
+import {
+  isConversationLiveSearchReady,
+  normalizeConversationSearch,
+  plainConversationExcerpt,
+} from "./conversationSearch.js";
+import {
+  renderConversationResults,
+  renderConversationsPage,
+  type ConversationListFilters,
+} from "./conversationsPage.js";
 import { layout } from "./layout.js";
 import { emptyNavBadges, loadNavBadges } from "./navBadges.js";
 import { renderInbox } from "./inboxPage.js";
@@ -652,37 +661,70 @@ export function registerAdmin(app: FastifyInstance): void {
       admin.get("/conversations", async (req, reply) => {
         const query = req.query as Record<string, string | undefined>;
         const search = String(query.q ?? "").slice(0, 300).trim();
-        const searchTerms = normalizeConversationSearch(search);
         const period = query.period === "7" || query.period === "30" ? query.period : "all";
         const page = Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1);
         const result = await q.listClientsPage({ search, page, periodDays: period === "all" ? null : Number(period) });
-        const sourceLabel = { client: "Client", awa: "Awa", team: "Équipe" } as const;
-        const rows = result.rows
-          .map(
-            (c) => {
-              const hasMatch = Boolean(c.matched_message && searchTerms.length);
-              const message = hasMatch
-                ? highlightedConversationExcerpt(c.matched_message ?? "", searchTerms)
-                : `${escapeHtml((c.last_message ?? "").slice(0, 110))}${(c.last_message ?? "").length > 110 ? "…" : ""}`;
-              const messageMeta = hasMatch
-                ? `<span class="badge badge--gray">${sourceLabel[c.matched_source ?? "awa"]}</span> · ${ago(c.matched_at ?? null)} · ${c.message_count} messages`
-                : `${ago(c.last_message_at)} · ${c.message_count} messages`;
-              return `<tr>
-<td data-label="Client"><a class="rowlink" href="/admin/conversations/${c.id}"><b>${escapeHtml(c.name ?? "(sans nom)")}</b>${c.is_test ? ` <span class="badge badge--gray">Équipe</span>` : ""}${c.human_takeover_until && new Date(c.human_takeover_until).getTime() > Date.now() ? ` <span class="badge badge--amber">${c.human_takeover_by === "awa-technical-failure" ? "Relais technique Awa" : "Relais humain"}</span>` : ""}${c.awa_disengaged_until && new Date(c.awa_disengaged_until).getTime() > Date.now() ? ` <span class="badge badge--gray">Awa en pause</span>` : ""}<div class="muted">+${escapeHtml(c.wa_phone)}</div></a></td>
-<td data-label="${hasMatch ? "Correspondance" : "Dernier message"}" class="${hasMatch ? "conversation-match" : ""}">${message}<div class="muted">${messageMeta}</div></td>
-<td data-label="Langue" class="hide-sm"><span class="badge badge--gray">${escapeHtml(c.language ?? "—")}</span></td>
-<td data-label=""><a class="act act--ghost act--sm" href="/admin/conversations/${c.id}">Ouvrir</a></td>
-</tr>`;
-            },
-          )
-          .join("");
-        const clearParams = new URLSearchParams(period !== "all" ? { period } : {}).toString();
-        const body = `
-<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Clients</span><h2>Conversations</h2><p>${result.total} client(s)${search ? ` pour « ${escapeHtml(search)} »` : " classés par dernière activité"}.</p></div></header>
-<form method="get" action="/admin/conversations" class="card conversation-filters"><label>Rechercher par nom, numéro ou mots-clés<input type="search" name="q" placeholder="Ex. Marie, 77 123… ou remboursement" value="${escapeHtml(search)}"></label><label>Période<select name="period"><option value="all"${period === "all" ? " selected" : ""}>Toutes</option><option value="7"${period === "7" ? " selected" : ""}>7 jours</option><option value="30"${period === "30" ? " selected" : ""}>30 jours</option></select></label><button class="act" type="submit">Appliquer</button>${search ? `<a class="act act--ghost" href="/admin/conversations${clearParams ? `?${clearParams}` : ""}">Effacer la recherche</a>` : period !== "all" ? `<a class="act act--ghost" href="/admin/conversations">Effacer la période</a>` : ""}</form>
-<div class="card">${rows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Client</th><th>${searchTerms.length ? "Correspondance" : "Dernier message"}</th><th class="hide-sm">Langue</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty"><span class="empty-icon" aria-hidden="true">⌕</span><b>Aucun client trouvé</b><p>Essayez un autre nom, quelques chiffres du numéro ou moins de mots-clés.</p></div>`}</div>
-${result.pages > 1 ? `<nav class="pagination" aria-label="Pagination"><span>${result.page > 1 ? `<a class="act act--ghost act--sm" href="/admin/conversations?${new URLSearchParams({ ...(search ? { q: search } : {}), ...(period !== "all" ? { period } : {}), page: String(result.page - 1) }).toString()}">Précédent</a>` : ""}</span><span>Page <b>${result.page}</b> sur ${result.pages}</span><span>${result.page < result.pages ? `<a class="act act--ghost act--sm" href="/admin/conversations?${new URLSearchParams({ ...(search ? { q: search } : {}), ...(period !== "all" ? { period } : {}), page: String(result.page + 1) }).toString()}">Suivant</a>` : ""}</span></nav>` : ""}`;
+        const body = renderConversationsPage(result, { search, period, page: result.page });
         reply.type("text/html").send(await layout("Conversations", "/admin/conversations", body, { subtitle: "Historique client", contentWidth: "wide" }));
+      });
+
+      admin.get("/conversations/results", async (req, reply) => {
+        const query = req.query as Record<string, string | undefined>;
+        const filters: ConversationListFilters = {
+          search: String(query.q ?? "").slice(0, 300).trim(),
+          period: query.period === "7" || query.period === "30" ? query.period : "all",
+          page: Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1),
+        };
+        try {
+          const result = await q.listClientsPageWithTimeout({
+            search: filters.search,
+            page: filters.page,
+            periodDays: filters.period === "all" ? null : Number(filters.period),
+          });
+          return reply
+            .header("Cache-Control", "private, no-store")
+            .type("text/html")
+            .send(renderConversationResults(result, { ...filters, page: result.page }));
+        } catch (error) {
+          const timedOut = (error as { code?: string })?.code === "57014";
+          req.log.warn({ err: error, endpoint: "conversation_results" }, "Admin conversation live search failed");
+          return reply
+            .header("Cache-Control", "private, no-store")
+            .code(timedOut ? 503 : 500)
+            .type("text/plain")
+            .send(timedOut ? "search_timeout" : "search_unavailable");
+        }
+      });
+
+      admin.get("/conversations/suggestions", async (req, reply) => {
+        const query = String((req.query as Record<string, string | undefined>).q ?? "").slice(0, 300).trim();
+        if (!isConversationLiveSearchReady(query)) {
+          return reply.header("Cache-Control", "private, no-store").send({ query, total: 0, items: [] });
+        }
+        try {
+          const terms = normalizeConversationSearch(query);
+          const result = await q.listConversationSuggestionsWithTimeout(query, 6);
+          return reply.header("Cache-Control", "private, no-store").send({
+            query,
+            total: result.total,
+            items: result.items.map((item) => ({
+              id: item.id,
+              name: item.name,
+              phone: item.phone,
+              preview: item.preview ? plainConversationExcerpt(item.preview, terms) : null,
+              source: item.source,
+              matchedAt: item.matchedAt?.toISOString() ?? null,
+              href: `/admin/conversations/${item.id}`,
+            })),
+          });
+        } catch (error) {
+          const timedOut = (error as { code?: string })?.code === "57014";
+          req.log.warn({ err: error, endpoint: "conversation_suggestions" }, "Admin conversation suggestions failed");
+          return reply
+            .header("Cache-Control", "private, no-store")
+            .code(timedOut ? 503 : 500)
+            .send({ query, total: 0, items: [], error: timedOut ? "search_timeout" : "search_unavailable" });
+        }
       });
 
       admin.get("/conversations/:clientId", async (req, reply) => {

@@ -95,12 +95,32 @@ export interface PageResult<T> {
   pages: number;
 }
 
-export async function listClientsPage(args: {
+type Queryable = {
+  query: (text: string, values?: unknown[]) => Promise<{ rows: any[] }>;
+};
+
+export interface AdminConversationSuggestion {
+  id: string;
+  name: string | null;
+  phone: string;
+  preview: string | null;
+  source: "client" | "awa" | "team" | null;
+  matchedAt: Date | null;
+}
+
+export interface ConversationSuggestionResult {
+  items: AdminConversationSuggestion[];
+  total: number;
+}
+
+export interface ClientPageArgs {
   search?: string;
   page?: number;
   pageSize?: number;
   periodDays?: number | null;
-}): Promise<PageResult<AdminClientRow>> {
+}
+
+async function queryClientsPage(args: ClientPageArgs, db: Queryable): Promise<PageResult<AdminClientRow>> {
   const page = Math.max(1, Math.trunc(args.page ?? 1));
   const pageSize = Math.min(100, Math.max(10, Math.trunc(args.pageSize ?? 30)));
   const terms = normalizeConversationSearch(args.search);
@@ -110,7 +130,7 @@ export async function listClientsPage(args: {
   const identitySql = normalizedSearchSql(`concat_ws(' ', latest.name, latest.wa_phone)`);
   const messageSql = normalizedSearchSql("message.content");
   const coverageMessageSql = normalizedSearchSql("coverage_message.content");
-  const result = await pool.query(
+  const result = await db.query(
     `with search_terms as (
        select unnest($1::text[]) as term
      ), latest as (
@@ -199,6 +219,128 @@ export async function listClientsPage(args: {
     total,
     pages: Math.max(1, Math.ceil(total / pageSize)),
   };
+}
+
+export async function listClientsPage(args: ClientPageArgs): Promise<PageResult<AdminClientRow>> {
+  return queryClientsPage(args, pool);
+}
+
+async function withConversationSearchTimeout<T>(timeoutMs: number, work: (db: Queryable) => Promise<T>): Promise<T> {
+  const db = await pool.connect();
+  const safeTimeout = Math.min(10_000, Math.max(100, Math.trunc(timeoutMs)));
+  try {
+    await db.query("begin");
+    await db.query("select set_config('statement_timeout', $1, true)", [`${safeTimeout}ms`]);
+    const result = await work(db);
+    await db.query("commit");
+    return result;
+  } catch (error) {
+    await db.query("rollback").catch(() => undefined);
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+
+export async function listClientsPageWithTimeout(
+  args: ClientPageArgs,
+  timeoutMs = 2_500,
+): Promise<PageResult<AdminClientRow>> {
+  return withConversationSearchTimeout(timeoutMs, (db) => queryClientsPage(args, db));
+}
+
+async function queryConversationSuggestions(
+  search: string,
+  limit: number,
+  db: Queryable,
+): Promise<ConversationSuggestionResult> {
+  const terms = normalizeConversationSearch(search);
+  if (!terms.length) return { items: [], total: 0 };
+  const safeLimit = Math.min(12, Math.max(1, Math.trunc(limit)));
+  const identitySql = normalizedSearchSql(`concat_ws(' ', c.name, c.wa_phone)`);
+  const conversationContentSql = normalizedSearchSql("cm.content");
+  const teamContentSql = normalizedSearchSql("am.body");
+  const result = await db.query(
+    `with search_terms as (
+       select unnest($1::text[]) as term
+     ), client_search as materialized (
+       select c.id, c.name, c.wa_phone, ${identitySql} as identity
+         from clients c
+     ), visible_messages as materialized (
+       select cm.id::text as id, cm.client_id, cm.content, cm.created_at,
+              case when cm.role = 'user' then 'client' else 'awa' end::text as source,
+              ${conversationContentSql} as normalized_content
+         from conversations cm
+        where cm.role in ('user', 'assistant')
+       union all
+       select am.id::text, am.client_id, am.body, am.created_at, 'team'::text,
+              ${teamContentSql}
+         from admin_outbound_messages am
+     ), term_matches as (
+       select cs.id as client_id, st.term
+         from client_search cs
+         cross join search_terms st
+        where cs.identity like '%' || st.term || '%'
+       union
+       select vm.client_id, st.term
+         from visible_messages vm
+         cross join search_terms st
+        where vm.normalized_content like '%' || st.term || '%'
+     ), eligible as (
+       select client_id
+         from term_matches
+        group by client_id
+       having count(distinct term) = (select count(*) from search_terms)
+     ), scored_messages as (
+       select vm.id, vm.client_id, vm.content, vm.created_at, vm.source,
+              count(st.term)::int as score
+         from visible_messages vm
+         join eligible e on e.client_id = vm.client_id
+         join search_terms st on vm.normalized_content like '%' || st.term || '%'
+        group by vm.id, vm.client_id, vm.content, vm.created_at, vm.source
+     ), best_message as (
+       select distinct on (client_id) client_id, content, created_at, source
+         from scored_messages
+        order by client_id, score desc, created_at desc, id desc
+     ), latest_message as (
+       select distinct on (vm.client_id) vm.client_id, vm.content, vm.created_at, vm.source
+         from visible_messages vm
+         join eligible e on e.client_id = vm.client_id
+        order by vm.client_id, vm.created_at desc, vm.id desc
+     )
+     select cs.id, cs.name, cs.wa_phone as phone,
+            coalesce(bm.content, lm.content) as preview,
+            coalesce(bm.source, lm.source) as source,
+            coalesce(bm.created_at, lm.created_at) as matched_at,
+            count(*) over()::int as total_count,
+            lm.created_at as last_activity
+       from eligible e
+       join client_search cs on cs.id = e.client_id
+       left join best_message bm on bm.client_id = e.client_id
+       left join latest_message lm on lm.client_id = e.client_id
+      order by lm.created_at desc nulls last, cs.id
+      limit $2`,
+    [terms, safeLimit],
+  );
+  return {
+    total: result.rows[0]?.total_count ?? 0,
+    items: result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      phone: row.phone,
+      preview: row.preview,
+      source: row.source,
+      matchedAt: row.matched_at,
+    })),
+  };
+}
+
+export async function listConversationSuggestionsWithTimeout(
+  search: string,
+  limit = 6,
+  timeoutMs = 2_500,
+): Promise<ConversationSuggestionResult> {
+  return withConversationSearchTimeout(timeoutMs, (db) => queryConversationSuggestions(search, limit, db));
 }
 
 export interface AdminTurn {

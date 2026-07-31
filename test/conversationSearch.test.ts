@@ -3,7 +3,9 @@ import {
   MAX_CONVERSATION_SEARCH_TERM_LENGTH,
   MAX_CONVERSATION_SEARCH_TERMS,
   highlightedConversationExcerpt,
+  isConversationLiveSearchReady,
   normalizeConversationSearch,
+  plainConversationExcerpt,
 } from "../src/admin/conversationSearch.js";
 
 describe("conversation search normalization", () => {
@@ -20,6 +22,14 @@ describe("conversation search normalization", () => {
     const terms = normalizeConversationSearch(`${"x".repeat(100)} a b c d e f g h i j k`);
     expect(terms).toHaveLength(MAX_CONVERSATION_SEARCH_TERMS);
     expect(terms[0]).toHaveLength(MAX_CONVERSATION_SEARCH_TERM_LENGTH);
+  });
+
+  it("starts live name searches at two useful characters and digit-only searches at four", () => {
+    expect(isConversationLiveSearchReady("é")).toBe(false);
+    expect(isConversationLiveSearchReady("Él")).toBe(true);
+    expect(isConversationLiveSearchReady("77")).toBe(false);
+    expect(isConversationLiveSearchReady("77 12")).toBe(true);
+    expect(isConversationLiveSearchReady("%_?!")).toBe(false);
   });
 });
 
@@ -40,5 +50,12 @@ describe("conversation search excerpts", () => {
     expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
     expect(html).toContain("<mark>remboursement</mark>");
     expect(html).not.toContain("<img");
+  });
+
+  it("returns a relevant plain-text excerpt for JSON suggestions", () => {
+    const excerpt = plainConversationExcerpt(`${"début ".repeat(35)}remboursement confirmé`, ["remboursement"], 70);
+    expect(excerpt).toContain("remboursement");
+    expect(excerpt.startsWith("…")).toBe(true);
+    expect(excerpt).not.toContain("<mark>");
   });
 });

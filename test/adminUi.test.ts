@@ -16,6 +16,10 @@ const badges: NavBadges = {
 };
 
 describe("admin design system shell", () => {
+  it("ships syntactically valid progressive-enhancement JavaScript", () => {
+    expect(() => new Function(ADMIN_CLIENT_JS)).not.toThrow();
+  });
+
   it("renders task-oriented navigation and accessible mobile controls", async () => {
     const html = await layout("Réservations", "/admin/bookings", "<p>contenu</p>", {
       badges,
@@ -28,6 +32,10 @@ describe("admin design system shell", () => {
     expect(html).toContain('aria-current="page"');
     expect(html).toContain('aria-controls="admin-sidebar"');
     expect(html).toContain('id="global-client-search"');
+    expect(html).toContain('role="combobox"');
+    expect(html).toContain('id="global-client-search-results"');
+    expect(html).toContain("/admin/conversations/suggestions?q=");
+    expect(html).toContain("globalQueued");
     expect(html).toContain('class="content-full"');
     expect(html).toContain('id="confirm-dialog"');
     expect(html).toContain("#7c547d");

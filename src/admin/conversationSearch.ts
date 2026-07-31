@@ -44,6 +44,14 @@ export function normalizeConversationSearch(value: string | null | undefined): s
   return unique;
 }
 
+/** Live-search threshold: names stay responsive, common mobile prefixes do not. */
+export function isConversationLiveSearchReady(value: string | null | undefined): boolean {
+  const folded = asciiFold(String(value ?? ""));
+  const letters = folded.match(/[a-z]/g)?.length ?? 0;
+  const digits = folded.match(/[0-9]/g)?.length ?? 0;
+  return letters > 0 ? letters + digits >= 2 : digits >= 4;
+}
+
 type FoldedCharacter = { value: string; start: number; end: number };
 
 function foldedCharacters(value: string): FoldedCharacter[] {
@@ -66,6 +74,25 @@ function safeSliceStart(value: string, index: number): number {
 function safeSliceEnd(value: string, index: number): number {
   if (index < value.length && /[\uDC00-\uDFFF]/.test(value[index] ?? "")) return index + 1;
   return index;
+}
+
+/** Plain-text counterpart used by the JSON suggestion API. */
+export function plainConversationExcerpt(message: string, terms: string[], maxLength = 130): string {
+  const value = String(message ?? "");
+  if (value.length <= maxLength) return value;
+  const folded = foldedCharacters(value);
+  const haystack = folded.map((item) => item.value).join("");
+  const matches = terms
+    .map((term) => haystack.indexOf(term))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b);
+  const anchor = folded[matches[0] ?? 0]?.start ?? 0;
+  let start = Math.max(0, anchor - Math.floor(maxLength / 3));
+  let end = Math.min(value.length, start + maxLength);
+  if (end - start < maxLength) start = Math.max(0, end - maxLength);
+  start = safeSliceStart(value, start);
+  end = safeSliceEnd(value, end);
+  return `${start > 0 ? "…" : ""}${value.slice(start, end)}${end < value.length ? "…" : ""}`;
 }
 
 /** Escapes the message first, then adds markup only around literal matches. */

@@ -148,8 +148,104 @@ describe("admin conversation keyword search", () => {
     expect(response.body).toContain("&lt;img src=x onerror=&quot;bad&quot;&gt;");
     expect(response.body).not.toContain("<img src=x");
     expect(response.body).toContain("Client</span>");
-    expect(response.body).toContain("q=r%C3%A9servation&period=7&page=1");
+    expect(response.body).toContain("q=r%C3%A9servation&period=7");
     expect(response.body).toContain('href="/admin/conversations?period=7">Effacer la recherche</a>');
+  });
+
+  it("serves the same safe result renderer as a protected no-store fragment", async () => {
+    const client = await seedClient({ name: "Fragment partagé" });
+    await message(client.id, "user", '<img src=x onerror="bad"> remboursement');
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/admin/conversations/results?q=remboursement&period=7",
+      headers: { authorization: AUTH, accept: "text/html" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.body).toContain('id="conversation-results"');
+    expect(response.body).toContain('data-query="remboursement"');
+    expect(response.body).toContain("<mark>remboursement</mark>");
+    expect(response.body).toContain("&lt;img src=x onerror=&quot;bad&quot;&gt;");
+    expect(response.body).not.toContain("<img src=x");
+
+    const unauthorized = await app.inject({
+      method: "GET",
+      url: "/admin/conversations/results?q=remboursement",
+      headers: { accept: "text/html" },
+    });
+    expect(unauthorized.statusCode).toBe(302);
+    expect(unauthorized.headers.location).toContain("/admin/login");
+  });
+
+  it("returns at most six ordered plain-text suggestions from all visible sources", async () => {
+    const manual = await seedClient({ name: "Manuelle prioritaire" });
+    await message(manual.id, "user", "Bonjour", "2 hours");
+    await teamMessage(manual.id, '<script>alert("bad")</script> remboursement urgent', "pending", "1 minute");
+    for (let index = 0; index < 6; index += 1) {
+      const client = await seedClient({ wa_phone: `2217800000${index}`, name: `Suggestion ${index}` });
+      await message(client.id, "assistant", `Votre remboursement numéro ${index}`, `${index + 1} hours`);
+    }
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/admin/conversations/suggestions?q=remboursement",
+      headers: { authorization: AUTH, accept: "application/json" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toContain("no-store");
+    const body = response.json();
+    expect(body).toMatchObject({ query: "remboursement", total: 7 });
+    expect(body.items).toHaveLength(6);
+    expect(body.items[0]).toMatchObject({
+      id: manual.id,
+      name: "Manuelle prioritaire",
+      source: "team",
+      href: `/admin/conversations/${manual.id}`,
+    });
+    expect(body.items[0].preview).toContain('<script>alert("bad")</script>');
+    expect(body.items[0].preview).not.toContain("<mark>");
+  });
+
+  it("does not query broad mobile prefixes and protects the suggestions endpoint", async () => {
+    const phoneMatch = await seedClient({ wa_phone: "221771234567", name: "Recherche téléphone" });
+    await message(phoneMatch.id, "user", "Bonjour");
+    const short = await app.inject({
+      method: "GET",
+      url: "/admin/conversations/suggestions?q=77",
+      headers: { authorization: AUTH, accept: "application/json" },
+    });
+    expect(short.statusCode).toBe(200);
+    expect(short.json()).toEqual({ query: "77", total: 0, items: [] });
+
+    const digits = await app.inject({
+      method: "GET",
+      url: "/admin/conversations/suggestions?q=1234",
+      headers: { authorization: AUTH, accept: "application/json" },
+    });
+    expect(digits.json().items[0]).toMatchObject({ id: phoneMatch.id, phone: "221771234567" });
+
+    const unauthorized = await app.inject({
+      method: "GET",
+      url: "/admin/conversations/suggestions?q=amina",
+      headers: { accept: "application/json" },
+    });
+    expect(unauthorized.statusCode).toBe(401);
+  });
+
+  it("requires all suggestion terms even when they occur in different messages", async () => {
+    const complete = await seedClient({ name: "Suggestion complète" });
+    const partial = await seedClient({ wa_phone: "221770000002", name: "Suggestion partielle" });
+    await message(complete.id, "user", "Je cherche du pilates", "2 hours");
+    await message(complete.id, "assistant", "Le matin est disponible", "1 hour");
+    await message(partial.id, "user", "Je cherche du pilates", "1 minute");
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/admin/conversations/suggestions?q=pilates%20matin",
+      headers: { authorization: AUTH, accept: "application/json" },
+    });
+    expect(response.json().items.map((item: { id: string }) => item.id)).toEqual([complete.id]);
   });
 
   it("keeps existing name and phone searches and returns an empty state", async () => {
