@@ -226,6 +226,30 @@ create table if not exists processed_webhooks (
   received_at timestamptz not null default now()
 );
 
+-- Orange Money callbacks can arrive a few seconds before the corresponding
+-- transaction is visible in Sonatel's authenticated lookup API. Persist the
+-- exact transaction/order pair before looking it up so a deploy, crash, or a
+-- missing provider retry cannot lose a payment confirmation.
+create table if not exists orange_money_verifications (
+  transaction_id text primary key,
+  order_id text not null,
+  amount_xof integer not null,
+  customer_id text,
+  status text not null default 'PENDING'
+    check (status in ('PENDING','SUCCEEDED','FAILED')),
+  attempts integer not null default 0,
+  next_attempt_at timestamptz not null default now(),
+  lease_until timestamptz,
+  last_error text,
+  alerted_at timestamptz,
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_om_verifications_due
+  on orange_money_verifications (next_attempt_at)
+  where status = 'PENDING';
+
 create table if not exists conversations (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references clients(id),

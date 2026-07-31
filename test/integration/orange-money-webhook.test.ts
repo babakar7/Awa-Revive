@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { pool, migrate } from "../../src/db/index.js";
 import { _resetOmTokenCacheForTests } from "../../src/lib/orangeMoney.js";
+import { sweepOmVerifications } from "../../src/domain/orangeMoneyVerification.js";
 import {
   makeFetchMock,
   type FetchMock,
@@ -185,7 +186,7 @@ describe("happy path (verify-by-lookup → fulfill)", () => {
 });
 
 describe("verify-by-lookup guards (anti-forgery)", () => {
-  it("does not fulfill when lookup finds no SUCCESS transaction", async () => {
+  it("persists and retries when the transaction is not visible yet", async () => {
     const client = await seedClient();
     const booking = await seedBooking(client.id, { payment_method: "orange_money" });
     const transactionId = "OM_TX_not_found";
@@ -196,15 +197,33 @@ describe("verify-by-lookup guards (anti-forgery)", () => {
     expect((await bookingById(booking.id)).status).toBe("AWAITING_PAYMENT");
     expect(mock.wixCreateBookingCalls()).toHaveLength(0);
 
-    // Reception warned (email).
-    await waitFor(async () => (mock.emailCalls().length > 0 ? true : null), "reception email");
-    expect(JSON.stringify(mock.emailCalls()[0].body)).toMatch(/introuvable|SUCCESS/i);
-
-    // Handler returns without throw → marked processed (no infinite retries).
-    await waitFor(
-      async () => ((await wasOmProcessed(transactionId)) ? true : null),
-      "marked processed after non-SUCCESS lookup",
+    expect(await wasOmProcessed(transactionId)).toBe(false);
+    const queued = await pool.query(
+      `select status,attempts from orange_money_verifications where transaction_id=$1`,
+      [transactionId],
     );
+    expect(queued.rows[0]).toMatchObject({ status: "PENDING", attempts: 1 });
+
+    // Simulate Sonatel propagation after the original HTTP callback is gone.
+    mock.om.transactions[transactionId] = {
+      status: "SUCCESS",
+      amountValue: 15000,
+      partnerId: "553651",
+      metadata: { order: booking.id },
+    };
+    await pool.query(
+      `update orange_money_verifications set next_attempt_at=now()-interval '1 second' where transaction_id=$1`,
+      [transactionId],
+    );
+    await sweepOmVerifications(app.log);
+    await waitForStatus(booking.id, "BOOKED");
+    expect(mock.wixCreateBookingCalls()).toHaveLength(1);
+    expect(await wasOmProcessed(transactionId)).toBe(true);
+    const completed = await pool.query(
+      `select status from orange_money_verifications where transaction_id=$1`,
+      [transactionId],
+    );
+    expect(completed.rows[0]?.status).toBe("SUCCEEDED");
   });
 
   it("does not fulfill when lookup amount is below the pending amount", async () => {
@@ -291,7 +310,7 @@ describe("idempotency & retriability", () => {
     expect(mock.omLookupCalls().length).toBe(lookupsAfter);
   });
 
-  it("a failed lookup does NOT mark the event processed (stays retriable)", async () => {
+  it("a failed lookup survives without a provider redelivery and stays retriable", async () => {
     const client = await seedClient();
     const booking = await seedBooking(client.id, { payment_method: "orange_money" });
     const transactionId = "OM_TX_lookup_fail";
@@ -303,10 +322,7 @@ describe("idempotency & retriability", () => {
     expect(await wasOmProcessed(transactionId)).toBe(false);
     expect(mock.wixCreateBookingCalls()).toHaveLength(0);
 
-    // Reception alerted about verify failure.
-    await waitFor(async () => (mock.emailCalls().length > 0 ? true : null), "lookup-fail email");
-
-    // Retry with lookup healthy → books.
+    // A later worker pass (including after a process restart) can recover it.
     mock.om.failLookup = false;
     mock.om.transactions[transactionId] = {
       status: "SUCCESS",
@@ -314,13 +330,45 @@ describe("idempotency & retriability", () => {
       partnerId: "553651",
       metadata: { order: booking.id },
     };
-    await deliverOmWebhook(app, { orderId: booking.id, transactionId });
+    await pool.query(
+      `update orange_money_verifications set next_attempt_at=now()-interval '1 second' where transaction_id=$1`,
+      [transactionId],
+    );
+    await sweepOmVerifications(app.log);
     await waitForStatus(booking.id, "BOOKED");
     expect(mock.wixCreateBookingCalls()).toHaveLength(1);
     await waitFor(
       async () => ((await wasOmProcessed(transactionId)) ? true : null),
       "om id marked processed after successful retry",
     );
+  });
+
+  it("alerts reception once when verification remains delayed", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, { payment_method: "orange_money" });
+    const transactionId = "OM_TX_delayed_alert";
+    mock.om.transactions[transactionId] = null;
+
+    await deliverOmWebhook(app, { orderId: booking.id, transactionId });
+    await settle(300);
+    await pool.query(
+      `update orange_money_verifications
+          set created_at=now()-interval '3 minutes',
+              next_attempt_at=now()-interval '1 second'
+        where transaction_id=$1`,
+      [transactionId],
+    );
+    await sweepOmVerifications(app.log);
+    await waitFor(async () => (mock.emailCalls().length === 1 ? true : null), "delayed OM alert");
+    expect(JSON.stringify(mock.emailCalls()[0].body)).toMatch(/confirmation retardée/i);
+
+    await pool.query(
+      `update orange_money_verifications set next_attempt_at=now()-interval '1 second' where transaction_id=$1`,
+      [transactionId],
+    );
+    await sweepOmVerifications(app.log);
+    await settle(200);
+    expect(mock.emailCalls()).toHaveLength(1);
   });
 
   it("a different transactionId after BOOKED does not re-create the Wix booking", async () => {

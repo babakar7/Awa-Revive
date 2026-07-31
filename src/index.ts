@@ -31,6 +31,7 @@ import { closeInactiveBookingJourneys } from "./domain/bookingFunnel.js";
 import { sweepDueKeyBonuses } from "./domain/keyProvisioning.js";
 import { sweepKeyNudges } from "./domain/keyNudge.js";
 import { syncAttendanceLeaderboard } from "./domain/attendanceLeaderboard.js";
+import { sweepOmVerifications } from "./domain/orangeMoneyVerification.js";
 
 async function main() {
   assertConfig();
@@ -73,6 +74,20 @@ async function main() {
 
   const app = buildServer();
 
+  // A callback may have been persisted immediately before a deploy/crash.
+  // Resume it at boot; the periodic worker below handles provider visibility
+  // delays without depending on Sonatel sending the callback again.
+  void sweepOmVerifications(app.log).catch((err) =>
+    app.log.error({ err }, "Initial OM verification sweep failed"),
+  );
+
+  const omVerificationSweeper = setInterval(() => {
+    void sweepOmVerifications(app.log).catch((err) =>
+      app.log.error({ err }, "OM verification sweep failed"),
+    );
+  }, 10_000);
+  omVerificationSweeper.unref();
+
   // Attendance is a read-only Wix projection for the admin leaderboard. Do
   // not delay boot on a long historical import; the durable cache is filled in
   // the background and every later run is capped to once per hour.
@@ -110,9 +125,10 @@ async function main() {
       if (refunds > 0) app.log.info({ refunds }, "Re-notified REFUND_NEEDED rows");
       const keyBonuses = await sweepDueKeyBonuses();
       if (keyBonuses > 0) app.log.info({ keyBonuses }, "Repaired missing Key bonuses");
-      // OM lost-callback poller via transaction search: ABANDONNED (13/07 probe) —
-      // list API never returns metadata.order, so we cannot join to pending rows.
-      // Filet = webhook + verify-by-lookup only; ops recoup manually if needed.
+      // OM lost-callback polling via transaction search remains impossible:
+      // the list API omits metadata.order, so it cannot be joined to pending
+      // rows. Once a callback arrives, however, its exact transaction id is now
+      // persisted and retried by the dedicated 10-second worker above.
       // Account-link request the client never completed (no email given, code
       // never typed) → hand it to reception so no plan-holder is lost silently.
       const escalated = await escalateStaleLinkRequests();
@@ -222,6 +238,7 @@ async function main() {
     app.log.info({ signal }, "Shutting down");
     clearInterval(sweeper);
     clearInterval(cancellationSweeper);
+    clearInterval(omVerificationSweeper);
     // End open SSE streams first — they never complete on their own, so
     // app.close() would otherwise hang waiting on them past the SIGKILL window.
     closeOpsSseConnections();
