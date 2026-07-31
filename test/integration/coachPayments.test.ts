@@ -160,7 +160,7 @@ describe("monthly statement lifecycle", () => {
       [id],
     )).rows[0];
     expect(statement.course_count).toBe(1);
-    expect(statement.total_xof).toBe(9_524);
+    expect(statement.total_xof).toBe(9_500);
     let rows = (await pool.query(
       `select wix_event_id, wix_status, included, manual_decision
          from coach_payment_courses where statement_id=$1 order by starts_at`,
@@ -236,7 +236,7 @@ describe("monthly statement lifecycle", () => {
     let statement = (await pool.query(`select * from coach_payment_statements where id=$1`, [id])).rows[0];
     expect(statement.sync_status).toBe("ok");
     expect(statement.course_count).toBe(2);
-    expect(statement.total_xof).toBe(19_048);
+    expect(statement.total_xof).toBe(19_000);
     const draftPage = await app.inject({ method: "GET", url: `${BASE}/etats/${id}`, headers: { cookie } });
     expect(draftPage.body).toContain("Séance vide");
     expect(draftPage.body).toContain("2 participants");
@@ -264,7 +264,7 @@ describe("monthly statement lifecycle", () => {
 
     statement = (await pool.query(`select * from coach_payment_statements where id=$1`, [id])).rows[0];
     expect(statement.course_count).toBe(2); // one excluded + one manual replaces it
-    expect(statement.total_xof).toBe(20_048);
+    expect(statement.total_xof).toBe(20_000);
 
     const validated = await post(`${BASE}/etats/${id}/valider`, {}, cookie);
     expect(validated.headers.location).toContain("done=validated");
@@ -321,7 +321,7 @@ describe("monthly statement lifecycle", () => {
       [id],
     )).rows[0];
     expect(statement.course_count).toBe(3);
-    expect(statement.total_xof).toBe(28_571);
+    expect(statement.total_xof).toBe(28_500);
 
     const draftPage = await app.inject({
       method: "GET",

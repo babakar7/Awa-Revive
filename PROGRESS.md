@@ -66,6 +66,31 @@ n'apparaissait plus et produisait à tort « 0 annulée ».
 - Les volumes du scan (pages, bookings, candidats, durée) sont journalisés pour
   rendre visible sa croissance. Le registre webhook des annulations sans aucun
   booking est le second lot du même chantier.
+- **Vérification prod après déploiement (`9b6bb76`)** : resynchronisation du
+  brouillon courant Yass juillet réussie. Résultat observé dans l'état :
+  **4 annulées, 1 vide, 83 comptées**. Annulées : 06/07 12h30,
+  13/07 12h30, 16/07 12h30 et 22/07 18h15. Le 16/07 10h15 reste confirmé et
+  compté avec 2 participantes ; le 16/07 12h30 est annulé et exclu. Les anciens
+  objectifs « 1 annulée » / « 81 » étaient des estimations opérationnelles,
+  pas une vérité du dépôt.
+- **Correction tarifaire Yass (31 juillet 2026)** : l'ancienne formule
+  `800 000 / 84`, qui produisait à tort **790 476 FCFA** pour 83 cours, a été
+  remplacée par le tarif métier confirmé de **9 500 FCFA par cours**. La fiche
+  permanente et le brouillon de juillet ont été corrigés et vérifiés en
+  production : **83 × 9 500 = 788 500 FCFA**.
+- **Lot 2, distinct de `WIX-WEBHOOK-PLAN.md`** : il ne notifie aucun client et
+  ne remplace pas le sweep des réservations ; il doit seulement mémoriser les
+  occurrences Calendar annulées sans booking pour les états coachs. Avant tout
+  code de registre, souscrire la Custom App à
+  `wix.calendar.v3.events_view / projection_updated`, annuler réellement une
+  séance de test sans booking et prouver la réception du payload signé. Si ce
+  test échoue, utiliser une comparaison périodique des projections plutôt que
+  supposer le webhook fiable.
+- **Sortie du scan historique** : conserver les métriques pendant trois mois
+  civils clôturés après mise en service du lot 2. Si le registre/diff ne manque
+  aucune annulation sur ces trois clôtures, borner le scan des bookings annulés
+  à une fenêtre documentée ou le retirer ; sinon le garder comme filet et
+  investiguer les écarts.
 
 ## Revue de 20 conversations prod → 4 lots de correctifs UX (30 juillet 2026)
 

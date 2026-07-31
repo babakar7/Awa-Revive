@@ -9,14 +9,24 @@ import {
 } from "../src/domain/coachPaymentRules.js";
 import type { WixCalendarEvent, WixService } from "../src/lib/wix.js";
 
-const yass: CoachTariff = { type: "monthly_ratio", baseAmountXof: 800_000, baseSessionCount: 84 };
+const yass: CoachTariff = { type: "per_session", perSessionXof: 9_500 };
+const monthlyRatio: CoachTariff = { type: "monthly_ratio", baseAmountXof: 800_000, baseSessionCount: 84 };
 const leslie: CoachTariff = { type: "per_session", perSessionXof: 9_000 };
 
 describe("coach payment calculations", () => {
-  it("applies Yass's rounded monthly ratio", () => {
-    expect(computePaymentTotals(84, yass, []).totalXof).toBe(800_000);
-    expect(computePaymentTotals(80, yass, []).totalXof).toBe(761_905);
-    expect(computePaymentTotals(90, yass, []).totalXof).toBe(857_143);
+  it("applies Yass's 9,500 FCFA per-class rate", () => {
+    expect(computePaymentTotals(83, yass, [])).toEqual({
+      courseCount: 83,
+      baseTotalXof: 788_500,
+      adjustmentTotalXof: 0,
+      totalXof: 788_500,
+    });
+  });
+
+  it("still supports rounded monthly ratios for other profiles", () => {
+    expect(computePaymentTotals(84, monthlyRatio, []).totalXof).toBe(800_000);
+    expect(computePaymentTotals(80, monthlyRatio, []).totalXof).toBe(761_905);
+    expect(computePaymentTotals(90, monthlyRatio, []).totalXof).toBe(857_143);
   });
 
   it("applies Leslie's per-class rate", () => {

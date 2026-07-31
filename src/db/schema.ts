@@ -1291,9 +1291,23 @@ create index if not exists idx_coach_payment_send_log_statement
 insert into coach_payment_profiles
   (slug, display_name, formula_type, base_amount_xof, base_session_count, per_session_xof)
 values
-  ('yass', 'Yass', 'monthly_ratio', 800000, 84, null),
+  ('yass', 'Yass', 'per_session', null, null, 9500),
   ('leslie', 'Leslie', 'per_session', null, null, 9000)
 on conflict (slug) do nothing;
+
+-- Migration ciblée de l'ancien tarif initial de Yass. La garde sur les trois
+-- anciennes valeurs préserve toute configuration personnalisée ultérieure.
+update coach_payment_profiles
+set formula_type = 'per_session',
+    base_amount_xof = null,
+    base_session_count = null,
+    per_session_xof = 9500,
+    updated_at = now()
+where slug = 'yass'
+  and formula_type = 'monthly_ratio'
+  and base_amount_xof = 800000
+  and base_session_count = 84
+  and per_session_xof is null;
 
 -- Seed one-shot du planning actuel (feuille Word de Babakar, 07/2026). Sentinelle
 -- app_state : ne tourne qu'UNE fois, ne ressuscite jamais des données supprimées.
