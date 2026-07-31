@@ -685,7 +685,8 @@ export async function claimBookingForWixOrderSync(
     `update pending_bookings
         set wix_order_sync_at = now(), updated_at = now()
       where id = $1 and status = 'BOOKED' and wix_booking_id is not null
-        and amount_xof > 0 and wix_payment_recorded_at is null
+        and (amount_xof > 0 or payment_method = 'membership')
+        and wix_payment_recorded_at is null
         and (wix_order_sync_at is null or wix_order_sync_at < now() - interval '2 minutes')
       returning *`,
     [id],
@@ -735,7 +736,8 @@ export async function bookingsMissingWixPaymentRecord(
 ): Promise<PendingBooking[]> {
   const res = await pool.query(
     `select * from pending_bookings
-      where status = 'BOOKED' and wix_booking_id is not null and amount_xof > 0
+      where status = 'BOOKED' and wix_booking_id is not null
+        and (amount_xof > 0 or payment_method = 'membership')
         and wix_payment_recorded_at is null
         and created_at > now() - make_interval(hours => $2)
         and updated_at < now() - make_interval(mins => $1)

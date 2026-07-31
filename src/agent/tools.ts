@@ -43,6 +43,7 @@ import { PACK_DISCOVERY_CAMPAIGN, isCampaignReformerService } from "../domain/pa
 import { isPlanSellableByAwa } from "../domain/planSaleGuard.js";
 import { planNamesConflict } from "../domain/planNameGuard.js";
 import { resolveServiceAlias } from "../domain/serviceAlias.js";
+import { recordWixOrderForBooking, type PaymentLog } from "../domain/fulfillment.js";
 import * as keyRepo from "../domain/keyRepo.js";
 import {
   dakarDateKey,
@@ -156,6 +157,14 @@ export function decideNoneCandidateAction(
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Tool handlers have no request logger; the order sync only needs somewhere
+// to surface failures (the sweep in index.ts retries them with app.log).
+const consolePaymentLog: PaymentLog = {
+  info: () => undefined,
+  warn: (o, m) => console.warn(m ?? "wix order sync", o),
+  error: (o, m) => console.error(m ?? "wix order sync", o),
+};
 
 /**
  * Eligibility for add_spots_to_booking. Pure so it's unit-testable. NO 16h rule:
@@ -1287,6 +1296,9 @@ async function createProtectedBenefitBooking(args: {
       });
     } catch (error) {
       console.error(`Protected-benefit local booking persistence failed for ${wixBookingId}:`, error);
+    }
+    if (local) {
+      await recordWixOrderForBooking(local.id, consolePaymentLog).catch(() => undefined);
     }
     await keyRepo.markProtectedBenefitBooking({
       wixBookingId,
@@ -3721,6 +3733,11 @@ export async function executeTool(
         });
         // Sessions were just deducted — the cached balance is stale.
         invalidateMembershipCache(client.id);
+        // Dashboard order ("séance déduite") — the sweep retries on failure,
+        // and the booking above stays confirmed either way.
+        await recordWixOrderForBooking(membershipBooking.id, consolePaymentLog).catch(
+          () => undefined,
+        );
         const tip = classTip(service.name, client.language);
         return JSON.stringify({
           booked: true,

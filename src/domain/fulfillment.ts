@@ -408,6 +408,8 @@ export async function reconcileStuckBookings(log: any): Promise<number> {
  * Record a BOOKED custom-checkout reservation in Wix eCommerce and attach the
  * already-collected payment. Safe on retries: recover by externalOrderId and
  * inspect existing transactions before adding another payment record.
+ * Membership bookings get the native-flow shape instead: a 0-amount MEMBERSHIP
+ * order already PAID, with no separate payment record to attach.
  */
 export async function recordWixOrderForBooking(
   bookingId: string,
@@ -416,6 +418,7 @@ export async function recordWixOrderForBooking(
   const booking = await repo.claimBookingForWixOrderSync(bookingId);
   if (!booking) return false;
 
+  const isMembership = booking.payment_method === "membership";
   try {
     const clientRes = await pool.query(`select * from clients where id = $1`, [booking.client_id]);
     const client = clientRes.rows[0];
@@ -432,26 +435,42 @@ export async function recordWixOrderForBooking(
     if (!wixOrderId) {
       wixOrderId = await wix.findOrderIdByExternalId(booking.id);
       if (!wixOrderId) {
-        wixOrderId = await wix.createBookingOrder({
-          wixBookingId: booking.wix_booking_id!,
-          externalOrderId: booking.id,
-          // The calendar booking stays on the real service; the custom order
-          // label lets reception immediately identify the 10k campaign visit.
-          serviceName:
-            booking.campaign_code === "pack_decouverte_ctwa"
-              ? "Pack Découverte — Première séance"
-              : booking.service_name,
-          amountXof: booking.amount_xof,
-          participants: Math.max(1, booking.participants ?? 1),
-          phone,
-          name: canonicalName,
-          contactId: contact?.id,
-        });
+        if (isMembership) {
+          // The MEMBERSHIP buyer must be the plan-holding member; without the
+          // contact the order would not attach to them — retry on next sweep.
+          if (!contact?.id) throw new Error(`No Wix contact for membership order (${phone})`);
+          wixOrderId = await wix.createMembershipBookingOrder({
+            wixBookingId: booking.wix_booking_id!,
+            externalOrderId: booking.id,
+            serviceName: booking.service_name,
+            participants: Math.max(1, booking.participants ?? 1),
+            phone,
+            name: canonicalName,
+            contactId: contact.id,
+            slotStart: booking.slot_start,
+          });
+        } else {
+          wixOrderId = await wix.createBookingOrder({
+            wixBookingId: booking.wix_booking_id!,
+            externalOrderId: booking.id,
+            // The calendar booking stays on the real service; the custom order
+            // label lets reception immediately identify the 10k campaign visit.
+            serviceName:
+              booking.campaign_code === "pack_decouverte_ctwa"
+                ? "Pack Découverte — Première séance"
+                : booking.service_name,
+            amountXof: booking.amount_xof,
+            participants: Math.max(1, booking.participants ?? 1),
+            phone,
+            name: canonicalName,
+            contactId: contact?.id,
+          });
+        }
       }
       await repo.saveWixOrderId(booking.id, wixOrderId);
     }
 
-    if (!(await wix.hasApprovedOrderPayment(wixOrderId, booking.amount_xof))) {
+    if (!isMembership && !(await wix.hasApprovedOrderPayment(wixOrderId, booking.amount_xof))) {
       await wix.addApprovedOrderPayment({
         orderId: wixOrderId,
         amountXof: booking.amount_xof,
@@ -981,6 +1000,9 @@ async function fulfillInitialPlanBooking(
       bookingId: booking.id,
     });
     invalidateMembershipCache(order.client_id);
+    // Dashboard order ("séance déduite") — failure is retried by the sweep and
+    // must never fail the already-confirmed booking.
+    await recordWixOrderForBooking(booking.id, log).catch(() => undefined);
     const msg = applyFrenchRegister(
       confirmationMessage(lang, order.service_name, new Date(fresh.startDate)),
       lang === "fr" && client?.fr_register === "vous",

@@ -2216,6 +2216,100 @@ export async function findOrderIdByExternalId(externalOrderId: string): Promise<
   return data?.orders?.[0]?.id ? String(data.orders[0].id) : null;
 }
 
+/**
+ * eCommerce record for a membership-paid booking. Mirrors the order the native
+ * Wix flow (reception dashboard / member site) creates: a 0-amount MEMBERSHIP
+ * line item on a PAID order, with no payment record — the session itself was
+ * already deducted on the Benefit Programs ledger. Without this order the
+ * dashboard shows "Aucune commande créée - Indisponible" and reception cannot
+ * tell at a glance that the class came off a plan.
+ */
+export async function createMembershipBookingOrder(args: {
+  wixBookingId: string;
+  externalOrderId: string;
+  serviceName: string;
+  participants: number;
+  phone: string;
+  name: string;
+  contactId: string;
+  slotStart?: string | Date | null;
+}): Promise<string> {
+  await paceWixEcomCall();
+  const contactName = splitContactName(args.name);
+  const zero = { amount: "0" };
+  const slotLine = args.slotStart
+    ? new Intl.DateTimeFormat("fr-FR", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "Africa/Dakar",
+      }).format(args.slotStart instanceof Date ? args.slotStart : new Date(args.slotStart))
+    : null;
+  const data = await wixPost("/ecom/v1/orders", {
+    order: {
+      buyerInfo: { contactId: args.contactId, memberId: args.contactId },
+      billingInfo: {
+        contactDetails: { ...contactName, phone: args.phone },
+      },
+      lineItems: [
+        {
+          productName: {
+            original:
+              args.participants > 1
+                ? `${args.serviceName} — ${args.participants} places`
+                : args.serviceName,
+          },
+          catalogReference: {
+            catalogItemId: args.wixBookingId,
+            appId: WIX_BOOKINGS_APP_ID,
+          },
+          quantity: 1,
+          itemType: { preset: "SERVICE" },
+          price: zero,
+          paymentOption: "MEMBERSHIP",
+          descriptionLines: [
+            ...(slotLine
+              ? [
+                  {
+                    lineType: "PLAIN_TEXT",
+                    name: { original: "" },
+                    plainText: { original: slotLine },
+                  },
+                ]
+              : []),
+            {
+              lineType: "PLAIN_TEXT",
+              name: { original: "" },
+              plainText: { original: "Séance déduite de l'abonnement" },
+            },
+          ],
+          taxDetails: {
+            taxRate: "0",
+            totalTax: zero,
+          },
+        },
+      ],
+      channelInfo: { type: "OTHER_PLATFORM", externalOrderId: args.externalOrderId },
+      currency: "XOF",
+      currencyConversionDetails: { originalCurrency: "XOF", conversionRate: "1" },
+      taxIncludedInPrices: true,
+      paymentStatus: "PAID",
+      priceSummary: {
+        subtotal: zero,
+        shipping: zero,
+        tax: zero,
+        discount: zero,
+        total: zero,
+      },
+    },
+  });
+  const orderId = data?.order?.id;
+  if (!orderId) throw new Error(`Wix create membership order returned no id: ${JSON.stringify(data)}`);
+  return String(orderId);
+}
+
 /** Create the eCommerce record required after a custom-checkout booking. */
 export async function createBookingOrder(args: {
   wixBookingId: string;

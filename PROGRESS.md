@@ -4006,3 +4006,33 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   flux WhatsApp : la page statique Wix `/memberships` affiche encore l'ancienne
   gamme et doit être mise à jour manuellement dans l'éditeur Wix ; aucun accès
   d'édition de cette page n'existe dans le dépôt Resabot.
+
+## 2026-07-31 — Commandes Wix « séance déduite » pour les résas abonnement
+
+- Symptôme signalé (résa de Dialy, +221774762370) : une résa payée par
+  abonnement apparaissait dans Wix Bookings avec « Aucune commande créée -
+  Indisponible ». La séance était pourtant bien décomptée (ledger Benefit
+  Programs) — seul l'ordre eCommerce manquait : le chemin membership n'en
+  créait volontairement aucun, contrairement au chemin Wave
+  (`recordWixOrderForBooking`). La réception ne voyait donc pas d'un coup
+  d'œil que la séance venait d'un plan.
+- Constat clé (API, ordre natif `6e499090…` du 31/07) : les résas abonnement
+  faites par la réception dans le dashboard créent bien un ordre — ligne à
+  0 F avec `paymentOption: "MEMBERSHIP"`, `paymentStatus: "PAID"`,
+  `buyerInfo.contactId = memberId`, **aucun** enregistrement de paiement.
+- Fix : `wix.createMembershipBookingOrder()` reproduit cette forme (ligne 0 F
+  MEMBERSHIP, PAID, descriptionLines avec date Dakar + « Séance déduite de
+  l'abonnement », `externalOrderId` = id pending_booking).
+  `recordWixOrderForBooking` branche sur `payment_method='membership'`
+  (contact Wix obligatoire, pas d'add-payment) ; les requêtes
+  `claimBookingForWixOrderSync` / `bookingsMissingWixPaymentRecord` acceptent
+  désormais `amount_xof = 0` quand `payment_method='membership'`.
+- Appel inline après les trois créations membership (`book_with_membership`,
+  bénéfice Clé BONUS/INVITATION, première séance d'un plan) + le sweep 60 s
+  existant comme rattrapage (1 ordre/sweep, fenêtre 48 h) — il backfille
+  automatiquement les résas abonnement récentes sans ordre, dont celle de
+  Dialy, dès le déploiement.
+- Piège si régression : ne PAS ajouter d'add-payment sur ces ordres (un ordre
+  MEMBERSHIP natif n'a aucun paiement, balance 0) ; et le checkout eCommerce
+  serveur reste impossible pour les plans (acheteur anonyme par clé API) —
+  c'est bien un ordre créé directement, pas un checkout.

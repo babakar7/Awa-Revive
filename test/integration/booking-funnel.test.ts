@@ -247,5 +247,23 @@ describe("booking funnel persistence", () => {
       [result.booking_id],
     );
     expect(stages.rows.map((row) => row.stage)).toEqual(["payment_confirmed", "booked"]);
+
+    // The dashboard order mirrors the native membership flow: a 0-amount
+    // MEMBERSHIP line already PAID, no separate payment record.
+    const orderCalls = mock.wixCreateOrderCalls();
+    expect(orderCalls).toHaveLength(1);
+    const order = orderCalls[0].body.order;
+    expect(order.lineItems[0].paymentOption).toBe("MEMBERSHIP");
+    expect(order.lineItems[0].price.amount).toBe("0");
+    expect(order.paymentStatus).toBe("PAID");
+    expect(order.buyerInfo).toMatchObject({ contactId: "contact_1", memberId: "contact_1" });
+    expect(order.channelInfo.externalOrderId).toBe(result.booking_id);
+    expect(mock.wixAddPaymentCalls()).toHaveLength(0);
+    const synced = await pool.query(
+      `select wix_order_id, wix_payment_recorded_at from pending_bookings where id=$1`,
+      [result.booking_id],
+    );
+    expect(synced.rows[0].wix_order_id).toBeTruthy();
+    expect(synced.rows[0].wix_payment_recorded_at).toBeTruthy();
   });
 });
