@@ -4038,9 +4038,12 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   c'est bien un ordre créé directement, pas un checkout.
 - Piège découvert au premier passage prod : sans `status` explicite, Create
   Order laisse l'ordre en `INITIALIZED` (number 0) — invisible dans le
-  dashboard (la doc Wix prétend qu'un total 0 est auto-APPROVED : faux en
-  pratique). Le payload passe donc `status: "APPROVED"`, avec filet : si
-  l'ordre n'est pas APPROVED après création (ou pour un ordre existant
-  retrouvé par externalOrderId), un paiement offline 0 F APPROVED est ajouté
-  (la transition qu'utilise déjà le chemin Wave), puis warning si toujours
-  pas APPROVED.
+  dashboard ET dans Search Orders (la doc Wix prétend qu'un total 0 est
+  auto-APPROVED : faux en pratique). Le payload passe donc
+  `status: "APPROVED"` — vérifié en prod (ordre 14913 de Dialy). Deux faits
+  confirmés live 31/07 : un paiement offline 0 F APPROVED n'approuve PAS un
+  ordre INITIALIZED (le filet dans recordWixOrderForBooking logge juste un
+  warn) ; et comme Search Orders exclut INITIALIZED, le dédoublonnage par
+  externalOrderId ne ressuscite jamais un ordre fantôme — en recréer un
+  APPROVED est la bonne réparation (l'orphelin 39f407e2… de Dialy reste
+  invisible et inoffensif).
