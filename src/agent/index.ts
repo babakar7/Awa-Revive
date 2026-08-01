@@ -12,6 +12,7 @@ import { systemPrompt, dynamicContext } from "./systemPrompt.js";
 import {
   lintOutboundReply,
   correctiveLintInstruction,
+  canToolResultApprovePaymentUrl,
   normalizeUrl,
   TOOL_TRACE_MARKER,
 } from "./outboundLint.js";
@@ -992,7 +993,7 @@ export async function handleInboundText(args: {
         }
         await repo.addTurn(client.id, "tool", `${block.name}(${JSON.stringify(block.input)}) -> ${result.slice(0, 2000)}`);
         // Trust the link ONLY when a real payment tool minted it this turn.
-        if (!isError && block.name.startsWith("create_") && block.name.endsWith("payment_link")) {
+        if (!isError && canToolResultApprovePaymentUrl(block.name)) {
           try {
             const parsed = JSON.parse(result) as { payment_link?: unknown };
             if (typeof parsed.payment_link === "string" && parsed.payment_link) {

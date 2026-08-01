@@ -15,6 +15,21 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Renvoi d'un lien de Clé expiré bloqué par le filtre de sortie (1er août 2026)
+
+- Incident Kadidiatou Diallo : `refresh_expired_plan_payment_link` avait bien
+  créé une nouvelle tentative Wave liée à l'ordre expiré, mais Awa envoyait le
+  relais technique au lieu du lien. Aucun paiement ni réservation n'avait eu
+  lieu.
+- Cause : l'allowlist anti-faux-liens ne faisait confiance qu'aux noms
+  `create_*_payment_link`. Le vrai outil de renouvellement commence par
+  `refresh_`, donc son URL serveur était classée à tort
+  `unapproved_payment_url`. Le même angle mort existait pour
+  `add_spots_to_booking`, qui crée lui aussi un vrai lien.
+- Fix : allowlist explicite et testée des six outils serveur autorisés à
+  produire un lien. Les outils non listés et les noms ressemblants restent
+  refusés ; le garde anti-liens inventés n'est pas élargi à tous les résultats.
+
 ## Machine à avis Google — invitation du 1er renouvellement anticipé (31 juillet 2026)
 
 - **Objectif** : la **première fois** (à vie) qu'une cliente renouvelle une Clé

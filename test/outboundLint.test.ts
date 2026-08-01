@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   lintOutboundReply,
+  canToolResultApprovePaymentUrl,
   correctiveLintInstruction,
   extractUrls,
   isPaymentUrl,
@@ -11,6 +12,18 @@ const WAVE = "https://pay.wave.com/c/cos-26b60x0eg149a?a=12000&c=XOF";
 const OM = "https://sugu.orange-sonatel.com/mp/dmeqhrdd3D_ojFf3zu4T";
 const FAKE = "https://pay.wave.com/c/cos-xxbebe1";
 const MAPS = "https://maps.app.goo.gl/jJS8rS3sV5j41SGc9";
+
+describe("payment-link tool allowlist", () => {
+  it("trusts refreshed plan links and add-spots links", () => {
+    expect(canToolResultApprovePaymentUrl("refresh_expired_plan_payment_link")).toBe(true);
+    expect(canToolResultApprovePaymentUrl("add_spots_to_booking")).toBe(true);
+  });
+
+  it("keeps unrelated and lookalike tools outside the trust boundary", () => {
+    expect(canToolResultApprovePaymentUrl("list_plans")).toBe(false);
+    expect(canToolResultApprovePaymentUrl("refresh_expired_payment_link")).toBe(false);
+  });
+});
 
 describe("lintOutboundReply", () => {
   it("passes a reply with a server-issued Wave link", () => {

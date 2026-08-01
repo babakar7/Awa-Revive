@@ -14,6 +14,24 @@
 /** Internal replay marker for tool turns — the model must NEVER emit it. */
 export const TOOL_TRACE_MARKER = "⟦trace⟧";
 
+/**
+ * Server tools whose successful JSON result may mint or return a payment URL.
+ * Keep this explicit: trusting every tool result would weaken the last outbound
+ * guard, while relying on a naming convention missed refresh/add-spots tools.
+ */
+const PAYMENT_LINK_RESULT_TOOLS = new Set([
+  "create_payment_link",
+  "create_plan_payment_link",
+  "create_cafe_payment_link",
+  "create_delivery_payment_link",
+  "refresh_expired_plan_payment_link",
+  "add_spots_to_booking",
+]);
+
+export function canToolResultApprovePaymentUrl(toolName: string): boolean {
+  return PAYMENT_LINK_RESULT_TOOLS.has(toolName);
+}
+
 // The model imitating its own tool history: the internal marker, the legacy
 // "[outil]" marker (kept so an older cached history can't slip through), or a
 // bare tool-call written as prose. None of these belong in a client message.
