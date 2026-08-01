@@ -773,20 +773,16 @@ export async function handleInboundText(args: {
       conversationGapDays = Math.max(1, Math.round((curr - prev) / 86_400_000));
     }
   }
-  const packDiscoveryLead = await repo.activeCampaignLead(client.id, PACK_DISCOVERY_CAMPAIGN);
-  // Once the Keys launch, new and returning discovery leads go through
-  // L'Invitée. Existing paid step-1 orders remain fulfillable from their own
-  // stored rows, but an old campaign marker cannot create a fresh 10k link.
-  const packDiscoveryCampaign =
-    !config.KEYS_AUTOMATION_ENABLED && packDiscoveryLead !== null;
-  // A genuine Click-to-WhatsApp Meta lead whose number has no matching Wix
-  // contact is treated as new to Revive. Keep the server-side eligibility gate
-  // intact, but do not make this lead answer an extra discovery question.
-  const packDiscoveryMetaNewLead =
-    packDiscoveryCampaign &&
-    packDiscoveryLead?.matchedBy === "meta_referral" &&
-    memberships !== null &&
-    !memberships.linked;
+  // Pack Découverte campaign RETIRED (Babakar, 01/08/2026): the offer is gone,
+  // so no inbound lead is ever steered into the 10k first-session pitch. New and
+  // returning discovery leads all go through L'Invitée. Referral leads are still
+  // recorded above for attribution, but the entry pitch is off. The continuation
+  // /fulfillment path (PACK_DISCOVERY_CONTINUATION_PLAN_IDS, reception-activated)
+  // stays live while step-1 packs are still in flight (e.g. Zeina, 28/07); this
+  // whole entry mechanism is removed once no pack is in flight and no campaign
+  // lead has fired for 14 days.
+  const packDiscoveryCampaign = false;
+  const packDiscoveryMetaNewLead = false;
 
   // Unlinked-number signal: a subscriber messaging from a number that isn't on
   // their Wix fiche is invisible to Awa and could be pushed to Wave for a class

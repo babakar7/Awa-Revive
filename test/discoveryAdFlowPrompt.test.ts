@@ -8,14 +8,14 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(prompt).toMatch(/garantie satisfait ou remboursé/i);
     expect(prompt).toMatch(/intégralement remboursé/i);
     expect(prompt).toMatch(/boisson au choix du menu\s+café/i);
-    expect(prompt).toMatch(/ne passe JAMAIS par create_cafe_payment_link/i);
+    expect(prompt).toMatch(/ne passe\s+JAMAIS par\s+create_cafe_payment_link/i);
   });
 
   it("qualifies and shows a real slot before asking for the name and plan payment", () => {
     const prompt = systemPrompt();
 
-    expect(prompt).toMatch(/PRIORITY EXCEPTION — NEW PROSPECT \+ PACK DÉCOUVERTE/);
-    expect(prompt).toMatch(/initial sales intent, NOT confirmation/i);
+    expect(prompt).toMatch(/NEW PROSPECT — DISCOVERY \/ L'INVITÉE/);
+    expect(prompt).toMatch(/never as confirmation of an already-qualified plan/i);
     expect(prompt).toMatch(/Only after they select a slot may you ask for their first name/i);
     expect(prompt).toMatch(/payment webhook does not wake you or persist the chosen slot/i);
   });
@@ -28,7 +28,7 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     const prompt = systemPrompt();
     // Static persona rule: a first message never skips the greeting, even with clear intent.
     expect(prompt).toMatch(/A first message must NEVER skip the greeting/i);
-    expect(prompt).toMatch(/even for a Pack Découverte \/ L'Invitée opener/i);
+    expect(prompt).toMatch(/even for an L'Invitée opener/i);
     // The Pack Découverte instruction reiterates: greet before the pitch.
     expect(prompt).toMatch(/still open with the brief greeting.*before the pitch/i);
   });
@@ -55,7 +55,7 @@ describe("Pack Découverte ad-lead prompt contract", () => {
     expect(context).toContain("Moi c'est Awa, je suis une assistante automatisée de Revive");
     expect(context).toContain('exact words "je suis une assistante automatisée"');
     // The greeting stays mandatory even when the opener is a Pack Découverte / L'Invitée pitch.
-    expect(context).toMatch(/mandatory even for a Pack Découverte \/ L'Invitée opener/i);
+    expect(context).toMatch(/mandatory even for an L'Invitée opener/i);
   });
 
   it("states the Meta-campaign pack economics without double-counting the first session", () => {
@@ -114,7 +114,10 @@ describe("Pack Découverte ad-lead prompt contract", () => {
 
     expect(context).toMatch(/ONLY to Pilates Reformer/i);
     expect(context).toMatch(/non-Reformer class \(including Step\).*normal price returned by the latest class or availability tool/i);
-    expect(systemPrompt()).toMatch(/including Step, use the normal price returned by the class\/availability tool/i);
+    // The static campaign override was removed from the base prompt when the Pack
+    // Découverte entry flow was retired (01/08/2026); it now lives ONLY in the
+    // inert dynamic block above, which prod never renders (flags forced false).
+    expect(systemPrompt()).not.toMatch(/including Step, use the normal price returned by the class\/availability tool/i);
   });
 
   it("uses the short Pack Découverte copy for a new Meta-ad lead without asking eligibility", () => {
@@ -146,5 +149,31 @@ describe("Pack Découverte ad-lead prompt contract", () => {
   it("does not let a sticker or ambiguous acknowledgement decide eligibility", () => {
     expect(systemPrompt()).toMatch(/Never interpret a sticker, emoji, reaction, acknowledgement/i);
     expect(systemPrompt()).toMatch(/explicit statement.*Pilates at Revive/i);
+  });
+
+  it("treats Pack Découverte as retired and routes discovery to L'Invitée", () => {
+    const prompt = systemPrompt();
+    // The base prompt maps a legacy "Pack Découverte" mention to L'Invitée and
+    // forbids presenting it as a current offer (campaign retired 01/08/2026).
+    expect(prompt).toMatch(/["“]Pack Découverte["”] is RETIRED/i);
+    expect(prompt).toMatch(/never present ["“]Pack Découverte["”] as a current offer/i);
+  });
+
+  it("does not render the inert Pack Découverte campaign block by default", () => {
+    // Prod forces packDiscoveryCampaign/MetaNewLead false, so a normal context
+    // (no campaign flag) must never carry the retired 10,000 FCFA script.
+    const context = dynamicContext({
+      clientName: null,
+      clientLanguage: "fr",
+      activeBooking: null,
+      activePlanOrder: null,
+      activeCafeOrder: null,
+      memberships: [],
+      recentRefunds: [],
+      habit: null,
+      firstContact: true,
+    });
+    expect(context).not.toMatch(/PACK DÉCOUVERTE META CAMPAIGN/i);
+    expect(context).not.toMatch(/LEAD with the 10,000/i);
   });
 });
