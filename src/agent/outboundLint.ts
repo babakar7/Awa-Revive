@@ -41,6 +41,12 @@ const TOOL_SYNTAX_RE =
 const ACTIVE_LINK_CLAIM_RE =
   /\b(?:ton|votre|le|ce|the|your)\s+lien(?:\s+de\s+paiement|\s+payment)?\s+(?:est|reste|is|remains)\s+(?:encore\s+)?(?:actif|active|valide|valid)|\blien\s+(?:est\s+)?toujours\s+valide\b/i;
 
+// The internal silence sentinel. It is valid only as the WHOLE model reply and
+// is stripped before send in index.ts; this last-gate check catches any variant
+// that slips through so the raw token can never reach a client (prod 01/08:
+// Gogo Ibrahim received "<NO_REPLY>\n\nPour répondre...").
+const LEAKED_SENTINEL_RE = /<NO_REPLY>/i;
+
 // Hosts that carry money. A URL on one of these must be an exact server-issued
 // link, never anything the model wrote.
 const PAYMENT_HOST_RE =
@@ -70,7 +76,7 @@ export function isPaymentUrl(url: string): boolean {
 
 export interface OutboundLintResult {
   ok: boolean;
-  reason?: "tool_syntax" | "unapproved_payment_url" | "unbacked_active_link_claim";
+  reason?: "tool_syntax" | "unapproved_payment_url" | "unbacked_active_link_claim" | "leaked_sentinel";
   detail?: string;
 }
 
@@ -86,6 +92,9 @@ export function lintOutboundReply(
   const text = reply ?? "";
   if (TOOL_SYNTAX_RE.test(text)) {
     return { ok: false, reason: "tool_syntax", detail: text.match(TOOL_SYNTAX_RE)?.[0] };
+  }
+  if (LEAKED_SENTINEL_RE.test(text)) {
+    return { ok: false, reason: "leaked_sentinel", detail: text.match(LEAKED_SENTINEL_RE)?.[0] };
   }
   const approved = new Set<string>();
   for (const u of approvedUrls) approved.add(normalizeUrl(u));

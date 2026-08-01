@@ -99,6 +99,17 @@ describe("url helpers", () => {
   });
 });
 
+describe("leaked NO_REPLY sentinel (last-gate safety net)", () => {
+  it("blocks a reply that still carries the raw control token", () => {
+    const r = lintOutboundReply("<NO_REPLY>\n\nPour répondre à ta question : oui !", []);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("leaked_sentinel");
+  });
+  it("passes a normal reply with no sentinel", () => {
+    expect(lintOutboundReply("Oui, il y a bien la natation !", []).ok).toBe(true);
+  });
+});
+
 describe("correctiveLintInstruction", () => {
   it("lists approved urls when present", () => {
     const note = correctiveLintInstruction([WAVE]);

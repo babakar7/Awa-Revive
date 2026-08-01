@@ -120,21 +120,35 @@ export function extractText(response: Anthropic.Message): string {
 
 export type ReplyOutcome = "deliver" | "silent_after_interactive" | "recover";
 
+/** Matches a leaked <NO_REPLY> control token plus any whitespace hugging it. */
+const NO_REPLY_TOKEN_RE = /\s*<NO_REPLY>\s*/g;
+
+/**
+ * Remove any standalone <NO_REPLY> control token the model may have prepended to
+ * otherwise-real text (prod 01/08: Gogo Ibrahim was sent "<NO_REPLY>\n\nPour
+ * répondre..." because the token was mixed with a genuine answer). The token is
+ * internal and must never reach the client. An empty result means the reply was
+ * only the sentinel.
+ */
+export function stripNoReplySentinel(text: string | null | undefined): string {
+  return (text ?? "").replace(NO_REPLY_TOKEN_RE, " ").trim();
+}
+
 /**
  * Decide whether the model produced a client reply, a valid current-turn
  * present_options sentinel, or an unexpected silence that deserves one retry.
  * `<NO_REPLY>` is valid ONLY when this turn actually delivered an interactive
  * message; a stale sentinel from history must never become a technical error.
+ * The sentinel is stripped first so a reply that MIXES it with real text is
+ * delivered (as that real text), never suppressed or leaked verbatim.
  */
 export function classifyReplyOutcome(
   replyText: string | null,
   interactiveSent: boolean,
 ): ReplyOutcome {
-  const text = replyText?.trim() ?? "";
-  if (interactiveSent && (text === "" || text === NO_REPLY_SENTINEL)) {
-    return "silent_after_interactive";
-  }
-  if (text === "" || text === NO_REPLY_SENTINEL) return "recover";
+  const text = stripNoReplySentinel(replyText);
+  if (interactiveSent && text === "") return "silent_after_interactive";
+  if (text === "") return "recover";
   return "deliver";
 }
 
@@ -1112,8 +1126,11 @@ export async function handleInboundText(args: {
   // present_options already delivered (and logged) the reply — send nothing
   // more. A failed recovery is also cleared here so the literal sentinel can
   // never leak to the client; the normal technical fallback handles that case.
+  // On deliver, strip any leaked sentinel so a mixed reply reaches the client as
+  // clean text (the token itself is internal and must never be shown).
   replyOutcome = classifyReplyOutcome(replyText, interactiveSent);
   if (replyOutcome !== "deliver") replyText = null;
+  else replyText = stripNoReplySentinel(replyText);
 
   // Outbound payment-link guard (prod 25/07). Only model-authored text reaches
   // here as deliverable; the fallbacks below are fixed server strings. On a
@@ -1139,7 +1156,7 @@ export async function handleInboundText(args: {
             }),
           () => void sendTypingIndicator(args.waMessageId),
         );
-        const retried = extractText(corrected);
+        const retried = stripNoReplySentinel(extractText(corrected));
         if (retried && lintOutboundReply(retried, approvedPaymentUrls).ok) {
           replyText = retried;
         } else {
