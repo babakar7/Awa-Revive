@@ -15,6 +15,52 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Audit des 20 dernières conversations — correctifs (1er août 2026)
+
+Revue des 20 dernières conversations prod. Corrigés dans `agent/awa-convo-fixes` :
+
+- **B1 — fuite de `<NO_REPLY>`** (Gogo Ibrahim) : le modèle mélangeait le
+  sentinel interne avec une vraie réponse (« `<NO_REPLY>`\n\nPour répondre… »),
+  `classifyReplyOutcome` testait l'égalité stricte → le token partait au client.
+  Fix : on strippe tout sentinel autonome avant classification/envoi (réponse
+  mixte livrée en texte propre, sentinel pur → recover/silence), + garde-fou
+  outbound-lint `leaked_sentinel`.
+- **B2 — IDs inventés** (Aissatou/Agnes/Maimouna/Khadidjatou) : slugs
+  (`sculpt`) et placeholders (`invitee_key_id_placeholder`) → `unknown_*_id` +
+  aller-retour d'erreur sur le chemin paiement. Fix : `unknown_service_id` /
+  `unknown_plan_id` renvoient les IDs valides live (auto-correction en 1 tour,
+  jamais montrés au client) + règle prompt « copier l'ID verbatim ».
+- **B5 — client déjà payé, `get_my_bookings` vide** (Mickaelle, 2 numéros) :
+  Awa proposait de re-réserver (risque double paiement). Fix prompt : proposer
+  la vérification e-mail pour relier les fiches, sinon handoff — jamais
+  re-réserver. Invariant serveur vérifié : la fusion de fiches n'a lieu
+  qu'après un code e-mail correct (`submit_verification_code` → `planVerifiedMerge`).
+- **B3 — prix de cours inventés** (Myrma/Amicolle) : `list_classes` renvoyait 6
+  cours, Awa en listait 10 avec prix. Investigation : Power Yoga/Yoga
+  Inversions/Step/Natation Enfant étaient en cours de config Wix ce matin-là
+  (list_classes les renvoie tous aujourd'hui, prix exacts) → fenêtre transitoire,
+  pas un bug de filtre. Fix prompt : ne citer nom/prix/durée QUE depuis le dernier
+  `list_classes`.
+- **B4 — texte entrant percent-encodé** (Amicolle : `Bonjour%2C%20je…`) : lien
+  wa.me double-encodé. Fix : décodage défensif au parse, heuristique stricte
+  (≥2 espaces encodés, ou 1 espace + octet accentué, `decodeURIComponent` OK),
+  URLs/`%` isolé/malformé laissés intacts, chaque décodage loggé (source à
+  corriger côté lien wa.me).
+- **D1 — Pack Découverte RETIRÉ** : `index.ts` force
+  `packDiscoveryCampaign`/`packDiscoveryMetaNewLead` à `false` — plus aucun lead
+  n'entre dans le pitch 10 000 F ; la découverte passe par L'Invitée. Les leads
+  référral restent enregistrés (attribution). Le flux de continuité/fulfillment
+  (`PACK_DISCOVERY_CONTINUATION_PLAN_IDS`, activé en réception) reste VIVANT tant
+  qu'un pack étape-1 est en vol (Zeina, 28/07). Blocs prompt dynamiques laissés
+  inertes, à supprimer en bloc quand : (1) aucun pack actif, (2) aucun
+  paiement/réservation en attente lié, (3) 14 jours sans lead campagne. À FAIRE
+  côté Babakar : couper la pub Insta « Pack découverte ».
+- **C — copy/persona** : perks de Clé présentés d'emblée (choix Babakar) ;
+  langue conservée sur message court/neutre (Arame EN→FR) ; pas de surclassement
+  de niveau non demandé (Khadidjatou→Sculpt) ; nom de plan inventé « Découvrir
+  Revive » retiré (prompt + business-info) ; coach nommé depuis l'outil au lieu
+  de « sa/son coach ».
+
 ## Renvoi d'un lien de Clé expiré bloqué par le filtre de sortie (1er août 2026)
 
 - Incident Kadidiatou Diallo : `refresh_expired_plan_payment_link` avait bien
