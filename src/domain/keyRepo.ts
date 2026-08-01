@@ -134,15 +134,25 @@ export async function listKeysForAdmin(limit = 100): Promise<
 }
 
 export async function listActiveKeysForNudges(): Promise<
-  Array<KeyRegistry & { client_name: string | null; wa_phone: string }>
+  Array<
+    KeyRegistry & {
+      client_name: string | null;
+      wa_phone: string;
+      available_invitations: number;
+    }
+  >
 > {
   const result = await pool.query(
-    `select k.*, c.name as client_name, c.wa_phone
+    `select k.*, c.name as client_name, c.wa_phone,
+            (select count(*)::int
+               from key_invitations i
+              where i.key_id=k.id
+                and i.status in ('GRANTED','ASSIGNED')
+                and i.wix_booking_id is null) as available_invitations
        from key_registry k
        join clients c on c.id=k.client_id
       where k.status='ACTIVE'
         and k.starts_at <= now() and k.effective_ends_at > now()
-        and k.wix_contact_id is not null
       order by k.effective_ends_at asc`,
   );
   return result.rows;

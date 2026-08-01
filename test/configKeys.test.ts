@@ -48,6 +48,8 @@ describe("Clés production preflight", () => {
       WA_KEY_INVITEE_J5_TEMPLATE: "",
       WA_KEY_THIRD_SESSION_TEMPLATE: "",
       WA_KEY_MEMBER_J5_TEMPLATE: "",
+      WA_KEY_INVITATION_J10_TEMPLATE: "",
+      WA_KEY_MEMBER_J5_INVITATION_TEMPLATE: "",
       WA_KEY_FINISHED_TEMPLATE: "",
       WA_LEGACY_KEY_CONVERSION_TEMPLATE: "",
     });

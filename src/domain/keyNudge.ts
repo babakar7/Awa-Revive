@@ -9,6 +9,7 @@ import { dakarDateKey, type KeyType } from "./keyRules.js";
 export type KeyNudgeKind =
   | "INVITEE_J5"
   | "INVITEE_THIRD_24H"
+  | "INVITATION_J10"
   | "MEMBER_J5"
   | "REFORMER_FINISHED";
 
@@ -105,6 +106,8 @@ export async function sweepKeyNudges(log: {
       config.WA_KEY_INVITEE_J5_TEMPLATE,
       config.WA_KEY_THIRD_SESSION_TEMPLATE,
       config.WA_KEY_MEMBER_J5_TEMPLATE,
+      config.WA_KEY_INVITATION_J10_TEMPLATE,
+      config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE,
       config.WA_KEY_FINISHED_TEMPLATE,
     ].some(Boolean)
   ) {
@@ -117,10 +120,45 @@ export async function sweepKeyNudges(log: {
   for (const key of keys) {
     const name = key.client_name || "toi";
     const label = keyLabel(key.key_type);
+
+    // This reminder is entirely local. Keep it before the Wix balance lookup:
+    // a transient Wix failure on the one eligible calendar day must not make
+    // the client lose her invitation reminder.
+    if (
+      key.available_invitations > 0 &&
+      isCalendarDaysBefore(key.starts_at, now, -10)
+    ) {
+      const endLabel = dateLabel(key.effective_ends_at);
+      const transcript =
+        `[rappel invitation Clé J+10] ${label} : ${key.available_invitations} ` +
+        `invitation(s) disponible(s), à utiliser avant le ${endLabel}.`;
+      if (
+        await sendClaimed({
+          dedupKey: `INVITATION_J10:${key.id}`,
+          keyId: key.id,
+          clientId: key.client_id!,
+          phone: key.wa_phone,
+          template: config.WA_KEY_INVITATION_J10_TEMPLATE,
+          language: config.WA_KEY_INVITATION_J10_TEMPLATE_LANG,
+          params: [
+            toTemplateParam(name, 60),
+            String(key.available_invitations),
+            toTemplateParam(label, 80),
+            toTemplateParam(endLabel, 40),
+          ],
+          transcript,
+          log,
+        })
+      ) sent += 1;
+    }
+
+    // The remaining lifecycle branches need Wix; J+10 above deliberately does not.
+    if (!key.wix_contact_id) continue;
+
     let remaining: number | null;
     try {
       remaining = await wix.planRemainingSessions(
-        key.wix_contact_id!,
+        key.wix_contact_id,
         key.plan_id,
         label,
         key.paid_order_id,
@@ -186,23 +224,42 @@ export async function sweepKeyNudges(log: {
       remaining > 0 &&
       isCalendarDaysBefore(key.effective_ends_at, now, 5)
     ) {
+      const endLabel = dateLabel(key.effective_ends_at);
+      const useInvitationVariant =
+        key.available_invitations > 0 &&
+        Boolean(config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE);
       const transcript =
         `[relance Clé J-5] ${label} : ${remaining} séance(s), expiration le ` +
-        `${dateLabel(key.effective_ends_at)}.`;
+        `${endLabel}.` +
+        (useInvitationVariant
+          ? ` ${key.available_invitations} invitation(s) encore disponible(s) sur cette Clé.`
+          : "");
       if (
         await sendClaimed({
           dedupKey: `MEMBER_J5:${key.id}`,
           keyId: key.id,
           clientId: key.client_id!,
           phone: key.wa_phone,
-          template: config.WA_KEY_MEMBER_J5_TEMPLATE,
-          language: config.WA_KEY_MEMBER_J5_TEMPLATE_LANG,
-          params: [
-            toTemplateParam(name, 60),
-            toTemplateParam(label, 80),
-            String(remaining),
-            toTemplateParam(dateLabel(key.effective_ends_at), 40),
-          ],
+          template: useInvitationVariant
+            ? config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE
+            : config.WA_KEY_MEMBER_J5_TEMPLATE,
+          language: useInvitationVariant
+            ? config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE_LANG
+            : config.WA_KEY_MEMBER_J5_TEMPLATE_LANG,
+          params: useInvitationVariant
+            ? [
+                toTemplateParam(name, 60),
+                toTemplateParam(label, 80),
+                String(remaining),
+                toTemplateParam(endLabel, 40),
+                String(key.available_invitations),
+              ]
+            : [
+                toTemplateParam(name, 60),
+                toTemplateParam(label, 80),
+                String(remaining),
+                toTemplateParam(endLabel, 40),
+              ],
           transcript,
           log,
         })

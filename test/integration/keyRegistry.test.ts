@@ -58,6 +58,42 @@ describe("Clés registry", () => {
     ).toBe(2);
   });
 
+  it("counts only unlocked invitations that remain available for lifecycle reminders", async () => {
+    const client = await seedClient();
+    const key = await keys.upsertKey({
+      paidOrderId: "paid-reminder-count",
+      clientId: client.id,
+      wixContactId: "contact-reminder-count",
+      wixMemberId: "member-reminder-count",
+      mapping,
+      startsAt: new Date(inHours(-10 * 24)),
+      endsAt: new Date(inHours(50 * 24)),
+      status: "ACTIVE",
+    });
+    await keys.createInvitationRights(key.id, 5);
+    await pool.query(
+      `update key_invitations
+          set status=case ordinal
+            when 1 then 'GRANTED'
+            when 2 then 'ASSIGNED'
+            when 3 then 'PENDING_REVIEW'
+            when 4 then 'USED'
+            else 'VOID'
+          end,
+          friend_first_name=case when ordinal=2 then 'Sokhna' else null end
+        where key_id=$1`,
+      [key.id],
+    );
+
+    const rows = await keys.listActiveKeysForNudges();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: key.id,
+      available_invitations: 2,
+    });
+  });
+
   it("persists the same verified continuity facts on the payment and Key registry", async () => {
     const client = await seedClient();
     const paidAt = new Date("2026-07-27T10:00:00Z");
