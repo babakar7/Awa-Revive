@@ -115,6 +115,49 @@ export function resolvePaymentMethod(
   };
 }
 
+// Self-healing errors for invented ids (prod 01/08: the model called tools with
+// slugs like "sculpt" or placeholders like "invitee_key_id_placeholder", costing
+// an extra error→re-lookup round-trip). Returning the live valid ids lets the
+// model correct in ONE turn. These are tool results the model reads — the
+// technical ids are NEVER shown to the client.
+const MAX_ID_HINTS = 20;
+
+export async function unknownServiceIdResult(): Promise<string> {
+  let valid: Array<{ service_id: string; name: string }> = [];
+  try {
+    valid = (await wix.listServices())
+      .slice(0, MAX_ID_HINTS)
+      .map((s) => ({ service_id: s.id, name: s.name }));
+  } catch {
+    /* catalog fetch failed — still return the actionable message below */
+  }
+  return JSON.stringify({
+    error: "unknown_service_id",
+    message:
+      "That service_id is not in the catalog. Never invent or abbreviate a service_id — " +
+      "use one from valid_services below verbatim (or re-run list_classes).",
+    valid_services: valid,
+  });
+}
+
+export async function unknownPlanIdResult(): Promise<string> {
+  let valid: Array<{ plan_id: string; name: string }> = [];
+  try {
+    valid = (await wix.listPlans())
+      .slice(0, MAX_ID_HINTS)
+      .map((p) => ({ plan_id: p.id, name: p.name }));
+  } catch {
+    /* catalog fetch failed — still return the actionable message below */
+  }
+  return JSON.stringify({
+    error: "unknown_plan_id",
+    message:
+      "That plan_id is not in the catalog. Never invent or abbreviate a plan_id — " +
+      "use one from valid_plans below verbatim (or re-run list_plans).",
+    valid_plans: valid,
+  });
+}
+
 /**
  * A Wave payment link must NOT be sold while an email verification is mid-flight
  * (a code was just sent but not yet typed): the account being linked may hold an
@@ -1408,7 +1451,7 @@ export async function executeTool(
           service = services.find((candidate) => candidate.id === alias) ?? null;
         }
       }
-      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      if (!service) return await unknownServiceIdResult();
 
       await trackFunnel({
         clientId: client.id,
@@ -1671,7 +1714,7 @@ export async function executeTool(
 
       // 2. Price comes from the catalog, never from the model.
       const service = await wix.getService(serviceId);
-      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      if (!service) return await unknownServiceIdResult();
       if (!service.priceXof || service.priceXof <= 0) {
         return JSON.stringify({
           error: "no_price",
@@ -2054,7 +2097,7 @@ export async function executeTool(
         });
       }
       const service = await wix.getService(serviceId);
-      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      if (!service) return await unknownServiceIdResult();
 
       await repo.updateClientName(client.id, clientName);
       const result = await commitments.startCommitment({
@@ -2164,7 +2207,7 @@ export async function executeTool(
       // 2. Price from the catalog (never the model) + per-booking cap (the NEW
       //    booking must satisfy the cap on its own).
       const service = await wix.getService(source.service_id);
-      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      if (!service) return await unknownServiceIdResult();
       if (!service.priceXof || service.priceXof <= 0) {
         return JSON.stringify({
           error: "no_price",
@@ -2574,7 +2617,7 @@ export async function executeTool(
 
       // Price and existence come from the Wix catalog — never from the model.
       const plan = await wix.getPlan(planId);
-      if (!plan) return JSON.stringify({ error: "unknown_plan_id", message: "Re-run list_plans and pick a plan_id from it." });
+      if (!plan) return await unknownPlanIdResult();
       if (!isPlanSellableByAwa(plan.id, config.AWA_SELLABLE_PLAN_IDS)) {
         return JSON.stringify({
           error: "plan_not_sellable",
@@ -3285,7 +3328,7 @@ export async function executeTool(
         });
       }
       const service = await wix.getService(serviceId);
-      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      if (!service) return await unknownServiceIdResult();
       const fresh = await wix.isSlotStillOpen(serviceId, cached.event_id, slotStart, 1);
       if (!fresh) {
         return JSON.stringify({
@@ -3565,7 +3608,7 @@ export async function executeTool(
         metadata: { service_id: serviceId, participants },
       });
       const service = await wix.getService(serviceId);
-      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      if (!service) return await unknownServiceIdResult();
 
       // Wix rejects a single booking above the service's per-booking cap — same
       // guard as the Wave group flow, enforced BEFORE deducting any session.
@@ -4347,7 +4390,7 @@ export async function executeTool(
         });
       }
       const service = await wix.getService(serviceId);
-      if (!service) return JSON.stringify({ error: "unknown_service_id" });
+      if (!service) return await unknownServiceIdResult();
 
       // Server-authoritative: the slot must exist in Wix right now. The model
       // can't invent waitlist entries for slots it was never shown either —
