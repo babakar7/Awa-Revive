@@ -465,18 +465,19 @@ describe("monthly statement lifecycle", () => {
   it("blocks validation on an open month and after a Wix outage", async () => {
     const cookie = await loginAsOwner();
     const profileId = await configureYass();
-    mock.wix.calendarEvents = [calendarEvent("july", "2026-07-05T10:00:00")];
-    const julyCreate = await post(`${BASE}/etats`, { profile_id: profileId, month: "2026-07" }, cookie);
-    const julyId = String(julyCreate.headers.location).match(/\/etats\/([0-9a-f-]+)/i)![1];
-    const julyPage = await app.inject({
+    const openMonth = new Date().toISOString().slice(0, 7);
+    mock.wix.calendarEvents = [calendarEvent("open-month", `${openMonth}-05T10:00:00`)];
+    const openCreate = await post(`${BASE}/etats`, { profile_id: profileId, month: openMonth }, cookie);
+    const openId = String(openCreate.headers.location).match(/\/etats\/([0-9a-f-]+)/i)![1];
+    const openPage = await app.inject({
       method: "GET",
-      url: `${BASE}/etats/${julyId}`,
+      url: `${BASE}/etats/${openId}`,
       headers: { cookie },
     });
-    expect(julyPage.body).toContain(
+    expect(openPage.body).toContain(
       "Aucune séance annulée ou vide à vérifier",
     );
-    const early = await post(`${BASE}/etats/${julyId}/valider`, {}, cookie);
+    const early = await post(`${BASE}/etats/${openId}/valider`, {}, cookie);
     expect(decodeURIComponent(String(early.headers.location))).toMatch(/fin du mois civil/i);
 
     // A separate coach/month whose initial historical sync fails must never be
