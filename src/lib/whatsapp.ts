@@ -571,6 +571,44 @@ export function parseStatuses(payload: any): StatusUpdate[] {
   return out;
 }
 
+// Matches a run of encoded natural-language whitespace — the tell that a whole
+// phrase was percent-encoded (a pre-filled wa.me link), not a stray "%".
+const ENCODED_SPACE_RE = /%20/gi;
+// UTF-8 lead byte for accented Latin letters (é → %C3%A9); pairs with an encoded
+// space to catch short accented phrases with only one space.
+const ENCODED_ACCENT_RE = /%C3/i;
+
+/**
+ * Defensively decode an inbound text that arrived percent-encoded because a
+ * wa.me / QR deep link double-encoded its pre-filled body (prod 31/07: Amicolle
+ * sent "Bonjour%2C%20je%20souhaite%20r%C3%A9server%20un%20cours"). Kept strict
+ * to never mangle a legitimate message: only a string that clearly encodes a
+ * natural-language PHRASE (encoded spaces, or one space + an accented byte) and
+ * that decodeURIComponent can fully decode is rewritten. A lone "%", a "50%
+ * off", or a pasted URL is left untouched (decodeURIComponent throws on the
+ * first two; URLs are excluded outright). The true fix is the deep link at the
+ * source — this only stops a mangled phrase from reaching the model, and logs
+ * every rewrite so the source can be found.
+ */
+export function decodePercentEncodedMessage(raw: string): string {
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const spaces = (raw.match(ENCODED_SPACE_RE) ?? []).length;
+  const looksEncodedPhrase = spaces >= 2 || (spaces >= 1 && ENCODED_ACCENT_RE.test(raw));
+  if (!looksEncodedPhrase) return raw;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return raw; // malformed escape (e.g. "50% off") — leave as-is
+  }
+  if (decoded === raw) return raw;
+  console.warn(
+    `Inbound text was percent-encoded — decoded for the model. Fix the deep link at the source. ` +
+      `raw="${raw.slice(0, 120)}" decoded="${decoded.slice(0, 120)}"`,
+  );
+  return decoded;
+}
+
 export function parseInboundMessages(payload: any): InboundMessage[] {
   const out: InboundMessage[] = [];
   for (const entry of payload?.entry ?? []) {
@@ -598,7 +636,10 @@ export function parseInboundMessages(payload: any): InboundMessage[] {
           from: msg.from,
           id: msg.id,
           type: msg.type,
-          text: msg.type === "text" ? msg.text?.body : (reply?.title ?? templateButton?.text),
+          text:
+            msg.type === "text"
+              ? (msg.text?.body ? decodePercentEncodedMessage(msg.text.body) : msg.text?.body)
+              : (reply?.title ?? templateButton?.text),
           interactiveId: reply?.id ?? templateButton?.payload,
           mediaId:
             msg.type === "audio"
