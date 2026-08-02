@@ -53,6 +53,7 @@ function statusBadge(status: string): string {
 export function coachPaymentBanner(done?: string, error?: string): string {
   const messages: Record<string, string> = {
     profile: "Réglages enregistrés.",
+    "profile-created": "Coach ajoutée depuis Wix.",
     created: "Brouillon créé avec son instantané Wix.",
     synced: "Instantané Wix actualisé.",
     toggled: "Séance corrigée.",
@@ -89,7 +90,7 @@ export function renderCoachPaymentsDashboard(args: {
       return `<article class="card finance-card"><div class="row between"><div><span class="eyebrow">Coach</span><h2>${esc(profile.display_name)}</h2><div class="muted">${esc(tariffLabel(tariffFromProfile(profile)))}</div><div class="muted">${resource} · ${esc(profile.email ?? "e-mail non renseigné")}</div></div><div class="finance-total">${statement ? `${statusBadge(statement.status)}<b>${xof(statement.total_xof)}</b><span>${statement.course_count} cours · v${statement.version}</span>` : `<span class="muted">Aucun état pour ce mois</span>`}</div></div><div class="card-actions">${action}</div></article>`;
     })
     .join("");
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio · Propriétaire</span><h2>Paiements coachs</h2><p>Préparez, contrôlez et validez les états mensuels à partir des séances Wix.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}/reglages">Réglages coachs</a></div></header>${args.banner}<div class="card filter-bar"><form method="get" action="${BASE}" class="row"><label>Mois<input type="month" name="month" value="${esc(args.month)}" required></label><button class="act act--ghost" type="submit">Afficher le mois</button></form></div><div class="section-header"><h2>${esc(monthLabel(args.month))}</h2><span class="badge badge--gray">${args.profiles.length} coach(s)</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach active</b><p>Ajoutez ou réactivez une fiche depuis les réglages.</p></div>`}`;
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio · Propriétaire</span><h2>Paiements coachs</h2><p>Préparez, contrôlez et validez les états mensuels à partir des séances Wix.</p></div><div class="page-header-actions"><a class="act" href="${BASE}/reglages#ajouter-coach">Ajouter une coach Wix</a><a class="act act--ghost" href="${BASE}/reglages">Réglages coachs</a></div></header>${args.banner}<div class="card filter-bar"><form method="get" action="${BASE}" class="row"><label>Mois<input type="month" name="month" value="${esc(args.month)}" required></label><button class="act act--ghost" type="submit">Afficher le mois</button></form></div><div class="section-header"><h2>${esc(monthLabel(args.month))}</h2><span class="badge badge--gray">${args.profiles.length} coach(s)</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach active</b><p>Ajoutez ou réactivez une fiche depuis les réglages.</p></div>`}`;
 }
 
 export function renderCoachPaymentSettings(args: {
@@ -98,8 +99,29 @@ export function renderCoachPaymentSettings(args: {
   wixError?: string;
   banner: string;
 }): string {
+  const associatedResourceIds = new Set(
+    args.profiles.map((profile) => profile.wix_resource_id).filter(Boolean),
+  );
+  const availableResources = args.resources.filter(
+    (resource) => !associatedResourceIds.has(resource.id),
+  );
   const resourceOptions = (selected: string | null) =>
-    `<option value="">— Non associée —</option>${args.resources.map((r) => `<option value="${esc(r.id)}"${r.id === selected ? " selected" : ""}>${esc(r.name)}${r.email ? ` — ${esc(r.email)}` : ""}</option>`).join("")}`;
+    `<option value="">— Non associée —</option>${args.resources.map((r) => `<option value="${esc(r.id)}" data-name="${esc(r.name)}" data-email="${esc(r.email ?? "")}"${r.id === selected ? " selected" : ""}>${esc(r.name)}${r.email ? ` — ${esc(r.email)}` : ""}</option>`).join("")}`;
+  const addOptions = availableResources
+    .map((r) => `<option value="${esc(r.id)}" data-name="${esc(r.name)}" data-email="${esc(r.email ?? "")}">${esc(r.name)}${r.email ? ` — ${esc(r.email)}` : ""}</option>`)
+    .join("");
+  const addCard = availableResources.length
+    ? `<form class="card" id="ajouter-coach" method="post" action="${BASE}/reglages" data-new-coach>
+      <h2 style="margin:.1rem 0 .35rem">Ajouter une coach depuis Wix</h2>
+      <p class="muted">Choisissez une ressource coach existante dans Wix, puis définissez son tarif.</p>
+      <label>Coach Wix<select name="wix_resource_id" required><option value="">— Choisir une coach —</option>${addOptions}</select></label>
+      <label>E-mail<input name="email" type="email" placeholder="Récupéré automatiquement depuis Wix"></label>
+      <label>Formule<select name="formula_type" onchange="this.form.querySelector('[data-ratio]').style.display=this.value==='monthly_ratio'?'flex':'none';this.form.querySelector('[data-session]').style.display=this.value==='per_session'?'block':'none'"><option value="per_session">Montant par cours</option><option value="monthly_ratio">Forfait mensuel au prorata</option></select></label>
+      <div class="row" data-ratio style="display:none"><label>Montant de référence (FCFA)<input name="base_amount_xof" type="number" min="0" step="1" value="800000"></label><label>Nombre de cours de référence<input name="base_session_count" type="number" min="1" step="1" value="84"></label></div>
+      <label data-session>Montant par cours (FCFA)<input name="per_session_xof" type="number" min="0" step="1" value="9000" required></label>
+      <button class="act" type="submit">Ajouter la coach</button>
+    </form>`
+    : `<div class="card empty"><b>Aucune nouvelle coach Wix à ajouter</b><p>${args.resources.length ? "Toutes les ressources coach Wix ont déjà une fiche de paiement." : "Aucune ressource coach n’est disponible depuis Wix."}</p></div>`;
   const cards = args.profiles.map((p) => {
     const ratio = p.formula_type === "monthly_ratio";
     const wixEmail = args.resources.find((r) => r.id === p.wix_resource_id)?.email ?? null;
@@ -113,8 +135,8 @@ export function renderCoachPaymentSettings(args: {
       <button class="act" type="submit">Enregistrer la fiche</button>
     </form>`;
   }).join("");
-  const script = `<script>document.querySelectorAll('select[data-email-target]').forEach(function(s){s.addEventListener('change',function(){var o=s.options[s.selectedIndex];var text=o?o.textContent:'';var m=text.match(/—\s+([^\s]+@[^\s]+)$/);var input=document.getElementById(s.dataset.emailTarget);if(m&&input&&!input.value)input.value=m[1];});});</script>`;
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Paiements coachs · Propriétaire</span><h2>Réglages des coachs</h2><p>Associez chaque coach à Wix et définissez ses conditions pour les prochains brouillons.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}">États mensuels</a></div></header>${args.banner}${args.wixError ? `<div class="card warn">Ressources Wix indisponibles : ${esc(args.wixError)}</div>` : ""}<p class="subhead">Les états déjà créés conservent les conditions figées lors de leur création.</p>${cards || `<div class="card empty"><b>Aucune fiche coach</b><p>Créez une fiche en base pour commencer.</p></div>`}${script}`;
+  const script = `<script>document.querySelectorAll('select[data-email-target]').forEach(function(s){s.addEventListener('change',function(){var o=s.options[s.selectedIndex];var input=document.getElementById(s.dataset.emailTarget);if(o&&o.dataset.email&&input&&!input.value)input.value=o.dataset.email;});});var add=document.querySelector('[data-new-coach] select[name="wix_resource_id"]');if(add){add.addEventListener('change',function(){var o=add.options[add.selectedIndex];var input=add.form.querySelector('input[name="email"]');if(input)input.value=o&&o.dataset.email?o.dataset.email:'';});}</script>`;
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Paiements coachs · Propriétaire</span><h2>Réglages des coachs</h2><p>Ajoutez une coach existante dans Wix et définissez ses conditions pour les prochains brouillons.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}">États mensuels</a></div></header>${args.banner}${args.wixError ? `<div class="card warn">Ressources Wix indisponibles : ${esc(args.wixError)}</div>` : ""}<p class="subhead">Les états déjà créés conservent les conditions figées lors de leur création.</p>${addCard}<div class="section-header"><h2>Fiches coachs</h2><span class="badge badge--gray">${args.profiles.length}</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach</b><p>Ajoutez une coach depuis Wix pour commencer.</p></div>`}${script}`;
 }
 
 function tariffFields(detail: StatementDetail): string {

@@ -123,6 +123,49 @@ export async function findProfile(id: string): Promise<CoachPaymentProfile | nul
   return (result.rows[0] as CoachPaymentProfile) ?? null;
 }
 
+export async function createProfileFromWix(input: {
+  wixResourceId: string;
+  displayName: string;
+  email: string | null;
+  tariff: CoachTariff;
+}): Promise<CoachPaymentProfile> {
+  return transaction(async (client) => {
+    // Serialize creations for the same Wix resource without requiring a new
+    // database constraint that could make an existing deployment migration fail.
+    await client.query(
+      `select pg_advisory_xact_lock(hashtext($1))`,
+      [`coach-payment-profile:${input.wixResourceId}`],
+    );
+    const existing = await client.query(
+      `select id from coach_payment_profiles where wix_resource_id=$1 limit 1`,
+      [input.wixResourceId],
+    );
+    if (existing.rowCount) {
+      throw new CoachPaymentError("Cette coach Wix possède déjà une fiche de paiement");
+    }
+
+    const tariff = input.tariff;
+    const result = await client.query(
+      `insert into coach_payment_profiles
+        (slug, display_name, wix_resource_id, email, formula_type,
+         base_amount_xof, base_session_count, per_session_xof)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)
+       returning *`,
+      [
+        `wix:${input.wixResourceId}`,
+        input.displayName,
+        input.wixResourceId,
+        input.email,
+        tariff.type,
+        tariff.type === "monthly_ratio" ? tariff.baseAmountXof : null,
+        tariff.type === "monthly_ratio" ? tariff.baseSessionCount : null,
+        tariff.type === "per_session" ? tariff.perSessionXof : null,
+      ],
+    );
+    return result.rows[0] as CoachPaymentProfile;
+  });
+}
+
 export async function updateProfile(
   id: string,
   input: {

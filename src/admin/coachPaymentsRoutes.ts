@@ -165,6 +165,33 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
         reply.type("text/html").send(await layout("Réglages paiements coachs", BASE, body, { contentWidth: "standard", breadcrumbs: [{ href: BASE, label: "Paiements coachs" }, { label: "Réglages" }] }));
       });
 
+      section.post("/reglages", async (req, reply) => {
+        const body = (req.body ?? {}) as Record<string, string>;
+        try {
+          const wixResourceId = String(body.wix_resource_id ?? "").trim();
+          if (!wixResourceId) {
+            throw new payments.CoachPaymentError("Choisissez une coach Wix");
+          }
+          const resource = (await listStaffResources()).find((item) => item.id === wixResourceId);
+          if (!resource || !resource.name.trim()) {
+            throw new payments.CoachPaymentError("Ressource coach Wix introuvable");
+          }
+          const profile = await payments.createProfileFromWix({
+            wixResourceId: resource.id,
+            displayName: resource.name.trim(),
+            email: validEmail(body.email) ?? resource.email,
+            tariff: parseTariff(body),
+          });
+          req.log.info(
+            { profileId: profile.id, wixResourceId: resource.id, by: req.adminUser },
+            "Coach payment profile created from Wix",
+          );
+          return reply.redirect(`${BASE}/reglages?done=profile-created`, 303);
+        } catch (error) {
+          return reply.redirect(`${BASE}/reglages?err=${encodeURIComponent(message(error))}`, 303);
+        }
+      });
+
       section.post("/reglages/:profileId", async (req, reply) => {
         const { profileId } = req.params as { profileId: string };
         const body = (req.body ?? {}) as Record<string, string>;

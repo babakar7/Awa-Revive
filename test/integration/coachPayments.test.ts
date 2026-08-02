@@ -133,6 +133,56 @@ describe("owner payment authorization", () => {
   });
 });
 
+describe("coach payment settings", () => {
+  it("adds an existing Wix coach with her contact and tariff and rejects duplicates", async () => {
+    const cookie = await loginAsOwner();
+    mock.wix.staffResources = [
+      { id: "coach-awa", name: "Awa Ndiaye", email: "awa@revive.sn", tags: ["staff"] },
+    ];
+
+    const settings = await app.inject({
+      method: "GET",
+      url: `${BASE}/reglages`,
+      headers: { cookie },
+    });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.body).toContain("Ajouter une coach depuis Wix");
+    expect(settings.body).toContain("Awa Ndiaye");
+
+    const created = await post(`${BASE}/reglages`, {
+      wix_resource_id: "coach-awa",
+      email: "",
+      formula_type: "per_session",
+      per_session_xof: "12500",
+      base_amount_xof: "800000",
+      base_session_count: "84",
+    }, cookie);
+    expect(created.statusCode).toBe(303);
+    expect(created.headers.location).toContain("done=profile-created");
+
+    const profile = (await pool.query(
+      `select * from coach_payment_profiles where wix_resource_id='coach-awa'`,
+    )).rows[0];
+    expect(profile).toEqual(expect.objectContaining({
+      display_name: "Awa Ndiaye",
+      email: "awa@revive.sn",
+      formula_type: "per_session",
+      per_session_xof: 12_500,
+      enabled: true,
+    }));
+
+    const duplicate = await post(`${BASE}/reglages`, {
+      wix_resource_id: "coach-awa",
+      formula_type: "per_session",
+      per_session_xof: "9000",
+    }, cookie);
+    expect(duplicate.headers.location).toContain("err=");
+    expect(Number((await pool.query(
+      `select count(*) from coach_payment_profiles where wix_resource_id='coach-awa'`,
+    )).rows[0].count)).toBe(1);
+  });
+});
+
 describe("monthly statement lifecycle", () => {
   it("recovers a cancelled occurrence omitted by Calendar Query without treating client cancellations as a session cancellation", async () => {
     const cookie = await loginAsOwner();
