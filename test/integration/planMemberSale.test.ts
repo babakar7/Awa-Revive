@@ -225,6 +225,77 @@ describe("create_plan_payment_link member self-service", () => {
     });
   });
 
+  it("unlocks the member from a DURABLE proof older than the freshness window (Lisa Coulaud)", async () => {
+    const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    // Verified days ago (past the 60-min arbitration window) and never bought,
+    // so the fiche carries no member yet. Before F1 this looped forever on
+    // verification_required; now the durable proof + matching phone unlocks it.
+    await insertVerification(client.id, { status: "VERIFIED", linkedContactId: "contact-zeina" });
+    await pool.query(
+      `update link_requests set updated_at = now() - interval '2 days' where client_id=$1`,
+      [client.id],
+    );
+
+    const result = await call(client);
+    const stored = await pool.query(
+      `select member_id, status from pending_plan_orders where client_id=$1`,
+      [client.id],
+    );
+
+    expect(result.activation).toBe("auto_after_payment");
+    expect(result.error).toBeUndefined();
+    expect(result.payment_link).toMatch(/^https:\/\//);
+    expect(mock.wix.createdMemberIds).toEqual(["member_created_1"]);
+    expect(stored.rows[0]).toMatchObject({ member_id: "member_created_1", status: "AWAITING_PAYMENT" });
+  });
+
+  it("already_linked with a durable proof tells the model to retry — no code, no timestamp bump (F2)", async () => {
+    const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    await insertVerification(client.id, { status: "VERIFIED", linkedContactId: "contact-zeina" });
+    await pool.query(
+      `update link_requests set updated_at = now() - interval '2 days' where client_id=$1`,
+      [client.id],
+    );
+    const before = (await pool.query(
+      `select updated_at from link_requests where client_id=$1 and status='VERIFIED'`,
+      [client.id],
+    )).rows[0].updated_at;
+
+    const result = JSON.parse(
+      await executeTool(clientShape(client), "request_email_verification", {
+        email: "zeinasengold@gmail.com",
+        client_name: "Zeina",
+      }),
+    );
+
+    expect(result.status).toBe("already_linked");
+    expect(result.message).toMatch(/retry create_plan_payment_link/i);
+    // The durable proof must NOT be refreshed (faking a recent proof would
+    // bypass the phone-ambiguity guard) and no member/code is created.
+    const after = (await pool.query(
+      `select updated_at from link_requests where client_id=$1 and status='VERIFIED'`,
+      [client.id],
+    )).rows[0].updated_at;
+    expect(new Date(after).getTime()).toBe(new Date(before).getTime());
+    expect(mock.wix.createdMemberIds).toHaveLength(0);
+  });
+
+  it("ignores a bogus client_declined_verification when a durable proof matches", async () => {
+    const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
+    await insertVerification(client.id, { status: "VERIFIED", linkedContactId: "contact-zeina" });
+    await pool.query(
+      `update link_requests set updated_at = now() - interval '2 days' where client_id=$1`,
+      [client.id],
+    );
+
+    // The model lies (client never refused) to escape a loop — the server must
+    // still auto-activate via the durable proof, never manual_after_payment.
+    const result = await call(client, { client_declined_verification: true });
+
+    expect(result.activation).toBe("auto_after_payment");
+    expect(mock.wix.createdMemberIds).toEqual(["member_created_1"]);
+  });
+
   it("persists an indivisible initial class selection on the plan order", async () => {
     const client = await seedClient({ wa_phone: "221770000072", name: "Zeina" });
     await insertVerification(client.id, {

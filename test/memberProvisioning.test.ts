@@ -33,82 +33,50 @@ function verification(
   };
 }
 
+const args = (o: Partial<Parameters<typeof decideMemberProvisioning>[0]> = {}) => ({
+  phoneContactId: null,
+  memberId: null,
+  recentProof: null,
+  durableProof: null,
+  pendingVerification: null,
+  now: NOW,
+  ...o,
+});
+
 describe("decideMemberProvisioning", () => {
   it("uses an existing member", () => {
-    expect(
-      decideMemberProvisioning({
-        phoneContactId: "contact-phone",
-        memberId: "member-1",
-        verification: null,
-        now: NOW,
-      }),
-    ).toEqual({
+    expect(decideMemberProvisioning(args({ phoneContactId: "contact-phone", memberId: "member-1" }))).toEqual({
       action: "use_member",
       contactId: "contact-phone",
       memberId: "member-1",
     });
   });
 
-  it("requires verification when no email was proven", () => {
-    expect(
-      decideMemberProvisioning({
-        phoneContactId: "contact-phone",
-        memberId: null,
-        verification: null,
-        now: NOW,
-      }),
-    ).toEqual({
+  it("requires verification when nothing is proven", () => {
+    expect(decideMemberProvisioning(args({ phoneContactId: "contact-phone" }))).toEqual({
       action: "require_verification",
       contactId: "contact-phone",
       codeAlreadySent: false,
     });
   });
 
-  it("reports only a still-valid code as already sent", () => {
-    const active = verification({
-      status: "AWAITING_CODE",
-      linked_contact_id: null,
-      code_expires_at: new Date(NOW.getTime() + 60_000),
-    });
-    const expired = verification({
-      status: "AWAITING_CODE",
-      linked_contact_id: null,
-      code_expires_at: new Date(NOW.getTime() - 60_000),
-    });
+  it("reports only a still-valid pending code as already sent", () => {
     expect(
-      decideMemberProvisioning({
-        phoneContactId: null,
-        memberId: null,
-        verification: active,
-        now: NOW,
-      }),
+      decideMemberProvisioning(
+        args({ pendingVerification: { status: "AWAITING_CODE", codeExpiresAt: new Date(NOW.getTime() + 60_000) } }),
+      ),
     ).toMatchObject({ action: "require_verification", codeAlreadySent: true });
     expect(
-      decideMemberProvisioning({
-        phoneContactId: null,
-        memberId: null,
-        verification: expired,
-        now: NOW,
-      }),
+      decideMemberProvisioning(
+        args({ pendingVerification: { status: "AWAITING_CODE", codeExpiresAt: new Date(NOW.getTime() - 60_000) } }),
+      ),
     ).toMatchObject({ action: "require_verification", codeAlreadySent: false });
   });
 
-  it("moves the Zeina case from verification-required to member creation", () => {
+  // Path A — a recent proof trumps a lagging/divergent phone index.
+  it("creates the member on the proven fiche for a RECENT proof (Zeina)", () => {
     expect(
-      decideMemberProvisioning({
-        phoneContactId: null,
-        memberId: null,
-        verification: null,
-        now: NOW,
-      }).action,
-    ).toBe("require_verification");
-    expect(
-      decideMemberProvisioning({
-        phoneContactId: null,
-        memberId: null,
-        verification: verification(),
-        now: NOW,
-      }),
+      decideMemberProvisioning(args({ phoneContactId: "contact-phone-stale", recentProof: verification() })),
     ).toEqual({
       action: "create_member",
       contactId: "contact-proven",
@@ -116,10 +84,67 @@ describe("decideMemberProvisioning", () => {
     });
   });
 
-  it("lets the proven fiche win over a divergent phone-index contact for 60 minutes", () => {
+  // Path B — the Lisa case: proof is OLD (no recentProof), but the phone
+  // unambiguously resolves to the same fiche the durable proof points to.
+  it("creates the member from a DURABLE proof when the phone matches its fiche (Lisa)", () => {
     expect(
-      effectiveMemberContactId("contact-phone-stale", verification(), NOW),
-    ).toBe("contact-proven");
+      decideMemberProvisioning(
+        args({
+          phoneContactId: "contact-lisa",
+          durableProof: { linkedContactId: "contact-lisa", claimedEmail: "coulaud.lisa1@gmail.com" },
+        }),
+      ),
+    ).toEqual({
+      action: "create_member",
+      contactId: "contact-lisa",
+      verifiedEmail: "coulaud.lisa1@gmail.com",
+    });
+  });
+
+  it("passes verifiedEmail null when a durable LINKED proof carries no email", () => {
+    expect(
+      decideMemberProvisioning(
+        args({
+          phoneContactId: "contact-lisa",
+          durableProof: { linkedContactId: "contact-lisa", claimedEmail: null },
+        }),
+      ),
+    ).toMatchObject({ action: "create_member", contactId: "contact-lisa", verifiedEmail: null });
+  });
+
+  it("does NOT create from a durable proof pointing to a DIFFERENT fiche (anti-hijack)", () => {
+    expect(
+      decideMemberProvisioning(
+        args({
+          phoneContactId: "contact-phone",
+          durableProof: { linkedContactId: "contact-other", claimedEmail: "x@y.com" },
+        }),
+      ).action,
+    ).toBe("require_verification");
+  });
+
+  it("does NOT create from a durable proof when the phone is ambiguous/null", () => {
+    expect(
+      decideMemberProvisioning(
+        args({ phoneContactId: null, durableProof: { linkedContactId: "contact-x", claimedEmail: "x@y.com" } }),
+      ).action,
+    ).toBe("require_verification");
+  });
+
+  it("lets an active code win over a durable proof (verification in progress)", () => {
+    expect(
+      decideMemberProvisioning(
+        args({
+          phoneContactId: "contact-lisa",
+          durableProof: { linkedContactId: "contact-lisa", claimedEmail: "l@x.com" },
+          pendingVerification: { status: "AWAITING_CODE", codeExpiresAt: new Date(NOW.getTime() + 60_000) },
+        }),
+      ),
+    ).toMatchObject({ action: "require_verification", codeAlreadySent: true });
+  });
+
+  it("lets the proven fiche win over a divergent phone-index contact for 60 minutes", () => {
+    expect(effectiveMemberContactId("contact-phone-stale", verification(), NOW)).toBe("contact-proven");
     expect(
       effectiveMemberContactId(
         "contact-phone-stale",
@@ -217,6 +242,18 @@ describe("provisionWixMember", () => {
       });
       expect(d.notifyFailure).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("falls back to verification when neither the fiche nor the proof has an email", async () => {
+    const d = deps({ getContact: vi.fn(async () => ({ info: {} })) });
+    await expect(
+      provisionWixMember(
+        { action: "create_member", contactId: "contact-proven", verifiedEmail: null },
+        d,
+      ),
+    ).resolves.toMatchObject({ status: "verification_required", codeAlreadySent: false });
+    expect(d.createMember).not.toHaveBeenCalled();
+    expect(d.notifyFailure).not.toHaveBeenCalled();
   });
 
   it("resolves a committed createMember response before notifying", async () => {

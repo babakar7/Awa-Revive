@@ -16,6 +16,50 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Boucle « vérifié mais pas de member » → achat de plan impossible (Lisa Coulaud, 2 août 2026)
+
+**Incident** : Lisa vérifie son email par code le 28/07 (`account_created` : fiche
+Wix créée + liée, MAIS sans member — le member n'est provisionné qu'à l'achat).
+Elle achète le 02/08 : `create_plan_payment_link` → `plan_member_verification_required` ;
+Awa redemande l'email → `request_email_verification` → `already_linked` (« no
+verification needed ») ; retry → **encore** `verification_required` → boucle. Le
+modèle s'échappe en **mentant** (`client_declined_verification:true`, aucun refus
+réel) → activation manuelle, 30 000 FCFA Wave bloqués, séance jamais réservée,
+intervention manuelle de Babakar.
+
+**Root cause** : dans `decideMemberProvisioning`, la fenêtre de fraîcheur 60 min
+servait À LA FOIS à arbitrer fiche-prouvée-vs-index-téléphone ET à autoriser la
+création du member. Comme TTL d'autorisation, elle enferme tout client vérifié il
+y a > 1 h sans member. Décision : **une preuve par code est DURABLE pour le
+provisioning** (elle n'expire pas).
+
+**Correctifs** (worktree `verified-member-loop`) :
+- **F1** — [src/domain/memberProvisioning.ts](src/domain/memberProvisioning.ts) : trois
+  notions séparées. `recentProof` (60 min → arbitrage index seul) ; `durableProof`
+  (preuve VERIFIED/LINKED de tout âge → `links.latestProvenLinkRequest`, autorise
+  `create_member` UNIQUEMENT si `phoneContactId === durableProof.linkedContactId`,
+  anti-hijack) ; `pendingVerification` (→ `codeAlreadySent` seul, un code actif reste
+  prioritaire). `verifiedEmail` nullable (LINKED admin sans email) → `provisionWixMember`
+  retombe sur l'email primaire de la fiche, sinon `verification_required`.
+- **F2** — branche `already_linked` de `request_email_verification` SANS mutation
+  d'`updated_at` : preuve durable correspondante → « retry create_plan_payment_link
+  NOW » ; sinon (fiche téléphone+email jamais prouvée, ex. vieux paiement Wave) →
+  **envoi d'un vrai code** au lieu de la fausse promesse.
+- **F4** — le mensonge est neutralisé STRUCTURELLEMENT par F1 (preuve durable →
+  décision `create_member`, donc `client_declined_verification` est inerte) ;
+  renfort de consigne dans les 3 descriptions du paramètre + prompt.
+- **F3 (chantier séparé, PHASE2)** : créer le member dès `submit_verification_code`.
+  Écarté ici car `createMember(email)` peut atterrir sur une autre fiche (index email
+  en retard) — même risque que `autoProvisionDeclinedNewAccount` déjà en prod.
+- **Ordre Lisa `0e05a8e1` : INTOUCHÉ** (réglé manuellement ; poser `member_id` seul le
+  rendrait éligible à `stuckPaidPlanOrders` → `findPlanOrderForMember` ±5 min →
+  SECONDE Clé créée dans Wix).
+
+Tests : `test/memberProvisioning.test.ts` (Path A/B, anti-hijack, ambiguïté,
+code-actif-prioritaire, email nullable) + `test/integration/planMemberSale.test.ts`
+(Lisa durable J-2 → auto-activation ; already_linked retry sans mutation ; faux
+`client_declined_verification` ignoré).
+
 ## Auto-fermeture des interventions à la prise de relais (2 août 2026)
 
 Un handoff / une review « à reprendre » restait OPEN dans /admin/suivi tant que

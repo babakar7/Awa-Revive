@@ -331,7 +331,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly " +
             "says they can't access that inbox or prefers to pay now. Otherwise leave absent: if a code " +
             "is pending, the server refuses the link so the client can type the code first (their abonnement may " +
-            "cover this class).",
+            "cover this class). NEVER set it merely to escape a verification_required error — instead re-run " +
+            "request_email_verification and follow its answer (the account may already be linked).",
         },
         commitment_item_id: {
           type: "string",
@@ -455,7 +456,9 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           description:
             "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly " +
             "says they can't access that inbox or refuses verification. This keeps the manual-after-payment fallback. " +
-            "Otherwise leave absent: the server requires verification before any plan payment.",
+            "Otherwise leave absent: the server requires verification before any plan payment. NEVER set it merely " +
+            "to escape a verification_required error — re-run request_email_verification and follow its answer " +
+            "(the account may already be linked, in which case a simple retry succeeds).",
         },
         service_id: {
           type: "string",
@@ -1028,7 +1031,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: "boolean",
           description:
             "Set true ONLY when an email verification is pending (a code was sent) AND the client explicitly says " +
-            "they can't access that inbox or prefer to pay now. Otherwise leave absent.",
+            "they can't access that inbox or prefer to pay now. Otherwise leave absent. NEVER set it merely to " +
+            "escape a verification_required error — re-run request_email_verification and follow its answer.",
         },
       },
       required: ["booking_id", "extra_participants"],
@@ -1193,21 +1197,31 @@ async function resolvePlanMemberContext(
   pending: links.LinkRequest | null,
   now = new Date(),
 ): Promise<PlanMemberContext> {
-  const [phoneContactId, recentlyVerified] = await Promise.all([
+  const [phoneContactId, recentProof, durableRow] = await Promise.all([
     wix.findContactIdByPhone(phone, nameHint || undefined),
     links.recentlyResolved(client.id, 60),
+    links.latestProvenLinkRequest(client.id),
   ]);
-  const verification = recentlyVerified ?? pending;
-  const contactId = effectiveMemberContactId(phoneContactId, verification, now);
+  // recentProof: freshness arbitration only. durableProof: authorizes creating
+  // the member for the phone's own fiche (any age). pending: codeAlreadySent.
+  const contactId = effectiveMemberContactId(phoneContactId, recentProof, now);
   const memberId = contactId ? await wix.findMemberIdByContactId(contactId) : null;
+  const durableProof = durableRow
+    ? { linkedContactId: durableRow.linked_contact_id, claimedEmail: durableRow.claimed_email }
+    : null;
   return {
     contactId,
     memberId,
-    verification,
+    // Kept for downstream reception/notify + declined-fallback consumers.
+    verification: recentProof ?? pending,
     decision: decideMemberProvisioning({
       phoneContactId,
       memberId,
-      verification,
+      recentProof,
+      durableProof,
+      pendingVerification: pending
+        ? { status: pending.status, codeExpiresAt: pending.code_expires_at }
+        : null,
       now,
     }),
   };
@@ -2882,6 +2896,12 @@ export async function executeTool(
       // Provision only after every plan/catalog/eligibility/renewal/payment
       // guard passed, immediately before the local draft. A refusal/inaccessible
       // inbox explicitly opts into the existing manual-after-payment fallback.
+      // F4 guard is structural: a client with a durable proof for the phone's
+      // own fiche yields decision.action === "create_member" (not
+      // require_verification), so a bogus client_declined_verification:true is
+      // inert here — the member is created and the plan auto-activates (this is
+      // exactly what trapped Lisa Coulaud 02/08, where the model lied about a
+      // refusal to escape a verification loop).
       const declinedVerification =
         memberContext.decision.action === "require_verification" &&
         input.client_declined_verification === true;
@@ -4606,14 +4626,50 @@ export async function executeTool(
         });
       }
       switch (candidate.kind) {
-        case "already_linked":
+        case "already_linked": {
           invalidateMembershipCache(client.id);
+          const durable = await links.latestProvenLinkRequest(client.id);
+          if (durable && durable.linked_contact_id === candidate.contactId) {
+            // The phone's fiche was already PROVEN by a past code. No member yet
+            // is fine — create_plan_payment_link now provisions it from this
+            // durable proof (F1). Do NOT re-verify and do NOT mutate the proof's
+            // timestamp (that would fake a "recent" proof and bypass the
+            // phone-ambiguity guard). Just tell the model to retry.
+            return JSON.stringify({
+              status: "already_linked",
+              message:
+                "The account carrying this email ALREADY has this WhatsApp number and was previously " +
+                "verified. No new verification is needed — retry create_plan_payment_link NOW (with the " +
+                "payment method) and it will succeed. To just show plans, run check_membership.",
+            });
+          }
+          // The fiche carries this phone+email but was NEVER proven by a code
+          // (e.g. a fiche a past Wave payment created). A durable proof is
+          // required before we may open a member for it (anti-hijack), so send
+          // a real code now — exactly like a single-candidate link.
+          const code = links.generateCode();
+          await links.setAwaitingCode(request.id, email, candidate.contactId, links.hashCode(code, request.id));
+          try {
+            await sendVerificationCodeEmail(email, code);
+          } catch (err) {
+            console.error("Verification-code email failed (already-linked reproof):", err);
+            await escalateLinkRequest(request, client, `envoi du code impossible (email ${email})`);
+            return JSON.stringify({
+              status: "send_failed",
+              message:
+                "The verification email could not be sent — reception has been notified and will link " +
+                "the account manually. Tell the client the team is on it (no need to call).",
+            });
+          }
           return JSON.stringify({
-            status: "already_linked",
+            status: "code_sent",
+            expires_in_minutes: links.CODE_TTL_MINUTES,
             message:
-              "The account carrying this email ALREADY has this WhatsApp number — no verification " +
-              "needed. Run check_membership again to see their plans.",
+              "A 6-digit code was just emailed to that address to finish setting up the account (check " +
+              "spam too). Ask the client to type it HERE, then call submit_verification_code. The code is " +
+              `valid ${links.CODE_TTL_MINUTES} minutes. You do NOT know it — it only exists in their inbox.`,
           });
+        }
         case "none": {
           const wantsCreate = input.create_account === true;
           const clientName = String(input.client_name ?? "").slice(0, 80).trim();

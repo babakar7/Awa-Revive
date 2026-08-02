@@ -25,16 +25,48 @@ export type MemberProvisioningDecision =
   | {
       action: "create_member";
       contactId: string;
-      verifiedEmail: string;
+      /** Email to open the Wix member with. May be null on an admin LINKED
+       *  proof carrying no email — provisionWixMember then falls back to the
+       *  fiche's primary email, or asks for verification if there is none. */
+      verifiedEmail: string | null;
     };
+
+/** Durable proof that the client owns a fiche: a VERIFIED/LINKED link_request
+ *  of ANY age. Distinct from a recent proof — see decideMemberProvisioning. */
+export interface DurableProof {
+  linkedContactId: string | null;
+  claimedEmail: string | null;
+}
+
+/** A verification currently in progress (open request), for codeAlreadySent. */
+export interface PendingVerificationSnapshot {
+  status: string;
+  codeExpiresAt: Date | string | null;
+}
 
 export interface DecideMemberProvisioningArgs {
   /** Contact resolved from the WhatsApp phone index, if it is unambiguous. */
   phoneContactId: string | null;
   /** Member resolved for the effective contact (the proven contact wins). */
   memberId: string | null;
-  verification: VerificationSnapshot | null;
+  /** Proof resolved WITHIN the 60-min window — arbitrates the proven fiche vs
+   *  the eventually-consistent phone index right after a code. NOTHING else. */
+  recentProof: VerificationSnapshot | null;
+  /** Proof of ANY age — authorizes creating the member for the phone's OWN
+   *  fiche (never as a freshness signal; see the linked_contact_id guard). */
+  durableProof: DurableProof | null;
+  /** Open verification in progress — used ONLY to compute codeAlreadySent. */
+  pendingVerification: PendingVerificationSnapshot | null;
   now: Date;
+}
+
+function codeStillActive(
+  pending: PendingVerificationSnapshot | null,
+  now: Date,
+): boolean {
+  if (pending?.status !== "AWAITING_CODE") return false;
+  const expiresAt = pending.codeExpiresAt ? new Date(pending.codeExpiresAt).getTime() : Number.NaN;
+  return Number.isFinite(expiresAt) && expiresAt > now.getTime();
 }
 
 function isRecentlyVerified(
@@ -65,13 +97,21 @@ export function effectiveMemberContactId(
   return phoneContactId;
 }
 
+function normalizeEmail(email: string | null): string | null {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed ? trimmed : null;
+}
+
 /** Pure, side-effect-free decision. Member creation is deliberately separate. */
 export function decideMemberProvisioning(
   args: DecideMemberProvisioningArgs,
 ): MemberProvisioningDecision {
+  // Freshness arbitrates the proven fiche vs the lagging phone index — and
+  // ONLY that. It is NOT an authorization TTL (the bug that trapped a client
+  // verified >1h earlier with no member yet: Lisa Coulaud 28/07→02/08).
   const contactId = effectiveMemberContactId(
     args.phoneContactId,
-    args.verification,
+    args.recentProof,
     args.now,
   );
 
@@ -79,29 +119,35 @@ export function decideMemberProvisioning(
     return { action: "use_member", contactId, memberId: args.memberId };
   }
 
-  if (
-    contactId &&
-    isRecentlyVerified(args.verification, args.now) &&
-    args.verification.claimed_email
-  ) {
+  // Path A — a RECENT proof: trust the proof over the (possibly lagging) phone
+  // index and create the member on the effective (proven) contact.
+  if (contactId && isRecentlyVerified(args.recentProof, args.now)) {
     return {
       action: "create_member",
       contactId,
-      verifiedEmail: args.verification.claimed_email.trim().toLowerCase(),
+      verifiedEmail: normalizeEmail(args.recentProof.claimed_email),
     };
   }
 
-  const expiresAt = args.verification?.code_expires_at
-    ? new Date(args.verification.code_expires_at).getTime()
-    : Number.NaN;
-  return {
-    action: "require_verification",
-    contactId,
-    codeAlreadySent:
-      args.verification?.status === "AWAITING_CODE" &&
-      Number.isFinite(expiresAt) &&
-      expiresAt > args.now.getTime(),
-  };
+  const codeAlreadySent = codeStillActive(args.pendingVerification, args.now);
+
+  // Path B — a DURABLE proof (any age): create the member ONLY when the phone
+  // unambiguously resolves to the SAME fiche the proof points to. An active
+  // code in flight wins first (the client may be verifying another account).
+  if (
+    !codeAlreadySent &&
+    args.phoneContactId &&
+    args.durableProof &&
+    args.durableProof.linkedContactId === args.phoneContactId
+  ) {
+    return {
+      action: "create_member",
+      contactId: args.phoneContactId,
+      verifiedEmail: normalizeEmail(args.durableProof.claimedEmail),
+    };
+  }
+
+  return { action: "require_verification", contactId, codeAlreadySent };
 }
 
 export function memberAttachmentMismatch(
@@ -201,6 +247,16 @@ export async function provisionWixMember(
     const contact = await deps.getContact(decision.contactId);
     if (!contact) throw new Error(`Wix contact ${decision.contactId} not found`);
     const email = primaryContactEmail(contact) ?? decision.verifiedEmail;
+    if (!email) {
+      // Durable proof authorized a member, but neither the fiche nor the proof
+      // carries an email (e.g. an admin LINKED with no email). Fall back to a
+      // real verification rather than opening a member with no login email.
+      return {
+        status: "verification_required",
+        contactId: decision.contactId,
+        codeAlreadySent: false,
+      };
+    }
     const created = await deps.createMember(email);
     if (memberAttachmentMismatch(decision.contactId, created.contactId)) {
       const detail =

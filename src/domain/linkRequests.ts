@@ -178,6 +178,26 @@ export async function recentlyResolved(
   return res.rows[0] ?? null;
 }
 
+/**
+ * The client's most recent PROVEN link (VERIFIED/LINKED), regardless of age.
+ * Unlike recentlyResolved (a freshness window for phone-index arbitration),
+ * this is durable evidence the client owns a fiche — used to provision a member
+ * for a client who verified long ago but whose fiche never got a member (real
+ * case Lisa Coulaud: verified 28/07, tried to buy 02/08). Never use it to widen
+ * the freshness window; the caller gates member creation on linked_contact_id
+ * matching the phone's own fiche.
+ */
+export async function latestProvenLinkRequest(clientId: string): Promise<LinkRequest | null> {
+  const res = await pool.query(
+    `select * from link_requests
+      where client_id = $1 and status in ('VERIFIED','LINKED')
+        and linked_contact_id is not null
+      order by updated_at desc limit 1`,
+    [clientId],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function markNeedsReception(id: string, detail: string): Promise<void> {
   await pool.query(
     `update link_requests

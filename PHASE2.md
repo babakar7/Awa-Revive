@@ -6,6 +6,15 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
 
 ## Paiements
 
+- 🔧 **F3 — provisionner le member Wix dès `submit_verification_code`** (chemin
+  création de compte), pour qu'aucune fiche « vérifiée sans member » ne naisse.
+  Écarté du fix Lisa (02/08) car `createMember(email)` peut atterrir sur une AUTRE
+  fiche quand l'index email Wix est en retard juste après `createContact` → member
+  divergent, 409 ensuite, non réparable par F1. À faire proprement : factoriser les
+  DEUX chemins (`submit_verification_code` + `autoProvisionDeclinedNewAccount`, qui
+  a déjà ce risque en prod) sur `provisionWixMember` (il a déjà `isMemberEmailConflict`
+  + `memberAttachmentMismatch`), vérifier la convergence `findContactsByEmail → provenId`,
+  réconcilier explicitement les 409/rattachements divergents, tests dédiés.
 - 🔥 **Orange Money** en plus de Wave (le site web le propose déjà — parité des
   canaux). Non-goal explicite du spec Phase 1.
 - 🔥 **Remboursements automatisés** via l'API Wave quand un `REFUND_NEEDED` est
