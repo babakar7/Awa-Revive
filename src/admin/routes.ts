@@ -32,6 +32,13 @@ import { recordOpsEvent } from "../domain/opsEvents.js";
 import { CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
 import { hashOpsToken, newPairCode, PAIR_CODE_TTL_MS } from "../ops/opsAuth.js";
 import { renderDevicesPage } from "./devicesPage.js";
+import { renderOmReconcilePage, looksLikeOmTransactionId } from "./omReconcilePage.js";
+import {
+  enqueueOmVerification,
+  findPendingOmOrder,
+  verifyQueuedOmTransaction,
+} from "../domain/orangeMoneyVerification.js";
+import { isOmEnabled } from "../lib/orangeMoney.js";
 import { renderClosuresPage } from "./closuresPage.js";
 import { renderFaqPage } from "./faqPage.js";
 import * as closures from "../domain/closuresRepo.js";
@@ -1453,6 +1460,64 @@ ${
       });
 
       // Printable QR poster for the changing-room ordering page (/commander).
+      // ---------- Réconciliation Orange Money / Max It (callback perdu) ----------
+      admin.get("/paiements-om", async (req, reply) => {
+        const q = (req.query ?? {}) as { done?: string; err?: string };
+        const body = await renderOmReconcilePage(q);
+        reply.type("text/html").send(
+          await layout("Paiements OM", "/admin/paiements-om", body, {
+            subtitle: "Retrouver un paiement sans callback",
+            contentWidth: "wide",
+          }),
+        );
+      });
+
+      admin.post("/paiements-om", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const back = (msg: { done?: string; err?: string }) =>
+          reply.redirect(
+            `/admin/paiements-om?${msg.done ? `done=${encodeURIComponent(msg.done)}` : `err=${encodeURIComponent(msg.err ?? "erreur inconnue")}`}`,
+            303,
+          );
+        if (!isOmEnabled()) {
+          return back({ err: "Orange Money n'est pas configuré sur cet environnement." });
+        }
+        const transactionId = String(b.transaction_id ?? "").trim();
+        const orderId = String(b.order ?? "").trim();
+        if (!looksLikeOmTransactionId(transactionId)) {
+          return back({ err: "ID de transaction invalide — copie-le tel quel depuis le portail OM (ex. MP260801.2046.A59064)." });
+        }
+        if (!orderId) return back({ err: "Choisis la commande à réconcilier dans la liste." });
+        const pending = await findPendingOmOrder(orderId);
+        if (!pending) return back({ err: "Commande introuvable — recharge la page." });
+
+        // Même pipeline que le webhook : réception durable puis vérification
+        // authentifiée Sonatel (SUCCESS + montant + marchand) avant fulfillment.
+        const queued = await enqueueOmVerification({
+          transactionId,
+          orderId,
+          amountXof: pending.amount_xof,
+        });
+        if (!queued) {
+          return back({ err: "Cette transaction est déjà rattachée à une AUTRE commande — vérifie l'ID." });
+        }
+        const outcome = await verifyQueuedOmTransaction(transactionId, req.log);
+        req.log.info(
+          { transactionId, orderId, outcome, by: req.adminUser },
+          "Manual OM reconciliation attempted from admin",
+        );
+        switch (outcome) {
+          case "succeeded":
+            return back({ done: "Transaction vérifiée auprès de Sonatel — commande finalisée, le client reçoit sa confirmation WhatsApp." });
+          case "failed":
+            return back({ err: "Sonatel a rejeté la correspondance (montant/marchand/commande) — voir « Dernières vérifications » ci-dessous." });
+          case "retry_scheduled":
+            return back({ done: "Transaction pas encore visible en SUCCESS chez Sonatel — nouvelle tentative automatique dans quelques instants (suivre « Dernières vérifications »)." });
+          default:
+            return back({ done: "Vérification déjà en cours pour cette transaction — suivre « Dernières vérifications »." });
+        }
+      });
+
       admin.get("/qr-commander", async (_req, reply) => {
         const url = `${config.COMMANDER_PUBLIC_BASE_URL.replace(/\/$/, "")}/commander`;
         const dataUri = await QRCode.toDataURL(url, { width: 520, margin: 2, errorCorrectionLevel: "M" });

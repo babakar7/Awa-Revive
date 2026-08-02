@@ -16,6 +16,35 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## PANNE callbacks Orange Money/Max It + outil admin de réconciliation (2 août 2026)
+
+**Constat systémique** (découvert via l'incident Marie, +221776382380) : depuis le
+**31/07 12:36 GMT** (dernier callback réel `MP260731.1236.A50831`), **plus aucun
+callback Sonatel n'arrive** alors que les paiements aboutissent : Maryeme 01/08
+(payé, prouvé SUCCESS via `GET /api/eWallet/v1/transactions`, zéro callback),
+Marie 02/08 (2 liens, payé ~09:00, zéro callback, séance réservée à la main par
+Babakar), + 1 booking 08:30. Wave confirme normalement sur la même période →
+problème spécifique OM, très probablement côté Sonatel (notre endpoint répond
+200 et un POST manuel du 02/08 00:54 a été traité de bout en bout). Config
+vérifiée saine (`X-Callback-Url` → `https://awa.revive.sn/webhooks/orange-money`).
+**Email de signalement envoyé à Sonatel** (marchand 553651) : logs de délivrance,
+support du header `X-Callback-Url`, changement plateforme au 31/07, re-déclenchement.
+
+**Nouvel outil : `/admin/paiements-om`** (nav Studio → « Paiements OM ») — la
+réception colle l'ID de transaction du portail OM, choisit la commande (liste
+des ordres OM/Max It non payés < 7 jours : cours, abonnements, bar, livraisons)
+et valide. Le serveur rejoue le pipeline webhook EXACT (`enqueueOmVerification`
+→ vérification authentifiée Sonatel montant/marchand/SUCCESS →
+`processPayment`/fulfillment → confirmation WhatsApp client). Payment-first
+intact : rien n'est validé sans confirmation Sonatel ; une transaction ne peut
+jamais être rattachée à deux commandes. Tableau « Dernières vérifications »
+pour suivre les résultats. Fichiers : [src/admin/omReconcilePage.ts](src/admin/omReconcilePage.ts),
+routes GET/POST dans routes.ts, lien nav layout.ts.
+
+Runbook tant que la panne dure : tout paiement OM/Max It réclamé → portail OM →
+copier l'ID `MP…` → `/admin/paiements-om`. (Le nudge d'expiration + l'alerte
+réception OM shippés plus tôt aujourd'hui préviennent automatiquement.)
+
 ## Incidents Tout & Maryeme → 4 correctifs paiement/fiabilité (2 août 2026)
 
 Deux conversations ratées le 1er août, diagnostiquées sur la DB prod + code.
