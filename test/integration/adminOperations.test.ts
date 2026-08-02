@@ -5,6 +5,7 @@ import { buildServer } from "../../src/server.js";
 import { migrate, pool } from "../../src/db/index.js";
 import { config } from "../../src/config.js";
 import { handleInboundText } from "../../src/agent/index.js";
+import { recordNoIntentTurn } from "../../src/domain/repo.js";
 import { makeFetchMock, seedClient, settle, truncateAll, type FetchMock } from "./helpers.js";
 
 const AUTH = `Basic ${Buffer.from("revive:revive@5000").toString("base64")}`;
@@ -42,6 +43,34 @@ const post = (url: string, fields: Record<string, string>) => app.inject({
 });
 
 describe("shared follow-up and human takeover", () => {
+  it("closes on the third no-intent turn without calling the model, then stays silent", async () => {
+    const client = await seedClient({ wa_phone: "221771234570", name: "Atueydjk" });
+    await recordNoIntentTurn(client.id);
+    await recordNoIntentTurn(client.id);
+
+    await handleInboundText({
+      waPhone: client.wa_phone,
+      text: "[note vocale] ana petrol bi?",
+      waMessageId: "wamid.no-intent-3",
+    });
+    await settle();
+
+    const sent = mock.waTextsTo(client.wa_phone);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("assistante automatisée de Revive");
+    const paused = (await pool.query(`select * from clients where id=$1`, [client.id])).rows[0];
+    expect(paused.awa_no_intent_streak).toBe(3);
+    expect(paused.awa_disengaged_kind).toBe("no_intent");
+
+    await handleInboundText({
+      waPhone: client.wa_phone,
+      text: "What's up?",
+      waMessageId: "wamid.no-intent-4",
+    });
+    await settle();
+    expect(mock.waTextsTo(client.wa_phone)).toEqual(sent);
+  });
+
   it("stores a WhatsApp profile name for the admin conversation without replacing an existing name", async () => {
     const unnamed = (await pool.query(
       `insert into clients (wa_phone, name, human_takeover_until)

@@ -41,6 +41,10 @@ import {
   handleTechnicalFailure,
   technicalClientMessage,
 } from "../domain/technicalFailure.js";
+import {
+  classifyConversationSignal,
+  noIntentClosingMessage,
+} from "../domain/noIntentGuard.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -690,10 +694,40 @@ export async function handleInboundText(args: {
     return;
   }
 
-  // Awa disengaged from a non-serious/suggestive contact: stay fully silent.
-  // The turn is already persisted above (visible in admin); no team ping — the
-  // studio only sees it via the admin badge (silent to team, per product call).
-  if (isAwaDisengaged(client)) return;
+  const signal = campaign.matched ? "revive_intent" : classifyConversationSignal(text);
+
+  // Only an automatic no-intent pause may reopen itself, and only for an
+  // explicit Revive signal. Manual/non-serious pauses remain hard gates.
+  if (isAwaDisengaged(client)) {
+    if (client.awa_disengaged_kind !== "no_intent" || signal !== "revive_intent") return;
+    if (!(await repo.clearNoIntentDisengagement(client.id))) return;
+    client.awa_disengaged_at = null;
+    client.awa_disengaged_until = null;
+    client.awa_disengaged_reason = null;
+    client.awa_disengaged_kind = null;
+    client.awa_no_intent_streak = 0;
+    client.awa_no_intent_last_at = null;
+  }
+
+  if (signal === "no_intent") {
+    const guard = await repo.recordNoIntentTurn(client.id);
+    if (guard.disengaged) {
+      const closing = noIntentClosingMessage(
+        client.language ?? lang,
+        client.fr_register === "vous",
+      );
+      const wamid = await sendText(client.wa_phone, closing);
+      await repo.addTurn(client.id, "assistant", closing, wamid ?? undefined);
+      return;
+    }
+  } else {
+    // A clear OR substantive message breaks consecutiveness. Substantive
+    // unknowns still reach Awa; only short low-information fragments count.
+    await repo.resetNoIntentStreak(client.id);
+    if (client.awa_disengaged_kind === "no_intent") {
+      await repo.clearNoIntentDisengagement(client.id);
+    }
+  }
 
   // Multi-session commitment button taps are routed by the SERVER (deterministic,
   // "le serveur décide"): ms_later and ms_link are self-contained and answered
@@ -1307,6 +1341,16 @@ export async function handleFailedVoiceNote(waPhone: string, waMessageId: string
     return;
   }
   if (isAwaDisengaged(client)) return;
+  const guard = await repo.recordNoIntentTurn(client.id);
+  if (guard.disengaged) {
+    const closing = noIntentClosingMessage(
+      client.language,
+      client.fr_register === "vous",
+    );
+    const wamid = await sendText(waPhone, closing);
+    await repo.addTurn(client.id, "assistant", closing, wamid ?? undefined);
+    return;
+  }
   void sendTypingIndicator(waMessageId);
   const reply = applyFrenchRegister(
     "Désolée, je n'ai pas réussi à écouter ta note vocale 🙏🏾 Tu peux me l'écrire ?\n" +

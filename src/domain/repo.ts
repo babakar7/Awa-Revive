@@ -4,6 +4,9 @@ import { pool } from "../db/index.js";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { transition } from "./stateMachine.js";
+import { NO_INTENT_THRESHOLD, NO_INTENT_WINDOW_HOURS } from "./noIntentGuard.js";
+
+export type AwaDisengagedKind = "manual" | "nonserious" | "no_intent";
 
 export interface Client {
   id: string;
@@ -28,6 +31,9 @@ export interface Client {
   awa_disengaged_until: Date | null;
   awa_disengaged_at: Date | null;
   awa_disengaged_reason: string | null;
+  awa_disengaged_kind: AwaDisengagedKind | null;
+  awa_no_intent_streak: number;
+  awa_no_intent_last_at: Date | null;
 }
 
 export interface PendingBooking {
@@ -78,7 +84,8 @@ export async function upsertClient(waPhone: string): Promise<Client> {
      returning id, wa_phone, name, language, email_prompted_at, claimed_email,
                capability_menu_at, fr_register, is_test, human_takeover_until,
                human_takeover_by, human_takeover_at, awa_disengaged_until,
-               awa_disengaged_at, awa_disengaged_reason`,
+               awa_disengaged_at, awa_disengaged_reason, awa_disengaged_kind,
+               awa_no_intent_streak, awa_no_intent_last_at`,
     [waPhone],
   );
   return res.rows[0];
@@ -101,13 +108,15 @@ export async function setAwaDisengaged(
   clientId: string,
   reason: string,
   hours = 24,
+  kind: AwaDisengagedKind = "nonserious",
 ): Promise<void> {
   await pool.query(
     `update clients
         set awa_disengaged_at = now(), awa_disengaged_reason = $2,
-            awa_disengaged_until = now() + ($3 * interval '1 hour'), updated_at = now()
+            awa_disengaged_until = now() + ($3 * interval '1 hour'),
+            awa_disengaged_kind = $4, updated_at = now()
       where id = $1`,
-    [clientId, reason.slice(0, 500), hours],
+    [clientId, reason.slice(0, 500), hours, kind],
   );
 }
 
@@ -116,10 +125,76 @@ export async function clearAwaDisengaged(clientId: string): Promise<void> {
   await pool.query(
     `update clients
         set awa_disengaged_at = null, awa_disengaged_reason = null,
-            awa_disengaged_until = null, updated_at = now()
+            awa_disengaged_until = null, awa_disengaged_kind = null,
+            awa_no_intent_streak = 0, awa_no_intent_last_at = null,
+            updated_at = now()
       where id = $1`,
     [clientId],
   );
+}
+
+export interface NoIntentTurnResult {
+  streak: number;
+  disengaged: boolean;
+}
+
+/**
+ * Increment the rapid no-intent streak and atomically arm the 24 h silence on
+ * the threshold turn. This lives in Postgres so deploys and concurrent webhook
+ * deliveries cannot reset or double-decide the guard.
+ */
+export async function recordNoIntentTurn(clientId: string): Promise<NoIntentTurnResult> {
+  const res = await pool.query(
+    `with current as (
+       select id,
+              case
+                when awa_no_intent_last_at is null
+                  or awa_no_intent_last_at <= now() - ($2 * interval '1 hour')
+                then 1
+                else awa_no_intent_streak + 1
+              end as next_streak
+         from clients
+        where id = $1
+        for update
+     )
+     update clients c
+        set awa_no_intent_streak = current.next_streak,
+            awa_no_intent_last_at = now(),
+            awa_disengaged_at = case when current.next_streak >= $3 then now() else c.awa_disengaged_at end,
+            awa_disengaged_until = case when current.next_streak >= $3 then now() + ($2 * interval '1 hour') else c.awa_disengaged_until end,
+            awa_disengaged_reason = case when current.next_streak >= $3 then 'Conversation répétitive sans intention Revive' else c.awa_disengaged_reason end,
+            awa_disengaged_kind = case when current.next_streak >= $3 then 'no_intent' else c.awa_disengaged_kind end,
+            updated_at = now()
+       from current
+      where c.id = current.id
+      returning current.next_streak::int as streak,
+                (current.next_streak >= $3) as disengaged`,
+    [clientId, NO_INTENT_WINDOW_HOURS, NO_INTENT_THRESHOLD],
+  );
+  return res.rows[0] ?? { streak: 0, disengaged: false };
+}
+
+export async function resetNoIntentStreak(clientId: string): Promise<void> {
+  await pool.query(
+    `update clients
+        set awa_no_intent_streak = 0, awa_no_intent_last_at = null, updated_at = now()
+      where id = $1 and (awa_no_intent_streak <> 0 or awa_no_intent_last_at is not null)`,
+    [clientId],
+  );
+}
+
+/** Re-open only an automatic no-intent pause; manual/model pauses never match. */
+export async function clearNoIntentDisengagement(clientId: string): Promise<boolean> {
+  const res = await pool.query(
+    `update clients
+        set awa_disengaged_at = null, awa_disengaged_reason = null,
+            awa_disengaged_until = null, awa_disengaged_kind = null,
+            awa_no_intent_streak = 0, awa_no_intent_last_at = null,
+            updated_at = now()
+      where id = $1 and awa_disengaged_kind = 'no_intent'`,
+    [clientId],
+  );
+  return (res.rowCount ?? 0) > 0;
 }
 
 export async function recordCampaignLead(args: { clientId: string; campaignKey: string; triggerMessageId: string; matchedBy: "meta_referral" | "message"; sourceId?: string; sourceType?: string; sourceUrl?: string; headline?: string; ctwaClid?: string }): Promise<void> {
@@ -205,7 +280,8 @@ export async function findClientByPhone(candidates: string[]): Promise<Client | 
     `select id, wa_phone, name, language, email_prompted_at, claimed_email,
             capability_menu_at, fr_register, is_test, human_takeover_until,
             human_takeover_by, human_takeover_at, awa_disengaged_until,
-            awa_disengaged_at, awa_disengaged_reason
+            awa_disengaged_at, awa_disengaged_reason, awa_disengaged_kind,
+            awa_no_intent_streak, awa_no_intent_last_at
        from clients where regexp_replace(wa_phone, '\\D', '', 'g') = any($1) limit 1`,
     [digits],
   );

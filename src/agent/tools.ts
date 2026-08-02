@@ -916,7 +916,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     name: "disengage_conversation",
     description:
       "Stop engaging a contact who is clearly NOT here for the studio — sustained sexual/suggestive/romantic " +
-      "advances toward Awa, or someone plainly toying with the bot with no booking/studio intent. Do NOT use " +
+      "advances toward Awa, someone plainly toying with the bot, or a sustained rapid loop of greetings, " +
+      "goodbyes or unclear fragments after Awa already redirected them, with no booking/studio intent. Do NOT use " +
       "this for a single awkward or ambiguous line, ordinary warmth or a compliment, a complaint, or a real " +
       "client who flirts but also has a genuine studio need (serve the need, ignore the flirtation). After you " +
       "call it, send exactly ONE short, polite, firm closing line re-anchoring to the studio, then nothing else: " +
@@ -4977,7 +4978,7 @@ export async function executeTool(
 
     case "disengage_conversation": {
       const reason = String(input.reason ?? "Contact non sérieux").slice(0, 500);
-      await repo.setAwaDisengaged(client.id, reason);
+      await repo.setAwaDisengaged(client.id, reason, 24, "nonserious");
       return JSON.stringify({
         disengaged: true,
         note:

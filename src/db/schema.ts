@@ -149,6 +149,16 @@ alter table clients add column if not exists human_takeover_at timestamptz;
 alter table clients add column if not exists awa_disengaged_until timestamptz;
 alter table clients add column if not exists awa_disengaged_at timestamptz;
 alter table clients add column if not exists awa_disengaged_reason text;
+alter table clients add column if not exists awa_disengaged_kind text;
+alter table clients drop constraint if exists clients_awa_disengaged_kind_check;
+alter table clients add constraint clients_awa_disengaged_kind_check
+  check (awa_disengaged_kind is null or awa_disengaged_kind in ('manual','nonserious','no_intent'));
+
+-- Deterministic guard against rapid conversations made only of greetings,
+-- unclear fragments or unreadable voice notes. The count expires after 24 h;
+-- a real Revive request resets it immediately.
+alter table clients add column if not exists awa_no_intent_streak integer not null default 0;
+alter table clients add column if not exists awa_no_intent_last_at timestamptz;
 
 -- One durable attribution/offer record per client and campaign. The offer is
 -- redeemable until the first paid campaign booking; expired payment links do

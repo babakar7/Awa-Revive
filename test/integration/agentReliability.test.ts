@@ -7,6 +7,8 @@ import {
   latestPresentedChoices,
   markAgentToolFailureTripped,
   pauseAwaForTechnicalHandoff,
+  clearNoIntentDisengagement,
+  recordNoIntentTurn,
   recordAgentToolFailure,
   savePresentedChoices,
 } from "../../src/domain/repo.js";
@@ -77,6 +79,28 @@ describe("durable agent reliability state", () => {
         ).rows[0].count,
       ),
     ).toBe(0);
+  });
+
+  it("durably trips no-intent on turn three and only auto-clears that pause kind", async () => {
+    const client = await seedClient();
+    expect(await recordNoIntentTurn(client.id)).toEqual({ streak: 1, disengaged: false });
+    expect(await recordNoIntentTurn(client.id)).toEqual({ streak: 2, disengaged: false });
+    expect(await recordNoIntentTurn(client.id)).toEqual({ streak: 3, disengaged: true });
+
+    let row = (await pool.query(`select * from clients where id=$1`, [client.id])).rows[0];
+    expect(row.awa_disengaged_kind).toBe("no_intent");
+    expect(new Date(row.awa_disengaged_until).getTime()).toBeGreaterThan(Date.now());
+    expect(await clearNoIntentDisengagement(client.id)).toBe(true);
+
+    await pool.query(
+      `update clients
+          set awa_disengaged_kind='manual', awa_disengaged_until=now()+interval '1 hour'
+        where id=$1`,
+      [client.id],
+    );
+    expect(await clearNoIntentDisengagement(client.id)).toBe(false);
+    row = (await pool.query(`select * from clients where id=$1`, [client.id])).rows[0];
+    expect(row.awa_disengaged_kind).toBe("manual");
   });
 
   it("resolves only against the latest delivered option list", async () => {

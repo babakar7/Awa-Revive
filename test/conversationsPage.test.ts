@@ -15,6 +15,7 @@ const row: AdminClientRow = {
   human_takeover_until: null,
   human_takeover_by: null,
   awa_disengaged_until: null,
+  awa_disengaged_kind: null,
   matched_message: "Remboursement confirmé",
   matched_at: new Date("2026-07-31T10:00:00Z"),
   matched_source: "team",

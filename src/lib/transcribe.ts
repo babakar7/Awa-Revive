@@ -1,4 +1,8 @@
 import { config } from "../config.js";
+import {
+  isTranscriptionPromptEcho,
+  TRANSCRIPTION_CONTEXT_PROMPT,
+} from "../domain/noIntentGuard.js";
 
 /**
  * Voice-note transcription: download the audio from Meta's media API, then
@@ -56,12 +60,7 @@ export async function transcribeAudio(data: Buffer, mimeType: string): Promise<s
   // Bias the model toward the real acoustic + lexical context (prod 30/07: a
   // French/Wolof note came back as gibberish). A natural-language hint beats a
   // hard `language=fr` here — clients code-switch FR/Wolof/English mid-note.
-  form.append(
-    "prompt",
-    "Message vocal WhatsApp d'un client d'un studio de sport et bien-être à Dakar, " +
-      "principalement en français, parfois en wolof ou en anglais. Vocabulaire courant : " +
-      "Pilates Reformer, Aquabike, Bébé Nageur, réservation, créneau, abonnement, Wave, Orange Money.",
-  );
+  form.append("prompt", TRANSCRIPTION_CONTEXT_PROMPT);
 
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -73,6 +72,9 @@ export async function transcribeAudio(data: Buffer, mimeType: string): Promise<s
   const out = (await res.json()) as { text?: string };
   const text = (out.text ?? "").trim();
   if (!text) throw new Error("transcription returned empty text");
+  if (isTranscriptionPromptEcho(text)) {
+    throw new Error("transcription returned context prompt echo");
+  }
   return text;
 }
 

@@ -170,6 +170,7 @@ export async function startAwaDisengage(
       `update clients
           set awa_disengaged_at = now(),
               awa_disengaged_reason = 'Mis en pause manuellement (contact non sérieux)',
+              awa_disengaged_kind = 'manual',
               awa_disengaged_until = now() + ($2 * interval '1 hour'), updated_at = now()
         where id = $1`,
       [clientId, hours],
@@ -201,6 +202,8 @@ export async function resumeAwa(
           set human_takeover_at = null, human_takeover_by = null,
               human_takeover_until = null, awa_disengaged_at = null,
               awa_disengaged_reason = null, awa_disengaged_until = null,
+              awa_disengaged_kind = null, awa_no_intent_streak = 0,
+              awa_no_intent_last_at = null,
               updated_at = now()
         where id = $1`,
       [clientId],

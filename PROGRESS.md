@@ -1,7 +1,8 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **31 juillet 2026** — relais technique fiable,
+> Dernière mise à jour : **2 août 2026** — coupe-circuit déterministe des
+> conversations sans intention, relais technique fiable,
 > renouvellement des paiements de plan expirés et première séance des Clés.
 > Avant : politique d’annulation non remboursable, report et transfert de séance ; fiabilisation Awa
 > après l'incident Riche Aubambi : service canonique, coupe-circuit,
@@ -14,6 +15,27 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Coupe-circuit des conversations sans intention (2 août 2026)
+
+- Incident Atueydjk : Awa a répondu vingt fois à vingt notes vocales très
+  courtes ou inexploitables en quatre minutes, sans intention Revive. Quatre
+  transcriptions ont même repris mot pour mot le prompt de contexte Whisper.
+- Correctif serveur déterministe : salutations/adieux répétés, fragments courts
+  hors sujet, échecs de note vocale et échos du prompt de transcription
+  alimentent un compteur atomique. Au troisième tour sans intention, Awa envoie
+  une unique phrase de clôture dans la langue du client puis reste silencieuse
+  pendant 24 heures, avant tout appel au modèle.
+- Reprise sûre : seule une demande Revive explicite (cours, réservation, plan,
+  prix, horaire, paiement, livraison, etc.) réactive Awa avant les 24 heures.
+  Les pauses manuelles ou déclenchées pour comportement non sérieux gardent leur
+  sémantique et ne sont jamais levées par ce mécanisme.
+- Transcription : une réponse identique au prompt Whisper est désormais rejetée
+  comme échec de transcription au lieu d'être traitée comme un message client.
+- Visibilité admin : le motif `no_intent` est stocké et affiché comme « Boucle
+  sans intention ». Couverture : reproduction des trois premiers tours
+  Atueydjk, langues FR/EN/WO, prompt echo, compteur PostgreSQL concurrent-safe,
+  clôture au troisième tour et silence après clôture.
 
 ## Audit des 20 dernières conversations — correctifs (1er août 2026)
 
