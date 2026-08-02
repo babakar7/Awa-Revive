@@ -1717,7 +1717,12 @@ export async function executeTool(
                 `Ce client a un abonnement actif « ${covering.plan} » qui couvre ce cours ` +
                 `(${covering.remaining} séance(s) restante(s)). Réserve avec book_with_membership ` +
                 `(participants=${participants}) — ne crée PAS de lien de paiement et ne facture pas ce cours en plus. ` +
-                `Si book_with_membership répond not_enough_sessions, tu pourras alors proposer le paiement de l'appoint.`,
+                `Si book_with_membership répond not_enough_sessions, tu pourras alors proposer le paiement de l'appoint. ` +
+                `CAS ACCOMPAGNANT (« je paie pour mon ami(e) », une place en plus pour quelqu'un d'autre) : réserve ` +
+                `d'abord LA place du client avec book_with_membership, puis appelle add_spots_to_booking avec le ` +
+                `booking_id retourné et extra_participants pour la/les place(s) de l'accompagnant — ça crée le lien de ` +
+                `paiement UNIQUEMENT pour ces places-là, sans toucher à l'abonnement. Ne repasse jamais par ` +
+                `create_payment_link pour l'accompagnant : il sera refusé ici même (incident Khadidjatou 02/08).`,
             });
           }
         }
@@ -3977,6 +3982,9 @@ export async function executeTool(
             "Confirm to the client with class, date/time, how many spots and that it used their plan (mention remaining_sessions), " +
             "and remind them cancellation is free up to 16h before the class (after that the session is due) — no payment needed. " +
             (tip ? `Also include this pre-class tip VERBATIM: ${tip} ` : "") +
+            "If the client ALSO wants to pay for a companion's spot on this same class (\"je paie pour mon ami(e)\"), " +
+            "call add_spots_to_booking with THIS booking_id and extra_participants — it charges money for only those " +
+            "spots without touching the plan; never create_payment_link (it would be refused covered_by_membership). " +
             "Do NOT mention or propose the bar menu in your confirmation: the system automatically shows the " +
             "menu list right after your message. When the client then picks an item, use create_cafe_payment_link " +
             "with this booking_id.",

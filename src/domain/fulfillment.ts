@@ -1540,6 +1540,15 @@ export function confirmationMessage(
   orderNote?: string | null,
 ): string {
   const hasCafe = !!extras && extras.length > 0;
+  // Extension bookings (add_spots_to_booking) carry the marker order_note
+  // written in tools.ts ("Ajout de N place(s) à la résa <id>"). Their
+  // confirmation must say it covers the ADDED spot(s) only: the generic "ta
+  // place est confirmée" made both the client and the model read it as the
+  // client's own (already booked) spot — real confusion Khadidjatou 02/08,
+  // where Awa then denied the companion's paid booking. Cafe orders reuse
+  // orderNote as free text, so only a no-extras booking can be an extension.
+  const extensionMatch = !hasCafe && orderNote ? orderNote.match(/^Ajout de (\d+) place/) : null;
+  const extensionSpots = extensionMatch ? Math.max(1, Number(extensionMatch[1])) : null;
   // Keyword tip from classTips (null when unknown — never invent).
   // Lazy import avoided: classTips is pure and safe at module load.
   const tip = classTip(serviceName, lang);
@@ -1547,8 +1556,13 @@ export function confirmationMessage(
   switch (lang) {
     case "en":
       return (
-        `✅ Payment received — your spot is confirmed!\n\n` +
+        (extensionSpots
+          ? `✅ Payment received — ${extensionSpots > 1 ? `the ${extensionSpots} extra spots are` : "the extra spot is"} confirmed!\n\n`
+          : `✅ Payment received — your spot is confirmed!\n\n`) +
         `${serviceName}\n📅 ${formatSlot(slotStart, "en-GB")}\n📍 ${config.STUDIO_ADDRESS}\n\n` +
+        (extensionSpots
+          ? `👥 This covers only the added spot(s) — your own booking on this slot is unchanged; you'll be there together.\n\n`
+          : "") +
         (hasCafe
           ? `☕ Your bar order (already paid):\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "ready after your class"}\n\n`
           : "") +
@@ -1558,8 +1572,13 @@ export function confirmationMessage(
       );
     case "wo":
       return (
-        `✅ Fey bi jot na — sa palass dëgg na!\n\n` +
+        (extensionSpots
+          ? `✅ Fey bi jot na — palass bu yokk bi dëgg na!\n\n`
+          : `✅ Fey bi jot na — sa palass dëgg na!\n\n`) +
         `${serviceName}\n📅 ${formatSlot(slotStart, "fr-FR")}\n📍 ${config.STUDIO_ADDRESS}\n\n` +
+        (extensionSpots
+          ? `👥 Palass bu ci yokk rekk la — sa réservation bu jëkk du soppiku.\n\n`
+          : "") +
         (hasCafe
           ? `☕ Sa commande bar (fey nga ko ba noppi):\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "dina pare ginnaaw sa cours"}\n\n`
           : "") +
@@ -1569,8 +1588,13 @@ export function confirmationMessage(
       );
     default:
       return (
-        `✅ Paiement reçu — ta place est confirmée !\n\n` +
+        (extensionSpots
+          ? `✅ Paiement reçu — ${extensionSpots > 1 ? `les ${extensionSpots} places supplémentaires sont confirmées` : "la place supplémentaire est confirmée"} !\n\n`
+          : `✅ Paiement reçu — ta place est confirmée !\n\n`) +
         `${serviceName}\n📅 ${formatSlot(slotStart, "fr-FR")}\n📍 ${config.STUDIO_ADDRESS}\n\n` +
+        (extensionSpots
+          ? `👥 Cette confirmation couvre uniquement la/les place(s) ajoutée(s) — ta propre réservation sur ce créneau reste inchangée, vous y serez ensemble.\n\n`
+          : "") +
         (hasCafe
           ? `☕ Ta commande bar (déjà payée) :\n${formatExtrasMultiline(extras!)}\n→ ${orderNote ?? "prête après ton cours"}\n\n`
           : "") +

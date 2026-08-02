@@ -16,6 +16,44 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Place d'accompagnant impossible pour une cliente à Clé + double fabulation (Khadidjatou, 2 août 2026)
+
+**Incident** : cliente avec Clé L'Invitée demande « ma place sur ma clé + je paie
+pour mon amie, lien Wave svp ». Sa place : OK (book_with_membership, 1 séance
+déduite). La place de l'amie : le modèle tente `create_payment_link` → refusé par
+le garde `covered_by_membership` (conçu contre la double facturation d'un abonné,
+il ignore le cas « la place en plus est pour quelqu'un d'autre »). L'outil correct
+existait : **`add_spots_to_booking`** (lien argent pour les places AJOUTÉES, sans
+toucher au plan) — mais le message d'erreur ne le mentionnait pas. Le modèle a
+alors **fabulé** (« le système a rattaché sa place à votre abonnement » — faux :
+rien n'a été rattaché, le lien a juste été refusé) et handoff. Récup ops : lien
+envoyé via le vrai flux add_spots (12 000 FCFA, payé, 2 places BOOKED dim 9/08
+11:15). **Deuxième fabulation** ensuite : la confirmation auto de la place ajoutée
+disait « ta place est confirmée » (copie générique) ; quand la cliente a demandé
+« donc c'est pour 2 ? », le modèle a NIÉ le paiement pourtant confirmé dans
+l'historique et ressorti sa fausse histoire, sans appeler get_my_bookings.
+
+**Correctifs** (worktree `companion-spots`) :
+- Message `covered_by_membership` : ajoute le CAS ACCOMPAGNANT explicite
+  (book_with_membership pour le client PUIS add_spots_to_booking avec le
+  booking_id retourné ; jamais create_payment_link pour l'accompagnant).
+- Note de succès `book_with_membership` : même pointeur au moment exact où le
+  modèle en a besoin.
+- Prompt : cas MIXTE « clé + je paie pour un ami » (§membership) + interdiction de
+  fabuler une explication pour un appel outil refusé + règle « une question sur ce
+  qu'une confirmation couvre → get_my_bookings et répondre UNIQUEMENT de son
+  résultat ; ne jamais "corriger" une confirmation système depuis ses propres
+  messages passés » (§get_my_bookings).
+- `confirmationMessage` (fulfillment) : les réservations d'extension (order_note
+  « Ajout de N place(s)… » posé par add_spots) disent désormais « la/les place(s)
+  supplémentaire(s) confirmée(s) — ta propre réservation reste inchangée » au lieu
+  du générique « ta place est confirmée » qui a semé la confusion (client ET
+  modèle). Garde anti-collision avec les notes bar (extension = sans extras).
+- Tests : add-spots sur réservation MEMBERSHIP (scénario exact), garde
+  covered_by_membership → message accompagnant (fixture plans au beforeEach du
+  fichier : le catalogue services est module-caché 10 min, pricingPlanIds figés au
+  premier appel), copies d'extension FR/EN + anti-collision note bar.
+
 ## Boucle « vérifié mais pas de member » → achat de plan impossible (Lisa Coulaud, 2 août 2026)
 
 **Incident** : Lisa vérifie son email par code le 28/07 (`account_created` : fiche

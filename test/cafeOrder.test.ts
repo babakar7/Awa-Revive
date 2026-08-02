@@ -41,6 +41,35 @@ describe("confirmationMessage without a bar order (regression)", () => {
   });
 });
 
+// add_spots extension bookings (order_note "Ajout de N place(s)…") must say the
+// confirmation covers the ADDED spot(s) — the generic "ta place est confirmée"
+// made client AND model read it as the client's own spot (Khadidjatou 02/08).
+describe("confirmationMessage for an add_spots extension booking", () => {
+  it("fr singular: announces the extra spot and that the original booking is unchanged", () => {
+    const msg = confirmationMessage("fr", "Pilates Reformer", SLOT, undefined, "Ajout de 1 place(s) à la résa 2644fc59");
+    expect(msg).toContain("la place supplémentaire est confirmée");
+    expect(msg).toContain("ta propre réservation sur ce créneau reste inchangée");
+    expect(msg).not.toContain("ta place est confirmée");
+  });
+
+  it("fr plural: names the count", () => {
+    const msg = confirmationMessage("fr", "Pilates Reformer", SLOT, undefined, "Ajout de 3 place(s) à la résa 2644fc59");
+    expect(msg).toContain("les 3 places supplémentaires sont confirmées");
+  });
+
+  it("en: extra-spot copy", () => {
+    const msg = confirmationMessage("en", "Pilates Reformer", SLOT, undefined, "Ajout de 1 place(s) à la résa x");
+    expect(msg).toContain("the extra spot is confirmed");
+    expect(msg).toContain("your own booking on this slot is unchanged");
+  });
+
+  it("a cafe order note is never mistaken for an extension", () => {
+    const msg = confirmationMessage("fr", "Pilates", SLOT, EXTRAS, "Ajout de 2 place(s) de sucre svp");
+    expect(msg).toContain("ta place est confirmée");
+    expect(msg).not.toContain("supplémentaire");
+  });
+});
+
 describe("confirmationMessage pre-class tips (#6)", () => {
   it("Reformer gets socks tip; mat Pilates does not; aqua gets swimsuit", () => {
     const reformer = confirmationMessage("fr", "Pilates Reformer", SLOT);
