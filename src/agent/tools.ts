@@ -1241,6 +1241,50 @@ async function provisionPlanMember(
   });
 }
 
+/**
+ * Owner-approved narrow override of the 13/07 "Awa never creates Wix members"
+ * rule (probe-create-member.ts). ONE case: a brand-NEW account whose email the
+ * client herself supplied for verification, but the code never arrived and she
+ * chose to pay now. Manual reception activation then left the client waiting
+ * indefinitely (Maryeme 01/08). Instead we create the fiche + member directly
+ * so the plan auto-activates and the first class books itself. Wix WILL email a
+ * welcome/set-password mail — acceptable here because the client asked for an
+ * account and gave this exact email. Fails safe: any duplicate/mismatch/error
+ * returns null and the caller keeps the manual-after-payment fallback (no throw).
+ */
+async function autoProvisionDeclinedNewAccount(
+  verification: links.LinkRequest | null,
+  client: Client,
+): Promise<{ contactId: string; memberId: string } | null> {
+  const email = verification?.claimed_email?.trim();
+  // New-account path only. An existing fiche (verification carries a
+  // wix_contact_id) is a LINK case that genuinely needs the code — never
+  // auto-create over it.
+  if (!email || verification?.wix_contact_id) return null;
+  const wa = `+${client.wa_phone.replace(/^\+/, "")}`;
+  try {
+    // A fiche already on this number means link/merge, not create — hand it to
+    // the manual path rather than spawning a duplicate.
+    if (await wix.findContactIdByPhone(wa, client.name ?? undefined)) return null;
+    const contactId = await wix.createContact({
+      name: verification?.claimed_name ?? client.name ?? undefined,
+      phone: wa,
+      email,
+    });
+    const member = await wix.createMember(email);
+    // Clean linkage = the member landed on the fiche we just made. A different
+    // contactId means the email already belonged to another fiche (a link case
+    // in disguise): don't guess — fall back to manual so reception reconciles.
+    if (member.contactId && member.contactId !== contactId) return null;
+    const memberId = member.id ?? (await wix.findMemberIdByContactId(contactId));
+    if (!memberId) return null;
+    return { contactId, memberId };
+  } catch (err) {
+    console.error("Auto-provision of declined new account failed — manual fallback:", err);
+    return null;
+  }
+}
+
 function verificationRequiredResult(
   error: "plan_member_verification_required" | "discovery_member_verification_required",
   codeAlreadySent: boolean,
@@ -1250,7 +1294,7 @@ function verificationRequiredResult(
     verification: codeAlreadySent ? "code_active" : "email_required",
     message: codeAlreadySent
       ? "A valid verification code was already emailed. Ask the client to type that 6-digit code here now; do NOT call request_email_verification again and do NOT create a payment link."
-      : "An email verification is required before this plan purchase can be auto-activated. Ask for the client's email, then call request_email_verification and pass the already-known client_name on that FIRST call. Tell them Wix may also send an optional welcome/set-password email; choosing a password is not required. If they refuse or cannot access the inbox, retry create_plan_payment_link with client_declined_verification:true for manual activation after payment.",
+      : "An email verification is required before this plan purchase can be auto-activated. Ask for the client's email, then call request_email_verification and pass the already-known client_name on that FIRST call. Tell them Wix may also send an optional welcome/set-password email; choosing a password is not required. If they refuse or cannot access the inbox, retry create_plan_payment_link with client_declined_verification:true — for a new account we then create it directly with the email they gave (payment stays automatic); for an existing account the team activates it manually after payment. The tool result's ACTIVATION note tells you which; follow it.",
   });
 }
 
@@ -2654,6 +2698,10 @@ export async function executeTool(
       );
       let contactId = memberContext.contactId;
       let memberId = memberContext.memberId;
+      // True only when we just created a brand-new Wix account for a
+      // declined-verification client (Fix D) — drives the "welcome email is
+      // coming" line so we don't say that to an existing member.
+      let accountJustCreated = false;
 
       // Pack Découverte eligibility (server decides): only for first-time
       // Pilates clients. History visible only when contactId is linked — if
@@ -2815,12 +2863,22 @@ export async function executeTool(
       // Provision only after every plan/catalog/eligibility/renewal/payment
       // guard passed, immediately before the local draft. A refusal/inaccessible
       // inbox explicitly opts into the existing manual-after-payment fallback.
-      if (
-        !(
-          memberContext.decision.action === "require_verification" &&
-          input.client_declined_verification === true
-        )
-      ) {
+      const declinedVerification =
+        memberContext.decision.action === "require_verification" &&
+        input.client_declined_verification === true;
+      if (declinedVerification) {
+        // Client couldn't get the code / declined. For a brand-new account with
+        // the email she gave, create it directly so activation is automatic
+        // instead of a manual-limbo fallback (owner-approved, see helper). Any
+        // ambiguity → null → the existing manual path below.
+        const auto = await autoProvisionDeclinedNewAccount(memberContext.verification, client);
+        if (auto) {
+          contactId = auto.contactId;
+          memberId = auto.memberId;
+          accountJustCreated = true;
+        }
+      }
+      if (!declinedVerification) {
         const prepared = await provisionPlanMember(memberContext, client);
         // The decision guard above makes this branch unreachable, but keep the
         // check as a defensive invariant if the decision type evolves.
@@ -2903,8 +2961,10 @@ export async function executeTool(
       // no-inbox/refusal fallback. Every verified purchase stores a member id.
       const activationManual = !memberId;
       const activationNote = activationManual
-        ? " ACTIVATION: the client explicitly declined/could not access email verification, so the team will activate the plan manually AFTER payment. Tell them clearly that activation is not instant."
-        : " ACTIVATION: automatic after verified payment. Wix may send an optional welcome/set-password email; choosing a password is not required.";
+        ? " ACTIVATION: no Wix member could be created, so the team activates the plan MANUALLY after payment — tell the client the ACTIVATION itself isn't instant. CRITICAL: payment CONFIRMATION is still automatic and separate. If the client says they paid, reassure them the confirmation lands within a minute or two and, if it doesn't, call handoff_to_human. NEVER tell the client to wait for, watch for, or report back an 'activation confirmation' — that leaves them hanging (real drift: Maryeme 01/08)."
+        : accountJustCreated
+          ? " ACTIVATION: automatic after verified payment. We just created a Revive account for the client with the email they gave, so Wix will email them a welcome/set-password link — mention it up front so it isn't a surprise; choosing a password is not required to book."
+          : " ACTIVATION: automatic after verified payment. Wix may send an optional welcome/set-password email; choosing a password is not required.";
       return JSON.stringify({
         payment_link: session.paymentLink,
         payment_method: session.method,

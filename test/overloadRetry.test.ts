@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isOverloadedError, withOverloadRetry } from "../src/agent/index.js";
+import Anthropic from "@anthropic-ai/sdk";
+import { isConnectionError, isOverloadedError, withOverloadRetry } from "../src/agent/index.js";
 
 // 16/07: a 529 overload spike outlived the SDK's sub-second retries and a
 // brand-new client got the technical fallback on "Bonsoir". The app-level
@@ -20,7 +21,33 @@ describe("isOverloadedError", () => {
   });
 });
 
+// 01/08: an Anthropic connection blip outlived the SDK's sub-second retries and
+// Tout got "un problème technique" on her very first message. A connection error
+// carries no HTTP status, so the app-level retry sleeps through it too — while
+// real 4xx/5xx API responses still fail fast.
+describe("isConnectionError", () => {
+  it("matches an APIConnectionError instance and its timeout subclass", () => {
+    expect(isConnectionError(new Anthropic.APIConnectionError({ message: "Connection error." }))).toBe(true);
+    expect(isConnectionError(new Anthropic.APIConnectionTimeoutError())).toBe(true);
+  });
+
+  it("matches the name/message signature even without instanceof", () => {
+    expect(isConnectionError({ name: "APIConnectionError" })).toBe(true);
+    expect(isConnectionError({ name: "APIConnectionTimeoutError" })).toBe(true);
+    expect(isConnectionError(new Error("Connection error."))).toBe(true);
+  });
+
+  it("does not match real HTTP responses or unrelated errors", () => {
+    expect(isConnectionError({ status: 500 })).toBe(false);
+    expect(isConnectionError({ status: 429 })).toBe(false);
+    expect(isConnectionError({ status: 529 })).toBe(false);
+    expect(isConnectionError(new Error("bad request (400)"))).toBe(false);
+    expect(isConnectionError(undefined)).toBe(false);
+  });
+});
+
 const overloaded = () => Object.assign(new Error("Overloaded"), { status: 529 });
+const connectionError = () => new Anthropic.APIConnectionError({ message: "Connection error." });
 
 describe("withOverloadRetry", () => {
   it("returns the first success without retrying", async () => {
@@ -55,15 +82,30 @@ describe("withOverloadRetry", () => {
     expect(calls).toBe(2); // initial + 1 retry
   });
 
-  it("rethrows non-overload errors immediately (no retry)", async () => {
+  it("sleeps through a connection error then succeeds", async () => {
+    let calls = 0;
+    const out = await withOverloadRetry(
+      async () => {
+        calls++;
+        if (calls < 2) throw connectionError();
+        return "ok";
+      },
+      undefined,
+      [1, 1],
+    );
+    expect(out).toBe("ok");
+    expect(calls).toBe(2);
+  });
+
+  it("rethrows deterministic errors (no connection/overload signature) immediately", async () => {
     let calls = 0;
     await expect(
       withOverloadRetry(
-        async () => (++calls, Promise.reject(new Error("Request timed out."))),
+        async () => (++calls, Promise.reject(Object.assign(new Error("bad request"), { status: 400 }))),
         undefined,
         [1, 1],
       ),
-    ).rejects.toThrow("timed out");
+    ).rejects.toThrow("bad request");
     expect(calls).toBe(1);
   });
 });

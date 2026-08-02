@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expiryNudgeMessage } from "../src/domain/expiryNudge.js";
+import { expiryNudgeMessage, planExpiryNudgeMessage } from "../src/domain/expiryNudge.js";
 
 const slot = new Date("2026-07-17T10:00:00Z"); // vendredi 17 juillet, 10:00 Dakar
 
@@ -36,5 +36,29 @@ describe("expiryNudgeMessage", () => {
   it("unknown/null language falls back to French", () => {
     expect(expiryNudgeMessage(null, "Yoga", slot)).toContain("a expiré");
     expect(expiryNudgeMessage("de", "Yoga", slot)).toContain("a expiré");
+  });
+});
+
+describe("planExpiryNudgeMessage", () => {
+  it("fr: names the plan, is honest about the missing confirmation, and invites an 'I paid' reply", () => {
+    const msg = planExpiryNudgeMessage("fr", "L'Invitée — Clé 3 séances");
+    expect(msg).toContain("L'Invitée — Clé 3 séances");
+    expect(msg).toContain("pas reçu de confirmation de paiement");
+    expect(msg).toContain("déjà payé");
+    expect(msg).toContain("l'équipe vérifie");
+    expect(msg).toContain("frais");
+  });
+
+  it("en: same content in English", () => {
+    const msg = planExpiryNudgeMessage("en", "L'Invitée");
+    expect(msg).toContain("L'Invitée");
+    expect(msg).toContain("haven't received a payment confirmation");
+    expect(msg).toContain("already paid");
+    expect(msg).toContain("fresh link");
+  });
+
+  it("unknown/null language falls back to French", () => {
+    expect(planExpiryNudgeMessage(null, "Yoga")).toContain("a expiré");
+    expect(planExpiryNudgeMessage("de", "Yoga")).toContain("a expiré");
   });
 });

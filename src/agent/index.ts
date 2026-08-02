@@ -70,7 +70,34 @@ export function isOverloadedError(err: unknown): boolean {
   return e?.status === 529 || e?.error?.error?.type === "overloaded_error";
 }
 
-/** Run an Anthropic call, sleeping through overload spikes before retrying. */
+/**
+ * Transient network failure reaching Anthropic (APIConnectionError and its
+ * APIConnectionTimeoutError subclass). The SDK's own maxRetries:2 fire first
+ * with sub-second backoff; when a blip outlives those the loop used to greet
+ * the client with the technical fallback on the FIRST message (real case: Tout
+ * 01/08, "je veux réserver la Clé Invité" → "un problème technique"). A network
+ * error carries no HTTP `status` — real API responses (4xx/5xx) are handled by
+ * the overload check or fail fast, never here. The instanceof is primary; the
+ * name/message fallback survives a duplicated SDK copy across module bounds.
+ */
+export function isConnectionError(err: unknown): boolean {
+  if (err instanceof Anthropic.APIConnectionError) return true;
+  const e = err as { status?: number; name?: string; message?: string };
+  if (e?.status != null) return false;
+  const name = String(e?.name ?? "");
+  return (
+    name === "APIConnectionError" ||
+    name === "APIConnectionTimeoutError" ||
+    /connection error/i.test(String(e?.message ?? ""))
+  );
+}
+
+/**
+ * Run an Anthropic call, sleeping through a transient spike before retrying:
+ * a 529 overload OR a connection error. Both return without a usable reply, so
+ * a short wait-and-retry beats failing the turn. Deterministic 4xx/5xx and
+ * empty-reply errors still propagate immediately.
+ */
 export async function withOverloadRetry<T>(
   fn: () => Promise<T>,
   onRetry?: () => void,
@@ -81,9 +108,11 @@ export async function withOverloadRetry<T>(
     try {
       return await fn();
     } catch (err) {
-      if (attempt >= delaysMs.length || !isOverloadedError(err)) throw err;
+      const retriable = isOverloadedError(err) || isConnectionError(err);
+      if (attempt >= delaysMs.length || !retriable) throw err;
       const delay = delaysMs[attempt++];
-      console.warn(`Anthropic overloaded — waiting ${delay / 1000}s then retrying (${attempt}/${delaysMs.length})`);
+      const kind = isOverloadedError(err) ? "overloaded" : "connection error";
+      console.warn(`Anthropic ${kind} — waiting ${delay / 1000}s then retrying (${attempt}/${delaysMs.length})`);
       await new Promise((r) => setTimeout(r, delay));
       onRetry?.();
     }

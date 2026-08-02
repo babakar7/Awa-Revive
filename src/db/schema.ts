@@ -466,6 +466,11 @@ alter table pending_plan_orders add column if not exists retry_of_order_id uuid
 alter table pending_plan_orders add column if not exists fulfillment_failure_count integer
   not null default 0;
 alter table pending_plan_orders add column if not exists technical_failure_at timestamptz;
+-- One-shot "your link expired, no payment received" follow-up for plan orders,
+-- mirroring pending_bookings.expiry_nudged_at. Also the flag behind the OM/Max
+-- It reception alert on expiry (a lost Sonatel callback is otherwise invisible:
+-- real case Maryeme 01/08 — paid, callback never arrived, order silently EXPIRED).
+alter table pending_plan_orders add column if not exists expiry_nudged_at timestamptz;
 
 alter table pending_cafe_orders
   add column if not exists fulfilling_at timestamptz;

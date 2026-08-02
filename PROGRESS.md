@@ -16,6 +16,54 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Incidents Tout & Maryeme → 4 correctifs paiement/fiabilité (2 août 2026)
+
+Deux conversations ratées le 1er août, diagnostiquées sur la DB prod + code.
+
+- **Tout** (`c2c58ab4`) : premier message « je veux réserver la Clé Invité » →
+  réponse immédiate « un problème technique ». Cause : une `APIConnectionError`
+  transitoire vers l'API Anthropic n'était PAS retentée (`withOverloadRetry` ne
+  couvrait que les 529). Le loop a basculé en relais technique + takeover 12h dès
+  le 1er message. **Récupéré** : takeover levé, message de relance envoyé.
+- **Maryeme** (`b4a634b1`, order `3e44be77`) : funnel L'Invitée parfait jusqu'au
+  lien Max It (30 000 FCFA, séance mer 5 août 17:15). Elle a payé (confirmé par
+  Babakar, transaction `MP260801.2046.A59064`) mais **le callback Sonatel n'est
+  jamais arrivé** → l'ordre est passé EXPIRED sans notif à personne. En plus, la
+  vérif email iCloud n'est jamais arrivée et Awa a improvisé « répondez quand
+  vous recevez la confirmation d'activation », laissant la cliente en attente
+  infinie. **Récupéré** : callback rejoué (re-vérifié Sonatel → PAID), compte Wix
+  créé avec l'email fourni (fiche unique, pas de doublon), Clé + bonus activés,
+  séance CONFIRMED dans Wix, message de confirmation envoyé.
+
+Correctifs (worktree `convo-failure-fixes`) :
+- **A — retry des erreurs réseau Anthropic** : `withOverloadRetry` retente
+  désormais aussi les `APIConnectionError` (via `isConnectionError`, instanceof +
+  fallback nom/message ; les 4xx/5xx HTTP restent fail-fast). Décision Babakar :
+  on GARDE le takeover 12h + silence après échec définitif (Awa promet que la
+  réception recontacte — un auto-resume serait incohérent) ; le retry réduit
+  juste l'entrée dans cet état.
+- **B — nudge sur ordre de plan expiré + alerte réception OM/Max It** : nouveau
+  `expiry_nudged_at` sur `pending_plan_orders`, `expiredPlanOrdersToNudge`/
+  `claimPlanOrderExpiryNudge`, `nudgeExpiredPlanOrders` dans le sweep 60s. Le
+  client reçoit « lien expiré, si tu as payé dis-le-moi » ; pour OM/Max It la
+  réception est aussi alertée (un callback perdu est invisible autrement — c'est
+  le trou exact du cas Maryeme).
+- **C — anti-dérive « j'ai payé » / activation manuelle** : la note ACTIVATION et
+  le prompt séparent explicitement CONFIRMATION de paiement (auto ~2 min → sinon
+  `handoff_to_human`) et ACTIVATION (manuelle) ; interdiction de demander au
+  client d'attendre/rapporter une « confirmation d'activation ».
+- **D — création de compte directe quand le code n'arrive pas** (demande Babakar,
+  override ciblé du NO-GO du 13/07) : si un client d'un compte NEUF a donné son
+  email pour la vérif mais décline (code non reçu), on crée la fiche + le membre
+  Wix directement (`autoProvisionDeclinedNewAccount`) → activation automatique au
+  lieu du limbo manuel. **Effet de bord assumé** : Wix envoie un mail de
+  bienvenue/mot-de-passe (Awa l'annonce). Fail-safe : tout doublon/ambiguïté →
+  fallback manuel. Compte existant → toujours vérif par code obligatoire.
+
+Runbook « callback OM perdu » : demander la transaction `MP…`, la rejouer via
+`POST /webhooks/orange-money` (voir OM-LINKS-HOW-TO.md) ; si compte neuf, créer
+la fiche+membre avant de rejouer pour une activation auto complète.
+
 ## Coupe-circuit des conversations sans intention (2 août 2026)
 
 - Incident Atueydjk : Awa a répondu vingt fois à vingt notes vocales très

@@ -1,7 +1,7 @@
 import { assertConfig, config } from "./config.js";
 import { migrate, closeDb } from "./db/index.js";
 import { expireStaleBookings, expireStalePlanOrders, expireStaleCafeOrders } from "./domain/repo.js";
-import { nudgeExpiredLinks } from "./domain/expiryNudge.js";
+import { nudgeExpiredLinks, nudgeExpiredPlanOrders } from "./domain/expiryNudge.js";
 import { escalateStaleLinkRequests } from "./domain/linkRequests.js";
 import { runReviewSweep, maybeSendDailyDigest } from "./domain/conversationReview.js";
 import { maybeSendDailyStory } from "./domain/dailyStory.js";
@@ -107,6 +107,9 @@ async function main() {
       await closeInactiveBookingJourneys();
       // One-shot "want a fresh link?" follow-up for links that just expired.
       await nudgeExpiredLinks(app.log);
+      // Same for expired plan/Key orders, plus an OM/Max It reception alert so a
+      // lost Sonatel callback (invisible otherwise) can be recovered manually.
+      await nudgeExpiredPlanOrders(app.log);
       // Recover paid-but-unfulfilled work (crash between PAID and Wix / notify).
       const earlyKeys = await activateCompletedInviteeRenewals(app.log);
       if (earlyKeys > 0) {

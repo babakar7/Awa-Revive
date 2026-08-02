@@ -961,6 +961,54 @@ export async function activeAwaitingPayment(clientId: string): Promise<PendingBo
   return res.rows[0] ?? null;
 }
 
+/**
+ * Plan-order twin of expiredLinksToNudge: a plan/Key payment link that just
+ * expired UNPAID and the client went silent. Same one-shot posture
+ * (expiry_nudged_at), same "client re-engaged → Awa handles it, don't nudge"
+ * guard. Kept narrow to the recent-TTL window so we never nudge an ancient row,
+ * and skips orders already superseded by a refresh (retry_of_order_id) or a
+ * newer draft/awaiting order. Returns the join fields the nudge + OM alert need.
+ */
+export async function expiredPlanOrdersToNudge(
+  windowMinutes = 30,
+  limit = 20,
+): Promise<(PlanOrder & { wa_phone: string; language: string | null })[]> {
+  const res = await pool.query(
+    `select p.*, c.wa_phone, c.language
+       from pending_plan_orders p
+       join clients c on c.id = p.client_id
+      where p.status = 'EXPIRED'
+        and p.paid_at is null
+        and p.expiry_nudged_at is null
+        and p.payment_link is not null
+        and p.link_expires_at < now()
+        and p.link_expires_at > now() - make_interval(mins => $1)
+        and not exists (select 1 from pending_plan_orders r where r.retry_of_order_id = p.id)
+        and not exists (select 1 from pending_plan_orders n
+                         where n.client_id = p.client_id and n.created_at > p.created_at)
+        and not exists (select 1 from conversations m
+                         where m.client_id = p.client_id and m.role = 'user'
+                           and m.created_at > p.link_expires_at)
+      order by p.link_expires_at asc
+      limit $2`,
+    [windowMinutes, limit],
+  );
+  return res.rows;
+}
+
+/**
+ * Atomically claim the right to nudge one expired plan order (one-shot,
+ * claim-before-send like claimExpiryNudge). Returns false if already claimed.
+ */
+export async function claimPlanOrderExpiryNudge(orderId: string): Promise<boolean> {
+  const res = await pool.query(
+    `update pending_plan_orders set expiry_nudged_at = now(), updated_at = now()
+      where id = $1 and expiry_nudged_at is null`,
+    [orderId],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
 /** Most recent verified class-payment rail. Membership deductions are not a mobile-money preference. */
 export async function lastSuccessfulBookingPaymentMethod(clientId: string): Promise<string | null> {
   const res = await pool.query(
