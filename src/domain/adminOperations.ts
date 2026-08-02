@@ -124,6 +124,72 @@ export const resolveReview = (
   note: string | null,
 ) => resolveFollowUp("conversation_reviews", id, identity, outcome, note);
 
+/**
+ * Close every OPEN intervention (handoffs + reviews) for one client in the
+ * given transaction. Taking over a conversation to handle it yourself, or
+ * pausing it as non-serious, IS the resolution — the item should not linger
+ * in /admin/suivi until someone also clicks "Traité" (real cases Tout, Maryeme,
+ * Marie 01-02/08 all stayed OPEN after being handled). link_requests are left
+ * untouched: CRM linking is a separate one-click task with its own queue.
+ * Guarded by `status='OPEN'`, so it is a safe no-op on an already-closed item.
+ * Returns the number of rows closed.
+ */
+async function autoResolveOpenFollowUpsTx(
+  db: Pick<PoolClient, "query">,
+  clientId: string,
+  identity: { username: string; role: AdminRole },
+  outcome: ResolutionOutcome,
+  note: string,
+): Promise<number> {
+  let closed = 0;
+  for (const table of ["handoffs", "conversation_reviews"] as const) {
+    const res = await db.query(
+      `update ${table}
+          set status = 'DONE', done_by = $2, done_at = now(),
+              resolution_outcome = $3, resolution_note = $4
+        where client_id = $1 and status = 'OPEN'
+        returning id`,
+      [clientId, identity.username, outcome, note],
+    );
+    const ids = res.rows.map((r) => r.id as string);
+    if (ids.length > 0) {
+      closed += ids.length;
+      await writeAudit(db, identity, "follow_up.auto_resolved", table, ids.join(","), {
+        outcome,
+        note,
+        clientId,
+        count: ids.length,
+      });
+    }
+  }
+  return closed;
+}
+
+/**
+ * Standalone (own-transaction) variant for callers outside a takeover/disengage
+ * transaction — e.g. the admin reply route, which handles a technical takeover
+ * where the human never clicked "Prendre le relais" (case Tout).
+ */
+export async function autoResolveClientFollowUps(
+  clientId: string,
+  identity: { username: string; role: AdminRole },
+  outcome: ResolutionOutcome,
+  note: string,
+): Promise<number> {
+  const db = await pool.connect();
+  try {
+    await db.query("begin");
+    const closed = await autoResolveOpenFollowUpsTx(db, clientId, identity, outcome, note);
+    await db.query("commit");
+    return closed;
+  } catch (error) {
+    await db.query("rollback");
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+
 export async function startHumanTakeover(
   clientId: string,
   identity: { username: string; role: AdminRole },
@@ -141,6 +207,14 @@ export async function startHumanTakeover(
     );
     if ((updated.rowCount ?? 0) > 0) {
       await writeAudit(db, identity, "conversation.takeover_started", "client", clientId, { hours });
+      // Taking over to handle it yourself resolves the client's open items.
+      await autoResolveOpenFollowUpsTx(
+        db,
+        clientId,
+        identity,
+        "resolved",
+        `Auto : prise de relais par ${identity.username}`,
+      );
     }
     await db.query("commit");
     return (updated.rowCount ?? 0) > 0;
@@ -177,6 +251,14 @@ export async function startAwaDisengage(
     );
     if ((updated.rowCount ?? 0) > 0) {
       await writeAudit(db, identity, "conversation.disengaged", "client", clientId, { hours });
+      // Judging a contact non-serious IS handling its open items.
+      await autoResolveOpenFollowUpsTx(
+        db,
+        clientId,
+        identity,
+        "not_applicable",
+        "Auto : conversation mise en pause (contact non sérieux)",
+      );
     }
     await db.query("commit");
     return (updated.rowCount ?? 0) > 0;

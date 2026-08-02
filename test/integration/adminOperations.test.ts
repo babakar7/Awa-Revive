@@ -186,3 +186,94 @@ describe("shared follow-up and human takeover", () => {
     expect(Number((await pool.query(`select count(*) from admin_audit_log`)).rows[0].count)).toBeGreaterThan(0);
   });
 });
+
+describe("auto-close open interventions when a human takes over", () => {
+  async function openHandoff(clientId: string, reason: string): Promise<string> {
+    return (await pool.query(
+      `insert into handoffs (client_id, reason) values ($1,$2) returning id`,
+      [clientId, reason],
+    )).rows[0].id;
+  }
+  async function openReview(clientId: string, summary: string): Promise<string> {
+    return (await pool.query(
+      `insert into conversation_reviews
+         (client_id, last_message_at, outcome, need_category, severity, summary, status)
+       values ($1, now(), 'unresolved_request', 'booking', 'normal', $2, 'OPEN') returning id`,
+      [clientId, summary],
+    )).rows[0].id;
+  }
+  const statusOf = async (table: string, id: string) =>
+    (await pool.query(`select status, resolution_outcome, resolution_note, done_by from ${table} where id=$1`, [id])).rows[0];
+
+  it("takeover closes the client's open handoff AND review as resolved", async () => {
+    const client = await seedClient({ wa_phone: "221770000001", name: "Awa" });
+    const h = await openHandoff(client.id, "Problème paiement OM");
+    const r = await openReview(client.id, "Cliente sans réponse");
+
+    const res = await post(`/admin/conversations/${client.id}/takeover`, {});
+    expect(res.statusCode).toBe(303);
+
+    const hs = await statusOf("handoffs", h);
+    const rs = await statusOf("conversation_reviews", r);
+    expect(hs.status).toBe("DONE");
+    expect(hs.resolution_outcome).toBe("resolved");
+    expect(hs.resolution_note).toContain("prise de relais");
+    expect(rs.status).toBe("DONE");
+    expect(rs.resolution_outcome).toBe("resolved");
+
+    const audit = await pool.query(
+      `select target_type from admin_audit_log where action='follow_up.auto_resolved' order by target_type`,
+    );
+    expect(audit.rows.map((x) => x.target_type)).toEqual(["conversation_reviews", "handoffs"]);
+  });
+
+  it("does not touch another client's open items", async () => {
+    const a = await seedClient({ wa_phone: "221770000002", name: "A" });
+    const b = await seedClient({ wa_phone: "221770000003", name: "B" });
+    const hb = await openHandoff(b.id, "autre client");
+    await post(`/admin/conversations/${a.id}/takeover`, {});
+    expect((await statusOf("handoffs", hb)).status).toBe("OPEN");
+  });
+
+  it("a reply during a technical takeover (no manual takeover click) closes the handoff as contacted", async () => {
+    const client = (await pool.query(
+      `insert into clients (wa_phone, name, human_takeover_until, human_takeover_by, human_takeover_at)
+       values ($1,$2, now() + interval '12 hours', 'awa-technical-failure', now()) returning id, wa_phone`,
+      ["221770000004", "Tout"],
+    )).rows[0];
+    await pool.query(`insert into conversations (client_id, role, content) values ($1,'user','Bonjour')`, [client.id]);
+    const h = await openHandoff(client.id, "Relais technique Awa");
+
+    const res = await post(`/admin/conversations/${client.id}/reply`, {
+      request_key: crypto.randomUUID(),
+      mode: "text",
+      body: "Bonjour, l'équipe Revive reprend votre demande.",
+    });
+    expect(res.statusCode).toBe(303);
+    const hs = await statusOf("handoffs", h);
+    expect(hs.status).toBe("DONE");
+    expect(hs.resolution_outcome).toBe("contacted");
+  });
+
+  it("disengage closes open items as not_applicable", async () => {
+    const client = await seedClient({ wa_phone: "221770000005", name: "Spam" });
+    const h = await openHandoff(client.id, "contact douteux");
+    await post(`/admin/conversations/${client.id}/disengage`, {});
+    const hs = await statusOf("handoffs", h);
+    expect(hs.status).toBe("DONE");
+    expect(hs.resolution_outcome).toBe("not_applicable");
+  });
+
+  it("never rewrites an already-closed item", async () => {
+    const client = await seedClient({ wa_phone: "221770000006", name: "Déjà" });
+    const h = await openHandoff(client.id, "déjà traité");
+    await post(`/admin/suivi/handoff/${h}/resolve`, { outcome: "contacted", note: "Manuel", next: "/admin/suivi" });
+    const before = await statusOf("handoffs", h);
+
+    await post(`/admin/conversations/${client.id}/takeover`, {});
+    const after = await statusOf("handoffs", h);
+    expect(after.resolution_outcome).toBe("contacted");
+    expect(after.resolution_note).toBe("Manuel");
+    expect(after.done_by).toBe(before.done_by);
+  });
+});

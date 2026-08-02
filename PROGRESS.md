@@ -16,6 +16,32 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Auto-fermeture des interventions à la prise de relais (2 août 2026)
+
+Un handoff / une review « à reprendre » restait OPEN dans /admin/suivi tant que
+personne ne cliquait « Traité », même après résolution réelle (Tout, Maryeme,
+Marie tous restés OPEN, fermés à la main en DB). **Décision : prendre le relais
+ou répondre soi-même au client EST le traitement de l'intervention.**
+
+Nouvelle `autoResolveClientFollowUps` ([src/domain/adminOperations.ts](src/domain/adminOperations.ts))
+qui passe à DONE tous les items OPEN (`handoffs` + `conversation_reviews`) du
+client, avec audit `follow_up.auto_resolved`. Trois déclencheurs :
+- **`startHumanTakeover`** (bouton « Prendre le relais ») → outcome `resolved`,
+  note « Auto : prise de relais par <user> » (dans la transaction du takeover).
+- **POST `/conversations/:id/reply`** (réponse admin envoyée) → outcome
+  `contacted` — filet pour les takeovers TECHNIQUES où personne n'a cliqué
+  « Prendre le relais » (`awa-technical-failure`, cas Tout).
+- **`startAwaDisengage`** (« Mettre en pause », contact non sérieux) → outcome
+  `not_applicable`.
+
+Garde `status='OPEN'` → jamais de réécriture d'un item déjà clos ; `link_requests`
+(liaison CRM) intacts (tâche distincte, propre flux 1-clic). Aucun changement UI :
+les items disparaissent d'eux-mêmes de /admin/suivi, du bloc « Suivi ouvert » de
+la page conversation et des badges. Tests : bloc dédié dans
+[test/integration/adminOperations.test.ts](test/integration/adminOperations.test.ts)
+(takeover ferme handoff+review, isolation par client, reply en takeover technique,
+disengage, non-réécriture d'un item déjà clos).
+
 ## PANNE callbacks Orange Money/Max It + outil admin de réconciliation (2 août 2026)
 
 **Constat systémique** (découvert via l'incident Marie, +221776382380) : depuis le

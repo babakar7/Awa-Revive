@@ -829,6 +829,13 @@ export function registerAdmin(app: FastifyInstance): void {
             : await sendText(client.wa_phone, message);
           await adminOps.markAdminOutboundSent(outbound.id, wamid);
           await adminOps.recordAdminAudit(identity, "conversation.message_sent", "client", clientId, { mode, outboundId: outbound.id });
+          // Replying to the client yourself resolves their open interventions.
+          // Covers technical takeovers where nobody clicked "Prendre le relais"
+          // (case Tout: takeover set by awa-technical-failure). No-op if the
+          // takeover click already closed them.
+          await adminOps
+            .autoResolveClientFollowUps(clientId, identity, "contacted", `Auto : message envoyé au client par ${identity.username}`)
+            .catch((err) => req.log.error({ err, clientId }, "Auto-resolve after admin reply failed"));
           return back("done", "sent");
         } catch (error) {
           await adminOps.markAdminOutboundFailed(outbound.id, error);
