@@ -26,6 +26,135 @@ export interface EligibleCourse {
   raw: unknown;
 }
 
+export type CoachPaymentUiStatus =
+  | "À préparer"
+  | "Association Wix requise"
+  | "Erreur Wix"
+  | "Brouillon en cours"
+  | "À resynchroniser"
+  | "À corriger"
+  | "Prêt à valider"
+  | "Validé"
+  | "Payé";
+
+export type CoachPaymentBlocker =
+  | "statement_missing"
+  | "month_open"
+  | "coach_unlinked"
+  | "sync_after_close_missing"
+  | "negative_total";
+
+export interface CoachPaymentState {
+  status: CoachPaymentUiStatus;
+  canValidate: boolean;
+  blockers: CoachPaymentBlocker[];
+}
+
+interface StateStatement {
+  status: "draft" | "validated" | "paid";
+  sync_status: "pending" | "ok" | "failed" | "unlinked";
+  synced_at: Date | string | null;
+  total_xof: number;
+}
+
+/** One source of truth for the cockpit, statement checklist and validate CTA. */
+export function coachPaymentState(args: {
+  month: string;
+  statement: StateStatement | null | undefined;
+  coachLinked: boolean;
+  now?: Date;
+}): CoachPaymentState {
+  if (!args.statement) {
+    return { status: "À préparer", canValidate: false, blockers: ["statement_missing"] };
+  }
+
+  const statement = args.statement;
+  if (statement.status === "paid") {
+    return { status: "Payé", canValidate: false, blockers: [] };
+  }
+  if (statement.status === "validated") {
+    return { status: "Validé", canValidate: false, blockers: [] };
+  }
+
+  const closed = monthIsClosed(args.month, args.now ?? new Date());
+  const syncedAfterClose =
+    statement.sync_status === "ok" &&
+    Boolean(
+      statement.synced_at &&
+        new Date(statement.synced_at).getTime() >= monthBounds(args.month).end.getTime(),
+    );
+  const blockers: CoachPaymentBlocker[] = [];
+  if (!closed) blockers.push("month_open");
+  if (!args.coachLinked) blockers.push("coach_unlinked");
+  if (!syncedAfterClose) blockers.push("sync_after_close_missing");
+  if (statement.total_xof < 0) blockers.push("negative_total");
+
+  let status: CoachPaymentUiStatus;
+  if (!args.coachLinked) {
+    status = "Association Wix requise";
+  } else if (statement.sync_status === "failed") {
+    status = "Erreur Wix";
+  } else if (!closed) {
+    status = "Brouillon en cours";
+  } else if (statement.sync_status === "ok" && !syncedAfterClose) {
+    status = "À resynchroniser";
+  } else if (statement.total_xof < 0) {
+    status = "À corriger";
+  } else if (blockers.length === 0) {
+    status = "Prêt à valider";
+  } else {
+    status = "Brouillon en cours";
+  }
+  return { status, canValidate: blockers.length === 0, blockers };
+}
+
+interface BucketCourse {
+  source: "wix" | "manual";
+  service_name: string;
+  included: boolean;
+  wix_status?: string | null;
+  participant_count?: number | null;
+  manual_decision?: boolean;
+}
+
+export interface CoachPaymentCourseBuckets {
+  manual: number;
+  mat: number;
+  reformer: number;
+  otherWix: number;
+  total: number;
+}
+
+/** Included courses are partitioned exactly once, with Mat taking precedence. */
+export function coachPaymentCourseBuckets(courses: BucketCourse[]): CoachPaymentCourseBuckets {
+  const buckets = { manual: 0, mat: 0, reformer: 0, otherWix: 0, total: 0 };
+  for (const course of courses) {
+    if (!course.included) continue;
+    buckets.total += 1;
+    if (course.source === "manual") {
+      buckets.manual += 1;
+      continue;
+    }
+    const name = normalizeSearch(course.service_name);
+    if (name.includes("pilates mat") || name.includes("mat pilates")) {
+      buckets.mat += 1;
+    } else if (name.includes("reformer")) {
+      buckets.reformer += 1;
+    } else {
+      buckets.otherWix += 1;
+    }
+  }
+  return buckets;
+}
+
+export function coachPaymentCourseNeedsReview(course: BucketCourse): boolean {
+  return (
+    (course.source === "wix" && course.wix_status === "CANCELLED") ||
+    (course.source === "wix" && course.wix_status !== "CANCELLED" && course.participant_count === 0) ||
+    (Boolean(course.manual_decision) && !course.included)
+  );
+}
+
 export function normalizeSearch(value: string): string {
   return value
     .normalize("NFD")

@@ -183,6 +183,138 @@ describe("coach payment settings", () => {
   });
 });
 
+describe("monthly bulk preparation", () => {
+  it("creates missing drafts, resyncs existing ones once, preserves decisions and skips paid states", async () => {
+    const cookie = await loginAsOwner();
+    const yassId = await configureYass();
+    const leslie = (await pool.query(`select * from coach_payment_profiles where slug='leslie'`)).rows[0];
+    await pool.query(
+      `update coach_payment_profiles set wix_resource_id='coach-leslie' where id=$1`,
+      [leslie.id],
+    );
+    const awa = (await pool.query(
+      `insert into coach_payment_profiles
+        (slug, display_name, formula_type, per_session_xof)
+       values ('awa-bulk','Awa Bulk','per_session',10000) returning *`,
+    )).rows[0];
+    const paidProfile = (await pool.query(
+      `insert into coach_payment_profiles
+        (slug, display_name, wix_resource_id, formula_type, per_session_xof)
+       values ('paid-bulk','Payée Bulk','coach-paid','per_session',10000) returning *`,
+    )).rows[0];
+    const paid = (await pool.query(
+      `insert into coach_payment_statements
+        (coach_profile_id, month, version, status, coach_name_snapshot,
+         wix_resource_id_snapshot, tariff_json, sync_status, synced_at,
+         course_count, base_total_xof, total_xof)
+       values ($1,'2026-06-01',1,'paid',$2,'coach-paid',$3,'ok','2026-07-01',1,12345,12345)
+       returning *`,
+      [paidProfile.id, paidProfile.display_name, JSON.stringify({ type: "per_session", perSessionXof: 10000 })],
+    )).rows[0];
+
+    const oldCancelled = calendarEvent("bulk-old-cancelled", "2026-06-04T10:00:00", {
+      status: "CANCELLED",
+    });
+    mock.wix.calendarEvents = [oldCancelled];
+    const yassStatementId = await createJuneDraft(cookie, yassId);
+    const oldCourseId = (await pool.query(
+      `select id from coach_payment_courses where statement_id=$1 and wix_event_id='bulk-old-cancelled'`,
+      [yassStatementId],
+    )).rows[0].id;
+    await post(`${BASE}/etats/${yassStatementId}/cours/${oldCourseId}/toggle`, {}, cookie);
+
+    const yassNew = calendarEvent("bulk-yass-new", "2026-06-10T10:00:00");
+    const leslieNew = calendarEvent("bulk-leslie-new", "2026-06-11T10:00:00", {
+      resources: [{ id: "coach-leslie", name: "Leslie", type: "staff" }],
+    });
+    mock.reset();
+    mock.wix.calendarEvents = [yassNew, leslieNew];
+    mock.wix.calendarEventsById = { "bulk-old-cancelled": oldCancelled };
+
+    const prepared = await post(`${BASE}/preparer`, { month: "2026-06" }, cookie);
+    expect(prepared.statusCode).toBe(303);
+    const location = String(prepared.headers.location);
+    expect(location).toContain("done=prepared");
+    expect(location).toContain("created=2");
+    expect(location).toContain("synced=1");
+    expect(location).toContain("failed=0");
+    expect(location).toContain("skipped=1");
+
+    const resolutionCalls = mock.calls.filter((call) =>
+      call.method === "GET" && call.url.includes("/calendar/v3/events?")
+    );
+    expect(resolutionCalls).toHaveLength(1);
+    expect(new URL(resolutionCalls[0].url).searchParams.getAll("eventIds")).toEqual([
+      "bulk-old-cancelled",
+    ]);
+    expect((await pool.query(
+      `select included, manual_decision from coach_payment_courses
+        where statement_id=$1 and wix_event_id='bulk-old-cancelled'`,
+      [yassStatementId],
+    )).rows[0]).toEqual({ included: true, manual_decision: true });
+    expect((await pool.query(
+      `select sync_status from coach_payment_statements
+        where coach_profile_id=$1 and month='2026-06-01' and is_current`,
+      [leslie.id],
+    )).rows[0].sync_status).toBe("ok");
+    expect((await pool.query(
+      `select sync_status from coach_payment_statements
+        where coach_profile_id=$1 and month='2026-06-01' and is_current`,
+      [awa.id],
+    )).rows[0].sync_status).toBe("unlinked");
+    expect((await pool.query(`select status, total_xof from coach_payment_statements where id=$1`, [paid.id])).rows[0])
+      .toEqual({ status: "paid", total_xof: 12_345 });
+
+    const second = await post(`${BASE}/preparer`, { month: "2026-06" }, cookie);
+    expect(String(second.headers.location)).toContain("created=0");
+    expect(String(second.headers.location)).toContain("synced=2");
+    expect(String(second.headers.location)).toContain("skipped=2");
+    expect(Number((await pool.query(
+      `select count(*) from coach_payment_statements where month='2026-06-01' and is_current`,
+    )).rows[0].count)).toBe(4);
+  });
+
+  it("records one shared Wix outage, keeps unlinked coaches unlinked and continues after a coach DB error", async () => {
+    const cookie = await loginAsOwner();
+    const yassId = await configureYass();
+    mock.wix.calendarEvents = [calendarEvent("before-outage", "2026-06-04T10:00:00")];
+    const yassStatementId = await createJuneDraft(cookie, yassId);
+    const leslie = (await pool.query(`select * from coach_payment_profiles where slug='leslie'`)).rows[0];
+    await pool.query(`update coach_payment_profiles set wix_resource_id='coach-leslie' where id=$1`, [leslie.id]);
+    const unlinked = (await pool.query(
+      `insert into coach_payment_profiles
+        (slug, display_name, formula_type, per_session_xof)
+       values ('unlinked-outage','Unlinked Outage','per_session',9000) returning *`,
+    )).rows[0];
+    await pool.query(
+      `insert into coach_payment_profiles
+        (slug, display_name, wix_resource_id, formula_type, per_session_xof)
+       values ('bad-bulk','Bad Bulk','coach-bad','per_session',null)`,
+    );
+    mock.reset();
+    mock.wix.failCalendar = true;
+
+    const response = await post(`${BASE}/preparer`, { month: "2026-06" }, cookie);
+    expect(response.statusCode).toBe(303);
+    expect(String(response.headers.location)).toContain("failed=3");
+    expect(String(response.headers.location)).toContain("created=1");
+    expect((await pool.query(
+      `select sync_status from coach_payment_statements where id=$1`,
+      [yassStatementId],
+    )).rows[0].sync_status).toBe("failed");
+    expect((await pool.query(
+      `select sync_status from coach_payment_statements
+        where coach_profile_id=$1 and month='2026-06-01'`,
+      [leslie.id],
+    )).rows[0].sync_status).toBe("failed");
+    expect((await pool.query(
+      `select sync_status from coach_payment_statements
+        where coach_profile_id=$1 and month='2026-06-01'`,
+      [unlinked.id],
+    )).rows[0].sync_status).toBe("unlinked");
+  });
+});
+
 describe("monthly statement lifecycle", () => {
   it("recovers a cancelled occurrence omitted by Calendar Query without treating client cancellations as a session cancellation", async () => {
     const cookie = await loginAsOwner();
@@ -240,6 +372,13 @@ describe("monthly statement lifecycle", () => {
       headers: { cookie },
     });
     expect(page.body).toContain("1 séance à vérifier · 1 annulée · 0 vide");
+    expect(page.body).toContain("Prêt à valider");
+    const cockpit = await app.inject({
+      method: "GET",
+      url: `${BASE}?month=2026-06`,
+      headers: { cookie },
+    });
+    expect(cockpit.body).toContain("Prêt à valider");
 
     const cancelledId = (await pool.query(
       `select id from coach_payment_courses
@@ -381,6 +520,10 @@ describe("monthly statement lifecycle", () => {
     expect(draftPage.body).toContain(
       "4 séances à vérifier · 2 annulées · 2 vides",
     );
+    expect(draftPage.body).toContain('<details class="card payment-panel" open>');
+    expect(draftPage.body).toMatch(
+      /<details class="card payment-panel"><summary><span><b>Autres séances/,
+    );
     expect(draftPage.body).toContain("Séance annulée");
     expect(draftPage.body).toContain("Séance vide · 0 participant");
     expect(draftPage.body).toContain("Inclure exceptionnellement");
@@ -481,6 +624,9 @@ describe("monthly statement lifecycle", () => {
       headers: { cookie },
     });
     expect(reviewedPage.body).toContain("Incluse exceptionnellement");
+    expect(reviewedPage.body.indexOf("Incluse exceptionnellement")).toBeLessThan(
+      reviewedPage.body.indexOf("Autres séances"),
+    );
 
     const validated = await post(`${BASE}/etats/${id}/valider`, {}, cookie);
     expect(validated.headers.location).toContain("done=validated");

@@ -37,6 +37,8 @@ describe("coach payment settings page", () => {
     expect(addForm).toContain("awa@revive.sn");
     expect(addForm).not.toContain("coach-yass");
     expect(html).toContain("Ajouter la coach");
+    expect(html).toContain('<details class="payment-settings-item"');
+    expect(html).not.toContain('<details class="payment-settings-item" open');
   });
 
   it("explains when every Wix coach is already configured", () => {

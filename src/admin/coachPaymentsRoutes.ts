@@ -124,6 +124,41 @@ async function fetchEligibleCourses(
   });
 }
 
+async function fetchSharedWixSnapshot(
+  month: string,
+  knownEventIds: string[],
+  onDiscovery?: Parameters<typeof fetchEligibleCourses>[4],
+) {
+  const bounds = calendarLocalBounds(month);
+  const [services, queriedEvents, discovery] = await Promise.all([
+    listServices(),
+    queryCalendarEventsV3(bounds.fromLocalDate, bounds.toLocalDate),
+    listCancelledBookingEventIds(bounds.fromLocalDate, bounds.toLocalDate),
+  ]);
+  onDiscovery?.({
+    pages: discovery.pages,
+    scannedBookings: discovery.scannedBookings,
+    candidateEvents: discovery.eventIds.length,
+    elapsedMs: discovery.elapsedMs,
+  });
+  if (coachPaymentServices(services).length === 0) {
+    throw new payments.CoachPaymentError("Aucun service Reformer ou Pilates Mat identifiable dans Wix");
+  }
+  const queriedIds = new Set(queriedEvents.map((event) => event.id));
+  const missingIds = [...new Set([...discovery.eventIds, ...knownEventIds])]
+    .filter((id) => !queriedIds.has(id));
+  const recovered = missingIds.length
+    ? await resolveCalendarEventsV3ByIds(missingIds)
+    : [];
+  return {
+    services,
+    events: [
+      ...queriedEvents,
+      ...recovered.filter((event) => event.status === "CANCELLED"),
+    ],
+  };
+}
+
 /** Registers an encapsulated owner-only section under /admin/paiements-coachs. */
 export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
   admin.register(
@@ -131,7 +166,15 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
       section.addHook("onRequest", ownerPaymentsAuthHook);
 
       section.get("/", async (req, reply) => {
-        const query = req.query as { month?: string; done?: string; err?: string };
+        const query = req.query as {
+          month?: string;
+          done?: string;
+          err?: string;
+          created?: string;
+          synced?: string;
+          failed?: string;
+          skipped?: string;
+        };
         const month = parseMonthKey(String(query.month ?? "")) ?? currentMonthKey();
         const [profiles, statements] = await Promise.all([
           payments.listProfiles(),
@@ -141,9 +184,134 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
           month,
           profiles,
           statements,
-          banner: coachPaymentBanner(query.done, query.err),
+          banner: coachPaymentBanner(query.done, query.err, query),
         });
         reply.type("text/html").send(await layout("Paiements coachs", BASE, body, { subtitle: "États mensuels confidentiels", contentWidth: "wide" }));
+      });
+
+      section.post("/preparer", async (req, reply) => {
+        const body = (req.body ?? {}) as Record<string, string>;
+        const month = parseMonthKey(String(body.month ?? ""));
+        if (!month) return reply.redirect(`${BASE}?err=${encodeURIComponent("Mois invalide")}`, 303);
+
+        const [profiles, statements] = await Promise.all([
+          payments.listProfiles(),
+          payments.listCurrentStatements(month),
+        ]);
+        const byProfile = new Map(statements.map((statement) => [statement.coach_profile_id, statement]));
+        const draftIds = statements
+          .filter((statement) => statement.status === "draft")
+          .map((statement) => statement.id);
+        let knownEventIds: string[] = [];
+        try {
+          knownEventIds = await payments.listWixEventIds(draftIds);
+        } catch (error) {
+          req.log.error({ err: error, month }, "Coach payment bulk known-event query failed");
+        }
+
+        let shared: Awaited<ReturnType<typeof fetchSharedWixSnapshot>> | null = null;
+        let sharedWixError: string | null = null;
+        const needsWix = profiles.some((profile) => {
+          const statement = byProfile.get(profile.id);
+          return Boolean(profile.wix_resource_id) && (!statement || statement.status === "draft");
+        });
+        if (needsWix) {
+          try {
+            shared = await fetchSharedWixSnapshot(
+              month,
+              knownEventIds,
+              (metrics) => req.log.info(metrics, "Coach payment bulk cancelled-booking discovery"),
+            );
+          } catch (error) {
+            sharedWixError = message(error);
+            req.log.error({ err: error, month }, "Coach payment shared Wix preparation failed");
+          }
+        }
+
+        const counters = { created: 0, synced: 0, failed: 0, skipped: 0 };
+        for (const profile of profiles) {
+          const existing = byProfile.get(profile.id);
+          if (existing && existing.status !== "draft") {
+            counters.skipped += 1;
+            continue;
+          }
+          try {
+            if (!profile.wix_resource_id) {
+              if (existing) {
+                await payments.refreshDraftProfileSnapshot(existing.id, profile);
+                counters.skipped += 1;
+              } else {
+                await payments.createDraft({
+                  profile,
+                  month,
+                  courses: [],
+                  syncStatus: "unlinked",
+                  syncError: "Aucune ressource Wix associée à cette coach",
+                  createdBy: req.adminUser ?? null,
+                });
+                counters.created += 1;
+              }
+              continue;
+            }
+
+            if (sharedWixError || !shared) {
+              if (existing) {
+                await payments.refreshDraftProfileSnapshot(existing.id, profile);
+                await payments.recordSyncFailure(existing.id, sharedWixError ?? "Wix indisponible");
+              } else {
+                await payments.createDraft({
+                  profile,
+                  month,
+                  courses: [],
+                  syncStatus: "failed",
+                  syncError: sharedWixError ?? "Wix indisponible",
+                  createdBy: req.adminUser ?? null,
+                });
+              }
+              counters.failed += 1;
+              continue;
+            }
+
+            const courses = selectEligibleCoachPaymentEvents({
+              events: shared.events,
+              services: shared.services,
+              coachResourceId: profile.wix_resource_id,
+              month,
+              now: new Date(),
+            });
+            if (existing) {
+              await payments.refreshDraftProfileSnapshot(existing.id, profile);
+              await payments.replaceWixSnapshot(existing.id, courses);
+              counters.synced += 1;
+            } else {
+              await payments.createDraft({
+                profile,
+                month,
+                courses,
+                syncStatus: "ok",
+                syncError: null,
+                createdBy: req.adminUser ?? null,
+              });
+              counters.created += 1;
+            }
+          } catch (error) {
+            counters.failed += 1;
+            req.log.error(
+              { err: error, profileId: profile.id, month },
+              "Coach payment database preparation failed for coach",
+            );
+          }
+        }
+        req.log.info({ month, ...counters, by: req.adminUser }, "Coach payment month prepared");
+        const query = new URLSearchParams({
+          month,
+          done: "prepared",
+          created: String(counters.created),
+          synced: String(counters.synced),
+          failed: String(counters.failed),
+          skipped: String(counters.skipped),
+        });
+        return reply.redirect(`${BASE}?${query.toString()}`, 303);
       });
 
       section.get("/reglages", async (req, reply) => {

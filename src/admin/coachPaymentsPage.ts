@@ -1,9 +1,18 @@
 import type {
+  CoachPaymentCockpitStatement,
   CoachPaymentProfile,
-  CoachPaymentStatement,
   StatementDetail,
 } from "../domain/coachPaymentRepo.js";
-import { monthBounds, monthIsClosed, storedMonthKey, tariffFromJson, tariffFromProfile, tariffLabel } from "../domain/coachPaymentRules.js";
+import {
+  coachPaymentCourseBuckets,
+  coachPaymentCourseNeedsReview,
+  coachPaymentState,
+  storedMonthKey,
+  tariffFromJson,
+  tariffFromProfile,
+  tariffLabel,
+  type CoachPaymentUiStatus,
+} from "../domain/coachPaymentRules.js";
 import type { WixStaffResource } from "../lib/wix.js";
 
 const BASE = "/admin/paiements-coachs";
@@ -50,7 +59,30 @@ function statusBadge(status: string): string {
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
-export function coachPaymentBanner(done?: string, error?: string): string {
+function cockpitStatusBadge(status: CoachPaymentUiStatus): string {
+  const cls = status === "Payé"
+    ? "badge--green"
+    : status === "Validé" || status === "Prêt à valider"
+      ? "badge--blue"
+      : status === "Erreur Wix" || status === "À corriger"
+        ? "badge--red"
+        : status === "À préparer" || status === "Brouillon en cours"
+          ? "badge--gray"
+          : "badge--amber";
+  return `<span class="badge ${cls}">${esc(status)}</span>`;
+}
+
+function shiftedMonth(month: string, delta: number): string {
+  const [year, number] = month.split("-").map(Number);
+  const value = new Date(Date.UTC(year, number - 1 + delta, 1));
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function coachPaymentBanner(
+  done?: string,
+  error?: string,
+  counters: Record<string, string | undefined> = {},
+): string {
   const messages: Record<string, string> = {
     profile: "Réglages enregistrés.",
     "profile-created": "Coach ajoutée depuis Wix.",
@@ -67,6 +99,10 @@ export function coachPaymentBanner(done?: string, error?: string): string {
     paid: "État marqué comme payé.",
   };
   if (error) return `<div class="card warn">⚠️ ${esc(error)}</div>`;
+  if (done === "prepared") {
+    const count = (key: string) => /^\d+$/.test(counters[key] ?? "") ? Number(counters[key]) : 0;
+    return `<div class="card success"><span class="ok">✓ Préparation terminée.</span><div class="payment-bulk-result"><span>${count("created")} créé(s)</span><span>${count("synced")} resynchronisé(s)</span><span>${count("failed")} échec(s)</span><span>${count("skipped")} ignoré(s)</span></div></div>`;
+  }
   if (done && messages[done]) return `<div class="card success"><span class="ok">✓ ${esc(messages[done])}</span></div>`;
   return "";
 }
@@ -74,23 +110,64 @@ export function coachPaymentBanner(done?: string, error?: string): string {
 export function renderCoachPaymentsDashboard(args: {
   month: string;
   profiles: CoachPaymentProfile[];
-  statements: CoachPaymentStatement[];
+  statements: CoachPaymentCockpitStatement[];
   banner: string;
+  now?: Date;
 }): string {
   const byProfile = new Map(args.statements.map((s) => [s.coach_profile_id, s]));
-  const cards = args.profiles
+  const snapshotAvailable = (statement: CoachPaymentCockpitStatement | undefined) => Boolean(
+    statement && (
+      statement.sync_status === "ok" ||
+      statement.synced_at ||
+      statement.status === "validated" ||
+      statement.status === "paid"
+    ),
+  );
+  const coveredStatements = args.statements.filter((statement) => snapshotAvailable(statement));
+  const coverage = coveredStatements.length;
+  const coachCount = args.profiles.length;
+  const coverageLabel = `${coverage} état${coverage > 1 ? "s" : ""} sur ${coachCount} coach${coachCount > 1 ? "s" : ""}`;
+  const total = coveredStatements.reduce((sum, statement) => sum + statement.total_xof, 0);
+  const courses = coveredStatements.reduce((sum, statement) => sum + statement.course_count, 0);
+  const anomalies = coveredStatements.reduce((sum, statement) => sum + statement.anomaly_count, 0);
+  const progressed = args.profiles.filter((profile) => {
+    const statement = byProfile.get(profile.id);
+    if (!statement) return false;
+    const status = coachPaymentState({
+      month: args.month,
+      statement,
+      coachLinked: Boolean(profile.wix_resource_id),
+      now: args.now,
+    }).status;
+    return ["Prêt à valider", "Validé", "Payé"].includes(status);
+  }).length;
+  const value = (content: string) => coverage ? content : "—";
+  const stats = `<div class="payment-stat-grid">
+    <article><span>Total estimé</span><b>${value(xof(total))}</b><small>${coverageLabel}</small></article>
+    <article><span>Cours comptés</span><b>${value(String(courses))}</b><small>${coverageLabel}</small></article>
+    <article><span>Séances à vérifier</span><b>${value(String(anomalies))}</b><small>${coverageLabel}</small></article>
+    <article><span>Progression</span><b>${coachCount ? `${progressed}/${coachCount}` : "—"}</b><small>${coverageLabel}</small></article>
+  </div>`;
+  const rows = args.profiles
     .map((profile) => {
       const statement = byProfile.get(profile.id);
-      const resource = profile.wix_resource_id
-        ? `<span class="ok">Ressource Wix associée</span>`
-        : `<span class="danger-text">Ressource Wix manquante</span>`;
+      const hasSnapshot = snapshotAvailable(statement);
+      const state = coachPaymentState({
+        month: args.month,
+        statement,
+        coachLinked: Boolean(profile.wix_resource_id),
+        now: args.now,
+      });
       const action = statement
-        ? `<a class="act" href="${BASE}/etats/${esc(statement.id)}">Ouvrir la version ${statement.version}</a>`
-        : `<form method="post" action="${BASE}/etats"><input type="hidden" name="profile_id" value="${esc(profile.id)}"><input type="hidden" name="month" value="${esc(args.month)}"><button class="act" type="submit">Créer le brouillon</button></form>`;
-      return `<article class="card finance-card"><div class="row between"><div><span class="eyebrow">Coach</span><h2>${esc(profile.display_name)}</h2><div class="muted">${esc(tariffLabel(tariffFromProfile(profile)))}</div><div class="muted">${resource} · ${esc(profile.email ?? "e-mail non renseigné")}</div></div><div class="finance-total">${statement ? `${statusBadge(statement.status)}<b>${xof(statement.total_xof)}</b><span>${statement.course_count} cours · v${statement.version}</span>` : `<span class="muted">Aucun état pour ce mois</span>`}</div></div><div class="card-actions">${action}</div></article>`;
+        ? `<a class="act act--ghost act--sm" href="${BASE}/etats/${esc(statement.id)}">${state.status === "Prêt à valider" ? "Contrôler et valider" : state.status === "Payé" ? "Voir le règlement" : "Ouvrir"}</a>`
+        : `<form method="post" action="${BASE}/etats"><input type="hidden" name="profile_id" value="${esc(profile.id)}"><input type="hidden" name="month" value="${esc(args.month)}"><button class="act act--ghost act--sm" type="submit">Préparer</button></form>`;
+      return `<tr><td data-label="Coach"><b>${esc(profile.display_name)}</b><div class="muted">${esc(profile.email ?? "e-mail non renseigné")}</div></td><td data-label="Statut">${cockpitStatusBadge(state.status)}</td><td data-label="Reformer">${hasSnapshot ? statement!.reformer_count : "—"}</td><td data-label="Mat">${hasSnapshot ? statement!.mat_count : "—"}</td><td data-label="Manuel">${hasSnapshot ? statement!.manual_count : "—"}</td><td data-label="Anomalies">${hasSnapshot ? (statement!.anomaly_count ? `<span class="badge badge--amber">${statement!.anomaly_count}</span>` : "0") : "—"}</td><td data-label="Montant" class="right">${hasSnapshot ? `<b>${xof(statement!.total_xof)}</b><div class="muted">v${statement!.version}</div>` : statement ? "—" : "À préparer"}</td><td data-label="Action">${action}</td></tr>`;
     })
     .join("");
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio · Propriétaire</span><h2>Paiements coachs</h2><p>Préparez, contrôlez et validez les états mensuels à partir des séances Wix.</p></div><div class="page-header-actions"><a class="act" href="${BASE}/reglages#ajouter-coach">Ajouter une coach Wix</a><a class="act act--ghost" href="${BASE}/reglages">Réglages coachs</a></div></header>${args.banner}<div class="card filter-bar"><form method="get" action="${BASE}" class="row"><label>Mois<input type="month" name="month" value="${esc(args.month)}" required></label><button class="act act--ghost" type="submit">Afficher le mois</button></form></div><div class="section-header"><h2>${esc(monthLabel(args.month))}</h2><span class="badge badge--gray">${args.profiles.length} coach(s)</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach active</b><p>Ajoutez ou réactivez une fiche depuis les réglages.</p></div>`}`;
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Studio · Propriétaire</span><h2>Paiements coachs</h2><p>Couverture du mois, anomalies et prochaine action dans un seul cockpit.</p></div><div class="page-header-actions"><form method="post" action="${BASE}/preparer"><input type="hidden" name="month" value="${esc(args.month)}"><button class="act" type="submit">Préparer le mois</button></form><a class="act act--ghost" href="${BASE}/reglages">Réglages coachs</a></div></header>${args.banner}
+  <div class="card payment-month-bar"><a class="act act--ghost act--sm" href="${BASE}?month=${shiftedMonth(args.month, -1)}" aria-label="Mois précédent">← Mois précédent</a><form method="get" action="${BASE}" class="row"><label>Mois<input type="month" name="month" value="${esc(args.month)}" required></label><button class="act act--ghost" type="submit">Afficher</button></form><a class="act act--ghost act--sm" href="${BASE}?month=${shiftedMonth(args.month, 1)}" aria-label="Mois suivant">Mois suivant →</a></div>
+  <div class="section-header"><h2>${esc(monthLabel(args.month))}</h2><span class="badge badge--gray">${coachCount} coach(s)</span></div>${stats}
+  ${rows ? `<div class="card payment-cockpit-table"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Coach</th><th>Statut</th><th>Reformer</th><th>Mat</th><th>Manuel</th><th>Anomalies</th><th class="right">Montant</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>` : `<div class="card empty"><b>Aucune fiche coach active</b><p>Ajoutez ou réactivez une fiche depuis les réglages.</p></div>`}`;
 }
 
 export function renderCoachPaymentSettings(args: {
@@ -111,7 +188,7 @@ export function renderCoachPaymentSettings(args: {
     .map((r) => `<option value="${esc(r.id)}" data-name="${esc(r.name)}" data-email="${esc(r.email ?? "")}">${esc(r.name)}${r.email ? ` — ${esc(r.email)}` : ""}</option>`)
     .join("");
   const addCard = availableResources.length
-    ? `<form class="card" id="ajouter-coach" method="post" action="${BASE}/reglages" data-new-coach>
+    ? `<details class="payment-settings-item" id="ajouter-coach-panel"><summary><span><b>Ajouter une coach depuis Wix</b><small>${availableResources.length} ressource(s) disponible(s)</small></span><span class="act act--ghost act--sm">Ajouter</span></summary><form class="card" id="ajouter-coach" method="post" action="${BASE}/reglages" data-new-coach>
       <h2 style="margin:.1rem 0 .35rem">Ajouter une coach depuis Wix</h2>
       <p class="muted">Choisissez une ressource coach existante dans Wix, puis définissez son tarif.</p>
       <label>Coach Wix<select name="wix_resource_id" required><option value="">— Choisir une coach —</option>${addOptions}</select></label>
@@ -120,12 +197,12 @@ export function renderCoachPaymentSettings(args: {
       <div class="row" data-ratio style="display:none"><label>Montant de référence (FCFA)<input name="base_amount_xof" type="number" min="0" step="1" value="800000"></label><label>Nombre de cours de référence<input name="base_session_count" type="number" min="1" step="1" value="84"></label></div>
       <label data-session>Montant par cours (FCFA)<input name="per_session_xof" type="number" min="0" step="1" value="9000" required></label>
       <button class="act" type="submit">Ajouter la coach</button>
-    </form>`
+    </form></details>`
     : `<div class="card empty"><b>Aucune nouvelle coach Wix à ajouter</b><p>${args.resources.length ? "Toutes les ressources coach Wix ont déjà une fiche de paiement." : "Aucune ressource coach n’est disponible depuis Wix."}</p></div>`;
   const cards = args.profiles.map((p) => {
     const ratio = p.formula_type === "monthly_ratio";
     const wixEmail = args.resources.find((r) => r.id === p.wix_resource_id)?.email ?? null;
-    return `<form class="card" method="post" action="${BASE}/reglages/${esc(p.id)}">
+    return `<details class="payment-settings-item"><summary><span><b>${esc(p.display_name)}</b><small>${p.wix_resource_id ? "Wix associé" : "Association Wix requise"} · ${esc(tariffLabel(tariffFromProfile(p)))}</small></span><span class="act act--ghost act--sm">Modifier</span></summary><form class="card" method="post" action="${BASE}/reglages/${esc(p.id)}">
       <h2 style="margin:.1rem 0 .8rem">${esc(p.display_name)}</h2>
       <div class="row"><label style="flex:1">Nom affiché<input name="display_name" value="${esc(p.display_name)}" required></label><label style="flex:2">Ressource coach Wix<select name="wix_resource_id" data-email-target="email-${esc(p.id)}">${resourceOptions(p.wix_resource_id)}</select></label></div>
       <label>E-mail mémorisé<input id="email-${esc(p.id)}" name="email" type="email" value="${esc(p.email ?? wixEmail ?? "")}" placeholder="coach@exemple.com"></label>
@@ -133,7 +210,7 @@ export function renderCoachPaymentSettings(args: {
       <div class="row" data-ratio style="${ratio ? "" : "display:none"}"><label>Montant de référence (FCFA)<input name="base_amount_xof" type="number" min="0" step="1" value="${esc(p.base_amount_xof ?? 800000)}"></label><label>Nombre de cours de référence<input name="base_session_count" type="number" min="1" step="1" value="${esc(p.base_session_count ?? 84)}"></label></div>
       <label data-session style="${ratio ? "display:none" : ""}">Montant par cours (FCFA)<input name="per_session_xof" type="number" min="0" step="1" value="${esc(p.per_session_xof ?? 9000)}"></label>
       <button class="act" type="submit">Enregistrer la fiche</button>
-    </form>`;
+    </form></details>`;
   }).join("");
   const script = `<script>document.querySelectorAll('select[data-email-target]').forEach(function(s){s.addEventListener('change',function(){var o=s.options[s.selectedIndex];var input=document.getElementById(s.dataset.emailTarget);if(o&&o.dataset.email&&input&&!input.value)input.value=o.dataset.email;});});var add=document.querySelector('[data-new-coach] select[name="wix_resource_id"]');if(add){add.addEventListener('change',function(){var o=add.options[add.selectedIndex];var input=add.form.querySelector('input[name="email"]');if(input)input.value=o&&o.dataset.email?o.dataset.email:'';});}</script>`;
   return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Paiements coachs · Propriétaire</span><h2>Réglages des coachs</h2><p>Ajoutez une coach existante dans Wix et définissez ses conditions pour les prochains brouillons.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}">États mensuels</a></div></header>${args.banner}${args.wixError ? `<div class="card warn">Ressources Wix indisponibles : ${esc(args.wixError)}</div>` : ""}<p class="subhead">Les états déjà créés conservent les conditions figées lors de leur création.</p>${addCard}<div class="section-header"><h2>Fiches coachs</h2><span class="badge badge--gray">${args.profiles.length}</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach</b><p>Ajoutez une coach depuis Wix pour commencer.</p></div>`}${script}`;
@@ -156,17 +233,15 @@ export function renderCoachPaymentStatement(args: {
   const { statement, profile, courses, adjustments, sends, versions } = args.detail;
   const draft = statement.status === "draft";
   const month = storedMonthKey(statement.month);
-  const closed = monthIsClosed(month, args.now ?? new Date());
-  const syncAfterClose =
-    !closed ||
-    Boolean(
-      statement.synced_at &&
-        new Date(statement.synced_at).getTime() >= monthBounds(month).end.getTime(),
-    );
-  const syncOk =
-    statement.sync_status === "ok" &&
-    Boolean(statement.wix_resource_id_snapshot) &&
-    syncAfterClose;
+  const state = coachPaymentState({
+    month,
+    statement,
+    coachLinked: Boolean(profile.wix_resource_id),
+    now: args.now,
+  });
+  const closed = !state.blockers.includes("month_open");
+  const syncOk = !state.blockers.includes("coach_unlinked") &&
+    !state.blockers.includes("sync_after_close_missing");
   const syncLabel = statement.sync_status === "ok"
     ? `Synchronisé le ${date(statement.synced_at)}`
     : statement.sync_status === "unlinked"
@@ -187,9 +262,15 @@ export function renderCoachPaymentStatement(args: {
         c.participant_count === 0,
     )
     .sort(chronological);
-  const priorityIds = new Set([...cancelledCourses, ...emptyCourses].map((c) => c.id));
-  const priorityCourses = [...cancelledCourses, ...emptyCourses];
+  const alreadyPriority = new Set([...cancelledCourses, ...emptyCourses].map((c) => c.id));
+  const manuallyExcludedCourses = courses
+    .filter((c) => c.manual_decision && !c.included && !alreadyPriority.has(c.id))
+    .sort(chronological);
+  const priorityIds = new Set([...alreadyPriority, ...manuallyExcludedCourses.map((c) => c.id)]);
+  const priorityCourses = [...cancelledCourses, ...emptyCourses, ...manuallyExcludedCourses];
   const otherCourses = courses.filter((c) => !priorityIds.has(c.id)).sort(chronological);
+  const buckets = coachPaymentCourseBuckets(courses);
+  const reviewCount = courses.filter(coachPaymentCourseNeedsReview).length;
   const courseRows = (rows: typeof courses, priority: boolean) => rows.map((c) => {
     const cancelled = c.source === "wix" && c.wix_status === "CANCELLED";
     const attendance = cancelled
@@ -211,29 +292,47 @@ export function renderCoachPaymentStatement(args: {
   }).join("");
   const columns = draft ? 5 : 4;
   const reviewSummary = priorityCourses.length
-    ? `<div class="card warn"><b>${priorityCourses.length} séance${priorityCourses.length > 1 ? "s" : ""} à vérifier · ${cancelledCourses.length} annulée${cancelledCourses.length > 1 ? "s" : ""} · ${emptyCourses.length} vide${emptyCourses.length > 1 ? "s" : ""}</b><div class="muted">Ces alertes n’empêchent pas la validation de l’état.</div></div>`
+    ? `<div class="card warn"><b>${priorityCourses.length} séance${priorityCourses.length > 1 ? "s" : ""} à vérifier · ${cancelledCourses.length} annulée${cancelledCourses.length > 1 ? "s" : ""} · ${emptyCourses.length} vide${emptyCourses.length > 1 ? "s" : ""}${manuallyExcludedCourses.length ? ` · ${manuallyExcludedCourses.length} exclue${manuallyExcludedCourses.length > 1 ? "s" : ""} manuellement` : ""}</b><div class="muted">Ces alertes n’empêchent pas la validation de l’état.</div></div>`
     : `<div class="card success"><span class="ok">✓ Aucune séance annulée ou vide à vérifier.</span></div>`;
   const priorityBlock = priorityCourses.length
-    ? `<div class="card"><h2>Séances à vérifier</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Participants Wix</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${courseRows(priorityCourses, true)}</tbody></table></div></div>`
+    ? `<details class="card payment-panel" open><summary><span><b>Séances à vérifier</b><small>${priorityCourses.length} anomalie(s)</small></span></summary><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Participants Wix</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${courseRows(priorityCourses, true)}</tbody></table></div></details>`
     : "";
   const otherRows = courseRows(otherCourses, false);
   const adjustmentRows = adjustments.map((a) => `<tr><td>${a.kind === "bonus" ? "Prime" : "Retenue"}</td><td>${esc(a.reason)}</td><td class="right"><b>${a.kind === "bonus" ? "+" : "−"} ${xof(a.amount_xof)}</b></td>${draft ? `<td><form method="post" action="${BASE}/etats/${esc(statement.id)}/ajustements/${esc(a.id)}/supprimer"><button class="act act--ghost act--sm" type="submit">Retirer</button></form></td>` : ""}</tr>`).join("");
-  const draftTools = draft ? `<div class="card"><h2>Actions sur le brouillon</h2><div class="row"><form method="post" action="${BASE}/etats/${esc(statement.id)}/synchroniser"><button class="act act--ghost" type="submit">Synchroniser Wix</button></form><form method="post" action="${BASE}/etats/${esc(statement.id)}/valider" data-confirm="Une dernière synchronisation Wix sera faite. Valider définitivement cet état ? Son contenu ne sera plus modifiable."><button class="act act--ok" type="submit"${!closed || !syncOk || statement.total_xof < 0 ? " disabled" : ""}>Valider l'état</button></form></div>${!closed ? `<p class="muted">Validation disponible après la clôture de ${esc(monthLabel(month))}.</p>` : ""}${!syncOk ? `<p class="muted">Validation bloquée tant que Wix n'est pas synchronisé après la clôture et la ressource coach associée.</p>` : ""}</div>
-  <div class="card"><h2>Conditions tarifaires du brouillon</h2><p class="muted">${esc(tariffLabel(tariffFromJson(statement.tariff_json)))}</p><form method="post" action="${BASE}/etats/${esc(statement.id)}/tarif">${tariffFields(args.detail)}<button class="act act--ghost" type="submit">Mettre à jour le calcul</button></form></div>
-  <div class="card"><h2>Ajouter un cours manuel</h2><form method="post" action="${BASE}/etats/${esc(statement.id)}/cours-manuel"><div class="row"><label>Date et heure<input name="starts_at" type="datetime-local" required></label><label style="flex:1">Séance<input name="service_name" value="Reformer" required></label></div><label>Motif obligatoire<input name="reason" maxlength="300" required placeholder="Pourquoi cette séance n'est-elle pas dans Wix ?"></label><button class="act act--ghost" type="submit">Ajouter le cours</button></form></div>
-  <div class="card"><h2>Ajouter une prime ou retenue</h2><form method="post" action="${BASE}/etats/${esc(statement.id)}/ajustements"><div class="row"><label>Type<select name="kind"><option value="bonus">Prime</option><option value="deduction">Retenue</option></select></label><label>Montant FCFA<input name="amount_xof" type="number" min="1" step="1" required></label><label style="flex:1">Motif<input name="reason" maxlength="300" required></label></div><button class="act act--ghost" type="submit">Ajouter l'ajustement</button></form></div>` : "";
+  const draftTools = draft ? `<details class="card payment-panel"><summary><span><b>Conditions tarifaires</b><small>${esc(tariffLabel(tariffFromJson(statement.tariff_json)))}</small></span></summary><form method="post" action="${BASE}/etats/${esc(statement.id)}/tarif">${tariffFields(args.detail)}<button class="act act--ghost" type="submit">Mettre à jour le calcul</button></form></details>
+  <details class="card payment-panel"><summary><span><b>Ajouter un cours manuel</b><small>Avec date et motif obligatoires</small></span></summary><form method="post" action="${BASE}/etats/${esc(statement.id)}/cours-manuel"><div class="row"><label>Date et heure<input name="starts_at" type="datetime-local" required></label><label style="flex:1">Séance<input name="service_name" value="Reformer" required></label></div><label>Motif obligatoire<input name="reason" maxlength="300" required placeholder="Pourquoi cette séance n'est-elle pas dans Wix ?"></label><button class="act act--ghost" type="submit">Ajouter le cours</button></form></details>
+  <details class="card payment-panel"><summary><span><b>Ajouter une prime ou retenue</b><small>Ajustement motivé du montant</small></span></summary><form method="post" action="${BASE}/etats/${esc(statement.id)}/ajustements"><div class="row"><label>Type<select name="kind"><option value="bonus">Prime</option><option value="deduction">Retenue</option></select></label><label>Montant FCFA<input name="amount_xof" type="number" min="1" step="1" required></label><label style="flex:1">Motif<input name="reason" maxlength="300" required></label></div><button class="act act--ghost" type="submit">Ajouter l'ajustement</button></form></details>` : "";
 
   const sendBlock = !draft ? `<div class="card"><h2>Envoyer par e-mail</h2>${args.emailEnabled ? `<form method="post" action="${BASE}/etats/${esc(statement.id)}/envoyer" data-confirm="Envoyer ce relevé PDF à la coach ?"><div class="row"><label style="flex:1">Destinataire<input name="recipient_email" type="email" value="${esc(profile.email ?? statement.coach_email_snapshot ?? "")}" required></label><button class="act" type="submit">${sends.length ? "Renvoyer" : "Envoyer"} le PDF</button></div></form>` : `<p class="muted">Envoi désactivé : BREVO_API_KEY n'est pas configurée.</p>`}</div>` : "";
   const paidBlock = statement.status === "validated" ? `<div class="card"><h2>Règlement</h2><form method="post" action="${BASE}/etats/${esc(statement.id)}/payer" data-confirm="Confirmer que ce règlement a été effectué ?"><div class="row"><label>Date de règlement<input name="paid_on" type="date" value="${new Date().toISOString().slice(0, 10)}" required></label><button class="act act--ok" type="submit">Marquer payé</button></div></form></div>` : statement.status === "paid" ? `<div class="card success"><b>✓ Payé le ${date(statement.paid_at)}</b>${statement.paid_by ? `<div class="muted">Pointé par ${esc(statement.paid_by)}</div>` : ""}</div>` : "";
   const correction = !draft && statement.is_current ? `<form class="inline" method="post" action="${BASE}/etats/${esc(statement.id)}/correction" data-confirm="Créer une nouvelle version corrective ?"><button class="act act--ghost" type="submit">Créer une version corrective</button></form>` : "";
   const versionsHtml = versions.map((v) => `<li><a href="${BASE}/etats/${esc(v.id)}">Version ${v.version}</a> — ${statusBadge(v.status)}${v.is_current ? " · active" : ""} · ${xof(v.total_xof)}</li>`).join("");
   const sendsHtml = sends.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Destinataire</th><th>Résultat</th><th>Erreur</th></tr></thead><tbody>${sends.map((s) => `<tr><td>${date(s.attempted_at)}</td><td>${esc(s.recipient_email)}</td><td>${s.status === "success" ? `<span class="ok">Succès</span>` : `<span class="danger-text">Erreur</span>`}</td><td class="muted">${esc(s.error ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>Aucun envoi</b><p>Les tentatives apparaîtront ici avec leur résultat.</p></div>`;
+  const checklistItem = (ok: boolean, label: string, detail: string) =>
+    `<li class="${ok ? "is-ok" : "is-blocked"}"><span>${ok ? "✓" : "!"}</span><div><b>${esc(label)}</b><small>${esc(detail)}</small></div></li>`;
+  const checklist = `<div class="card payment-checklist"><div class="section-header"><h2>Checklist de validation</h2>${cockpitStatusBadge(state.status)}</div><ul>
+    ${checklistItem(!state.blockers.includes("month_open"), "Mois clôturé", closed ? "Le mois civil est terminé." : `Disponible après ${monthLabel(month)}.`)}
+    ${checklistItem(!state.blockers.includes("coach_unlinked"), "Coach liée", profile.wix_resource_id ? "Ressource Wix associée." : "Associez la coach dans les réglages.")}
+    ${checklistItem(!state.blockers.includes("sync_after_close_missing"), "Synchronisation après clôture", syncOk ? `Synchronisé le ${date(statement.synced_at)}.` : "Resynchronisez Wix après la fin du mois.")}
+    ${checklistItem(!state.blockers.includes("negative_total"), "Total non négatif", statement.total_xof >= 0 ? xof(statement.total_xof) : "Corrigez les retenues ou le tarif.")}
+  </ul></div>`;
+  const primaryAction = draft
+    ? state.canValidate
+      ? `<form method="post" action="${BASE}/etats/${esc(statement.id)}/valider" data-confirm="Une dernière synchronisation Wix sera faite. Valider définitivement cet état ? Son contenu ne sera plus modifiable."><button class="act act--ok" type="submit">Valider l’état</button></form>`
+      : state.blockers.includes("coach_unlinked")
+        ? `<a class="act" href="${BASE}/reglages">Associer dans les réglages</a>`
+        : `<form method="post" action="${BASE}/etats/${esc(statement.id)}/synchroniser"><button class="act" type="submit">Resynchroniser Wix</button></form>`
+    : statement.status === "validated"
+      ? `<a class="act act--ok" href="#reglement">Marquer payé</a>`
+      : `<a class="act" href="${BASE}/etats/${esc(statement.id)}/pdf" target="_blank">Ouvrir le PDF</a>`;
+  const bucketSummary = `<div class="payment-buckets"><article><span>Manuel</span><b>${buckets.manual}</b></article><article><span>Pilates Mat</span><b>${buckets.mat}</b></article><article><span>Reformer</span><b>${buckets.reformer}</b></article><article><span>Autres Wix</span><b>${buckets.otherWix}</b></article></div>`;
 
   return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">État mensuel · version ${statement.version} · Propriétaire</span><h2>${esc(statement.coach_name_snapshot)} — ${esc(monthLabel(month))}</h2><p>${esc(tariffLabel(tariffFromJson(statement.tariff_json)))}</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}?month=${esc(month)}">États du mois</a><a class="act act--ghost" href="${BASE}/etats/${esc(statement.id)}/pdf" target="_blank">PDF ${draft ? "brouillon" : "validé"}</a>${correction}</div></header>${args.banner}
-  <div class="card statement-summary"><div><span class="muted">Montant de l’état</span><b>${xof(statement.total_xof)}</b></div><div>${statusBadge(statement.status)}<p class="${syncOk ? "muted" : "danger-text"}">${esc(syncLabel)}</p></div></div>
-  ${draftTools}
+  <div class="payment-sticky-summary"><div><span>Montant</span><b>${xof(statement.total_xof)}</b></div><div><span>Statut</span>${cockpitStatusBadge(state.status)}</div><div><span>Cours</span><b>${statement.course_count}</b></div><div><span>Anomalies</span><b>${reviewCount}</b></div><div class="payment-primary-action">${primaryAction}</div></div>
+  <p class="payment-sync-line ${syncOk ? "muted" : "danger-text"}">${esc(syncLabel)}</p>
+  ${checklist}${bucketSummary}
   ${reviewSummary}${priorityBlock}
-  <div class="card"><h2>Autres séances (${statement.course_count} comptées au total)</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Participants Wix</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${otherRows || `<tr><td colspan="${columns}"><div class="empty"><b>Aucune autre séance</b><p>Synchronisez Wix ou ajoutez une séance manuelle.</p></div></td></tr>`}</tbody></table></div></div>
+  <details class="card payment-panel"><summary><span><b>Autres séances (${statement.course_count} comptées au total)</b><small>Séances normales repliées</small></span></summary><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Participants Wix</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${otherRows || `<tr><td colspan="${columns}"><div class="empty"><b>Aucune autre séance</b><p>Synchronisez Wix ou ajoutez une séance manuelle.</p></div></td></tr>`}</tbody></table></div></details>
   <div class="card"><h2>Calcul</h2><div class="table-wrap"><table><tbody><tr><td>${statement.course_count} séance(s) selon la formule figée</td><td class="right"><b>${xof(statement.base_total_xof)}</b></td>${draft ? "<td></td>" : ""}</tr>${adjustmentRows}<tr><td><b>Total à payer</b></td><td class="right"><b style="font-size:1.12rem">${xof(statement.total_xof)}</b></td>${draft ? "<td></td>" : ""}</tr></tbody></table></div></div>
-  ${sendBlock}${paidBlock}<div class="card"><h2>Versions</h2><ul>${versionsHtml}</ul></div><div class="card"><h2>Historique des envois</h2>${sendsHtml}</div>`;
+  ${draftTools}${sendBlock}<div id="reglement">${paidBlock}</div><details class="card payment-panel"><summary><span><b>Versions</b><small>${versions.length} version(s)</small></span></summary><ul>${versionsHtml}</ul></details><details class="card payment-panel"><summary><span><b>Historique des envois</b><small>${sends.length} tentative(s)</small></span></summary>${sendsHtml}</details>`;
 }

@@ -4368,3 +4368,29 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   externalOrderId ne ressuscite jamais un ordre fantôme — en recréer un
   APPROVED est la bonne réparation (l'orphelin 39f407e2… de Dialy reste
   invisible et inoffensif).
+
+## 2026-08-02 — Cockpit mensuel des paiements coachs
+
+- `/admin/paiements-coachs` devient un cockpit compact : indicateurs avec
+  couverture explicite, statuts et blockers partagés, ventilation
+  Reformer/Mat/manuel, anomalies, montants honnêtes (`—` sans snapshot),
+  actions par coach et navigation mois précédent/suivant.
+- `POST /admin/paiements-coachs/preparer` prépare le mois sans jamais valider,
+  envoyer ni marquer payé : les brouillons manquants sont créés, les brouillons
+  existants resynchronisés et les états validés/payés ignorés. Services,
+  calendrier, annulations et résolution des ids connus sont mutualisés pour
+  toutes les coachs ; les erreurs DB restent isolées par coach.
+- Une panne Wix partagée crée les nouveaux états liés en `failed`, journalise
+  l'échec sur les brouillons existants et conserve `unlinked` pour les coachs
+  non associées. Les décisions d'inclusion/exclusion restent préservées par
+  `replaceWixSnapshot` et l'idempotence coach/mois existante couvre les doubles
+  clics.
+- La fiche coach reçoit un bandeau sticky, la checklist de validation commune,
+  quatre buckets dont la somme égale `course_count`, les anomalies ouvertes et
+  les sections secondaires repliées. Les réglages utilisent une liste compacte
+  de formulaires repliables.
+- Régressions unitaires et intégration ajoutées pour les neuf statuts, les
+  blockers, les couvertures partielles, l'absence de faux zéro, les buckets,
+  les panneaux, la cohérence cockpit/fiche, la préparation globale, la panne
+  Wix, les erreurs DB isolées, le double clic, l'union/résolution Wix unique et
+  la conservation des décisions manuelles.

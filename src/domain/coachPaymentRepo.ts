@@ -58,6 +58,14 @@ export interface CoachPaymentStatement {
   updated_at: Date;
 }
 
+export interface CoachPaymentCockpitStatement extends CoachPaymentStatement {
+  reformer_count: number;
+  mat_count: number;
+  manual_count: number;
+  other_wix_count: number;
+  anomaly_count: number;
+}
+
 export interface CoachPaymentCourse {
   id: string;
   statement_id: string;
@@ -204,12 +212,59 @@ export async function rememberProfileEmail(profileId: string, email: string): Pr
   );
 }
 
-export async function listCurrentStatements(month: string): Promise<CoachPaymentStatement[]> {
+export async function listCurrentStatements(month: string): Promise<CoachPaymentCockpitStatement[]> {
   const result = await pool.query(
-    `select * from coach_payment_statements where month=$1 and is_current order by coach_name_snapshot`,
+    `select s.*,
+            coalesce(c.reformer_count, 0)::int as reformer_count,
+            coalesce(c.mat_count, 0)::int as mat_count,
+            coalesce(c.manual_count, 0)::int as manual_count,
+            coalesce(c.other_wix_count, 0)::int as other_wix_count,
+            coalesce(c.anomaly_count, 0)::int as anomaly_count
+       from coach_payment_statements s
+       left join lateral (
+         select
+           count(*) filter (
+             where source='wix' and included
+               and lower(service_name) like '%reformer%'
+               and lower(service_name) not like '%pilates mat%'
+               and lower(service_name) not like '%mat pilates%'
+           ) as reformer_count,
+           count(*) filter (
+             where source='wix' and included
+               and (lower(service_name) like '%pilates mat%' or lower(service_name) like '%mat pilates%')
+           ) as mat_count,
+           count(*) filter (where source='manual' and included) as manual_count,
+           count(*) filter (
+             where source='wix' and included
+               and lower(service_name) not like '%reformer%'
+               and lower(service_name) not like '%pilates mat%'
+               and lower(service_name) not like '%mat pilates%'
+           ) as other_wix_count,
+           count(*) filter (
+             where (source='wix' and wix_status='CANCELLED')
+                or (source='wix' and wix_status is distinct from 'CANCELLED' and participant_count=0)
+                or (manual_decision and not included)
+           ) as anomaly_count
+         from coach_payment_courses where statement_id=s.id
+       ) c on true
+      where s.month=$1 and s.is_current
+      order by s.coach_name_snapshot`,
     [`${month}-01`],
   );
-  return result.rows as CoachPaymentStatement[];
+  return result.rows as CoachPaymentCockpitStatement[];
+}
+
+/** One query for the shared bulk Wix recovery set. */
+export async function listWixEventIds(statementIds: string[]): Promise<string[]> {
+  const ids = statementIds.filter(validUuid);
+  if (!ids.length) return [];
+  const result = await pool.query(
+    `select distinct wix_event_id
+       from coach_payment_courses
+      where statement_id=any($1::uuid[]) and source='wix' and wix_event_id is not null`,
+    [ids],
+  );
+  return result.rows.map((row) => String(row.wix_event_id));
 }
 
 export async function findCurrentStatement(
