@@ -127,6 +127,8 @@ describe("coach payment cockpit coverage", () => {
     expect(html).toMatch(/data-label="Reformer">—/);
     expect(html).toContain("Mois précédent");
     expect(html).toContain("Mois suivant");
+    expect(html).toContain('onchange="this.form.requestSubmit()"');
+    expect(html).not.toContain(">Afficher</button>");
   });
 
   it("uses dashes for every uncovered indicator", () => {
