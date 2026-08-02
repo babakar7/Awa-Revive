@@ -149,12 +149,19 @@ export function computePaymentTotals(
   return { courseCount, baseTotalXof, adjustmentTotalXof, totalXof: baseTotalXof + adjustmentTotalXof };
 }
 
-export function reformerServices(services: WixService[]): WixService[] {
-  return services.filter((service) => normalizeSearch(service.name).includes("reformer"));
+export function isCoachPaymentServiceName(name: string): boolean {
+  const normalized = normalizeSearch(name);
+  return normalized.includes("reformer") ||
+    normalized.includes("pilates mat") ||
+    normalized.includes("mat pilates");
+}
+
+export function coachPaymentServices(services: WixService[]): WixService[] {
+  return services.filter((service) => isCoachPaymentServiceName(service.name));
 }
 
 /** Strict, deterministic filtering before anything becomes a payroll line. */
-export function selectEligibleReformerEvents(args: {
+export function selectEligibleCoachPaymentEvents(args: {
   events: WixCalendarEvent[];
   services: WixService[];
   coachResourceId: string;
@@ -163,7 +170,7 @@ export function selectEligibleReformerEvents(args: {
 }): EligibleCourse[] {
   const now = args.now ?? new Date();
   const { start, end } = monthBounds(args.month);
-  const matches = reformerServices(args.services);
+  const matches = coachPaymentServices(args.services);
   const serviceIds = new Set(matches.map((s) => s.id));
   const serviceNames = new Set(matches.map((s) => normalizeSearch(s.name)));
   const seen = new Set<string>();
@@ -177,8 +184,8 @@ export function selectEligibleReformerEvents(args: {
     const serviceMatches = event.serviceId
       ? serviceIds.has(event.serviceId)
       : serviceNames.has(normalizeSearch(event.serviceName)) ||
-        normalizeSearch(event.serviceName).includes("reformer") ||
-        normalizeSearch(event.title).includes("reformer");
+        isCoachPaymentServiceName(event.serviceName) ||
+        isCoachPaymentServiceName(event.title);
     if (!serviceMatches) continue;
     const startsAt = calendarDate(event.startDate);
     const endsAt = calendarDate(event.endDate);
@@ -188,7 +195,7 @@ export function selectEligibleReformerEvents(args: {
     result.push({
       wixEventId: event.id,
       serviceId: event.serviceId,
-      serviceName: event.serviceName || event.title || "Reformer",
+      serviceName: event.serviceName || event.title || "Pilates",
       startsAt,
       endsAt,
       participantCount: event.participantCount,

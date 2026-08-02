@@ -3,7 +3,7 @@ import {
   computePaymentTotals,
   monthBounds,
   monthIsClosed,
-  selectEligibleReformerEvents,
+  selectEligibleCoachPaymentEvents,
   validateManualCourseDate,
   type CoachTariff,
 } from "../src/domain/coachPaymentRules.js";
@@ -63,6 +63,7 @@ describe("Dakar civil-month boundaries", () => {
 describe("Calendar V3 event eligibility", () => {
   const services: WixService[] = [
     { id: "reformer-1", name: "Pilates Reformer", description: "", priceXof: null, durationMinutes: 50, maxParticipantsPerBooking: 1, pricingPlanIds: [], type: "CLASS" },
+    { id: "mat-1", name: "Pilates Mat", description: "", priceXof: null, durationMinutes: 50, maxParticipantsPerBooking: 1, pricingPlanIds: [], type: "CLASS" },
     { id: "yoga-1", name: "Yoga", description: "", priceXof: null, durationMinutes: 60, maxParticipantsPerBooking: 1, pricingPlanIds: [], type: "CLASS" },
   ];
   const event = (overrides: Partial<WixCalendarEvent> = {}): WixCalendarEvent => ({
@@ -81,7 +82,7 @@ describe("Calendar V3 event eligibility", () => {
   });
 
   it("keeps finished confirmed and cancelled Reformer events assigned to the coach and deduplicates Wix ids", () => {
-    const eligible = selectEligibleReformerEvents({
+    const eligible = selectEligibleCoachPaymentEvents({
       services,
       coachResourceId: "coach-yass",
       month: "2026-06",
@@ -109,7 +110,7 @@ describe("Calendar V3 event eligibility", () => {
   });
 
   it("keeps an empty session included and carries its zero-participant flag", () => {
-    const eligible = selectEligibleReformerEvents({
+    const eligible = selectEligibleCoachPaymentEvents({
       services,
       coachResourceId: "coach-yass",
       month: "2026-06",
@@ -121,7 +122,7 @@ describe("Calendar V3 event eligibility", () => {
   });
 
   it("does not count an event that has not ended yet", () => {
-    const eligible = selectEligibleReformerEvents({
+    const eligible = selectEligibleCoachPaymentEvents({
       services,
       coachResourceId: "coach-yass",
       month: "2026-06",
@@ -129,5 +130,31 @@ describe("Calendar V3 event eligibility", () => {
       events: [event()],
     });
     expect(eligible).toHaveLength(0);
+  });
+
+  it("counts Pilates Mat with exactly the same per-class tariff as Reformer", () => {
+    const eligible = selectEligibleCoachPaymentEvents({
+      services,
+      coachResourceId: "coach-yass",
+      month: "2026-06",
+      now: new Date("2026-07-01T00:00:00Z"),
+      events: [
+        event(),
+        event({
+          id: "mat-event",
+          serviceId: "mat-1",
+          serviceName: "Pilates Mat",
+          title: "Pilates Mat",
+          startDate: "2026-06-11T10:00:00",
+          endDate: "2026-06-11T10:50:00",
+        }),
+      ],
+    });
+
+    expect(eligible.map((course) => course.serviceName)).toEqual([
+      "Pilates Reformer",
+      "Pilates Mat",
+    ]);
+    expect(computePaymentTotals(eligible.length, yass, []).baseTotalXof).toBe(19_000);
   });
 });

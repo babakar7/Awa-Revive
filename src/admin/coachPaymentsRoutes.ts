@@ -5,8 +5,8 @@ import {
   currentMonthKey,
   monthIsClosed,
   parseMonthKey,
-  reformerServices,
-  selectEligibleReformerEvents,
+  coachPaymentServices,
+  selectEligibleCoachPaymentEvents,
   storedMonthKey,
   tariffFromProfile,
   validateManualCourseDate,
@@ -100,8 +100,8 @@ async function fetchEligibleCourses(
     candidateEvents: discovery.eventIds.length,
     elapsedMs: discovery.elapsedMs,
   });
-  if (reformerServices(services).length === 0) {
-    throw new payments.CoachPaymentError("Aucun service Reformer identifiable dans Wix");
+  if (coachPaymentServices(services).length === 0) {
+    throw new payments.CoachPaymentError("Aucun service Reformer ou Pilates Mat identifiable dans Wix");
   }
   const queriedIds = new Set(queriedEvents.map((event) => event.id));
   const missingCandidateIds = [...new Set([...discovery.eventIds, ...knownEventIds])]
@@ -115,7 +115,7 @@ async function fetchEligibleCourses(
     ...queriedEvents,
     ...recovered.filter((event) => event.status === "CANCELLED"),
   ];
-  return selectEligibleReformerEvents({
+  return selectEligibleCoachPaymentEvents({
     events,
     services,
     coachResourceId: profile.wix_resource_id,
