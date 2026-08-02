@@ -83,13 +83,48 @@ describe("durable agent reliability state", () => {
 
   it("durably trips no-intent on turn three and only auto-clears that pause kind", async () => {
     const client = await seedClient();
+    await pool.query(
+      `insert into handoffs (client_id, reason) values ($1, 'Demande devenue sans objet')`,
+      [client.id],
+    );
+    await pool.query(
+      `insert into conversation_reviews
+         (client_id, last_message_at, outcome, need_category, summary)
+       values ($1, now(), 'deadend', 'unknown', 'Boucle à reprendre')`,
+      [client.id],
+    );
+
     expect(await recordNoIntentTurn(client.id)).toEqual({ streak: 1, disengaged: false });
     expect(await recordNoIntentTurn(client.id)).toEqual({ streak: 2, disengaged: false });
+    expect(
+      (
+        await pool.query(
+          `select count(*)::int as n from handoffs where client_id=$1 and status='OPEN'`,
+          [client.id],
+        )
+      ).rows[0].n,
+    ).toBe(1);
     expect(await recordNoIntentTurn(client.id)).toEqual({ streak: 3, disengaged: true });
 
     let row = (await pool.query(`select * from clients where id=$1`, [client.id])).rows[0];
     expect(row.awa_disengaged_kind).toBe("no_intent");
     expect(new Date(row.awa_disengaged_until).getTime()).toBeGreaterThan(Date.now());
+    for (const table of ["handoffs", "conversation_reviews"] as const) {
+      const followUp = (
+        await pool.query(
+          `select status, done_by, done_at, resolution_outcome, resolution_note
+             from ${table} where client_id=$1`,
+          [client.id],
+        )
+      ).rows[0];
+      expect(followUp).toMatchObject({
+        status: "DONE",
+        done_by: "awa-system",
+        resolution_outcome: "not_applicable",
+        resolution_note: "Auto : conversation mise en pause (boucle sans intention)",
+      });
+      expect(followUp.done_at).toBeInstanceOf(Date);
+    }
     expect(await clearNoIntentDisengagement(client.id)).toBe(true);
 
     await pool.query(

@@ -140,8 +140,9 @@ export interface NoIntentTurnResult {
 
 /**
  * Increment the rapid no-intent streak and atomically arm the 24 h silence on
- * the threshold turn. This lives in Postgres so deploys and concurrent webhook
- * deliveries cannot reset or double-decide the guard.
+ * the threshold turn. The same atomic statement closes any open human follow-up
+ * because the no-intent pause makes it non-actionable. This lives in Postgres so
+ * deploys and concurrent webhook deliveries cannot reset or double-decide it.
  */
 export async function recordNoIntentTurn(clientId: string): Promise<NoIntentTurnResult> {
   const res = await pool.query(
@@ -156,8 +157,8 @@ export async function recordNoIntentTurn(clientId: string): Promise<NoIntentTurn
          from clients
         where id = $1
         for update
-     )
-     update clients c
+     ), updated_client as (
+       update clients c
         set awa_no_intent_streak = current.next_streak,
             awa_no_intent_last_at = now(),
             awa_disengaged_at = case when current.next_streak >= $3 then now() else c.awa_disengaged_at end,
@@ -168,10 +169,34 @@ export async function recordNoIntentTurn(clientId: string): Promise<NoIntentTurn
        from current
       where c.id = current.id
       returning current.next_streak::int as streak,
-                (current.next_streak >= $3) as disengaged`,
+                (current.next_streak >= $3) as disengaged
+     ), closed_handoffs as (
+       update handoffs
+          set status = 'DONE', done_by = 'awa-system', done_at = now(),
+              resolution_outcome = 'not_applicable',
+              resolution_note = 'Auto : conversation mise en pause (boucle sans intention)'
+        where client_id = $1 and status = 'OPEN'
+          and exists (select 1 from updated_client where disengaged)
+        returning id
+     ), closed_reviews as (
+       update conversation_reviews
+          set status = 'DONE', done_by = 'awa-system', done_at = now(),
+              resolution_outcome = 'not_applicable',
+              resolution_note = 'Auto : conversation mise en pause (boucle sans intention)'
+        where client_id = $1 and status = 'OPEN'
+          and exists (select 1 from updated_client where disengaged)
+        returning id
+     )
+     select streak, disengaged,
+            (select count(*)::int from closed_handoffs) as handoffs_closed,
+            (select count(*)::int from closed_reviews) as reviews_closed
+       from updated_client`,
     [clientId, NO_INTENT_WINDOW_HOURS, NO_INTENT_THRESHOLD],
   );
-  return res.rows[0] ?? { streak: 0, disengaged: false };
+  const result = res.rows[0] as NoIntentTurnResult | undefined;
+  return result
+    ? { streak: result.streak, disengaged: result.disengaged }
+    : { streak: 0, disengaged: false };
 }
 
 export async function resetNoIntentStreak(clientId: string): Promise<void> {
