@@ -62,3 +62,27 @@ describe("planExpiryNudgeMessage", () => {
     expect(planExpiryNudgeMessage("de", "Yoga")).toContain("a expiré");
   });
 });
+
+// Mode panne OM (callbacks Sonatel perdus, 31/07) : la copie ne doit JAMAIS
+// impliquer que le paiement n'a pas été fait — vérification manuelle assumée.
+describe("outage-mode variants", () => {
+  it("plan: never claims non-receipt, announces manual verification", () => {
+    const msg = planExpiryNudgeMessage("fr", "L'Invitée", true);
+    expect(msg).not.toContain("nous n'avons pas reçu");
+    expect(msg).toContain("vérifiées par notre équipe");
+    expect(msg).toContain("arrivera automatiquement");
+    expect(msg).not.toMatch(/sonatel|panne/i);
+  });
+
+  it("booking: same posture with the slot named", () => {
+    const msg = expiryNudgeMessage("fr", "Aquabike (Intermédiaire)", slot, true);
+    expect(msg).not.toContain("nous n'avons pas reçu");
+    expect(msg).toContain("Aquabike (Intermédiaire)");
+    expect(msg).toContain("vérifiées par notre équipe");
+    expect(msg).not.toMatch(/sonatel|panne/i);
+  });
+
+  it("outage off keeps the original copy", () => {
+    expect(expiryNudgeMessage("fr", "Yoga", slot, false)).toContain("nous n'avons pas reçu de confirmation");
+  });
+});

@@ -52,6 +52,7 @@ import {
   keyMappingForPlan,
 } from "../domain/keyRules.js";
 import { resolveContinuitySource } from "../domain/keyContinuity.js";
+import { isOmOutageActive } from "../domain/omOutage.js";
 import {
   decideMemberProvisioning,
   effectiveMemberContactId,
@@ -1242,6 +1243,23 @@ async function provisionPlanMember(
 }
 
 /**
+ * Extra note appended to payment-link tool results for OM/Max It while the
+ * owner-activated outage mode is on (lost Sonatel callbacks): the model must
+ * pre-warn the client and never treat a payment claim as "not received".
+ */
+async function omOutageNoteFor(method: string): Promise<string> {
+  if (method !== "orange_money" && method !== "maxit") return "";
+  const active = await isOmOutageActive().catch(() => false);
+  if (!active) return "";
+  return (
+    " OM OUTAGE MODE IS ON: tell the client, in one short kind sentence, that the payment confirmation " +
+    "for this method is currently verified by the team and can take a bit longer than usual. If they later " +
+    "say they've paid, NEVER say the payment wasn't received — reassure that the team is verifying it and " +
+    "call handoff_to_human once with amount + item + approximate payment time."
+  );
+}
+
+/**
  * Owner-approved narrow override of the 13/07 "Awa never creates Wix members"
  * rule (probe-create-member.ts). ONE case: a brand-NEW account whose email the
  * client herself supplied for verification, but the code never arrived and she
@@ -2095,7 +2113,8 @@ export async function executeTool(
         note:
           `Your reply must contain ONLY the class, amount, expiry, and payment link. ` +
           `Do not add the bar, another class, an upsell, or any unrelated suggestion while payment is unresolved. ` +
-          `The client chose ${appLabel}; confirmation arrives automatically after verified payment.`,
+          `The client chose ${appLabel}; confirmation arrives automatically after verified payment.` +
+          (await omOutageNoteFor(session.method)),
       });
     }
 
@@ -2988,7 +3007,8 @@ export async function executeTool(
           activationNote +
           (plan.billing === "recurring"
             ? " Recurring plan: this payment covers the FIRST period; renewal is self-service — the client just buys it again here when it ends, say so."
-            : ""),
+            : "") +
+          (await omOutageNoteFor(session.method)),
       });
     }
 

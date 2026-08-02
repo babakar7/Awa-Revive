@@ -308,6 +308,8 @@ export function dynamicContext(args: {
   packDiscoveryCampaign?: boolean;
   /** Meta Click-to-WhatsApp lead with no matching Revive account. */
   packDiscoveryMetaNewLead?: boolean;
+  /** Owner-activated Orange Money/Max It outage mode (lost Sonatel callbacks). */
+  omOutageActive?: boolean;
   /**
    * Google-review gate state for this client (feature dark = null):
    * "announce" — no gate yet: announce the review condition during an EARLY
@@ -369,6 +371,17 @@ export function dynamicContext(args: {
   if (args.clientRegister === "vous") {
     lines.push(
       "French register: VOUS is permanently latched. Use vous/votre/vos in every French reply; never tu/te/ton/ta.",
+    );
+  }
+  if (args.omOutageActive) {
+    lines.push(
+      "⚠️ ORANGE MONEY / MAX IT OUTAGE MODE (activated by the owner — Sonatel payment notifications are currently unreliable): " +
+        "a client may have GENUINELY paid via Orange Money or Max It without the system receiving any confirmation. Rules while this mode is on: " +
+        "(1) if a client says they paid via Orange Money or Max It, NEVER say the payment was not received, failed, or left no trace — treat their claim as plausible; " +
+        "(2) explain kindly that confirmations for Orange Money / Max It are temporarily verified BY THE TEAM (operator-side issue), that the verification is being done right now, and that their confirmation will arrive automatically HERE once checked; " +
+        "(3) call handoff_to_human ONCE with the payment details (amount, class or plan, approximate payment time) so the team reconciles it — do not repeat the handoff if one was already made for this payment; " +
+        "(4) Wave is NOT affected: when offering payment methods you may mention that Wave confirms instantly right now while Orange Money / Max It take longer, but never refuse or hide Orange Money / Max It if the client prefers them. " +
+        "Never mention 'Sonatel', 'panne', 'outage mode' or any technical detail — say 'vérification manuelle temporaire' or equivalent.",
     );
   }
   // RETIRED & INERT (Babakar, 01/08/2026): the Pack Découverte campaign is off —

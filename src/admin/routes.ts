@@ -39,6 +39,7 @@ import {
   verifyQueuedOmTransaction,
 } from "../domain/orangeMoneyVerification.js";
 import { isOmEnabled } from "../lib/orangeMoney.js";
+import { setOmOutageMode } from "../domain/omOutage.js";
 import { renderClosuresPage } from "./closuresPage.js";
 import { renderFaqPage } from "./faqPage.js";
 import * as closures from "../domain/closuresRepo.js";
@@ -1469,6 +1470,21 @@ ${
             subtitle: "Retrouver un paiement sans callback",
             contentWidth: "wide",
           }),
+        );
+      });
+
+      admin.post("/paiements-om/outage", async (req, reply) => {
+        const b = (req.body ?? {}) as Record<string, string>;
+        const on = String(b.mode ?? "") === "on";
+        await setOmOutageMode(on);
+        req.log.warn({ on, by: req.adminUser }, "OM outage mode toggled from admin");
+        return reply.redirect(
+          `/admin/paiements-om?done=${encodeURIComponent(
+            on
+              ? "Mode panne OM activé — Awa prévient désormais les clients (vérification manuelle) et alerte l'équipe."
+              : "Mode panne OM désactivé — Awa reprend son discours normal sur les paiements OM/Max It.",
+          )}`,
+          303,
         );
       });
 

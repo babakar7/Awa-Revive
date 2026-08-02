@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, pool } from "../../src/db/index.js";
 import * as repo from "../../src/domain/repo.js";
 import { omReconcileCandidates } from "../../src/admin/omReconcilePage.js";
+import { isOmOutageActive, setOmOutageMode } from "../../src/domain/omOutage.js";
 import { seedClient, truncateAll } from "./helpers.js";
 
 beforeAll(async () => {
@@ -84,5 +85,16 @@ describe("omReconcileCandidates", () => {
     expect(planRow.kind).toBe("Abonnement");
     expect(planRow.label).toBe("L'Invitée — Clé 3 séances");
     expect(planRow.amount_xof).toBe(30_000);
+  });
+});
+
+// Le toggle du mode panne vit dans app_state — off par défaut, on/off durables.
+describe("omOutageMode", () => {
+  it("defaults to off, persists on, then off again", async () => {
+    expect(await isOmOutageActive()).toBe(false);
+    await setOmOutageMode(true);
+    expect(await isOmOutageActive()).toBe(true);
+    await setOmOutageMode(false);
+    expect(await isOmOutageActive()).toBe(false);
   });
 });

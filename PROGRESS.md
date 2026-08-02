@@ -45,6 +45,21 @@ Runbook tant que la panne dure : tout paiement OM/Max It réclamé → portail O
 copier l'ID `MP…` → `/admin/paiements-om`. (Le nudge d'expiration + l'alerte
 réception OM shippés plus tôt aujourd'hui préviennent automatiquement.)
 
+**Mode panne OM/Max It (toggle owner, même jour)** — bouton sur
+`/admin/paiements-om` (clé `app_state om_outage_mode`). Quand ACTIF :
+- Prompt : bloc « OM OUTAGE MODE » injecté dans le contexte dynamique — Awa ne
+  dit JAMAIS qu'un paiement OM/Max It « n'a pas été reçu » ; elle rassure
+  (« vérification manuelle temporaire », sans jamais dire Sonatel/panne),
+  fait UN `handoff_to_human` avec montant/article/heure, promet la confirmation
+  automatique ici ; Wave annoncé comme instantané mais OM/Max It jamais refusés.
+- Notes outils `create_payment_link`/`create_plan_payment_link` (OM/maxit) :
+  pré-avertir le client d'une confirmation plus lente.
+- Nudges d'expiration : copie qui ne sous-entend plus le non-paiement + alerte
+  réception/owner « MODE PANNE OM ACTIF » pointant `/admin/paiements-om`.
+- **Alerte OM/Max It étendue aux réservations de cours** (le trou du cas Marie :
+  seul le flux abonnement alertait) — expiration OM/maxit d'un booking = même
+  alerte réception/owner, mode panne ou pas.
+
 ## Incidents Tout & Maryeme → 4 correctifs paiement/fiabilité (2 août 2026)
 
 Deux conversations ratées le 1er août, diagnostiquées sur la DB prod + code.

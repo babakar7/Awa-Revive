@@ -1,5 +1,6 @@
 import { pool } from "../db/index.js";
 import { escapeHtml, fmtFcfa, ago } from "./helpers.js";
+import { isOmOutageActive } from "../domain/omOutage.js";
 
 /**
  * Réconciliation manuelle Orange Money / Max It.
@@ -111,10 +112,29 @@ export async function renderOmReconcilePage(query: {
   done?: string;
   err?: string;
 }): Promise<string> {
-  const [candidates, verifications] = await Promise.all([
+  const [candidates, verifications, outage] = await Promise.all([
     omReconcileCandidates(),
     recentVerifications(),
+    isOmOutageActive(),
   ]);
+
+  const outageCard = outage
+    ? `<div class="card" style="border-left:4px solid #c62828;margin-bottom:1rem">
+<b>🚧 Mode panne OM/Max It : ACTIF</b>
+<p class="muted" style="margin:.4rem 0 .8rem;max-width:44rem">Awa ne dit jamais qu'un paiement Orange Money / Max It
+« n'a pas été reçu » : elle rassure le client (vérification manuelle temporaire), alerte l'équipe, et la
+confirmation part automatiquement après réconciliation ici. Désactive ce mode dès que les callbacks Sonatel refonctionnent.</p>
+<form method="post" action="/admin/paiements-om/outage" class="inline" onsubmit="return confirm('Désactiver le mode panne OM ? Awa reprendra son discours normal sur les paiements OM/Max It.')">
+<input type="hidden" name="mode" value="off"><button class="btn">Désactiver le mode panne</button></form>
+</div>`
+    : `<div class="card" style="border-left:4px solid #2e7d32;margin-bottom:1rem">
+<b>Mode panne OM/Max It : inactif</b>
+<p class="muted" style="margin:.4rem 0 .8rem;max-width:44rem">À activer si les callbacks Sonatel se perdent à nouveau :
+Awa arrêtera de dire qu'un paiement OM/Max It « n'a pas été reçu », préviendra le client d'un délai de confirmation,
+et alertera l'équipe pour réconciliation manuelle ici.</p>
+<form method="post" action="/admin/paiements-om/outage" class="inline" onsubmit="return confirm('Activer le mode panne OM ? Awa préviendra les clients que les confirmations OM/Max It passent en vérification manuelle.')">
+<input type="hidden" name="mode" value="on"><button class="btn">🚧 Activer le mode panne</button></form>
+</div>`;
 
   const banner = query.done
     ? `<div class="card" style="border-left:4px solid #2e7d32;margin-bottom:1rem">✅ ${escapeHtml(query.done)}</div>`
@@ -162,7 +182,7 @@ export async function renderOmReconcilePage(query: {
 <tbody>${verifRows}</tbody></table></div>`
     : "";
 
-  return `${banner}<div class="card">
+  return `${banner}${outageCard}<div class="card">
 <h2 style="margin-top:0">Retrouver un paiement Orange Money / Max It</h2>
 <p class="muted" style="max-width:46rem">Quand un client dit avoir payé mais que rien ne s'est confirmé
 (callback Sonatel perdu) : retrouve la transaction dans le portail marchand OM

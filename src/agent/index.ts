@@ -45,6 +45,7 @@ import {
   classifyConversationSignal,
   noIntentClosingMessage,
 } from "../domain/noIntentGuard.js";
+import { isOmOutageActive } from "../domain/omOutage.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -788,6 +789,7 @@ export async function handleInboundText(args: {
     preferredPaymentMethod,
     deliveryOrders,
     activeCommitment,
+    omOutageActive,
   ] = await Promise.all([
     repo.activeAwaitingPayment(client.id),
     repo.activeAwaitingPlanOrder(client.id),
@@ -800,6 +802,7 @@ export async function handleInboundText(args: {
     repo.lastSuccessfulBookingPaymentMethod(client.id),
     deliveries.actionableDeliveriesForPhone(client.wa_phone),
     commitments.activeCommitmentSnapshot(client.id),
+    isOmOutageActive().catch(() => false),
   ]);
 
   // The delivery confirmation explicitly asks for a terse method reply. Resolve
@@ -932,6 +935,7 @@ export async function handleInboundText(args: {
         activeCommitment,
         packDiscoveryCampaign,
         packDiscoveryMetaNewLead,
+        omOutageActive,
         reviewGate,
         reviewLink: config.GOOGLE_REVIEW_URL || undefined,
         conversationGapDays,
