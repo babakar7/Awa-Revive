@@ -17,7 +17,41 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
-## Relance A — lead pub silencieux jamais revenu après le pitch (3 août 2026)
+## Relance A passée en ENVOI MANUEL — /admin/relances (3 août 2026)
+
+**Décision produit (Babakar) :** pas d'envoi automatique. La réception relit les
+leads pub silencieux dans le dashboard et décide, un par un, d'envoyer la
+relance ou d'ignorer le lead. Le sweep auto de la relance A (livré plus tôt le
+même jour, cf. section suivante) est **retiré**.
+
+**Ce qui change :**
+- Nouvelle page [/admin/relances](src/admin/relancesPage.ts) : liste des leads
+  candidats (nom, tel, ancienneté du clic, **compte à rebours de la fenêtre
+  24 h**, aperçu du message), 2 boutons par lead — « Envoyer la relance » /
+  « Ignorer ». Panneau historique des relances envoyées/ignorées. Badge nav
+  `leadNudges`. Routes GET + POST send/skip dans
+  [src/admin/routes.ts](src/admin/routes.ts).
+- L'envoi manuel passe par le **même claim atomique** (re-vérifie
+  réponse/paiement/takeover/handoff + fenêtre 24 h au clic) : si le lead a
+  répondu entre l'affichage et le clic, l'envoi est refusé (`status='gone'`,
+  bandeau « Lead déjà traité »). Le skip est one-shot et honoré
+  inconditionnellement (le lead disparaît de la liste).
+- **Holdout / mesure ITT supprimés** : la sélection manuelle n'est pas
+  randomisée, donc plus de bras HOLDOUT ni de FNV-1a/heures calmes. `arm='MANUAL'`
+  pour tous. `outbound_nudges.arm` accepte désormais `MANUAL` (migration
+  `alter … add constraint`). Mesure = simple décompte relances envoyées →
+  conversion Clé ≤72 h (non causal, assumé).
+- Sweep auto + config `LEAD_NUDGE_ENABLED/QUIET/HOLDOUT` retirés ; il ne reste
+  que `LEAD_NUDGE_DELAY_MINUTES` (silence min avant d'apparaître, 180) et
+  `LEAD_NUDGE_MAX_AGE_HOURS` (borne fenêtre 24 h, 22) qui cadrent la liste.
+- L'échec Meta asynchrone repasse toujours `SENT→FAILED`
+  (`markOutboundNudgeFailedByWamid`, webhook statuts).
+
+Tests : `test/relancesPage.test.ts` (rendu), `test/leadNudge.test.ts` (copie),
+`test/integration/leadNudge.test.ts` (envoi/skip/course/exclusions),
+`test/integration/relancesRoute.test.ts` (route bout-en-bout avec auth).
+
+## Relance A (auto) — lead pub silencieux jamais revenu après le pitch (3 août 2026)
 
 **Analyse prod (24/07→03/08).** 173 leads pub CTWA (`campaign_leads`, clé
 `pack_decouverte_ctwa`), 7 Clés L'Invitée vendues — toutes issues des cohortes

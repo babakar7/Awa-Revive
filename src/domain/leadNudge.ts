@@ -3,49 +3,23 @@ import { sendText } from "../lib/whatsapp.js";
 import * as repo from "./repo.js";
 import { PACK_DISCOVERY_CAMPAIGN } from "./packDiscoveryCampaign.js";
 import {
-  silentLeadCandidates,
-  claimSilentLeadNudge,
+  claimManualLeadNudge,
+  dismissSilentLead,
   completeOutboundNudge,
   silentLeadDedupKey,
-  type NudgeArm,
 } from "./leadNudgeRepo.js";
 
 /**
- * Relance A — one free-text follow-up to a Pack Découverte ad lead who clicked,
- * got Awa's pitch, and never replied. See LEAD-FOLLOWUP-PLAN.md. Selection +
- * atomic claim live in leadNudgeRepo; this module owns the copy, the
- * deterministic holdout, the quiet-hours gate, and the sweep.
+ * Manual relance A — reception reviews silent Pack Découverte ad leads in
+ * /admin/relances and sends (or skips) one follow-up per lead. This module owns
+ * the copy and the send orchestration; selection + the atomic claim live in
+ * leadNudgeRepo. See LEAD-FOLLOWUP-PLAN.md.
  */
 
-/**
- * FNV-1a over the client id, 32-bit. Math.imul + `>>> 0` give real 32-bit
- * unsigned arithmetic — a plain `hash * prime` overflows into floats past 2^53
- * and silently drops the low bits FNV depends on. TS-only and version-stable
- * (unlike Postgres hashtext()), so the holdout assignment can't drift.
- */
-export function fnv1aMod(input: string, mod: number): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash % mod;
-}
-
-/** Deterministic control-group assignment. mod <= 0 disables the holdout. */
-export function isHoldout(clientId: string, mod: number): boolean {
-  return mod > 0 && fnv1aMod(clientId, mod) === 0;
-}
-
-/**
- * Dakar quiet window (Dakar == UTC, no DST). Wraps midnight when start > end:
- * with defaults 21→9, quiet is [21,24) ∪ [0,9), so sends land 09:00–20:59.
- */
-export function isQuietHour(hour: number, quietStart: number, quietEnd: number): boolean {
-  if (quietStart === quietEnd) return false;
-  if (quietStart < quietEnd) return hour >= quietStart && hour < quietEnd;
-  return hour >= quietStart || hour < quietEnd;
-}
+export type ManualNudgeResult =
+  | { status: "sent"; waMessageId: string | null }
+  | { status: "skipped" } // reception dismissed the lead
+  | { status: "gone" }; // no longer a valid candidate (replied / paid / window closed)
 
 /**
  * Short, one closed question, no re-pitch (the full pitch is already in the
@@ -69,54 +43,47 @@ export function silentLeadNudgeMessage(lang: string | null, name: string | null)
   );
 }
 
-/** Sweep candidates, claim atomically, send to the treatment arm. Returns sent count. */
-export async function sweepSilentLeadNudges(log: {
-  info: (o: unknown, m?: string) => void;
-  error: (o: unknown, m?: string) => void;
-}): Promise<number> {
-  if (!config.LEAD_NUDGE_ENABLED) return 0;
-
-  const dakarHour = new Date().getUTCHours(); // Dakar == UTC
-  if (isQuietHour(dakarHour, config.LEAD_NUDGE_QUIET_START, config.LEAD_NUDGE_QUIET_END)) {
-    return 0;
-  }
-
-  const candidates = await silentLeadCandidates({
+/**
+ * Send one manual nudge. Claims atomically (re-validating reply/payment/
+ * takeover/handoff and the 24h window), then sends and journals the turn so Awa
+ * has context when the lead answers. Returns "gone" when the claim is refused —
+ * the lead is no longer a valid candidate.
+ */
+export async function sendManualLeadNudge(
+  clientId: string,
+  by: string,
+  log: { info: (o: unknown, m?: string) => void; error: (o: unknown, m?: string) => void },
+): Promise<ManualNudgeResult> {
+  const contact = await claimManualLeadNudge({
+    clientId,
     campaignKey: PACK_DISCOVERY_CAMPAIGN,
+    by,
     delayMinutes: config.LEAD_NUDGE_DELAY_MINUTES,
     maxAgeHours: config.LEAD_NUDGE_MAX_AGE_HOURS,
   });
+  if (!contact) return { status: "gone" };
 
-  let sent = 0;
-  for (const c of candidates) {
-    const arm: NudgeArm = isHoldout(c.client_id, config.LEAD_NUDGE_HOLDOUT_MOD)
-      ? "HOLDOUT"
-      : "TREATMENT";
-
-    // Same atomic guard for both arms — a reply/payment/takeover between
-    // selection and here cancels the claim (returns false).
-    const claimed = await claimSilentLeadNudge({
-      clientId: c.client_id,
-      campaignKey: c.campaign_key,
-      arm,
-      delayMinutes: config.LEAD_NUDGE_DELAY_MINUTES,
-      maxAgeHours: config.LEAD_NUDGE_MAX_AGE_HOURS,
-    });
-    if (!claimed) continue;
-    if (arm === "HOLDOUT") continue; // control: assigned + SUPPRESSED, never sent
-
-    const dedupKey = silentLeadDedupKey(c.client_id);
-    try {
-      const msg = silentLeadNudgeMessage(c.language, c.name);
-      const wamid = await sendText(c.wa_phone, msg);
-      await repo.addTurn(c.client_id, "assistant", msg, wamid ?? undefined);
-      await completeOutboundNudge({ dedupKey, outcome: "SENT", waMessageId: wamid });
-      sent++;
-      log.info({ clientId: c.client_id }, "Silent-lead nudge sent");
-    } catch (err) {
-      await completeOutboundNudge({ dedupKey, outcome: "FAILED", detail: String(err) });
-      log.error({ err, clientId: c.client_id }, "Silent-lead nudge failed");
-    }
+  const dedupKey = silentLeadDedupKey(clientId);
+  try {
+    const msg = silentLeadNudgeMessage(contact.language, contact.name);
+    const wamid = await sendText(contact.wa_phone, msg);
+    await repo.addTurn(clientId, "assistant", msg, wamid ?? undefined);
+    await completeOutboundNudge({ dedupKey, outcome: "SENT", waMessageId: wamid });
+    log.info({ clientId, by }, "Manual silent-lead nudge sent");
+    return { status: "sent", waMessageId: wamid };
+  } catch (err) {
+    await completeOutboundNudge({ dedupKey, outcome: "FAILED", detail: String(err) });
+    log.error({ err, clientId, by }, "Manual silent-lead nudge failed");
+    throw err;
   }
-  return sent;
+}
+
+/** Reception dismissed the lead — one-shot, drops it off the list. */
+export async function skipLeadNudge(clientId: string, by: string): Promise<ManualNudgeResult> {
+  const recorded = await dismissSilentLead({
+    clientId,
+    campaignKey: PACK_DISCOVERY_CAMPAIGN,
+    by,
+  });
+  return recorded ? { status: "skipped" } : { status: "gone" };
 }

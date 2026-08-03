@@ -1,11 +1,17 @@
-# LEAD-FOLLOWUP-PLAN — relance des leads pub silencieux (v3, FINAL)
+# LEAD-FOLLOWUP-PLAN — relance des leads pub silencieux (v4, LIVRÉ)
 
-> **Statut : PRÊT À IMPLÉMENTER** — worktree `lead-nudges` créé.
-> v1 03/08 (analyse prod §1) ; v2 03/08 (revue : claim atomique, exclusions,
-> holdout) ; **v3 03/08 (finale)** : la relance « lien plan expiré » est DÉJÀ en
-> prod (§2) → le build se réduit à la relance A ; séparation arm/outcome
-> (intention-to-treat) pour une mesure causale propre.
-> Décision associée : budget pub doublé ($5 → $10/jour) le 03/08.
+> **Statut : LIVRÉ en ENVOI MANUEL.** v1→v3 spécifiaient un envoi automatique
+> avec holdout randomisé (arm/outcome, intention-to-treat). **v4 (03/08) : pivot
+> décidé par Babakar — envoi MANUEL depuis /admin/relances**, pas d'automatisme.
+> Conséquence : plus de holdout ni de mesure causale (la sélection humaine n'est
+> pas randomisée) ; `arm='MANUAL'`. Le reste du design (claim atomique, ancrage
+> trigger, exclusion funnel paiement, fenêtre 24 h, copie) est conservé tel quel.
+> La relance « lien plan expiré » était DÉJÀ en prod (§2). Détail d'implémentation
+> et fichiers : PROGRESS.md (03/08). Budget pub doublé ($5 → $10/jour) le 03/08.
+>
+> **Les sections ci-dessous décrivent le design v3 (auto+holdout) pour mémoire.**
+> Ce qui a réellement été livré : le même moteur de sélection/claim, déclenché à
+> la main via des boutons « Envoyer » / « Ignorer » par lead.
 
 ## 1. Contexte — données prod (24/07 → 03/08)
 

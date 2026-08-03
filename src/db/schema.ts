@@ -1938,28 +1938,34 @@ create table if not exists faq_entries (
 );
 create index if not exists idx_faq_published on faq_entries (status, enabled);
 
--- Journal des relances PROACTIVES sortantes (lead pub silencieux, futur réveil
--- J+2). Distinct des nudges lien-expiré, qui vivent sur pending_bookings /
+-- Journal des relances PROACTIVES sortantes (lead pub silencieux). Distinct des
+-- nudges lien-expiré, qui vivent sur pending_bookings /
 -- pending_plan_orders.expiry_nudged_at — ce journal n'est PAS rétroactif.
 --
--- Deux dimensions séparées (intention-to-treat) :
---   arm     = assignation expérimentale, FIXÉE au claim, jamais modifiée ;
---   outcome = état opérationnel de livraison. Un message TREATMENT rejeté par
---             Meta passe FAILED mais RESTE dans le bras traitement pour la
---             comparaison causale (les échecs Meta corrèlent avec l'âge du lead).
--- dedup_key rend la relance one-shot par client/campagne.
+-- Envoi MANUEL : la réception relit les leads silencieux dans /admin/relances et
+-- décide, un par un, d'envoyer la relance ou d'ignorer le lead. dedup_key rend
+-- l'action one-shot par client (une relance OU un skip, jamais les deux).
+--   arm     = 'MANUAL' (déclenché à la main). 'TREATMENT'/'HOLDOUT' réservés à
+--             une éventuelle campagne randomisée future.
+--   outcome = CLAIMED (réservé le temps de l'envoi) → SENT | FAILED, ou
+--             SUPPRESSED pour un skip. Un SENT rejeté par Meta en asynchrone
+--             repasse FAILED (taux de livraison honnête).
 create table if not exists outbound_nudges (
-  dedup_key text primary key,        -- 'LEAD_SILENT:<client_id>' | 'LEAD_REVIVAL:<client_id>'
+  dedup_key text primary key,        -- 'LEAD_SILENT:<client_id>'
   client_id uuid not null references clients(id),
   campaign_key text,
-  kind text not null,                -- 'LEAD_SILENT' | 'LEAD_REVIVAL'
-  arm text not null check (arm in ('TREATMENT','HOLDOUT')),
+  kind text not null,                -- 'LEAD_SILENT'
+  arm text not null check (arm in ('TREATMENT','HOLDOUT','MANUAL')),
   outcome text not null check (outcome in ('CLAIMED','SENT','FAILED','SUPPRESSED')),
   detail text,
   wa_message_id text,
   assigned_at timestamptz not null default now(),
   sent_at timestamptz
 );
+-- La table a pu être créée avant l'ajout de 'MANUAL' (relance A auto initiale).
+alter table outbound_nudges drop constraint if exists outbound_nudges_arm_check;
+alter table outbound_nudges add constraint outbound_nudges_arm_check
+  check (arm in ('TREATMENT','HOLDOUT','MANUAL'));
 -- Résolution rapide d'un statut Meta 'failed' async → la ligne à repasser FAILED.
 create index if not exists idx_outbound_nudges_wamid
   on outbound_nudges (wa_message_id) where wa_message_id is not null;

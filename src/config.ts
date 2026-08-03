@@ -198,26 +198,15 @@ export const config = {
   // leaves the existing direct-booking campaign flow in place until rollout.
   PACK_DISCOVERY_STEP1_PLAN_ID: optional("PACK_DISCOVERY_STEP1_PLAN_ID", ""),
   PACK_DISCOVERY_CONTINUATION_PLAN_IDS: optional("PACK_DISCOVERY_CONTINUATION_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
-  // One-shot proactive follow-up for a Pack Découverte ad lead who clicked,
-  // received Awa's pitch, and never wrote back. Free-text inside the 24h
-  // window (the lead necessarily messaged us). OFF by default: enable via
-  // Railway after a prod dry-run of the candidate query.
-  LEAD_NUDGE_ENABLED: optional("LEAD_NUDGE_ENABLED", "false") === "true",
-  // Silence after Awa's last message before we nudge (the lead cooled off but
-  // the ad is still fresh in mind; buyers who convert do so within hours).
+  // Manual silent-lead follow-up (/admin/relances): reception reviews leads who
+  // clicked a Pack Découverte ad, got Awa's pitch, and never replied, then sends
+  // one nudge per lead. These two bound the review list.
+  // Silence after Awa's last message before a lead surfaces — so we never show a
+  // conversation the client is still reading/typing into.
   LEAD_NUDGE_DELAY_MINUTES: parseInt(optional("LEAD_NUDGE_DELAY_MINUTES", "180"), 10),
-  // Upper bound on the age of the client's LAST inbound: past this we risk the
-  // 24h WhatsApp window (Meta error 131047). Conservative < 24h.
+  // Hard cap on the last-inbound age: past this, free text can't be delivered
+  // inside the 24h WhatsApp window (Meta error 131047). Keep < 24h.
   LEAD_NUDGE_MAX_AGE_HOURS: parseInt(optional("LEAD_NUDGE_MAX_AGE_HOURS", "22"), 10),
-  // Dakar quiet hours (Dakar == UTC): no nudge sent when local hour is in
-  // [QUIET_START, 24) ∪ [0, QUIET_END). A night candidate is caught next
-  // morning if its 24h window still holds, else it drops out naturally.
-  LEAD_NUDGE_QUIET_START: parseInt(optional("LEAD_NUDGE_QUIET_START", "21"), 10),
-  LEAD_NUDGE_QUIET_END: parseInt(optional("LEAD_NUDGE_QUIET_END", "9"), 10),
-  // Deterministic holdout: 1 candidate in N is assigned to the control arm and
-  // never nudged, so nudged-vs-holdout isolates the nudge effect from the
-  // simultaneous budget change. 0 disables the holdout (everyone treated).
-  LEAD_NUDGE_HOLDOUT_MOD: parseInt(optional("LEAD_NUDGE_HOLDOUT_MOD", "6"), 10),
   // Explicit boundary for plans Awa may expose and sell. Wix `public:false`
   // only hides a plan from the website and is not an internal-plan marker.
   // Empty is tolerated outside production for local/unit tests; production

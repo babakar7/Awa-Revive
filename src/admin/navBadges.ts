@@ -2,6 +2,9 @@ import * as links from "../domain/linkRequests.js";
 import * as reviews from "../domain/conversationReview.js";
 import * as delivery from "../domain/deliveryRepo.js";
 import { pool } from "../db/index.js";
+import { config } from "../config.js";
+import { countSilentLeadCandidates } from "../domain/leadNudgeRepo.js";
+import { PACK_DISCOVERY_CAMPAIGN } from "../domain/packDiscoveryCampaign.js";
 
 /**
  * Cheap counts for the admin sidebar + inbox total. Soft-fails to 0 so chrome
@@ -15,6 +18,8 @@ export interface NavBadges {
   followUps: number;
   crmLinks: number;
   livraisons: number;
+  /** Pack Découverte leads waiting for a manual follow-up decision. */
+  leadNudges: number;
   /** Sum used on « À faire ». */
   total: number;
 }
@@ -27,6 +32,7 @@ const empty: NavBadges = {
   followUps: 0,
   crmLinks: 0,
   livraisons: 0,
+  leadNudges: 0,
   total: 0,
 };
 
@@ -39,7 +45,7 @@ async function soft<T>(p: Promise<T>, fallback: T): Promise<T> {
 }
 
 export async function loadNavBadges(): Promise<NavBadges> {
-  const [money, handoffs, reviewN, crmLinks, livraisons] = await Promise.all([
+  const [money, handoffs, reviewN, crmLinks, livraisons, leadNudges] = await Promise.all([
     soft(
       pool
         .query(
@@ -83,6 +89,14 @@ export async function loadNavBadges(): Promise<NavBadges> {
       }),
       0,
     ),
+    soft(
+      countSilentLeadCandidates({
+        campaignKey: PACK_DISCOVERY_CAMPAIGN,
+        delayMinutes: config.LEAD_NUDGE_DELAY_MINUTES,
+        maxAgeHours: config.LEAD_NUDGE_MAX_AGE_HOURS,
+      }),
+      0,
+    ),
   ]);
 
   const badges: NavBadges = {
@@ -93,6 +107,7 @@ export async function loadNavBadges(): Promise<NavBadges> {
     followUps: handoffs + reviewN,
     crmLinks,
     livraisons,
+    leadNudges,
     total: 0,
   };
   badges.total =

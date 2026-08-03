@@ -69,6 +69,7 @@ const NAV: NavSection[] = [
       { href: "/admin/conversations", label: "Conversations", icon: "chat" },
       { href: "/admin/classement", label: "Classement clients", icon: "booking" },
       { href: "/admin/suivi", label: "Suivi clients", icon: "handoff", badgeKey: "followUps" },
+      { href: "/admin/relances", label: "Relances leads", icon: "funnel", badgeKey: "leadNudges" },
       { href: "/admin/crm", label: "CRM", icon: "crm", badgeKey: "crmLinks" },
     ],
   },

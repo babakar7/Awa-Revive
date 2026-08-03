@@ -2,12 +2,12 @@ import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from
 import { migrate, pool } from "../../src/db/index.js";
 import { config } from "../../src/config.js";
 import { PACK_DISCOVERY_CAMPAIGN } from "../../src/domain/packDiscoveryCampaign.js";
-import { sweepSilentLeadNudges } from "../../src/domain/leadNudge.js";
+import { sendManualLeadNudge, skipLeadNudge } from "../../src/domain/leadNudge.js";
 import {
   silentLeadCandidates,
-  claimSilentLeadNudge,
-  markOutboundNudgeFailedByWamid,
+  countSilentLeadCandidates,
   silentLeadDedupKey,
+  markOutboundNudgeFailedByWamid,
 } from "../../src/domain/leadNudgeRepo.js";
 import { makeFetchMock, seedClient, truncateAll, type FetchMock } from "./helpers.js";
 
@@ -15,12 +15,8 @@ let mock: FetchMock;
 const log = { info() {}, error() {} };
 
 const original = {
-  enabled: config.LEAD_NUDGE_ENABLED,
-  quietStart: config.LEAD_NUDGE_QUIET_START,
-  quietEnd: config.LEAD_NUDGE_QUIET_END,
   delay: config.LEAD_NUDGE_DELAY_MINUTES,
   maxAge: config.LEAD_NUDGE_MAX_AGE_HOURS,
-  holdout: config.LEAD_NUDGE_HOLDOUT_MOD,
 };
 
 beforeAll(async () => {
@@ -37,23 +33,19 @@ afterAll(async () => {
 beforeEach(async () => {
   await truncateAll();
   mock.reset();
-  config.LEAD_NUDGE_ENABLED = true;
-  config.LEAD_NUDGE_QUIET_START = 0; // start == end → never quiet (time-of-day independent)
-  config.LEAD_NUDGE_QUIET_END = 0;
   config.LEAD_NUDGE_DELAY_MINUTES = 180;
   config.LEAD_NUDGE_MAX_AGE_HOURS = 22;
-  config.LEAD_NUDGE_HOLDOUT_MOD = 0; // everyone treatment unless a test overrides
 });
 
 afterEach(() => {
-  Object.assign(config, {
-    LEAD_NUDGE_ENABLED: original.enabled,
-    LEAD_NUDGE_QUIET_START: original.quietStart,
-    LEAD_NUDGE_QUIET_END: original.quietEnd,
-    LEAD_NUDGE_DELAY_MINUTES: original.delay,
-    LEAD_NUDGE_MAX_AGE_HOURS: original.maxAge,
-    LEAD_NUDGE_HOLDOUT_MOD: original.holdout,
-  });
+  config.LEAD_NUDGE_DELAY_MINUTES = original.delay;
+  config.LEAD_NUDGE_MAX_AGE_HOURS = original.maxAge;
+});
+
+const params = () => ({
+  campaignKey: PACK_DISCOVERY_CAMPAIGN,
+  delayMinutes: config.LEAD_NUDGE_DELAY_MINUTES,
+  maxAgeHours: config.LEAD_NUDGE_MAX_AGE_HOURS,
 });
 
 /** A lead who clicked the ad, got Awa's pitch, and never wrote back. */
@@ -77,7 +69,6 @@ async function seedSilentLead(opts: {
     [client.id, PACK_DISCOVERY_CAMPAIGN, triggerWamid],
   );
   if (opts.priorHistory) {
-    // Old back-and-forth from a previous relationship, BEFORE the ad click.
     await pool.query(
       `insert into conversations (client_id, role, content, created_at) values
          ($1, 'user', 'ancienne question', now() - interval '10 days'),
@@ -106,23 +97,31 @@ async function nudgeRow(clientId: string) {
   return res.rows[0];
 }
 
-describe("silent-lead nudge (relance A)", () => {
-  it("nudges a silent lead once, records TREATMENT/SENT and journals the turn", async () => {
+describe("manual silent-lead nudge (/admin/relances)", () => {
+  it("lists a silent lead and counts it for the badge", async () => {
     const c = await seedSilentLead({ phone: "221770001001", name: "Fatou" });
+    const list = await silentLeadCandidates(params());
+    expect(list.map((r) => r.client_id)).toContain(c.id);
+    expect(await countSilentLeadCandidates(params())).toBe(1);
+  });
 
-    const sent = await sweepSilentLeadNudges(log);
-    expect(sent).toBe(1);
+  it("sends one nudge on demand: TREATMENT-free MANUAL/SENT, journaled, one-shot", async () => {
+    const c = await seedSilentLead({ phone: "221770001002", name: "Fatou" });
 
-    const texts = mock.waTextsTo("221770001001");
+    const result = await sendManualLeadNudge(c.id, "reception", log);
+    expect(result.status).toBe("sent");
+
+    const texts = mock.waTextsTo("221770001002");
     expect(texts).toHaveLength(1);
     expect(texts[0]).toContain("L'Invitée");
     expect(texts[0]).toContain("Fatou");
 
     const row = await nudgeRow(c.id);
-    expect(row.arm).toBe("TREATMENT");
+    expect(row.arm).toBe("MANUAL");
     expect(row.outcome).toBe("SENT");
     expect(row.sent_at).not.toBeNull();
     expect(row.wa_message_id).toMatch(/^wamid\./);
+    expect(row.detail).toBe("manual:reception");
 
     // journaled so Awa has context when they reply
     const turns = await pool.query(
@@ -133,147 +132,84 @@ describe("silent-lead nudge (relance A)", () => {
     );
     expect(turns.rows[0].n).toBe(1);
 
-    // one-shot: a second sweep sends nothing more
-    const again = await sweepSilentLeadNudges(log);
-    expect(again).toBe(0);
-    expect(mock.waTextsTo("221770001001")).toHaveLength(1);
+    // one-shot: the lead is gone from the list and re-send is refused
+    expect((await silentLeadCandidates(params())).map((r) => r.client_id)).not.toContain(c.id);
+    const again = await sendManualLeadNudge(c.id, "reception", log);
+    expect(again.status).toBe("gone");
+    expect(mock.waTextsTo("221770001002")).toHaveLength(1);
   });
 
-  it("refuses the claim when a reply lands between selection and claim (ITT race)", async () => {
-    const c = await seedSilentLead({ phone: "221770001002" });
-
-    const before = await silentLeadCandidates({
-      campaignKey: PACK_DISCOVERY_CAMPAIGN,
-      delayMinutes: 180,
-      maxAgeHours: 22,
-    });
-    expect(before.map((r) => r.client_id)).toContain(c.id);
-
-    // The lead replies right after we selected them.
+  it("refuses to send (status=gone) when a reply lands before the click (race)", async () => {
+    const c = await seedSilentLead({ phone: "221770001003" });
+    // The lead replies between page load and the reception clicking Send.
     await pool.query(
       `insert into conversations (client_id, role, content) values ($1, 'user', 'oui le matin')`,
       [c.id],
     );
-
-    const claimed = await claimSilentLeadNudge({
-      clientId: c.id,
-      campaignKey: PACK_DISCOVERY_CAMPAIGN,
-      arm: "TREATMENT",
-      delayMinutes: 180,
-      maxAgeHours: 22,
-    });
-    expect(claimed).toBe(false);
+    const result = await sendManualLeadNudge(c.id, "reception", log);
+    expect(result.status).toBe("gone");
+    expect(mock.waTextsTo("221770001003")).toHaveLength(0);
     expect(await nudgeRow(c.id)).toBeUndefined();
   });
 
-  it("excludes a lead who already entered the payment funnel (EXPIRED plan order)", async () => {
-    const c = await seedSilentLead({ phone: "221770001003" });
+  it("skip records a one-shot dismissal and drops the lead off the list", async () => {
+    const c = await seedSilentLead({ phone: "221770001004" });
+    const result = await skipLeadNudge(c.id, "reception");
+    expect(result.status).toBe("skipped");
+
+    const row = await nudgeRow(c.id);
+    expect(row.outcome).toBe("SUPPRESSED");
+    expect(row.arm).toBe("MANUAL");
+    expect(row.detail).toBe("manual_skip:reception");
+    expect(mock.waTextsTo("221770001004")).toHaveLength(0);
+
+    // gone from the list; a later send is refused
+    expect((await silentLeadCandidates(params())).map((r) => r.client_id)).not.toContain(c.id);
+    expect((await sendManualLeadNudge(c.id, "reception", log)).status).toBe("gone");
+  });
+
+  it("excludes a lead already in the payment funnel (EXPIRED plan order)", async () => {
+    const c = await seedSilentLead({ phone: "221770001005" });
     await pool.query(
       `insert into pending_plan_orders (client_id, plan_id, plan_name, amount_xof, status, payment_link)
        values ($1, 'plan-invitee', 'L''Invitée — Clé 3 séances', 30000, 'EXPIRED', 'https://pay.wave.com/x')`,
       [c.id],
     );
-
-    const candidates = await silentLeadCandidates({
-      campaignKey: PACK_DISCOVERY_CAMPAIGN,
-      delayMinutes: 180,
-      maxAgeHours: 22,
-    });
-    expect(candidates.map((r) => r.client_id)).not.toContain(c.id);
+    expect((await silentLeadCandidates(params())).map((r) => r.client_id)).not.toContain(c.id);
+    // and a direct send is refused too
+    expect((await sendManualLeadNudge(c.id, "reception", log)).status).toBe("gone");
   });
 
-  it("still nudges an old client with prior history who clicks the ad (trigger anchoring)", async () => {
-    const c = await seedSilentLead({ phone: "221770001004", priorHistory: true });
-
-    const candidates = await silentLeadCandidates({
-      campaignKey: PACK_DISCOVERY_CAMPAIGN,
-      delayMinutes: 180,
-      maxAgeHours: 22,
-    });
-    // count-based "one user message ever" logic would wrongly drop them
-    expect(candidates.map((r) => r.client_id)).toContain(c.id);
+  it("still lists an old client with prior history who clicks the ad (trigger anchoring)", async () => {
+    const c = await seedSilentLead({ phone: "221770001006", priorHistory: true });
+    expect((await silentLeadCandidates(params())).map((r) => r.client_id)).toContain(c.id);
   });
 
-  it("assigns the holdout arm and never sends (SUPPRESSED)", async () => {
-    config.LEAD_NUDGE_HOLDOUT_MOD = 1; // fnv1aMod(id, 1) === 0 → everyone control
-    const c = await seedSilentLead({ phone: "221770001005" });
-
-    const sent = await sweepSilentLeadNudges(log);
-    expect(sent).toBe(0);
-    expect(mock.waTextsTo("221770001005")).toHaveLength(0);
-
-    const row = await nudgeRow(c.id);
-    expect(row.arm).toBe("HOLDOUT");
-    expect(row.outcome).toBe("SUPPRESSED");
-    expect(row.sent_at).toBeNull();
-
-    // still assigned, never re-processed
-    const again = await sweepSilentLeadNudges(log);
-    expect(again).toBe(0);
-    const rows = await pool.query(`select count(*)::int as n from outbound_nudges where client_id = $1`, [c.id]);
-    expect(rows.rows[0].n).toBe(1);
+  it("does not list a lead under an open handoff, and a send is refused", async () => {
+    const c = await seedSilentLead({ phone: "221770001007" });
+    await pool.query(`insert into handoffs (client_id, status) values ($1, 'OPEN')`, [c.id]);
+    expect((await silentLeadCandidates(params())).map((r) => r.client_id)).not.toContain(c.id);
+    expect((await sendManualLeadNudge(c.id, "reception", log)).status).toBe("gone");
   });
 
-  it("flips SENT→FAILED on an async Meta failure, leaving the arm untouched (ITT)", async () => {
-    const c = await seedSilentLead({ phone: "221770001006" });
-    await sweepSilentLeadNudges(log);
+  it("flips SENT→FAILED on an async Meta failure (delivery-rate honesty)", async () => {
+    const c = await seedSilentLead({ phone: "221770001008" });
+    await sendManualLeadNudge(c.id, "reception", log);
     const before = await nudgeRow(c.id);
     expect(before.outcome).toBe("SENT");
 
     const flipped = await markOutboundNudgeFailedByWamid(before.wa_message_id, "131047 re-engagement");
     expect(flipped).toBe(1);
-
-    const after = await nudgeRow(c.id);
-    expect(after.outcome).toBe("FAILED");
-    expect(after.arm).toBe("TREATMENT"); // assignment is immutable
+    expect((await nudgeRow(c.id)).outcome).toBe("FAILED");
   });
 
-  it("gates both arms on the identical guard (open handoff blocks treatment and holdout alike)", async () => {
-    const treated = await seedSilentLead({ phone: "221770001007" });
-    const control = await seedSilentLead({ phone: "221770001008" });
-    for (const id of [treated.id, control.id]) {
-      await pool.query(
-        `insert into handoffs (client_id, status) values ($1, 'OPEN')`,
-        [id],
-      );
-    }
-
-    const candidates = await silentLeadCandidates({
-      campaignKey: PACK_DISCOVERY_CAMPAIGN,
-      delayMinutes: 180,
-      maxAgeHours: 22,
-    });
-    expect(candidates).toHaveLength(0);
-
-    const t = await claimSilentLeadNudge({
-      clientId: treated.id, campaignKey: PACK_DISCOVERY_CAMPAIGN,
-      arm: "TREATMENT", delayMinutes: 180, maxAgeHours: 22,
-    });
-    const h = await claimSilentLeadNudge({
-      clientId: control.id, campaignKey: PACK_DISCOVERY_CAMPAIGN,
-      arm: "HOLDOUT", delayMinutes: 180, maxAgeHours: 22,
-    });
-    expect(t).toBe(false);
-    expect(h).toBe(false);
-  });
-
-  it("does not nudge before the silence delay has elapsed", async () => {
-    // Awa answered only 30 min ago — too soon.
+  it("does not list a lead before the silence delay has elapsed", async () => {
     await seedSilentLead({ phone: "221770001009", pitchAgoMin: 30 });
-    const sent = await sweepSilentLeadNudges(log);
-    expect(sent).toBe(0);
+    expect(await countSilentLeadCandidates(params())).toBe(0);
   });
 
-  it("does not nudge past the 24h window bound", async () => {
-    // Last inbound 23h ago — outside LEAD_NUDGE_MAX_AGE_HOURS.
+  it("does not list a lead past the 24h window bound", async () => {
     await seedSilentLead({ phone: "221770001010", triggerAgoH: 23, pitchAgoMin: 1370 });
-    const sent = await sweepSilentLeadNudges(log);
-    expect(sent).toBe(0);
-  });
-
-  it("is a no-op while disabled", async () => {
-    config.LEAD_NUDGE_ENABLED = false;
-    await seedSilentLead({ phone: "221770001011" });
-    expect(await sweepSilentLeadNudges(log)).toBe(0);
+    expect(await countSilentLeadCandidates(params())).toBe(0);
   });
 });

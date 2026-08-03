@@ -165,6 +165,13 @@ import { registerCoachPaymentRoutes } from "./coachPaymentsRoutes.js";
 import { registerStoryRoutes } from "./storyPage.js";
 import { ADMIN_AUTH_CSS } from "./adminStyles.js";
 import { renderFollowUpPage } from "./followUpPage.js";
+import { renderRelancesPage } from "./relancesPage.js";
+import {
+  silentLeadCandidates,
+  listRecentLeadNudges,
+} from "../domain/leadNudgeRepo.js";
+import { sendManualLeadNudge, skipLeadNudge } from "../domain/leadNudge.js";
+import { PACK_DISCOVERY_CAMPAIGN } from "../domain/packDiscoveryCampaign.js";
 import { renderClientWorkspace, renderThread, threadSignature } from "./clientWorkspacePage.js";
 import * as adminOps from "../domain/adminOperations.js";
 import { renderAdminReport, renderAuditPage } from "./reportPage.js";
@@ -663,6 +670,62 @@ export function registerAdmin(app: FastifyInstance): void {
           }
         }
         return reply.redirect(`${next}${next.includes("?") ? "&" : "?"}${updated ? "done=resolved" : `err=${encodeURIComponent("Ce suivi était déjà clôturé")}`}`, 303);
+      });
+
+      // ---------- Relances leads pub (manuel) ----------
+      admin.get("/relances", async (req, reply) => {
+        const query = req.query as Record<string, string | undefined>;
+        const params = {
+          campaignKey: PACK_DISCOVERY_CAMPAIGN,
+          delayMinutes: config.LEAD_NUDGE_DELAY_MINUTES,
+          maxAgeHours: config.LEAD_NUDGE_MAX_AGE_HOURS,
+        };
+        const [candidates, recent] = await Promise.all([
+          silentLeadCandidates(params),
+          listRecentLeadNudges(),
+        ]);
+        const banner = query.sent
+          ? `<div class="card success"><b>✓ Relance envoyée</b></div>`
+          : query.skip
+            ? `<div class="card"><b>Lead ignoré</b><p class="muted">Il ne réapparaîtra plus dans la liste.</p></div>`
+            : query.gone
+              ? `<div class="card warn"><b>Lead déjà traité</b><p class="muted">Il a répondu, payé, ou la fenêtre de 24 h s'est fermée — aucun message envoyé.</p></div>`
+              : query.err
+                ? `<div class="card warn"><b>Envoi impossible</b><p class="muted">${escapeHtml(query.err)}</p></div>`
+                : "";
+        const body = renderRelancesPage({
+          candidates,
+          recent,
+          maxAgeHours: config.LEAD_NUDGE_MAX_AGE_HOURS,
+          banner,
+        });
+        reply.type("text/html").send(await layout("Relances leads", "/admin/relances", body, {
+          badges: await loadNavBadges(),
+          subtitle: `${candidates.length} lead(s) à relancer`,
+          contentWidth: "wide",
+        }));
+      });
+
+      admin.post("/relances/:clientId/send", async (req, reply) => {
+        const { clientId } = req.params as { clientId: string };
+        const by = req.adminUser ?? "?";
+        try {
+          const result = await sendManualLeadNudge(clientId, by, req.log);
+          const flag = result.status === "sent" ? "sent=1" : "gone=1";
+          return reply.redirect(`/admin/relances?${flag}`, 303);
+        } catch (err) {
+          req.log.error({ err, clientId }, "Manual lead nudge send failed");
+          return reply.redirect(
+            `/admin/relances?err=${encodeURIComponent("Le message n'a pas pu être envoyé (réessaie).")}`,
+            303,
+          );
+        }
+      });
+
+      admin.post("/relances/:clientId/skip", async (req, reply) => {
+        const { clientId } = req.params as { clientId: string };
+        const result = await skipLeadNudge(clientId, req.adminUser ?? "?");
+        return reply.redirect(`/admin/relances?${result.status === "skipped" ? "skip=1" : "gone=1"}`, 303);
       });
 
       // ---------- Conversations ----------
