@@ -347,6 +347,20 @@ form.inline{display:inline}
 .key-founders-layout .key-checklist{margin-bottom:0}
 .key-memo-footer{display:flex;align-items:center;gap:.55rem;margin-top:1rem;padding:.9rem 1rem;border-radius:12px;background:var(--plum-800);color:#fff;font-size:.9rem}
 .key-memo-footer span{color:#eee3ee}
+/* Catalogue des abonnements (référence statique) */
+.key-catalogue{margin-top:1.4rem}
+.key-catalogue-head{margin-bottom:.9rem}
+.key-catalogue-head h2{margin:.15rem 0 .2rem}
+.key-catalogue-head p{font-size:.9rem;color:var(--muted)}
+.key-catalogue-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem}
+.key-cat-card{min-width:0;padding:1.05rem 1.15rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);box-shadow:var(--shadow-1)}
+.key-cat-card--accent{border-color:var(--plum-300,#d8b9d0);background:var(--plum-50,#faf4f8)}
+.key-cat-card--plain{background:var(--surface-2,#faf9fb)}
+.key-cat-card>header{display:flex;flex-direction:column;gap:.15rem;margin-bottom:.6rem}
+.key-cat-card h3{margin:0;font-size:1rem}
+.key-cat-price{font-size:.82rem;color:var(--muted);font-weight:600}
+.key-cat-card ul{margin:0;padding-left:1.1rem;display:flex;flex-direction:column;gap:.3rem;font-size:.9rem;line-height:1.5}
+.key-cat-note{margin:.6rem 0 0;font-size:.82rem;color:var(--muted);font-style:italic}
 
 /* menu catalogue and internal recipes */
 .menu-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -497,7 +511,7 @@ details>summary{cursor:pointer}
   .activity-stat-label{align-items:flex-start;flex-direction:column;gap:.4rem}
   .follow-up-filters,.conversation-filters,.workspace-history-grid{grid-template-columns:1fr}
   .report-stat-grid,.report-breakdown{grid-template-columns:1fr}
-  .key-memo-grid,.key-check-grid,.key-founders-layout{grid-template-columns:1fr}
+  .key-memo-grid,.key-check-grid,.key-founders-layout,.key-catalogue-grid{grid-template-columns:1fr}
   .key-rule-card--wide{grid-column:auto}
   .key-memo-principle{align-items:start;padding:1rem}
   .key-memo-principle-icon{width:38px;height:38px}
