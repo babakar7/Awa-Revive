@@ -173,10 +173,10 @@ describe("Meta acquisition dashboard", () => {
     const id = await client("221770001010");
     const leadAt = `${today}T08:00:00Z`;
     await lead(id,leadAt);
-    await sale(id,`${addCalendarDays(today,-1)}T08:00:00Z`);
+    await sale(id,`${addCalendarDays(today,-1)}T08:00:00Z`,"PAID");
     await sale(id,`${today}T09:00:00Z`,"PAID","aquabike-plan");
     await sale(id,`${today}T10:00:00Z`,"PAID","sur-mesure-plan");
-    await sale(id,`${addCalendarDays(today,30)}T08:00:00Z`);
+    await sale(id,`${addCalendarDays(today,30)}T08:00:00Z`,"PAID");
     const dashboard = await adAcquisitionDashboard();
     expect(dashboard.thirtyDays.ads[0]).toMatchObject({ acquisitionSales:0,acquisitionRevenueXof:0 });
   });
