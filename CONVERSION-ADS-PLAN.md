@@ -1,245 +1,209 @@
-# CONVERSION-ADS-PLAN — section « Acquisition pubs Meta » sur /admin/conversion
+# CONVERSION-ADS-PLAN — « Acquisition pubs Meta » sur /admin/conversion (API Meta au cœur)
 
-> **Statut : PLAN — à valider avant implémentation.** Rédigé le 03/08/2026.
-> Objectif : donner à Babakar une vue self-service sur ce que sa dépense pub
-> produit (aujourd'hui : zéro visibilité dashboard, tout vit dans des scripts
-> jetables). Contexte : budget pub doublé $5 → $10/jour le 03/08 ; les leads pub
-> alimentent la Clé L'Invitée (cf. [LEAD-FOLLOWUP-PLAN.md](LEAD-FOLLOWUP-PLAN.md)).
+> **Statut : PLAN — à valider avant implémentation.** Réécrit le 03/08/2026 pour
+> intégrer l'**API Meta Marketing (Insights) dès la v1** (plus de « phase 2 »).
+> Objectif : une vue self-service qui relie la **dépense réelle Meta** aux
+> **ventes de Clés** de la DB, pour décider budget & ciblage sans script jetable.
+> Contexte : budget doublé $5 → $10/jour le 03/08 ; leads pub → Clé L'Invitée
+> (cf. [LEAD-FOLLOWUP-PLAN.md](LEAD-FOLLOWUP-PLAN.md)).
 
-## 0. Décision produit centrale — le budget change de semaine en semaine
+## 0. Idée directrice — Meta pour la dépense, notre DB pour l'argent
 
-Le budget n'est PAS constant : $5/jour depuis le lancement (~24/07), $10/jour
-depuis le 03/08, et il rebougera. Un champ « budget » unique donnerait donc des
-coûts/lead faux. **On modélise le budget comme un journal daté de changements**,
-et la dépense d'une fenêtre = somme, jour par jour, du budget quotidien en
-vigueur ce jour-là.
+Meta sait : **dépense facturée réelle, impressions, clics, CTR, CPM, CPC,
+coût-par-résultat** (résultat = conversation WhatsApp lancée) — par campagne / ad
+set / **pub**, jour par jour. Meta NE sait PAS qu'un lead a acheté une **Clé à
+30 000 F** — ça, seule notre DB le sait (`campaign_leads × pending_plan_orders`).
 
-Conséquence concrète : la semaine qui contient le 03/08 est *mixte* (quelques
-jours à $5, quelques-uns à $10) → sa dépense est calculée au prorata, pas
-approximée. Chaque changement futur = une nouvelle ligne datée saisie dans
-l'admin. C'est ce qui rend le coût/lead et le coût/Clé honnêtes semaine après
-semaine.
+Le plan colle les deux **par ID de pub Meta** : chaque `campaign_leads.source_id`
+est l'ID de la pub (`source_type='ad'`, ex. `120249271231720239`), capté du
+referral click-to-WhatsApp. Donc : dépense (Meta) ÷ Clés (DB) = **coût par Clé
+et ROAS réels**, joints sur une vraie clé, pas du texte.
 
-```
-create table if not exists ad_budget_periods (
-  id uuid primary key default gen_random_uuid(),
-  effective_from date not null unique,   -- jour (Dakar) où ce budget/jour prend effet
-  daily_amount_usd numeric(10,2) not null check (daily_amount_usd >= 0),
-  note text,
-  created_by text,
-  created_at timestamptz not null default now()
-);
-```
+> ⚠️ **Granularité réelle constatée en prod (03/08) :** tous les leads partagent
+> aujourd'hui **un seul `source_id`** pour 3 headlines différentes. Donc la
+> **dépense se joint au niveau PUB** (un seul ad id), pas par headline. La
+> ventilation par `headline` (Bloc C) reste une lecture **qualitative côté DB**
+> (« quel message convertit »), pas un coût/créa exact. Pour un coût/créa exact,
+> il faudra soit séparer les créas en pubs distinctes (ad ids distincts), soit
+> exploiter les *asset breakdowns* Meta (dynamic creative) — noté en §Hors périmètre.
 
-Le budget quotidien d'un jour `d` = la ligne au plus grand `effective_from <= d`.
-Dépense d'une fenêtre `[start, end)` :
+## 1. Prérequis Meta (ce que Babakar fournit, ce que je branche)
+
+L'infra Graph est déjà là (App Meta en config, on tape `graph.facebook.com/v21.0`
+pour WhatsApp). Il manque juste la lecture pub :
+
+1. **Un token `ads_read`** — le token WhatsApp actuel ne l'a pas. Créer un
+   **token « system user » longue durée** dans Business Manager, avec accès au
+   compte publicitaire. → var `META_ADS_TOKEN`.
+2. **L'ID du compte publicitaire** `act_<…>` (visible dans Ads Manager). → var
+   `META_AD_ACCOUNT_ID`.
+3. (Usage interne Business : un system user suffit en général, sans App Review
+   pour `ads_read`.)
+
+**Moi je pose les vars Railway** (`railway variables --set`) — pas de manip
+dashboard côté Babakar au-delà de fournir le token + l'account id. Tant qu'elles
+ne sont pas posées, les blocs « dépense » affichent un état « Connecter Meta »
+propre ; les blocs DB (qualité, Clés en volume, relances) marchent déjà.
+
+## 2. Architecture — projection locale des insights (comme wix_attendance)
+
+On ne tape pas l'API Meta à chaque affichage (lenteur + rate limits). On
+**synchronise** les insights dans une table locale, exactement comme
+`wix_attendance_records` projette Wix : rapide, résilient (dashboard jamais à
+blanc si Meta hoquette), et ça constitue un **historique durable de dépense**
+même si l'accès API change plus tard.
 
 ```sql
-select coalesce(sum(p.daily_amount_usd), 0) as spend_usd
-  from generate_series($1::date, $2::date - 1, interval '1 day') g(day)
-  left join lateral (
-    select daily_amount_usd from ad_budget_periods b
-     where b.effective_from <= g.day
-     order by b.effective_from desc limit 1
-  ) p on true;
+create table if not exists ad_insights_daily (
+  day date not null,
+  ad_id text not null,
+  ad_name text,
+  adset_name text,
+  campaign_name text,
+  spend numeric(12,2) not null default 0,     -- dans account_currency
+  impressions integer not null default 0,
+  clicks integer not null default 0,
+  results integer not null default 0,         -- conversations WhatsApp lancées (CTWA)
+  account_currency text,                      -- ex. 'USD' ou 'XOF'
+  synced_at timestamptz not null default now(),
+  primary key (day, ad_id)
+);
+create index if not exists idx_ad_insights_day on ad_insights_daily (day);
 ```
 
-**Devise.** Babakar raisonne en dollars (Meta). Le CA est en FCFA (Clé = 30 000 F).
-Pour un coût/Clé et un ROAS comparables, on convertit via **un seul taux
-USD→XOF éditable** (clé `usd_xof_rate` dans `app_state`, défaut ~610). La page
-affiche la dépense en $ ET en FCFA ; coût/Clé et ROAS calculés en FCFA. Le taux
-n'a pas besoin d'être parfait — c'est un tableau de bord de décision, pas une
-compta.
+- **`src/lib/metaAds.ts`** : `fetchInsights({since, until, level:'ad', timeIncrement:1})`
+  → `GET /v21.0/act_<id>/insights?fields=spend,impressions,clicks,ctr,cpm,cpc,actions,account_currency,ad_id,ad_name,adset_name,campaign_name&level=ad&time_increment=1&time_range={...}`.
+  Mêmes patterns fetch/retry que [src/lib/whatsapp.ts](src/lib/whatsapp.ts).
+  `results` = extrait de `actions` (action CTWA « onsite_conversion... » /
+  messaging_conversation_started — à confirmer sur le compte réel, §9 étape 1).
+- **`syncAdInsights()`** dans le sweep (cap ~1×/heure, comme
+  `syncAttendanceLeaderboard`) : réabsorbe les ~30 derniers jours (les jours
+  récents bougent : Meta réconcilie la dépense a posteriori) et upsert par
+  `(day, ad_id)`. + un bouton **« Resynchroniser »** sur la page (owner).
+- Le dashboard lit `ad_insights_daily` (jamais l'API en direct).
 
-**Amorçage.** Insérer deux lignes connues (éditables ensuite) :
-`2026-07-24 → 5.00` et `2026-08-03 → 10.00`. La date exacte du démarrage à $5
-est à confirmer par Babakar (premier lead le 24/07).
+**Devise.** On lit `account_currency` renvoyé par Meta. Le CA est en FCFA. Si le
+compte n'est pas en XOF (souvent USD), on convertit la dépense en FCFA via **un
+taux éditable** (`app_state('usd_xof_rate')`, défaut ~610) pour coût/Clé & ROAS.
+Affichage en devise native ET FCFA.
 
-## 1. Où ça se branche
+## 3. Le budget change de semaine en semaine — et c'est natif ici
 
-Architecture actuelle (propre, on la prolonge) :
-- [src/domain/bookingFunnel.ts](src/domain/bookingFunnel.ts) →
-  `bookingConversionDashboard()` assemble les données.
-- [src/admin/conversionPage.ts](src/admin/conversionPage.ts) →
-  `renderConversionPage(dashboard)` rend le HTML.
-- [src/admin/routes.ts](src/admin/routes.ts) → `GET /admin/conversion`.
+Puisque la dépense vient d'`ad_insights_daily` **jour par jour**, un changement
+de budget (le $5→$10 du 03/08, ou tout futur) est capturé **automatiquement** :
+la dépense de chaque jour est la vraie dépense de ce jour. La dépense d'une
+semaine = `sum(spend)` sur ses jours — une semaine à cheval sur un changement est
+juste la somme des vraies dépenses quotidiennes. **Aucun budget à saisir à la
+main.** Le repli manuel optionnel ne sert qu'avant configuration / panne API (§8).
 
-Nouveau : un module `src/domain/adAcquisition.ts` exposant
-`adAcquisitionDashboard()` (indépendant du funnel de réservation — ce sont deux
-funnels différents). La route appelle les deux et passe les deux au rendu ; la
-page gagne une **section « Acquisition — pubs Meta »** au-dessus ou en tête du
-funnel de réservation. **On ne mélange pas** : le funnel de réservation répond à
-« où callent les acheteurs en cours d'achat ? » ; la section pub répond à « ma
-dépense marche-t-elle, et faut-il changer le budget ou le ciblage ? ».
+## 4. Sources de données
 
-## 0bis. Deux sources possibles pour la DÉPENSE — journal manuel vs API Meta
+- **Meta (via `ad_insights_daily`)** : dépense, impressions, clics, CTR, CPM,
+  CPC, résultats — par jour et par pub.
+- **`campaign_leads`** : leads, `source_id` (ad id, clé de jointure), `headline`,
+  `created_at`, is_test exclus.
+- **`conversations`** : qualité des leads (réponses après le message auto).
+- **`pending_plan_orders`** (is_key, ACTIVATED, paid_at, amount_xof) +
+  `key_registry` : Clés attribuées.
+- **`outbound_nudges`** : relances manuelles.
+- **Nouveau** : `ad_insights_daily` + `app_state('usd_xof_rate')`.
 
-La dépense peut venir de deux endroits. Ils ne s'excluent pas : le journal
-manuel ship tout de suite sans dépendance ; l'API Meta le remplace ensuite par
-la vérité facturée + des métriques que la DB ne connaît pas.
+Fenêtres : **7 j / 30 j** + **tableau par semaine ISO** (tendance).
 
-**Option A — journal manuel `ad_budget_periods` (§0). Recommandé pour la v1.**
-Zéro dépendance externe, ship aujourd'hui. Donne la dépense *programmée*
-(budget/jour saisi), pas la *facturée*. Suffit pour coût/lead et coût/Clé à
-l'ordre de grandeur.
+## 5. Les 4 blocs
 
-**Option B — Meta Marketing API (Insights). Phase 2.**
-`GET https://graph.facebook.com/v21.0/act_<AD_ACCOUNT_ID>/insights` renvoie la
-**dépense réelle facturée** + `impressions, clicks, ctr, cpm, cpc, reach`, et —
-crucial — les **breakdowns par campagne / ad set / créa** et le
-`cost_per_result` (résultat = conversation WhatsApp lancée, pour une pub CTWA).
-On peut demander `time_increment=1` (série jour par jour) ou une ventilation par
-semaine, ce qui alimente directement le Bloc A et enrichit le Bloc C (CTR/CPM
-par `headline`).
+### Bloc A — Dépense & livraison (Meta)
+Par fenêtre + par semaine : **dépense réelle** ($/FCFA), impressions, clics,
+**CTR, CPM, CPC**, **résultats** (conversations lancées) et **coût-par-résultat
+Meta**. En regard, **leads comptés côté DB** et **coût/lead** = dépense ÷ leads
+(notre définition de lead). Écart Meta-résultats vs nos-leads = signal
+d'attribution. **La tendance hebdo montre le doublement** : si la dépense monte
+mais pas les leads, coût/lead grimpe → « le budget sature l'audience ».
 
-Ce qu'il faut pour l'option B :
-- **App Meta déjà présente** (App ID en config, on tape déjà graph.facebook.com
-  v21.0 pour WhatsApp) — l'infra Graph est là.
-- **Un token avec la permission `ads_read`** — le token WhatsApp actuel ne l'a
-  probablement pas ; il faut un **token « system user »** longue durée du
-  Business Manager, avec accès au compte publicitaire. Nouvelle var
-  `META_ADS_TOKEN`.
-- **L'ID du compte publicitaire** `act_<...>` → nouvelle var `META_AD_ACCOUNT_ID`.
-- (Éventuellement une App Review pour `ads_read` selon le mode de l'app ; en
-  usage interne/Business, un system user suffit souvent sans review.)
+### Bloc B — Qualité des leads (ciblage) — DB
+Leads classés par réponses tapées APRÈS le message auto (ancrage
+`trigger_message_id`) : **0 = cliqueur réflexe** (message d'ouverture pré-rempli
+= zéro intention), **1 = superficiel**, **≥2 = vraie conversation**. Les 3 % +
+tendance. Si après $10 la part de réflexes grimpe (~40 %→60 %) → **« refine
+targeting, don't spend more »**, visible.
 
-**Répartition idéale (le meilleur des deux) :** Meta pour la **dépense +
-livraison** (spend réel, CTR, CPM, cost-per-result par créa) ; notre DB pour le
-**résultat argent** (Clés achetées, CA, ROAS) — parce que Meta voit « une
-conversation lancée » mais PAS « a acheté une Clé à 30 000 F », ça, c'est nous
-qui le savons via `campaign_leads × pending_plan_orders`. On colle les deux par
-créa (`headline` ↔ ad name).
+### Bloc C — Clés & ROAS par pub (Meta × DB)
+Jointure `campaign_leads.source_id = ad_insights_daily.ad_id` :
+- **dépense par pub** (Meta) ; **Clés par pub** (DB, is_key ACTIVATED) ; **CA
+  attribué** (Σ amount_xof) ; **coût/Clé** = dépense ÷ Clés ; **ROAS** = CA ÷
+  dépense ; CTR/CPM par pub.
+- **Ventilation par `headline`** (côté DB) : leads, ≥2-réponses, Clés, conversion
+  par titre — la lecture « quel message convertit » qui aurait tué « Pack
+  Découverte matcha » (26 leads, 0 Clé) et « Publicité en statut » (19, 0).
+  *(Coût par headline = approximatif tant qu'un seul ad id — cf. §0 ⚠️.)*
 
-**Recommandation :** livrer la v1 sur l'option A (le journal reste de toute façon
-utile comme repli/annotation), puis brancher l'option B en phase 2 pour passer
-« dépense estimée » → « dépense réelle + CTR/CPM/coût-par-résultat par créa ».
-Le reste du dashboard (blocs, attribution DB) ne change pas — seule la source
-`windowSpendUsd` bascule du journal vers Meta (avec repli sur le journal si
-l'API est indisponible).
+### Bloc D — Relances manuelles — DB
+`outbound_nudges` (kind='LEAD_SILENT') : envoyées vs ignorées ; parmi envoyées,
+% ayant répondu (turn user après `sent_at`) et % ayant acheté une Clé sous 72 h.
+**Directionnel, pas causal** (plus de holdout) — étiqueté comme tel.
 
-## 2. Sources de données — tout existe déjà, zéro nouveau tracking
+## 6. Attribution & pièges (affichés honnêtement)
 
-- `campaign_leads` (client_id, campaign_key, **headline**, matched_by, created_at).
-- `conversations` (pour la qualité des leads : réponses après le message auto).
-- `pending_plan_orders` (is_key, status, paid_at, amount_xof) + `key_registry`.
-- `outbound_nudges` (relances manuelles : outcome, sent_at).
-- `clients.is_test` (exclusion équipe/tests, comme le reste du dashboard).
-- Nouveau : `ad_budget_periods` (§0) + `app_state('usd_xof_rate')`.
+- **Attribution = « ce client vient d'une pub, puis a acheté une Clé ».**
+  Généreuse (achat même 3 semaines après). À noter sur la page.
+- **Dépense = ce que Meta facture** (mieux que le budget programmé), mais les
+  jours récents se réajustent → resync régulier ; on affiche `synced_at`.
+- **Granularité créa** : un seul ad id aujourd'hui → coût exact au niveau pub,
+  pas par headline (§0 ⚠️).
+- **Taux de change** approximatif/éditable → ROAS en ordre de grandeur si le
+  compte n'est pas en XOF.
+- **Résultat Meta ≠ notre lead** : Meta compte « conversation lancée », nous
+  comptons une ligne `campaign_leads` ; petits écarts normaux.
 
-Fenêtres : **7 j / 30 j** (comme le funnel existant) + un **tableau par semaine
-ISO** (là où le changement de budget se voit vraiment).
+## 7. Fichiers touchés
 
-## 3. Les 4 blocs de la section
-
-### Bloc A — Volume & dépense (le nerf de la décision budget)
-Par fenêtre (7 j, 30 j) et par semaine :
-- **Leads** : `count(campaign_leads)` (is_test exclus).
-- **Dépense** : requête §0, en $ et FCFA.
-- **Coût / lead** = dépense / leads.
-- Tendance hebdo : leads, dépense, coût/lead par semaine ISO. **C'est ici que
-  le doublement se lit** : si les leads ne suivent pas la dépense, le coût/lead
-  monte → signal « le budget sature l'audience ».
-
-### Bloc B — Qualité des leads (jauge de CIBLAGE)
-Classer les leads de la fenêtre par nombre de réponses tapées APRÈS le message
-auto (même ancrage `trigger_message_id` que les relances) :
-- **0 réponse** = cliqueur réflexe (le message d'ouverture est pré-rempli par la
-  pub → zéro intention) ;
-- **1 réponse** = superficiel ;
-- **≥2 réponses** = vraie conversation.
-
-Afficher les 3 %. **Tendance clé** : si après le passage à $10 la part de
-cliqueurs réflexes grimpe (~40 % → 60 %), Meta achète des clics moins chers mais
-pires → **« refine targeting, don't spend more »** rendu visible, avec ta propre
-définition de l'intention.
-
-### Bloc C — Ventes Clés attribuées aux pubs
-- **Clés achetées par des leads pub** (buyer a une ligne `campaign_leads`, achat
-  après `campaign_leads.created_at`) : `pending_plan_orders` is_key +
-  status='ACTIVATED' (ou `key_registry`). Compte 7 j / 30 j.
-- **Conversion lead → Clé**, **CA attribué** (Σ amount_xof).
-- **Coût / Clé** = dépense (FCFA) / Clés. **ROAS** = CA / dépense.
-- **Ventilation par créa (`headline`)** : leads, Clés, conversion par titre de
-  pub. C'est ce qui aurait attrapé « Pack Découverte matcha » (26 leads, 0 vente)
-  et « Publicité en statut » (19 leads, 0 vente) sans re-lancer un script.
-
-### Bloc D — Relances manuelles (efficacité de /admin/relances)
-Depuis `outbound_nudges` (kind='LEAD_SILENT') :
-- envoyées vs ignorées ;
-- parmi les envoyées : % ayant répondu (turn user après `sent_at`) et % ayant
-  acheté une Clé sous 72 h. **Directionnel, pas causal** (plus de holdout depuis
-  le passage en manuel) — à étiqueter comme tel sur la page.
-
-## 4. Attribution & pièges (à afficher honnêtement)
-
-- **Attribution = « ce client vient d'une pub, puis a acheté une Clé un jour ».**
-  Généreuse : un lead qui achète 3 semaines plus tard compte encore. Suffisant à
-  cette échelle, mais à noter sur la page (pas de fenêtre d'attribution stricte).
-- **Coût/lead & coût/Clé dépendent du budget saisi** : si le journal
-  `ad_budget_periods` n'est pas à jour, les coûts sont faux. Bandeau d'alerte si
-  aucune période ne couvre la fenêtre affichée.
-- **La dépense Meta réelle peut différer du budget** (Meta sous-dépense parfois).
-  On affiche le budget *programmé*, pas le *facturé* — approximation assumée
-  (pas d'API Meta Ads branchée). À afficher comme « dépense estimée ».
-- **Taux USD→XOF** approximatif et éditable — le ROAS est un ordre de grandeur.
-
-## 5. Admin — éditer le budget
-
-Petit formulaire (page `/admin/conversion` en bas, ou `/admin/pub-budget`) :
-- liste des périodes (`effective_from`, `$/jour`, note) + ajout d'une ligne ;
-- champ taux USD→XOF.
-Réservé au propriétaire (comme le journal/rapport). Écrit `ad_budget_periods` +
-`app_state('usd_xof_rate')`. Journalisé dans `admin_audit_log`.
-
-## 6. Fichiers touchés
-
-- **schema.ts** : table `ad_budget_periods` + amorçage des 2 périodes connues.
+- **schema.ts** : `ad_insights_daily` (+ index).
+- **`src/lib/metaAds.ts`** (nouveau) : appel Insights + parsing.
+- **`src/domain/adInsightsSync.ts`** (nouveau) : `syncAdInsights()` (upsert, cap
+  horaire), branché au sweep de [src/index.ts](src/index.ts).
 - **`src/domain/adAcquisition.ts`** (nouveau) : `adAcquisitionDashboard()`
-  (blocs A–D) + `windowSpendUsd(start,end)` + repo budget (list/upsert period,
-  get/set FX).
-- **conversionPage.ts** : nouvelle section rendue depuis le nouveau dashboard
-  (fonctions pures de rendu, testables).
+  (blocs A–D, lit la projection locale + DB) + get/set FX.
+- **conversionPage.ts** : nouvelle section (fonctions de rendu pures, testables).
 - **routes.ts** : `/conversion` appelle aussi `adAcquisitionDashboard()` ;
-  routes POST du budget (owner-only).
-- **navBadges / layout** : inchangés (section dans une page existante).
+  `POST /conversion/resync-ads` (owner) ; form taux FX (owner).
+- **config.ts** : `META_ADS_TOKEN`, `META_AD_ACCOUNT_ID`, `META_GRAPH_VERSION`
+  (défaut v21.0).
 
-## 7. Tests
+## 8. Repli optionnel (résilience, pas le cœur)
 
-- **Purs** : `windowSpendUsd` sur un changement de budget en milieu de fenêtre
-  (le cas $5→$10 du 03/08 : une fenêtre de 7 j à cheval doit donner un mix, pas
-  5×7 ni 10×7) ; classification qualité 0/1/≥2 ; rendu de la section (pas de
-  throw, bandeau si budget manquant).
-- **Intégration** : seed leads (réflexe/superficiel/engagé) + une Clé attribuée
-  + une relance envoyée → le dashboard rend les bons compteurs ; ventilation par
-  headline ; exclusion is_test ; route `/admin/conversion` renvoie 200 avec la
-  section.
+Si `META_ADS_TOKEN`/`META_AD_ACCOUNT_ID` absents ou API en panne : les blocs
+dépense affichent « Connecter Meta » / « Dépense indisponible » (avec la dernière
+`synced_at`), les blocs DB rendent normalement. Un mini-journal `ad_budget_periods`
+(budget/jour daté) reste **optionnel** comme estimation de secours — non
+implémenté en v1 sauf besoin explicite.
 
-## 8. Découpage de livraison (incrémental)
+## 9. Découpage de livraison
 
-1. **Budget d'abord** : table + amorçage + `windowSpendUsd` + éditeur admin +
-   tests. Rien d'autre n'a de sens sans dépense correcte.
-2. **Blocs A & C** (volume/dépense/coût-lead + Clés/coût-Clé/ROAS par créa) —
-   le cœur de la décision budget.
-3. **Bloc B** (qualité/ciblage).
-4. **Bloc D** (efficacité des relances).
-Chaque étape = un push buildé+testé (auto-deploy). ~0,5–1 j au total.
+1. **Connexion Meta** : `metaAds.ts` + `ad_insights_daily` + `syncAdInsights()` +
+   resync manuel + vars Railway. Vérifier qu'on lit la vraie dépense/résultats du
+   compte (le mapping `actions`→résultat CTWA se confirme ici, sur données réelles).
+2. **Bloc A** (dépense/livraison + coût/lead, 7j/30j/hebdo) — le cœur budget.
+3. **Bloc C** (Clés/coût-Clé/ROAS par pub + ventilation headline).
+4. **Bloc B** (qualité/ciblage).
+5. **Bloc D** (relances).
+Chaque étape = un push buildé+testé (auto-deploy). ~1–1,5 j au total.
 
-## 9. Phase 2 — brancher l'API Meta (option B, §0bis)
+## 10. Tests
 
-Quand Babakar fournit un token `ads_read` + l'ID de compte publicitaire :
-- Nouveau `src/lib/metaAds.ts` : `fetchInsights({since, until, timeIncrement, breakdowns})`
-  sur `graph.facebook.com/v21.0/act_<id>/insights` (mêmes patterns fetch/retry
-  que `src/lib/whatsapp.ts`).
-- `windowSpendUsd` bascule sur la dépense facturée Meta, **repli sur le journal**
-  si l'API échoue (dashboard jamais à blanc).
-- Bloc A gagne CTR/CPM ; Bloc C gagne CTR/CPM/coût-par-résultat par créa (jointure
-  `headline` ↔ nom de la pub Meta).
-- Vars : `META_ADS_TOKEN`, `META_AD_ACCOUNT_ID` (posées via `railway variables --set`).
-- Cache court (≤1 h) des insights pour ne pas taper l'API à chaque affichage.
+- **Purs** : parsing insights (extraction `results` depuis `actions`, devise) ;
+  agrégations fenêtre/semaine sur un jeu `ad_insights_daily` seedé (dont une
+  semaine à cheval sur un changement de dépense) ; classification qualité 0/1/≥2 ;
+  jointure Clés×pub ; rendu section (états « connecter Meta » / données présentes).
+- **Intégration** : `metaAds` contre un **mock fetch** (comme Wix/Wave dans
+  `test/integration/helpers.ts`) renvoyant un payload insights réaliste →
+  `syncAdInsights` upsert correctement (idempotent, resync ne double pas) ;
+  dashboard joint dépense (mock) × leads/Clés (seed) et calcule coût/Clé + ROAS ;
+  route `/admin/conversion` renvoie 200 avec la section ; exclusion is_test.
 
 ## Hors périmètre
-- Attribution multi-touch ou fenêtre d'attribution stricte (on garde « lead pub
-  → a acheté une Clé plus tard »).
+- Achat/édition de campagnes via l'API (lecture seule).
+- Attribution multi-touch / fenêtre stricte (on garde « lead pub → Clé plus tard »).
 - Le funnel de réservation existant n'est pas modifié.
-- Achat/gestion des pubs depuis l'admin (lecture seule ; on ne crée/édite pas de
-  campagnes via l'API).
+- **Coût/créa exact par headline** tant que les créas partagent un ad id (§0 ⚠️)
+  — à débloquer en séparant les pubs en ad ids distincts, ou via les *asset
+  breakdowns* Meta (dynamic creative).
