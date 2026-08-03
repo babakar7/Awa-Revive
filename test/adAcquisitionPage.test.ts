@@ -27,7 +27,7 @@ function dashboard(overrides: Partial<AdAcquisitionDashboard> = {}): AdAcquisiti
     sync:{last_started_at:new Date(),last_succeeded_at:new Date(),last_error:null,record_count:2,
       account_timezone:"America/Los_Angeles",account_currency:"USD",account_status:1,updated_at:new Date()},
     stale:false,currency:"USD",timezone:"America/Los_Angeles",fxRate:610,fxUpdatedAt:new Date(),
-    sevenDays:period,thirtyDays:period,weeks:[],...overrides,
+    sevenDays:{...period,label:"7 jours"},thirtyDays:period,weeks:[],...overrides,
   };
 }
 
@@ -40,12 +40,17 @@ describe("Meta acquisition admin section", () => {
     expect(html).toContain("Resynchroniser Meta");
     expect(html).toContain("&lt;Cinema&gt;");
     expect(html).not.toContain("<Cinema>");
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('data-acquisition-period="7" aria-selected="true"');
+    expect(html).toContain('data-acquisition-period="30" aria-selected="false"');
+    expect(html).toContain('data-acquisition-period-panel="30" role="tabpanel" aria-labelledby="acquisition-tab-30" hidden');
+    expect(html.indexOf("ad-roas-primary")).toBeLessThan(html.indexOf("Dépense livrée"));
   });
 
   it("hides fake zero spend when campaign mapping is unavailable but keeps DB sections", () => {
     const html = renderAdAcquisition(dashboard({enabled:false,configError:"Campagne Meta non rattachée",weeks:[]}),false);
     expect(html).toContain("Dépense indisponible");
-    expect(html).toContain("Qualité — 30 jours");
+    expect(html).toContain("Qualité · 30 jours");
     expect(html).not.toContain("Resynchroniser Meta");
   });
 });

@@ -56,18 +56,18 @@ function cohortSummary(period: AcquisitionPeriod, data: AdAcquisitionDashboard):
   const renewals = period.ads.reduce((sum,row) => sum+row.influencedRenewals,0);
   const spendXof = data.currency==="XOF" ? period.delivery.spend : data.currency==="USD" ? period.delivery.spend*data.fxRate : null;
   const roas = spendXof && spendXof>0 ? revenue/spendXof : null;
-  return `<article class="card"><span class="eyebrow">Cohorte ${esc(period.label)} · <span class="badge badge--amber">en maturation</span></span><div class="stat-grid">
+  return `<article class="card ad-roas-hero"><span class="eyebrow">Cohorte ${esc(period.label)} · <span class="badge badge--amber">en maturation</span></span><div class="stat-grid ad-roas-grid">
+    <div class="stat ad-roas-primary"><span>ROAS attribué estimé</span><b>${decimal(roas,"×")}</b><span>CA acquisition ÷ dépense · première Clé à &lt; 30 j</span></div>
     <div class="stat"><span>Ventes acquisition</span><b>${sales}</b><span>${fmtFcfa(revenue)} brut</span></div>
-    <div class="stat"><span>ROAS attribué estimé</span><b>${decimal(roas,"×")}</b><span>première Clé à &lt; 30 j</span></div>
     <div class="stat"><span>Renouvellements influencés</span><b>${renewals}</b><span>montrés à part</span></div>
   </div></article>`;
 }
 
-function adsTable(data: AdAcquisitionDashboard): string {
+function adsTable(period: AcquisitionPeriod, data: AdAcquisitionDashboard): string {
   const financialReady = !data.eligibilityError;
   const planLines = (breakdown: Record<string,{sales:number;revenueXof:number}>) => Object.entries(breakdown)
     .map(([planId,value]) => `${esc(planId)} : ${value.sales} · ${fmtFcfa(value.revenueXof)}`).join("<br>");
-  const rows = data.thirtyDays.ads.map((row) => `<tr>
+  const rows = period.ads.map((row) => `<tr>
     <td data-label="Pub"><b>${esc(row.adName)}</b><div class="muted">${esc(row.campaignName)} · ${esc(row.adId)}</div></td>
     <td data-label="Dépense"><b>${nativeMoney(row.spend,data.currency)}</b><div class="muted">${data.currency==="USD"?`≈ ${fmtFcfa(Math.round(row.spend*data.fxRate))} · `:""}${row.impressions.toLocaleString("fr-FR")} impr.</div></td>
     <td data-label="Leads">${row.leads}<div class="muted">CTR ${pct(row.ctr)}</div></td>
@@ -77,13 +77,48 @@ function adsTable(data: AdAcquisitionDashboard): string {
     <td data-label="Provisioning">${financialReady?`${row.activated} activées<div class="muted">${row.toActivate} à activer</div>`:"—"}</td>
     <td data-label="Renouvellements">${financialReady?row.influencedRenewals:"—"}<div class="muted">hors ROAS acquisition</div></td>
   </tr>`).join("");
-  return rows ? `<div class="card"><p><span class="badge badge--amber">cohortes en maturation</span> Les leads des 30 derniers jours n’ont pas tous atteint leur fenêtre complète.</p><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Pub</th><th>Dépense</th><th>Leads</th><th>Ventes acquisition</th><th>Coût / Clé</th><th>ROAS</th><th>Activation</th><th>Renouvellements</th></tr></thead><tbody>${rows}</tbody></table></div></div>`
+  return rows ? `<div class="card"><p><span class="badge badge--amber">cohortes en maturation</span> Les leads de cette période n’ont pas tous atteint leur fenêtre complète.</p><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Pub</th><th>Dépense</th><th>Leads</th><th>Ventes acquisition</th><th>Coût / Clé</th><th>ROAS</th><th>Activation</th><th>Renouvellements</th></tr></thead><tbody>${rows}</tbody></table></div></div>`
     : `<div class="card empty"><b>Aucune dépense Meta dans cette fenêtre</b><p>Une pub avec dépense et zéro lead apparaîtra ici dès la prochaine synchronisation.</p></div>`;
 }
 
 function headlineTable(period: AcquisitionPeriod, financialReady: boolean): string {
   const rows = period.headlines.map((row) => `<tr><td data-label="Titre"><b>${esc(row.headline)}</b></td><td data-label="Leads">${row.leads}</td><td data-label="≥2 réponses">${row.engaged}</td><td data-label="Clés acquisition">${financialReady?`${row.acquisitionSales}<div class="muted">${row.leads?pct((row.acquisitionSales/row.leads)*100):"—"}</div>`:"—"}</td><td data-label="Renouvellements">${financialReady?row.influencedRenewals:"—"}</td></tr>`).join("");
-  return `<div class="card">${rows?`<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Headline</th><th>Leads</th><th>≥2 réponses</th><th>Clés / conversion</th><th>Renouvellements</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty"><b>Aucun headline attribué sur 30 jours</b></div>`}<p class="muted">Lecture first-touch qualitative. Aucun coût par headline n’est calculé tant que les créas partagent le même ad_id.</p></div>`;
+  return `<div class="card">${rows?`<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Headline</th><th>Leads</th><th>≥2 réponses</th><th>Clés / conversion</th><th>Renouvellements</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<div class="empty"><b>Aucun headline attribué sur ${esc(period.label)}</b></div>`}<p class="muted">Lecture first-touch qualitative. Aucun coût par headline n’est calculé tant que les créas partagent le même ad_id.</p></div>`;
+}
+
+function cashSummary(period: AcquisitionPeriod, data: AdAcquisitionDashboard, financialReady: boolean): string {
+  const cash = period.cash;
+  return `<div class="stat-grid report-stat-grid">
+    <div class="stat"><span>CA brut encaissé — toutes Clés</span><b>${financialReady?fmtFcfa(cash.allRevenueXof):"—"}</b><span>${financialReady?`${cash.allSales} ventes des 3 plans`:"allowlist Clés incomplète"}</span></div>
+    <div class="stat"><span>CA brut relié à un lead pub</span><b>${financialReady?fmtFcfa(cash.attributedRevenueXof):"—"}</b><span>${financialReady?`${cash.attributedSales} ventes attribuées`:"allowlist Clés incomplète"}</span></div>
+    <div class="stat"><span>FX utilisé</span><b>${data.fxRate.toLocaleString("fr-FR")}</b><span>USD → XOF · ROAS estimé</span></div>
+  </div>`;
+}
+
+function periodPanel(
+  key: "7" | "30",
+  period: AcquisitionPeriod,
+  data: AdAcquisitionDashboard,
+  financialReady: boolean,
+  metaUnavailable: boolean,
+): string {
+  const hidden = key === "30" ? " hidden" : "";
+  const delivery = metaUnavailable
+    ? `<div class="card empty"><b>Dépense indisponible</b><p>Rattache la campagne Meta pour afficher la dépense ; les blocs DB ci-dessous restent disponibles.</p></div>`
+    : deliveryCard(period.label,period.delivery,data.currency,data.fxRate);
+  return `<section id="acquisition-panel-${key}" data-acquisition-period-panel="${key}" role="tabpanel" aria-labelledby="acquisition-tab-${key}"${hidden}>
+${financialReady&&!metaUnavailable?cohortSummary(period,data):""}
+${delivery}
+<div class="section-header"><div><span class="eyebrow">Performance par pub · ${esc(period.label)}</span><h2>Dépense, Clés et ROAS</h2></div></div>
+${adsTable(period,data)}
+${cashSummary(period,data,financialReady)}
+<div class="section-header"><div><span class="eyebrow">Qualité · ${esc(period.label)}</span><h2>Intention après le message automatique</h2></div></div>
+${qualityCard(period)}
+<div class="section-header"><div><span class="eyebrow">Messages publicitaires · ${esc(period.label)}</span><h2>Ventilation qualitative par headline</h2></div></div>
+${headlineTable(period,financialReady)}
+<div class="section-header"><div><span class="eyebrow">Relances manuelles · ${esc(period.label)}</span><h2>Résultats directionnels à 72 h</h2></div></div>
+${nudgeCard(period,financialReady)}
+</section>`;
 }
 
 function weeksTable(data: AdAcquisitionDashboard): string {
@@ -101,28 +136,20 @@ export function renderAdAcquisition(data: AdAcquisitionDashboard, owner: boolean
     data.stale && data.sync.last_succeeded_at ? `<div class="card warn"><b>Données Meta anciennes</b><p>Dernier succès : ${fmtDate(data.sync.last_succeeded_at)}.</p></div>` : "",
   ].join("");
   const controls = owner ? `<div class="card"><div class="row between"><form method="post" action="/admin/conversion/resync-ads"><button class="act" type="submit">Resynchroniser Meta</button></form><form method="post" action="/admin/conversion/ads-fx" class="row"><label>Taux USD→XOF <input name="rate" type="number" min="100" max="2000" step="0.01" value="${data.fxRate}"></label><button class="act act--ghost" type="submit">Enregistrer</button></form></div><p class="muted">Taux utilisé : ${data.fxRate.toLocaleString("fr-FR")} · ${data.fxUpdatedAt?`mis à jour ${fmtDate(data.fxUpdatedAt)}`:"valeur par défaut"}. Dernier succès Meta : ${data.sync.last_succeeded_at?fmtDate(data.sync.last_succeeded_at):"jamais"}. Fuseau : ${esc(data.timezone)}.</p></div>` : "";
-  const cash = data.thirtyDays.cash;
   const financialReady = !data.eligibilityError;
   const mappingUnavailable = Boolean(data.configError && (data.configError.includes("AD_CAMPAIGN_MAP") || data.configError.includes("non rattachée")));
   const metaUnavailable = mappingUnavailable || !data.sync.last_succeeded_at;
-  const delivery = metaUnavailable
-    ? `<div class="card empty"><b>Dépense indisponible</b><p>Rattache la campagne Meta pour afficher la dépense ; les blocs DB ci-dessous restent disponibles.</p></div>`
-    : `<div class="col">${deliveryCard("7 derniers jours",data.sevenDays.delivery,data.currency,data.fxRate)}${deliveryCard("30 derniers jours",data.thirtyDays.delivery,data.currency,data.fxRate)}</div>${weeksTable(data)}`;
-  return `<div class="section-header"><div><span class="eyebrow">Acquisition pubs Meta</span><h2>Dépense → conversations → Clés</h2><p class="muted">ROAS de cohorte first-touch, première Clé payée à &lt; 30 jours. CA brut : remboursements non déduits.</p></div></div>
-${warnings}${controls}
-${delivery}
-<div class="section-header"><div><span class="eyebrow">ROAS acquisition — 30 jours</span><h2>Performance par pub</h2></div></div>
-${financialReady?`<div class="col">${cohortSummary(data.sevenDays,data)}${cohortSummary(data.thirtyDays,data)}</div>`:""}
-${adsTable(data)}
-<div class="stat-grid report-stat-grid">
-  <div class="stat"><span>CA brut encaissé — toutes Clés</span><b>${financialReady?fmtFcfa(cash.allRevenueXof):"—"}</b><span>${financialReady?`${cash.allSales} ventes des 3 plans`:"allowlist Clés incomplète"}</span></div>
-  <div class="stat"><span>CA brut relié à un lead pub</span><b>${financialReady?fmtFcfa(cash.attributedRevenueXof):"—"}</b><span>${financialReady?`${cash.attributedSales} ventes attribuées`:"allowlist Clés incomplète"}</span></div>
-  <div class="stat"><span>FX utilisé</span><b>${data.fxRate.toLocaleString("fr-FR")}</b><span>USD → XOF · ROAS estimé</span></div>
-</div>
-<div class="section-header"><div><span class="eyebrow">Qualité — 30 jours</span><h2>Intention après le message automatique</h2></div></div>
-<div class="col">${qualityCard(data.sevenDays)}${qualityCard(data.thirtyDays)}</div>
-<div class="section-header"><div><span class="eyebrow">Messages publicitaires</span><h2>Ventilation qualitative par headline</h2></div></div>
-${headlineTable(data.thirtyDays,financialReady)}
-<div class="section-header"><div><span class="eyebrow">Relances manuelles — 30 jours</span><h2>Résultats directionnels à 72 h</h2></div></div>
-<div class="col">${nudgeCard(data.sevenDays,financialReady)}${nudgeCard(data.thirtyDays,financialReady)}</div>`;
+  return `<section data-acquisition-dashboard><div class="section-header activity-section-header"><div><span class="eyebrow">Acquisition pubs Meta</span><h2>Dépense → conversations → Clés</h2><p class="activity-period-copy" data-acquisition-period-copy aria-live="polite">Résultats des 7 derniers jours</p></div>
+<div class="period-toggle" role="tablist" aria-label="Période des statistiques publicitaires">
+  <button id="acquisition-tab-7" type="button" role="tab" class="active" data-acquisition-period="7" aria-selected="true" aria-controls="acquisition-panel-7" tabindex="0">7 jours</button>
+  <button id="acquisition-tab-30" type="button" role="tab" data-acquisition-period="30" aria-selected="false" aria-controls="acquisition-panel-30" tabindex="-1">30 jours</button>
+</div></div>
+${warnings}
+${periodPanel("7",data.sevenDays,data,financialReady,metaUnavailable)}
+${periodPanel("30",data.thirtyDays,data,financialReady,metaUnavailable)}
+<div class="section-header"><div><span class="eyebrow">Tendance</span><h2>Performance hebdomadaire</h2></div></div>
+${weeksTable(data)}
+${controls}
+<noscript><style>[data-acquisition-period-panel][hidden]{display:block!important}</style></noscript>
+</section>`;
 }
