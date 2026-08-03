@@ -9,6 +9,7 @@ import {
 } from "../lib/whatsapp.js";
 import { markLogFailedByWamid } from "../domain/notificationRepo.js";
 import { markClientPingFailedByWamid } from "../domain/deliveryRepo.js";
+import { markOutboundNudgeFailedByWamid } from "../domain/leadNudgeRepo.js";
 import {
   handleInboundText,
   handleReaction,
@@ -57,13 +58,14 @@ export function registerWhatsAppWebhook(app: FastifyInstance): void {
     for (const s of parseStatuses(req.body)) {
       if (s.status !== "failed") continue;
       const reason = `${s.errorCode ?? "?"} ${s.errorTitle ?? "delivery failed"}`;
-      const [logged, deliveryPing] = await Promise.all([
+      const [logged, deliveryPing, nudge] = await Promise.all([
         markLogFailedByWamid(s.wamid, reason).catch(() => 0),
         markClientPingFailedByWamid(s.wamid).catch(() => 0),
+        markOutboundNudgeFailedByWamid(s.wamid, reason).catch(() => 0),
       ]);
-      if (logged > 0 || deliveryPing > 0) {
+      if (logged > 0 || deliveryPing > 0 || nudge > 0) {
         req.log.warn(
-          { wamid: s.wamid, reason, deliveryPing },
+          { wamid: s.wamid, reason, deliveryPing, nudge },
           "WhatsApp async delivery failure recorded",
         );
       }

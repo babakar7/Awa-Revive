@@ -30,6 +30,7 @@ import { closeOpsSseConnections } from "./ops/opsRoutes.js";
 import { closeInactiveBookingJourneys } from "./domain/bookingFunnel.js";
 import { sweepDueKeyBonuses } from "./domain/keyProvisioning.js";
 import { sweepKeyNudges } from "./domain/keyNudge.js";
+import { sweepSilentLeadNudges } from "./domain/leadNudge.js";
 import { syncAttendanceLeaderboard } from "./domain/attendanceLeaderboard.js";
 import { sweepOmVerifications } from "./domain/orangeMoneyVerification.js";
 
@@ -209,6 +210,14 @@ async function main() {
       if (nudged > 0) app.log.info({ nudged }, "Key lifecycle nudges sent");
     } catch (err) {
       app.log.error({ err }, "Key lifecycle nudge sweep failed");
+    }
+    try {
+      // Relance A : lead pub silencieux jamais revenu après le pitch d'Awa.
+      // No-op tant que LEAD_NUDGE_ENABLED est off ; claim atomique + holdout.
+      const nudged = await sweepSilentLeadNudges(app.log);
+      if (nudged > 0) app.log.info({ nudged }, "Silent-lead nudges sent");
+    } catch (err) {
+      app.log.error({ err }, "Silent-lead nudge sweep failed");
     }
     try {
       const synced = await syncAttendanceLeaderboard();

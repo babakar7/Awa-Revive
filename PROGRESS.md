@@ -1,8 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **2 août 2026** — coupe-circuit déterministe des
-> conversations sans intention, relais technique fiable,
+> Dernière mise à jour : **3 août 2026** — relance A des leads pub silencieux
+> (holdout ITT, OFF par défaut) + budget pub doublé. Avant : coupe-circuit
+> déterministe des conversations sans intention, relais technique fiable,
 > renouvellement des paiements de plan expirés et première séance des Clés.
 > Avant : politique d’annulation non remboursable, report et transfert de séance ; fiabilisation Awa
 > après l'incident Riche Aubambi : service canonique, coupe-circuit,
@@ -15,6 +16,60 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Relance A — lead pub silencieux jamais revenu après le pitch (3 août 2026)
+
+**Analyse prod (24/07→03/08).** 173 leads pub CTWA (`campaign_leads`, clé
+`pack_decouverte_ctwa`), 7 Clés L'Invitée vendues — toutes issues des cohortes
+30/07–01/08, après le fix « Clé nommée » : ~10 % de conversion post-fix,
+ROAS ≈ 7–18×. Seule créa qui convertit : « Découvre le Pilates Reformer ».
+**Fuite : 70 leads (40 %) n'écrivent jamais un 2e message** — clic, pitch
+d'Awa, silence, zéro relance. Décision produit associée : **budget pub doublé
+$5→$10/jour le 03/08**. Spec complète : [LEAD-FOLLOWUP-PLAN.md](LEAD-FOLLOWUP-PLAN.md)
+(3 tours de revue).
+
+**Découverte pendant l'analyse.** La relance des liens de paiement PLAN expirés
+(ex-« relance B ») était déjà en prod depuis le 01–02/08 (`nudgeExpiredPlanOrders`,
+exclusion des retries `retry_of_order_id`, alerte réception OM/Max It). Piège de
+process : les premières revues avaient été faites depuis le hub 32 commits en
+retard → on a failli re-spécifier du code existant. **Toujours `git fetch` +
+inspecter `origin/main` (ou un worktree frais) avant d'analyser.**
+
+**Ce qui a été livré (relance A uniquement).** Un seul message libre à un lead
+`pack_decouverte_ctwa` qui n'a **jamais répondu** après le pitch, 3 h de silence,
+dans la fenêtre 24 h (borne 22 h). [src/domain/leadNudge.ts](src/domain/leadNudge.ts)
+(copie FR/EN, holdout FNV-1a, heures calmes, sweep),
+[src/domain/leadNudgeRepo.ts](src/domain/leadNudgeRepo.ts) (candidats + claim),
+table `outbound_nudges`, appelée depuis le sweeper 60 s. **OFF par défaut**
+(`LEAD_NUDGE_ENABLED=false`) — à activer via Railway après un dry-run prod.
+
+Décisions de conception (les pièges à connaître) :
+- **« Jamais répondu » ancré sur `campaign_leads.trigger_message_id`**, PAS sur
+  un décompte de messages : `conversations` est un flux par client, donc un
+  ancien client qui reclique la pub doit rester éligible (testé).
+- **Exclusion de TOUT funnel paiement** (plan orders + booking links, tout
+  statut, `EXPIRED` inclus) → la relance A ne s'empile jamais sur la relance
+  lien-expiré ni sur le flux normal.
+- **Claim atomique** (`INSERT … SELECT … WHERE <toutes les gardes>`) qui
+  re-vérifie au moment du claim réponse/paiement/takeover/handoff — une réponse
+  arrivée entre sélection et claim annule l'envoi (test « ITT race »). Les
+  gardes SQL sont partagées verbatim entre sélection et claim.
+- **Mesure causale (intention-to-treat)** : `arm` (TREATMENT/HOLDOUT, fixé au
+  claim, immuable) séparé de `outcome` (CLAIMED→SENT/FAILED, ou SUPPRESSED).
+  Holdout 1/6 par FNV-1a côté TS (`Math.imul(…)>>>0`, stable entre versions PG,
+  contrairement à `hashtext()`). Un rejet Meta async repasse `outcome=FAILED`
+  via `markOutboundNudgeFailedByWamid` (branché au webhook statuts) **sans
+  toucher l'`arm`** — sinon les échecs Meta, corrélés à l'âge du lead,
+  biaiseraient le bras traitement.
+- **Pas de promesse de réservation** dans la copie (« je peux t'aider à trouver
+  une place », pas « je te garde une place ») : paiement d'abord.
+
+**Mesure (à 2 semaines OU ≥50 claims TREATMENT).** Principale : conversion Clé
+≤72 h, tous `arm=TREATMENT` (FAILED inclus) vs `arm=HOLDOUT`. Si les leads
+doublent mais pas les ventes → « refine targeting », pas « spend more » ; le
+holdout isole l'effet nudge de l'effet budget. V2 (template réveil J+2) gated
+sur cette mesure. Tests : `test/leadNudge.test.ts` (pur, 11) +
+`test/integration/leadNudge.test.ts` (10).
 
 ## Place d'accompagnant impossible pour une cliente à Clé + double fabulation (Khadidjatou, 2 août 2026)
 

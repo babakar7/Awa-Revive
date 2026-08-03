@@ -750,7 +750,7 @@ export async function truncateAll(): Promise<void> {
   await pool.query(
     `truncate clients, pending_bookings, pending_plan_orders, conversations,
               admin_outbound_messages, admin_audit_log, conversation_reviews,
-              agent_tool_failures, presented_choices,
+              agent_tool_failures, presented_choices, campaign_leads, outbound_nudges,
               processed_webhooks, orange_money_verifications, handoffs, slot_cache, delivery_orders,
               staff_contacts, staff_schedules, notification_log, invoices,
               coach_payment_profiles, coach_payment_statements, coach_payment_send_log,
