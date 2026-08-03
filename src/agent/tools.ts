@@ -58,6 +58,11 @@ import {
 import { resolveContinuitySource } from "../domain/keyContinuity.js";
 import { isOmOutageActive } from "../domain/omOutage.js";
 import {
+  missingReplyRequirements,
+  missingRequirementsToolResult,
+  type ReplyRequirement,
+} from "./replyCoverage.js";
+import {
   decideMemberProvisioning,
   effectiveMemberContactId,
   provisionWixMember,
@@ -258,6 +263,9 @@ const VERIFICATION_PENDING_RESULT = JSON.stringify({
     "if covered, otherwise the link). ONLY if the client says they can't access that email or explicitly prefers " +
     "to pay now, call this tool again with client_declined_verification:true.",
 });
+
+/** A direct-send tool already delivered the whole client reply. */
+export const NO_REPLY_SENTINEL = "<NO_REPLY>";
 
 /**
  * Tool definitions (SPEC §6). Kept in a stable order so the prompt cache
@@ -995,16 +1003,31 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "get_class_schedule",
     description:
-      "Send the client the studio's WEEKLY class schedule (Monday→Sunday grid, no dates) as an image, generated " +
-      "live from the Wix catalog — this tool renders AND delivers it itself. Use it whenever the client wants an " +
+      "Send the client the studio's WEEKLY class schedule (Monday→Sunday grid, no dates) as an image with your " +
+      "complete answer as its caption, generated live from the Wix catalog. This tool renders AND delivers the whole " +
+      "client reply itself. The required message field must answer every CURRENT-TURN REQUIRED COVERAGE item; on a " +
+      "first contact it includes the greeting/automated-assistant introduction, while an ongoing conversation must " +
+      "not re-introduce Awa. Use it whenever the client wants an " +
       "OVERVIEW of the studio's classes WITHOUT naming one: 'le planning des cours', 'vos horaires', 'the schedule', " +
       "AND any request to see ALL the slots at once or asking whether a site/page lists them ('avez-vous un site " +
       "avec tous les créneaux', 'je peux voir tous les créneaux ?', 'la liste complète des cours', 'c'est quoi le " +
-      "programme de la semaine'). In that case CALL THIS TOOL (it sends the planning image) — you may ALSO share the " +
-      "online planning link from <business_info> in the same reply. For the slots of ONE specific class (or to " +
+      "programme de la semaine'). In that case CALL THIS TOOL and include www.revive.sn/planning in message. For the " +
+      "slots of ONE specific class (or to " +
       "actually book), keep using check_availability — the weekly grid carries no dates and no open-spot counts. If " +
-      "the image cannot be sent, the tool returns the schedule as text for you to relay.",
-    input_schema: { type: "object", properties: {}, additionalProperties: false },
+      "the image cannot be sent, the tool returns the schedule as text for you to relay. After sent:true, reply " +
+      `exactly ${NO_REPLY_SENTINEL} and nothing else.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        message: {
+          type: "string",
+          description:
+            "The complete client-facing image caption (max 1024 chars): answer all current questions, include the online planning link, and do not append a CTA unless the client showed buying intent.",
+        },
+      },
+      required: ["message"],
+      additionalProperties: false,
+    },
   },
   {
     name: "add_spots_to_booking",
@@ -1044,12 +1067,6 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
 ];
-
-/**
- * When the model's final text equals this sentinel, the agent loop sends
- * nothing: a present_options call already delivered the reply.
- */
-export const NO_REPLY_SENTINEL = "<NO_REPLY>";
 
 // Weekly schedule (grid + rendered PNG) — dateless Mon→Sun timetable, safe to
 // share across clients and cache briefly. png null = render failed, use text.
@@ -1496,6 +1513,7 @@ export async function executeTool(
   client: Client,
   name: string,
   input: Record<string, unknown>,
+  turnContext: { replyRequirements?: readonly ReplyRequirement[] } = {},
 ): Promise<string> {
   switch (name) {
     case "list_classes": {
@@ -5170,6 +5188,20 @@ export async function executeTool(
     }
 
     case "get_class_schedule": {
+      // This tool has a WhatsApp side effect. Validate the exact caption that
+      // Meta will receive BEFORE rendering/uploading anything, so the model
+      // cannot send the image first and omit the greeting or sibling questions.
+      const message = String(input.message ?? "").trim().slice(0, 1024);
+      const missing = missingReplyRequirements(
+        message,
+        turnContext.replyRequirements ?? [],
+        { scheduleAttached: true },
+      );
+      if (!message || missing.length > 0) {
+        return missingRequirementsToolResult(
+          missing.length > 0 ? missing : ["schedule_overview"],
+        );
+      }
       // Build (or reuse) the weekly grid + PNG. The grid is the standing
       // Mon→Sun timetable — dateless by design — so a 30 min cache is safe
       // and turns the heaviest render in the bot into a no-op for most calls.
@@ -5206,15 +5238,19 @@ export async function executeTool(
       const text = scheduleText(cached.entries);
       if (cached.png) {
         try {
-          await sendImage(client.wa_phone, cached.png, "Planning des cours — Revive 🗓️");
-          await repo.addTurn(client.id, "assistant", `[image envoyée : planning hebdomadaire des cours]\n${text}`);
+          const wamid = await sendImage(client.wa_phone, cached.png, message);
+          await repo.addTurn(
+            client.id,
+            "assistant",
+            `${message}\n[image envoyée : planning hebdomadaire des cours]\n${text}`,
+            wamid ?? undefined,
+          );
           return JSON.stringify({
             sent: true,
             schedule: text,
             note:
-              "The weekly schedule image was already delivered to the client. Do NOT repeat the schedule in text. " +
-              "Follow up with ONE short message in the client's language asking which class (and day) they want, " +
-              "then use check_availability as usual — the image shows no dates or open spots.",
+              `The complete caption + weekly schedule image were already delivered and logged. Reply exactly ${NO_REPLY_SENTINEL} ` +
+              "and nothing else — any follow-up would duplicate or push the informational reply.",
           });
         } catch (err) {
           console.error("Schedule image send failed (falling back to text):", err);
@@ -5226,7 +5262,8 @@ export async function executeTool(
         schedule: text,
         note:
           "The image could not be sent. Relay this schedule as a short, readable text message (keep the day " +
-          "grouping), then ask which class they want and use check_availability as usual.",
+          "grouping) together with every CURRENT-TURN REQUIRED COVERAGE answer. Do not add a booking question " +
+          "unless the client showed buying intent.",
       });
     }
 
@@ -5242,6 +5279,11 @@ export async function executeTool(
         }))
         .filter((o) => o.id && o.title);
       const uniqueIds = new Set(options.map((o) => o.id));
+      const missing = missingReplyRequirements(
+        body,
+        turnContext.replyRequirements ?? [],
+      );
+      if (missing.length > 0) return missingRequirementsToolResult(missing);
       if (!body || options.length === 0 || options.length > 10 || uniqueIds.size !== options.length) {
         return JSON.stringify({
           error: "invalid_options",

@@ -1,7 +1,8 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **3 août 2026** — abonnements généralisés :
+> Dernière mise à jour : **3 août 2026** — garde serveur premier contact et
+> questions multiples. Avant : abonnements généralisés :
 > L'Abonnement Aquabike + plan sur mesure automatisés (familles de clés,
 > coexistence, admin « Abonnements »). Avant : relance A des leads pub silencieux
 > (holdout ITT, OFF par défaut) + budget pub doublé. Avant : coupe-circuit
@@ -18,6 +19,31 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Premier contact + questions multiples : réponse complète avant tout envoi (3 août 2026)
+
+- Incident prod `+221781038893` : « Bonjour… Comment réserver ? quelles sont
+  vos horaires ? Vous êtes où ? ». `get_class_schedule` a envoyé la photo avant
+  toute salutation, puis sa consigne de suivi a poussé « quel cours ? » ; Awa
+  n'a répondu ni au fonctionnement de la réservation ni à l'adresse, pourtant
+  présentes dans `business-info.md`.
+- Cause : la salutation et « ANSWER FIRST, FULLY » n'étaient que des consignes
+  modèle, tandis que `get_class_schedule` avait un effet WhatsApp immédiat et
+  imposait ensuite une question commerciale contradictoire. Le garde de sortie
+  ne voyait donc le message qu'après le premier envoi irréversible.
+- Correctif : `replyCoverage` dérive côté serveur les obligations du tour
+  (premier bonjour + identité automatisée, réservation, planning, localisation,
+  absence de CTA sans signal d'achat). Elles sont injectées au contexte et
+  validées avant tout `present_options`, toute légende de planning et tout texte
+  final ; un brouillon incomplet est corrigé une fois, jamais livré tel quel.
+- `get_class_schedule` exige désormais la réponse complète dans `message`,
+  l'envoie comme légende de l'image avec `www.revive.sn/planning`, puis clôt le
+  tour par `<NO_REPLY>`. Le serveur supprime tout second texte même si le modèle
+  ignore ce marqueur. En milieu de conversation, aucune nouvelle salutation ni
+  présentation n'est exigée.
+- Les horaires restent dynamiques : aucune promesse fixe « 10 h–19 h ». La
+  source officielle demeure le planning live + son lien ; la localisation
+  reste Almadies avec le lien Google Maps de `business-info.md`.
 
 ## Abonnements généralisés : L'Abonnement Aquabike + plan sur mesure (3 août 2026)
 

@@ -46,6 +46,12 @@ import {
   noIntentClosingMessage,
 } from "../domain/noIntentGuard.js";
 import { isOmOutageActive } from "../domain/omOutage.js";
+import {
+  correctiveCoverageInstruction,
+  deriveReplyRequirements,
+  missingReplyRequirements,
+  replyRequirementsInstruction,
+} from "./replyCoverage.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
 // timeout, and since messages are serialized per client (see lib/serialize),
@@ -875,6 +881,7 @@ export async function handleInboundText(args: {
   // "bonjour" that fires the capability menu should still open with a warm
   // introduction rather than a bare option list.
   const isFirstContact = !history.some((t) => t.role === "assistant");
+  const replyRequirements = deriveReplyRequirements(inboundText, isFirstContact);
   // Tiered capability menu on vague openers (incl. returning clients), once per ~24h.
   const capabilityMenu = capabilityMenuKind({
     isVague: isVagueOpener(text),
@@ -941,12 +948,13 @@ export async function handleInboundText(args: {
         conversationGapDays,
         studioClosures,
         faqEntries,
-      }),
+      }) + replyRequirementsInstruction(replyRequirements),
     },
   ];
 
   let replyText: string | null = null;
   let interactiveSent = false;
+  let scheduleReplySent = false;
   let terminalHandled = false;
   // Allowlist for the outbound payment-link guard (prod 25/07 fabricated link):
   // exact URLs the SERVER issued — active DB payment records + any link a real
@@ -1037,9 +1045,18 @@ export async function handleInboundText(args: {
         let result: string;
         let isError = false;
         try {
-          result = await executeTool(client, block.name, block.input as Record<string, unknown>);
-          if (block.name === "present_options" && result.includes('"sent":true')) {
+          result = await executeTool(
+            client,
+            block.name,
+            block.input as Record<string, unknown>,
+            { replyRequirements },
+          );
+          if (
+            (block.name === "present_options" || block.name === "get_class_schedule") &&
+            result.includes('"sent":true')
+          ) {
             interactiveSent = true;
+            if (block.name === "get_class_schedule") scheduleReplySent = true;
             // If the model itself already showed bar items, don't double-send
             // the menu offer below.
             const opts = (block.input as any)?.options;
@@ -1147,6 +1164,11 @@ export async function handleInboundText(args: {
     console.error("Agent loop failed:", err);
   }
 
+  // The schedule image caption is the complete, server-validated answer. Even
+  // if the model ignores the tool's sentinel instruction, never send a second
+  // follow-up (the exact duplicate/pushy shape of the 03/08 production bug).
+  if (scheduleReplySent) replyText = NO_REPLY_SENTINEL;
+
   // A stale <NO_REPLY> (or an unexplained empty end_turn) without a message
   // delivered in THIS turn is not a real outage. Retry once without tools and
   // with an explicit current-turn guard. This is intentionally before the
@@ -1195,6 +1217,47 @@ export async function handleInboundText(args: {
   if (replyOutcome !== "deliver") replyText = null;
   else replyText = stripNoReplySentinel(replyText);
 
+  // Coverage guard for first-contact identity and explicit information asks.
+  // Direct-send tools enforce the same contract before their own side effect;
+  // this path covers ordinary model text and schedule-text fallback.
+  if (replyText) {
+    const missing = missingReplyRequirements(replyText, replyRequirements);
+    if (missing.length > 0) {
+      console.warn(`Outbound reply missing required coverage (${missing.join(", ")}) — corrective retry`);
+      try {
+        const corrected = await withOverloadRetry(
+          () =>
+            anthropic.messages.create({
+              model: config.CLAUDE_MODEL,
+              max_tokens: REPLY_MAX_TOKENS,
+              output_config: { effort: "low" },
+              system: [
+                ...system,
+                { type: "text", text: correctiveCoverageInstruction(missing) },
+              ],
+              messages,
+            }),
+          () => void sendTypingIndicator(args.waMessageId),
+        );
+        const retried = stripNoReplySentinel(extractText(corrected));
+        if (
+          retried &&
+          missingReplyRequirements(retried, replyRequirements).length === 0 &&
+          lintOutboundReply(retried, approvedPaymentUrls).ok
+        ) {
+          replyText = retried;
+        } else {
+          replyText = null;
+          loopError = loopError ?? new Error(`outbound_coverage_failed:${missing.join(",")}`);
+        }
+      } catch (err) {
+        console.error("Corrective coverage retry failed:", err);
+        replyText = null;
+        loopError = loopError ?? new Error("outbound_coverage_retry_error");
+      }
+    }
+  }
+
   // Outbound payment-link guard (prod 25/07). Only model-authored text reaches
   // here as deliverable; the fallbacks below are fixed server strings. On a
   // block, retry ONCE without tools (so no side effect can repeat) constrained
@@ -1220,7 +1283,11 @@ export async function handleInboundText(args: {
           () => void sendTypingIndicator(args.waMessageId),
         );
         const retried = stripNoReplySentinel(extractText(corrected));
-        if (retried && lintOutboundReply(retried, approvedPaymentUrls).ok) {
+        if (
+          retried &&
+          lintOutboundReply(retried, approvedPaymentUrls).ok &&
+          missingReplyRequirements(retried, replyRequirements).length === 0
+        ) {
           replyText = retried;
         } else {
           replyText = null;
@@ -1236,7 +1303,7 @@ export async function handleInboundText(args: {
 
   if (!replyText && !interactiveSent && !terminalHandled) {
     const stage =
-      loopError instanceof Error && loopError.message.startsWith("outbound_lint")
+      loopError instanceof Error && /^outbound_(?:lint|coverage)/.test(loopError.message)
         ? "output_filter"
         : loopError instanceof Error && /^model returned /.test(loopError.message)
           ? "agent_empty_reply"
