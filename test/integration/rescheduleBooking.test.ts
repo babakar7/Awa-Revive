@@ -81,6 +81,71 @@ describe("reschedule_booking", () => {
     expect(moved?.body).toMatchObject({ revision: "1", slot: { eventId: "ev_monday" } });
   });
 
+  it("uses slot.eventId, never the overlong availability sessionId (Kadiatou regression)", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, {
+      status: "BOOKED",
+      wix_booking_id: "wb_kadiatou",
+      slot_start: inHours(30),
+      slot_end: inHours(31),
+    });
+    const overlongSessionId = "s".repeat(334);
+    const wixEventId = "e".repeat(119);
+    mock.wix.eventId = overlongSessionId;
+    mock.wix.rescheduleEventId = wixEventId;
+    mock.wix.slotStart = inHours(48);
+    mock.wix.slotEnd = inHours(49);
+
+    const availability = JSON.parse(
+      await executeTool(asClient(client), "check_availability", {
+        service_id: "svc_1",
+        date_from: inHours(24),
+        date_to: inHours(72),
+      }),
+    );
+    const out = JSON.parse(
+      await executeTool(asClient(client), "reschedule_booking", {
+        booking_id: booking.id,
+        event_id: availability.slots[0].choice_id,
+      }),
+    );
+
+    expect(out).toMatchObject({ rescheduled: true, payment_preserved: true });
+    const moved = mock.calls.find((call) => call.url.endsWith("/reschedule"));
+    expect(moved?.body.slot.eventId).toBe(wixEventId);
+    expect(moved?.body.slot.eventId).not.toBe(overlongSessionId);
+  });
+
+  it("refuses an invalid Wix event id before any rescheduling write", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, {
+      status: "BOOKED",
+      wix_booking_id: "wb_invalid_reschedule_event",
+      slot_start: inHours(30),
+      slot_end: inHours(31),
+    });
+    mock.wix.eventId = "session_valid_for_availability";
+    mock.wix.rescheduleEventId = "e".repeat(251);
+    mock.wix.slotStart = inHours(48);
+    mock.wix.slotEnd = inHours(49);
+
+    const availability = JSON.parse(
+      await executeTool(asClient(client), "check_availability", {
+        service_id: "svc_1",
+        date_from: inHours(24),
+        date_to: inHours(72),
+      }),
+    );
+    await expect(
+      executeTool(asClient(client), "reschedule_booking", {
+        booking_id: booking.id,
+        event_id: availability.slots[0].choice_id,
+      }),
+    ).rejects.toThrow("Invalid Wix reschedule event id (251 characters)");
+
+    expect(mock.calls.some((call) => call.url.endsWith("/reschedule"))).toBe(false);
+  });
+
   it("rejects a move inside the 16-hour window without touching Wix", async () => {
     const client = await seedClient();
     const booking = await seedBooking(client.id, {

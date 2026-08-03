@@ -4190,7 +4190,7 @@ export async function executeTool(
             message: "That new slot is no longer open for all their places. Re-run check_availability and offer another slot; the current booking is unchanged.",
           });
         }
-        await wix.rescheduleBooking(wixId, cached.event_id);
+        await wix.rescheduleBooking(wixId, fresh);
         return JSON.stringify({
           rescheduled: true,
           class: source.serviceName,
@@ -4238,7 +4238,7 @@ export async function executeTool(
         });
       }
 
-      await wix.rescheduleBooking(booking.wix_booking_id, cached.event_id);
+      await wix.rescheduleBooking(booking.wix_booking_id, fresh);
       const stored = await repo.updateBookedSlot({
         bookingId,
         clientId: client.id,

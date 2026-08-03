@@ -30,12 +30,15 @@ export interface WixState {
     slotEnd?: string;
     serviceId?: string;
     eventId?: string;
+    rescheduleEventId?: string;
   }>;
   /** Slot template returned by availability (startDate settable per test). */
   slotStart: string;
   slotEnd: string;
   serviceId: string;
   eventId: string;
+  /** Distinct slot.eventId used only by Reschedule Booking. Null mirrors eventId. */
+  rescheduleEventId: string | null;
   /** Ids handed out by create-booking, in order. */
   createdBookingIds: string[];
   /** Make create-booking answer 500 (Wix outage). */
@@ -174,6 +177,7 @@ export function makeFetchMock(): FetchMock {
     slotEnd: inHours(25),
     serviceId: "svc_1",
     eventId: "ev_1",
+    rescheduleEventId: null,
     createdBookingIds: [],
     failCreateBooking: false,
     contacts: [],
@@ -327,6 +331,11 @@ export function makeFetchMock(): FetchMock {
           {
             slot: {
               sessionId: override.eventId ?? wix.eventId,
+              eventId:
+                override.rescheduleEventId ??
+                wix.rescheduleEventId ??
+                override.eventId ??
+                wix.eventId,
               serviceId: override.serviceId ?? wix.serviceId,
               startDate: override.slotStart ?? wix.slotStart,
               endDate: override.slotEnd ?? wix.slotEnd,
@@ -668,6 +677,7 @@ export function makeFetchMock(): FetchMock {
       wix.slotEnd = inHours(25);
       wix.serviceId = "svc_1";
       wix.eventId = "ev_1";
+      wix.rescheduleEventId = null;
       wix.createdBookingIds.length = 0;
       wix.failCreateBooking = false;
       wix.contacts = [];

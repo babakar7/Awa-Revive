@@ -405,7 +405,18 @@ export async function planCoveredClassNames(planId: string): Promise<string[] | 
 // ---------- availability ----------
 
 export interface WixSlot {
-  eventId: string; // sessionId of the class event
+  /**
+   * Opaque availability session id. This is the stable value used to find the
+   * same slot again, but it is NOT the Calendar event id accepted by
+   * Reschedule Booking (production session ids can exceed 300 characters).
+   */
+  eventId: string;
+  /**
+   * `availabilityEntries.slot.eventId`, required by Wix's Reschedule Booking
+   * endpoint and capped there at 250 characters. Kept separate from the
+   * availability session id so the two can never be mixed up again.
+   */
+  rescheduleEventId?: string | null;
   serviceId: string;
   startDate: string; // ISO
   endDate: string; // ISO
@@ -464,6 +475,10 @@ export async function queryAvailabilityMulti(
     .filter((e) => e?.slot?.sessionId && (e?.slot?.serviceId || fallbackId))
     .map((e) => ({
       eventId: e.slot.sessionId as string,
+      rescheduleEventId:
+        typeof e.slot.eventId === "string" && e.slot.eventId.trim()
+          ? e.slot.eventId.trim()
+          : null,
       serviceId: (e.slot.serviceId ?? fallbackId) as string,
       startDate: e.slot.startDate,
       endDate: e.slot.endDate,
@@ -2113,7 +2128,18 @@ export async function markCancelledBookingRefunded(bookingId: string): Promise<v
  * Payment, participant count and booking id stay intact in Wix. The caller
  * owns the 16h, ownership, service-match and fresh-availability checks.
  */
-export async function rescheduleBooking(bookingId: string, eventId: string): Promise<void> {
+export async function rescheduleBooking(bookingId: string, target: WixSlot): Promise<void> {
+  const eventId = target.rescheduleEventId?.trim() ?? "";
+  // Wix documents slot.eventId as the rescheduling identifier and enforces a
+  // 250-character limit. Validate before even reading the booking revision so
+  // an availability sessionId (Kadiatou: 334 chars) can never reach the write
+  // endpoint if the upstream response shape changes or a caller regresses.
+  if (!eventId || eventId.length > 250) {
+    throw new Error(
+      `Invalid Wix reschedule event id (${eventId ? `${eventId.length} characters` : "missing"}); ` +
+      "expected availabilityEntries.slot.eventId with at most 250 characters",
+    );
+  }
   const revision = await getBookingRevision(bookingId);
   await wixPost(`/_api/bookings-service/v2/bookings/${bookingId}/reschedule`, {
     revision,
