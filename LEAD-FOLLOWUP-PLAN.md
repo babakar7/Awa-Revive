@@ -1,119 +1,132 @@
-# LEAD-FOLLOWUP-PLAN — relances pour convertir les leads pub en Clés
+# LEAD-FOLLOWUP-PLAN — relance des leads pub silencieux (v3, FINAL)
 
-> **Statut : PLAN v2 — à implémenter dans un worktree (`npm run agent:new -- lead-nudges`).**
-> v1 rédigée le 03/08/2026 après analyse prod (§1) ; v2 le même jour après revue
-> (claim atomique, exclusion funnel paiement, holdout, chaîne retry).
+> **Statut : PRÊT À IMPLÉMENTER** — worktree `lead-nudges` créé.
+> v1 03/08 (analyse prod §1) ; v2 03/08 (revue : claim atomique, exclusions,
+> holdout) ; **v3 03/08 (finale)** : la relance « lien plan expiré » est DÉJÀ en
+> prod (§2) → le build se réduit à la relance A ; séparation arm/outcome
+> (intention-to-treat) pour une mesure causale propre.
 > Décision associée : budget pub doublé ($5 → $10/jour) le 03/08.
 
-## 1. Contexte — ce que disent les données prod (24/07 → 03/08)
+## 1. Contexte — données prod (24/07 → 03/08)
 
 - 173 leads pub (`campaign_leads`, clé `pack_decouverte_ctwa`), ~22/jour à $5/jour.
 - **7 Clés L'Invitée vendues (30 000 F)**, toutes issues des cohortes 30/07–01/08
-  (après le fix « Named Key request wins » du 30/07) → **~10 % de conversion
-  post-fix**, ROAS ≈ 7–18×. La créa qui convertit : « Découvre le Pilates Reformer ».
-- **Fuite n°1 : 70 leads (40 %) n'écrivent JAMAIS un 2e message.** Ils envoient le
-  message pré-rempli, reçoivent le pitch d'Awa, silence. Zéro relance aujourd'hui.
-- **Fuite n°2 : des liens de paiement plan expirent sans relance** (4 ordres
-  `EXPIRED/KEY` + 1 Aquafitness sur la période). Le nudge lien-expiré existant
-  ([src/domain/expiryNudge.ts](src/domain/expiryNudge.ts)) ne couvre QUE
-  `pending_bookings` — **les `pending_plan_orders` ne sont pas relancés.**
-- Les acheteurs décident vite : 4/7 paient en <30 min, max observé 33 h.
-  → Les relances doivent être précoces (heures, pas jours).
-- Paiement : Wave 9/10 des ordres Clé. L'outage OM n'affecte pas ce funnel.
+  (post-fix « Named Key request wins ») → **~10 % de conversion post-fix**,
+  ROAS ≈ 7–18×. Seule créa qui convertit : « Découvre le Pilates Reformer ».
+- **Fuite ciblée : 70 leads (40 %) n'écrivent JAMAIS un 2e message.** Message
+  pré-rempli → pitch d'Awa → silence. Zéro relance aujourd'hui.
+- Les acheteurs décident vite : 4/7 paient en <30 min, max observé 33 h (payé à
+  00h54 — un client peut être actif à minuit). → Relance précoce (heures).
+- Paiement : Wave 9/10. L'outage OM n'affecte pas ce funnel.
 
-**Objectif : récupérer une partie des 40 % silencieux + 100 % des liens plan
-expirés, et le MESURER proprement (holdout) pour décider la suite.**
+## 2. Ce qui existe DÉJÀ en prod (ne PAS reconstruire)
 
-## 2. Vue d'ensemble — deux relances V1, une V2
+- **Relance lien plan expiré (ex-« relance B ») : livrée les 01–02/08**
+  (`d32d7b7`, `32da028`) — `expiredPlanOrdersToNudge` +
+  `claimPlanOrderExpiryNudge` ([src/domain/repo.ts](src/domain/repo.ts)),
+  `nudgeExpiredPlanOrders` ([src/domain/expiryNudge.ts](src/domain/expiryNudge.ts)),
+  appelée par le sweeper 60 s ([src/index.ts](src/index.ts)). Couvre déjà :
+  exclusion des ordres re-liés (`retry_of_order_id`), garde « le client a
+  répondu → Awa gère », alerte réception OM/Max It (callback Sonatel perdu),
+  messages FR/EN/WO avec variante outage OM.
+- Son claim est le pattern timestamp naïf (`expiry_nudged_at`). **Dette
+  assumée, hors chantier** : étroite (fenêtre 30 min), indépendante de A, en
+  prod — la refactorer ici ajouterait du risque sans bénéfice pour l'objectif.
+- Relance bookings (`nudgeExpiredLinks`) : idem, en prod depuis longtemps.
+- **Leçon de processus (vécue sur ce chantier)** : les revues v1/v2 ont été
+  faites sur un hub 32 commits en retard → on a spécifié une feature qui
+  existait déjà. Avant toute analyse : `git fetch`, puis inspection
+  d'`origin/main` ou worktree frais.
 
-| # | Relance | Cible | Canal | Délai | Version |
-|---|---------|-------|-------|-------|---------|
-| A | **Lead silencieux** | Lead `pack_decouverte_ctwa` sans AUCUNE réponse après le message pub | `sendText` (fenêtre 24 h) | 3 h de silence | **V1** |
-| B | **Lien plan expiré** | `pending_plan_orders` EXPIRED (Clés ET autres plans) | `sendText` (fenêtre quasi toujours ouverte) | ≤30 min après expiration | **V1** |
-| C | **Réveil J+2** | Lead non converti, fenêtre 24 h fermée | `sendTemplate` (template Meta à créer) | ~48 h | **V2 — après mesure** |
+## 3. Périmètre du build — relance A uniquement
 
-Principes non négociables :
+**A. Lead pub silencieux** : lead `pack_decouverte_ctwa` n'ayant JAMAIS répondu
+après le message pré-rempli → un (1) message libre dans la fenêtre 24 h, après
+3 h de silence. Plus : journal `outbound_nudges` (A et futur C — PAS
+rétroactivement celui de la relance plan), hook d'échec asynchrone Meta,
+holdout pour la mesure causale.
 
-- **Un seul envoi par cible, à vie.** Le claim est un
-  `INSERT … SELECT … WHERE <toutes les gardes volatiles>` **atomique** : il
-  re-vérifie au moment T du claim que le client n'a pas répondu, n'a pas payé,
-  n'a pas de nouvel ordre, n'est pas en takeover — pas seulement « pas déjà
-  claimé ». (Le claim naïf du nudge booking, repo.ts:867, ne re-vérifie que
-  `expiry_nudged_at is null` ; on ne le clone PAS tel quel.)
-- **Claim ≠ envoi réussi** : pattern `key_nudges` (claim insère
-  `outcome='FAILED', detail='claimed'`, puis `complete` passe à
-  `SENT/FAILED` — keyRepo.ts:155-178). On y ajoute le **wamid** retourné par
-  `sendText` (whatsapp.ts:59) pour tracer les échecs Meta asynchrones.
-- **Chaque envoi est journalisé dans `conversations` via `repo.addTurn`** pour
-  qu'Awa ait le contexte si le client répond.
-- **Aucune décision côté modèle** : candidats et timing 100 % SQL/serveur.
-- Kill-switch config par relance, **les deux `false` par défaut** ; activation
-  explicite après dry-run (§10).
+### 3.1 Candidats (`silentLeadCandidates(campaignKey, …)`)
 
-### Gardes de pause (communes A et B) — les VRAIES sources
+**Périmètre campagne** : `PACK_DISCOVERY_CAMPAIGN` uniquement
+([src/domain/packDiscoveryCampaign.ts](src/domain/packDiscoveryCampaign.ts)),
+passé en **argument** — la copy parle de L'Invitée et ne doit jamais partir
+vers une autre campagne.
 
-Vérifiées sur chaque inbound par l'agent (src/agent/index.ts, hard gates) :
+**Les trois horloges** (le lead rattache à la campagne, la fenêtre WhatsApp se
+calcule sur les turns) :
 
-- `clients.human_takeover_until > now()` (relais humain actif) ;
-- `clients.awa_disengaged_until > now()` (Awa désengagée) ;
-- handoff `OPEN` dans `handoffs` ;
-- coupe-circuit réellement déclenché dans `agent_tool_failures` (condition de
-  déclenchement effectif, pas simple présence d'une ligne) ;
-- `clients.is_test = true`.
-
-## 3. Relance A — lead pub silencieux
-
-### 3.1 Candidats (`repo.silentLeadsToNudge(campaignKey, …)`)
-
-**Périmètre campagne : `PACK_DISCOVERY_CAMPAIGN` uniquement**
-(constante existante, [src/domain/packDiscoveryCampaign.ts](src/domain/packDiscoveryCampaign.ts)),
-passée en **argument** de la requête — la copy parle de L'Invitée et ne doit
-jamais partir vers une future campagne différente.
-
-**Les trois horloges** (le lead sert au rattachement campagne, PAS au calcul de
-fenêtre) :
-
-1. `last_user_at > now() - LEAD_NUDGE_MAX_AGE_HOURS (22 h)` — fenêtre Meta sûre,
-   calculée depuis le **dernier message entrant** (`conversations.role='user'`) ;
+1. `last_user_at > now() − LEAD_NUDGE_MAX_AGE_HOURS (22 h)` — fenêtre Meta sûre,
+   depuis le **dernier message entrant** ;
 2. `last_assistant_at > last_user_at` — Awa a parlé la dernière ;
-3. `last_assistant_at <= now() - LEAD_NUDGE_DELAY_MINUTES (180)` — silence de
-   3 h après la réponse d'Awa (pas depuis `campaign_leads.created_at`).
+3. `last_assistant_at ≤ now() − LEAD_NUDGE_DELAY_MINUTES (180)` — 3 h de
+   silence après la réponse d'Awa.
 
-**Périmètre V1 : uniquement la fuite mesurée — AUCUN message utilisateur après
-le message déclencheur** (`campaign_leads.trigger_message_id` ; en pratique :
-un seul message `role='user'` dans la conversation). Les leads à 2-3 messages
-qui ont calé plus loin sont **hors V1** : la copy matin/soir serait incohérente
-pour un client qui a déjà répondu « soir » et reçu des créneaux. Extension
-multi-message = itération ultérieure, avec copy neutre ou état serveur
-déterministe.
+**« Jamais répondu », définition exacte** : aucun turn `role='user'` postérieur
+au **turn ancré sur `campaign_leads.trigger_message_id`**
+(`conversations.wa_message_id`), fallback `campaign_leads.created_at` si le
+trigger est introuvable (cas legacy, de toute façon hors fenêtre 22 h).
+JAMAIS « un seul message user dans la conversation » : `conversations` est un
+flux par client — un ancien client qui clique la pub serait exclu à tort.
 
-**Exclusion funnel paiement (anti-empilement A+B)** : est exclu tout client
-ayant **créé le moindre ordre ou lien de paiement depuis son entrée campagne,
-quel que soit le statut, `EXPIRED` inclus** — `pending_plan_orders` (tout
-statut) et `pending_bookings` avec `payment_link` (tout statut). A = « bloqué
-avant tout paiement proposé » ; dès qu'un lien a existé, B ou le flux normal
-est propriétaire du suivi. Sans cette règle, un lien Clé expiré recevrait B
-puis A trois heures plus tard.
+**Exclusion funnel paiement (anti-empilement avec la relance plan en prod)** :
+exclu tout client ayant le moindre `pending_plan_orders` (tout statut,
+**`EXPIRED` inclus**) ou `pending_bookings` avec `payment_link` (tout statut).
+A = « bloqué avant tout paiement proposé » ; dès qu'un lien a existé, la
+relance plan ou le flux normal est propriétaire.
 
-**Autres gardes** : gardes de pause §2 ; pas déjà dans `outbound_nudges`
-(dedup `LEAD_SILENT:<client_id>`) ; **heures d'envoi 09 h–21 h Dakar** (si le
-créneau tombe la nuit, le sweep du matin rattrape si la fenêtre 24 h tient
-encore ; sinon le candidat sort naturellement — pas d'état « reporté »).
+**Gardes de pause (les vraies sources, celles de l'agent)** :
+`clients.human_takeover_until > now()`, `clients.awa_disengaged_until > now()`,
+handoff `status='OPEN'`, coupe-circuit réellement déclenché
+(`agent_tool_failures.tripped_at is not null and expires_at > now()`),
+`clients.is_test`.
 
-**Holdout 15–20 % (mesure causale)** : le doublement de budget et l'activation
-des nudges arrivent en même temps — un avant/après ne prouve rien. Un
-candidat sur cinq/six, choisi par **hash déterministe de `client_id`** (ex.
-`hashtext(client_id::text) % 6 = 0`), est claimé avec
-`outcome='SUPPRESSED', detail='holdout'` et **jamais relancé**. Le claim du
-holdout est durable → groupe contrôle stable. La mesure compare réponse et
-conversion nudgés vs holdout.
+**Divers** : pas déjà dans `outbound_nudges` (dedup `LEAD_SILENT:<client_id>`) ;
+**heures d'envoi 09 h–21 h Dakar** (Dakar == UTC), vérifiées côté TS en tête de
+sweep — un candidat nocturne est rattrapé au matin si la fenêtre tient encore,
+sinon il sort naturellement (pas d'état « reporté »).
 
-### 3.2 Message (copy — FR défaut, EN si `clients.language='en'`)
+### 3.2 Holdout & mesure causale — arm ≠ outcome (intention-to-treat)
 
-Court, une question, pas un re-pitch (le pitch complet est déjà dans
-l'historique). Signé Awa, de Revive (jamais « Revive Pilates »). **Pas de
-promesse de réservation** (« je te garde une place » impliquerait qu'on pose
-une option — le système ne fait que consulter les dispos, et paiement d'abord) :
+Le doublement de budget et l'activation du nudge arrivent ensemble : un
+avant/après ne prouve rien. **1 candidat sur `LEAD_NUDGE_HOLDOUT_MOD` (6)** est
+assigné au contrôle par **hash FNV-1a de `client_id`, en TypeScript uniquement**
+(`Math.imul(…) >>> 0` pour un vrai 32 bits stable — pas de `hashtext()` SQL,
+non garanti entre versions PG, et pas de double implémentation).
+
+**Deux dimensions séparées dans le journal** :
+
+- **`arm` = `TREATMENT` | `HOLDOUT`** — assignation expérimentale, **fixée
+  définitivement au claim**, jamais modifiée ensuite ;
+- **`outcome` = `CLAIMED` → `SENT` | `FAILED`, ou `SUPPRESSED`** (holdout) —
+  état opérationnel de livraison.
+
+Un message assigné `TREATMENT` puis rejeté par Meta **reste dans le bras
+traitement** pour la comparaison causale (les échecs Meta sont corrélés à l'âge
+du lead — les exclure biaiserait le bras traitement vers les leads les plus
+frais/joignables ; l'ITT dilue vers zéro, direction conservatrice).
+
+**Invariant** : les deux bras passent **exactement le même claim atomique**
+(mêmes gardes SQL, seuls `arm`/`outcome` diffèrent). Un contrôle échantillonné
+plus laxement ne serait plus comparable. Testé explicitement (§8).
+
+### 3.3 Claim atomique (`claimSilentLeadNudge`)
+
+`INSERT … SELECT … WHERE <gardes> ON CONFLICT (dedup_key) DO NOTHING` — SQL
+**statique, écrit à la main** (pas de générateur de gardes : inauditables). Le
+`WHERE` **re-vérifie au moment du claim** toutes les conditions volatiles de la
+sélection : gardes de pause, `is_test`, aucun funnel paiement, **et la même
+condition ancrée sur `trigger_message_id`** (pas « depuis le dernier message
+d'Awa » : le client peut répondre et recevoir la réponse d'Awa en quelques
+secondes — la condition non ancrée re-passerait et enverrait un nudge hors
+contexte). Couvre la course « réponse entre sélection et claim ».
+`completeOutboundNudge(dedupKey, outcome, detail, wamid)` partagé.
+
+### 3.4 Message (FR défaut, EN si `clients.language='en'`)
+
+Court, une question fermée, pas de re-pitch (le pitch complet est dans
+l'historique). Signé Awa, de Revive. **Pas de promesse de réservation**
+(paiement d'abord ; le système consulte les dispos, il ne pose pas d'option) :
 
 > **FR** : « Coucou{, {name}} 👋🏾 C'est encore Awa, de Revive. Tu m'avais écrit
 > pour la Clé L'Invitée (3 séances de Pilates Reformer + piscine + 1 cours
@@ -125,168 +138,135 @@ une option — le système ne fait que consulter les dispos, et paiement d'abord
 > I can help you find a spot this week if you'd like 🙂 Do mornings or evenings
 > work better for you?"
 
-La question fermée (matin/soir) donne une réponse à un mot ; la réponse relance
-l'agent normal (dispos réelles via `list_classes`, jamais en dur).
+La réponse (« matin ») relance l'agent normal (dispos réelles via
+`list_classes`, jamais en dur). Envoi journalisé dans `conversations` via
+`repo.addTurn(clientId, 'assistant', msg, wamid)` pour le contexte d'Awa.
 
-## 4. Relance B — lien de paiement plan expiré
-
-Sœur de `nudgeExpiredLinks` (bookings) pour `pending_plan_orders` :
-`nudgeExpiredPlanLinks` dans expiryNudge.ts.
-
-**Périmètre — décision explicite : TOUS les plans, pas seulement les Clés.**
-Le message est générique (`plan_name`), la mécanique identique, et la période
-d'analyse contient déjà un abandon non-Clé récupérable (Aquafitness). La
-mesure (§8) reste segmentée par `is_key` pour suivre l'objectif Clés. (Si on
-voulait Clés only, il suffirait d'ajouter `p.is_key = true` — non retenu.)
-
-### 4.1 Candidats (`repo.expiredPlanLinksToNudge`)
-
-Adaptation de `repo.expiredLinksToNudge` (repo.ts:834) :
-
-- `status='EXPIRED'`, `payment_link is not null` ;
-- expiré depuis < 30 min (fenêtre de fraîcheur) ;
-- pas d'ordre plan plus récent pour ce client (ni `retry_of_order_id` pointant
-  vers cet ordre — Awa a déjà refait un lien) ;
-- pas de message `role='user'` postérieur à l'expiration ;
-- gardes de pause §2 ;
-- pas déjà dans `outbound_nudges` (dedup `PLAN_LINK:<order_id>`).
-
-Toutes ces conditions sont **répétées dans le claim atomique** (§2). Pas de
-colonne `plan_expiry_nudged_at` : le dedup vit dans `outbound_nudges` (PK),
-qui distingue claim/SENT/FAILED et porte le wamid — contrairement au simple
-timestamp du pattern booking, qui compterait comme « relancé » un envoi ayant
-échoué après claim.
-
-Pas de contrainte `slot_start` (un plan n'a pas de créneau) ni de gate horaire :
-le lien expire ~30 min après création, le client était actif il y a moins d'une
-heure — fenêtre 24 h et heure décente garanties. Pas de holdout sur B (volume
-trop faible, mécanique déjà éprouvée côté bookings).
-
-### 4.2 Message
-
-> **FR** : « ⏳ Ton lien de paiement pour {plan_name} a expiré — nous n'avons
-> pas reçu de confirmation. Si tu viens de payer, la confirmation arrive d'ici
-> 1 à 2 min ; sinon réponds-moi et je t'en renvoie un tout frais 🙂 »
-
-> **EN** : "⏳ Your payment link for {plan_name} has expired — we haven't
-> received a confirmation. If you just paid, it should arrive within 1–2 min;
-> otherwise reply here and I'll send you a fresh one 🙂"
-
-## 5. V2 (ne PAS implémenter maintenant) — template « réveil J+2 »
-
-Pour les leads jamais convertis dont la fenêtre 24 h est fermée : template Meta
-one-shot à ~48 h (créé par Babakar, langue `en` par convention), vars
-`WA_LEAD_REVIVAL_TEMPLATE` + `_LANG`, dedup `LEAD_REVIVAL:<client_id>` dans la
-même table. **Condition d'activation : mesure §8 concluante** — au moins
-**2 semaines OU ≥50 nudges A envoyés** (le premier atteint), et un delta
-nudgés/holdout visible. Si A récupère bien, C est du spam ; si A plafonne, C
-prend le relais.
-
-## 6. Schéma & config
+## 4. Schéma
 
 ```sql
--- schema.ts — journal commun des relances sortantes (A, B, futur C).
--- Nommé outbound_nudges (pas lead_nudges) : B concerne aussi des clients
--- hors campagne. Pattern claim/complete de key_nudges + wamid.
+-- Journal des relances proactives de A (et du futur réveil J+2). La relance
+-- plan en prod garde son expiry_nudged_at — ce journal n'est PAS rétroactif.
 create table if not exists outbound_nudges (
-  dedup_key text primary key,     -- 'LEAD_SILENT:<client_id>' | 'PLAN_LINK:<order_id>' | 'LEAD_REVIVAL:<client_id>'
-  client_id uuid references clients(id),
-  campaign_key text,              -- null pour B hors campagne ; mesure par campagne
-  kind text not null,             -- 'LEAD_SILENT' | 'PLAN_LINK' | 'LEAD_REVIVAL'
-  outcome text not null check (outcome in ('SENT','SUPPRESSED','FAILED')),
-  detail text,                    -- 'claimed' → puis erreur / 'holdout' / vide
-  wa_message_id text,             -- wamid retourné par sendText (échecs Meta asynchrones)
-  created_at timestamptz not null default now()
+  dedup_key text primary key,        -- 'LEAD_SILENT:<client_id>' | 'LEAD_REVIVAL:<client_id>'
+  client_id uuid not null references clients(id),
+  campaign_key text,                 -- mesure par campagne
+  kind text not null,                -- 'LEAD_SILENT' | 'LEAD_REVIVAL'
+  arm text not null check (arm in ('TREATMENT','HOLDOUT')),        -- fixé au claim, immuable
+  outcome text not null check (outcome in ('CLAIMED','SENT','FAILED','SUPPRESSED')),
+  detail text,
+  wa_message_id text,
+  assigned_at timestamptz not null default now(),
+  sent_at timestamptz                -- mesure « sous 72 h » depuis l'envoi effectif
 );
+create index if not exists idx_outbound_nudges_wamid
+  on outbound_nudges (wa_message_id) where wa_message_id is not null;
 ```
 
-(Le claim insère `outcome='FAILED', detail='claimed'` via
-`INSERT … SELECT … WHERE <gardes volatiles>` ; `complete` met à jour outcome,
-detail, wamid. Aucune colonne ajoutée à `pending_plan_orders`.)
+Cycle : claim `TREATMENT/CLAIMED` → `SENT` (+ `sent_at`, wamid) ou `FAILED` ;
+claim `HOLDOUT/SUPPRESSED` (terminal). Plus de hack « `FAILED`/`detail='claimed'` »
+du pattern key_nudges : `CLAIMED` est un état de première classe.
 
-Config ([src/config.ts](src/config.ts)) :
+**Échecs Meta asynchrones** : Meta accepte (200) puis rejette en asynchrone
+(fenêtre fermée, type 131047). `markOutboundNudgeFailedByWamid(wamid, reason)`
+branché dans le handler de statuts `failed`
+([src/webhooks/whatsapp.ts](src/webhooks/whatsapp.ts), à côté de
+`markLogFailedByWamid` / `markClientPingFailedByWamid`) :
+`outcome SENT → FAILED` (l'`arm` ne bouge pas — ITT). Sans ce hook, le taux de
+livraison serait gonflé en silence.
+
+## 5. Config ([src/config.ts](src/config.ts))
 
 | Var | Défaut | Rôle |
 |-----|--------|------|
-| `LEAD_NUDGE_ENABLED` | `false` | kill-switch relance A |
+| `LEAD_NUDGE_ENABLED` | `false` | kill-switch — activation via `railway variables --set` après dry-run |
 | `LEAD_NUDGE_DELAY_MINUTES` | `180` | silence minimal après le dernier message d'Awa |
 | `LEAD_NUDGE_MAX_AGE_HOURS` | `22` | borne fenêtre 24 h (depuis le dernier inbound) |
 | `LEAD_NUDGE_QUIET_START` / `_END` | `21` / `9` | heures silencieuses Dakar |
 | `LEAD_NUDGE_HOLDOUT_MOD` | `6` | 1 candidat sur N en holdout (0 = désactivé) |
-| `PLAN_EXPIRY_NUDGE_ENABLED` | `false` | kill-switch relance B — activation après dry-run §10 |
 
-## 7. Câblage
+## 6. Câblage
 
-- Nouveau module `src/domain/leadNudge.ts` : `silentLeadNudgeMessage(lang, name)`
-  (pure, testable), `isInHoldout(clientId, mod)` (pure), `sweepSilentLeads(log)`.
-- `nudgeExpiredPlanLinks(log)` + `expiredPlanLinkNudgeMessage` dans
-  [src/domain/expiryNudge.ts](src/domain/expiryNudge.ts).
-- Les deux appelés depuis le **sweeper 60 s** de [src/index.ts](src/index.ts)
-  (B juste après `nudgeExpiredLinks` ; A dans son propre `try/catch`).
-- Requêtes candidates + claims atomiques dans
-  [src/domain/repo.ts](src/domain/repo.ts) (`claimOutboundNudge` prend la liste
-  de gardes en SQL, pas seulement le dedup). `campaignKey` passé en argument
-  depuis `PACK_DISCOVERY_CAMPAIGN`.
+- **`src/domain/leadNudgeRepo.ts`** (nouveau — évite de grossir repo.ts,
+  partagé entre agents) : `silentLeadCandidates`, `claimSilentLeadNudge`,
+  `completeOutboundNudge`, `markOutboundNudgeFailedByWamid`.
+- **`src/domain/leadNudge.ts`** (nouveau) : `silentLeadNudgeMessage(lang, name)`
+  (pure), `fnv1aMod(clientId, mod)` (pure), `isQuietHour(hour, start, end)`
+  (pure), `sweepSilentLeadNudges(log)`.
+- **[src/index.ts](src/index.ts)** : appel dans le sweeper 60 s, `try/catch`
+  propre (une erreur ne bloque pas l'expiry sweep).
+- **[src/webhooks/whatsapp.ts](src/webhooks/whatsapp.ts)** : ajout au
+  `Promise.all` du handler de statuts `failed`.
+- **[src/db/schema.ts](src/db/schema.ts)** : table + index §4.
 
-## 8. Mesure (aller-retour avec le doublement de budget)
+## 7. Mesure (à 2 semaines OU ≥50 claims TREATMENT, le premier atteint)
 
-Fenêtre : **2 semaines OU ≥50 nudges A** (le premier atteint) — 7 jours et
-2 Clés seraient un signal trop bruité pour décider V2. Bilan opérationnel
-possible à J+7 (santé des sweeps, volume, plaintes), décision à la fenêtre.
+Bilan opérationnel possible à J+7 (santé du sweep, volumes, plaintes) ; la
+**décision** (V2, budget) attend la fenêtre complète — 7 jours et ~2 Clés,
+c'est du bruit.
 
-- **Relance A — nudgés vs holdout** : % de réponse (message `role='user'`
-  postérieur au nudge / au claim holdout) et % d'ordre Clé `ACTIVATED` sous
-  72 h, comparés entre `outcome='SENT'` et `detail='holdout'`. Succès = delta
-  net en faveur des nudgés (pas de seuil absolu : le holdout EST la baseline).
-- **Relance B — suivre la chaîne de retry** : quand Awa recrée un lien
-  (`refresh_expired_plan_payment_link`), le nouvel ordre porte
-  `retry_of_order_id` et l'ancien reste `EXPIRED` (tools.ts:2963,
-  schema.ts:430). Compter comme converti : paiement tardif de l'ordre original
-  **OU** activation d'un descendant via CTE récursif sur `retry_of_order_id`.
-  Chercher seulement `ACTIVATED` sur l'ordre relancé sous-compterait.
-  Segmenter par `is_key`.
-- **Qualité du numéro WhatsApp** (blocages/signalements dans WhatsApp
-  Manager) : si la note baisse, allonger le délai, pas de V2.
-- **Budget doublé** : comparer coût/lead et coût/Clé avant/après. Si les leads
-  doublent mais pas les ventes → signal « refine targeting » (audience élargie
-  de moindre qualité), pas « spend more ». Le holdout isole l'effet nudge de
-  l'effet budget.
+- **Principale, causale (ITT)** : conversion Clé `ACTIVATED` ≤72 h et taux de
+  réponse, **tous `arm='TREATMENT'`** (y compris `FAILED`) vs
+  **`arm='HOLDOUT'`**. Le holdout EST la baseline — pas de seuil absolu.
+- **Secondaire, opérationnelle** : taux de livraison (`SENT` non repassés
+  `FAILED` par le hook) et conversion parmi `outcome='SENT'`, `sent_at` comme
+  origine des 72 h.
+- **Relance plan (prod)** : conversion via `expiry_nudged_at` — compter comme
+  converti le paiement tardif de l'ordre original **OU** l'activation d'un
+  descendant (CTE récursif sur `retry_of_order_id`) ; segmenter par `is_key`.
+- **Qualité du numéro** (WhatsApp Manager) : si la note baisse → allonger le
+  délai, pas de V2.
+- **Budget doublé** : coût/lead et coût/Clé avant/après. Leads ×2 sans ventes
+  ×2 → signal « refine targeting », pas « spend more ». Le holdout isole
+  l'effet nudge de l'effet budget.
 
-## 9. Tests
+## 8. Tests
 
-- **Purs** (`npm test`) : copy FR/EN (snapshot) ; holdout déterministe ; logique
-  des trois horloges et bornes (délai, 22 h, heures silencieuses) ; exclusions
-  (funnel paiement tout statut, takeover/disengaged/handoff, is_test,
-  multi-message) — sélection isolée en fonctions pures sur le modèle de
-  `renewalNudgeCandidates`.
+- **Purs** (`npm test`) : copy FR/EN (snapshot) ; `fnv1aMod` déterministe
+  (valeurs figées + distribution grossière) ; `isQuietHour` aux bornes
+  (9 h, 20 h 59, 21 h, 8 h 59).
 - **Intégration** (`npm run test:integration`) :
-  - claim one-shot : 2 sweeps → 1 seul envoi ;
-  - **réponse entre sélection et claim → 0 envoi** (le test clé du claim
-    atomique) ; idem paiement tardif passé `PAID` et handoff ouvert entre-temps ;
-  - lead silencieux → SENT + turn ajouté + wamid journalisé ;
-  - lead en holdout → SUPPRESSED, jamais renudgé au sweep suivant ;
-  - ordre plan EXPIRED → SENT ; ordre avec `retry_of_order_id` descendant → pas
-    de nudge ;
-  - lien Clé expiré → B envoyé puis A **non** envoyé (anti-empilement).
-- Ship avec `npm run agent:ship -- --full` (flux paiement touché).
+  - one-shot : 2 sweeps → 1 seul envoi ;
+  - **réponse entre sélection et claim → 0 ligne** (les deux bras) ;
+  - paiement/ordre créé entre-temps → 0 ligne ; takeover/handoff ouvert
+    entre-temps → 0 ligne ;
+  - **invariant des bras** : mêmes gardes — un même état bloquant refuse
+    TREATMENT et HOLDOUT à l'identique ;
+  - lead jamais-répondu → `TREATMENT/SENT` + turn + wamid + `sent_at` ;
+  - lead en holdout → `HOLDOUT/SUPPRESSED`, jamais renudgé ensuite ;
+  - client avec ordre plan `EXPIRED` → exclu (pas d'empilement avec la relance
+    plan prod) ;
+  - ancien client avec historique + nouveau lead → **candidat** (ancrage
+    trigger, pas « 1 seul message ») ;
+  - statut Meta `failed` → `outcome FAILED`, **`arm` inchangé**.
+- Ship : `npm run agent:ship -- --full`.
 
-## 10. Rollout
+## 9. Rollout
 
-1. Worktree `npm run agent:new -- lead-nudges`, implémentation V1 (A+B), les
-   deux flags `false`.
-2. Ship → auto-deploy. **Dry-run** : requêter les candidats A et B en prod
-   (script read-only) et vérifier à la main que la sélection est saine (pas de
-   client en takeover, pas de payeur, volumes plausibles).
-3. Activer `PLAN_EXPIRY_NUDGE_ENABLED=true` puis `LEAD_NUDGE_ENABLED=true` via
-   `railway variables --set`, surveiller un cycle de sweep dans les logs.
-4. Bilan opérationnel J+7 ; **décision V2 + budget à 2 semaines / 50 nudges**
-   (§8). Mettre à jour PROGRESS.md au ship (décision + chiffres §1).
+1. Implémentation dans le worktree `lead-nudges` (créé), flag `false`.
+2. Ship → auto-deploy. **Dry-run prod** (read-only) : lister les candidats du
+   moment, vérifier à la main (pas de payeur, pas de takeover, volumes
+   plausibles ~10-30).
+3. `railway variables --set LEAD_NUDGE_ENABLED=true`, surveiller un cycle de
+   sweep dans les logs.
+4. Mettre à jour PROGRESS.md (décision, chiffres §1, découverte §2).
+5. Bilan opérationnel J+7 ; **décision à 2 semaines / 50 claims** (§7).
+
+## 10. V2 (hors build) — template « réveil J+2 »
+
+Leads jamais convertis, fenêtre fermée : template Meta one-shot ~48 h (créé par
+Babakar, langue `en` par convention), `WA_LEAD_REVIVAL_TEMPLATE` + `_LANG`,
+dedup `LEAD_REVIVAL:<client_id>` dans le même journal (mêmes colonnes
+arm/outcome). **Uniquement si la mesure §7 le justifie** : si A récupère bien,
+C est du spam ; si A plafonne, C prend le relais.
 
 ## Hors périmètre (explicite)
 
+- Refactor du claim naïf de la relance plan/bookings en prod (dette réelle mais
+  étroite et indépendante — chantier séparé si un jour nécessaire).
 - Leads pré-30/07 (fenêtre morte, pitch d'époque buggé) — campagne « réveil »
   séparée, à décider avec la V2.
-- Leads multi-messages qui ont calé (2-3 msgs) — extension post-V1 (§3.1).
-- Clients non-pub pour A (B, lui, couvre tout client à lien plan expiré —
-  décision §4).
-- Aucun changement au prompt d'Awa ni au flux de paiement lui-même.
+- Leads multi-messages qui ont calé (2-3 msgs, ~40 sur la période) — extension
+  post-V1 : copy neutre ou état serveur déterministe requis.
+- Clients non-pub.
+- Aucun changement au prompt d'Awa ni au flux de paiement.
