@@ -942,7 +942,18 @@ export async function hasAnyPastReviveBooking(contactId: string): Promise<boolea
  * failures are surfaced: invitation eligibility must be handed to reception
  * when it cannot be established safely.
  */
-export async function hasPastReformerBooking(contactId: string): Promise<boolean> {
+/**
+ * Whether this contact has any past/upcoming CONFIRMED/PENDING booking for a
+ * given discipline. Matches on the configured service ids first, then on the
+ * booking title, then on service names — so a booking still counts even when
+ * Wix omits the serviceId on the slot. `configuredIds` is the fast path from
+ * env; `nameRegex` is the resilient fallback.
+ */
+async function hasPastBookingForDiscipline(
+  contactId: string,
+  configuredIds: Set<string>,
+  nameRegex: RegExp,
+): Promise<boolean> {
   const extendedBookings: any[] = [];
   for (let offset = 0; offset < 500; offset += 100) {
     const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
@@ -960,7 +971,6 @@ export async function hasPastReformerBooking(contactId: string): Promise<boolean
   }
   if (extendedBookings.length === 0) return false;
 
-  const configuredIds = new Set(config.KEY_REFORMER_SERVICE_IDS);
   const candidates = extendedBookings.flatMap((entry) => {
     const booking = entry?.booking;
     if (
@@ -977,17 +987,33 @@ export async function hasPastReformerBooking(contactId: string): Promise<boolean
 
   if (
     candidates.some(
-      ({ serviceId, title }) => configuredIds.has(serviceId) || /reformer/i.test(title),
+      ({ serviceId, title }) => configuredIds.has(serviceId) || nameRegex.test(title),
     )
   ) {
     return true;
   }
 
   const services = await listServices();
-  const reformerIds = new Set(
-    services.filter((service) => /reformer/i.test(service.name)).map((service) => service.id),
+  const matchingIds = new Set(
+    services.filter((service) => nameRegex.test(service.name)).map((service) => service.id),
   );
-  return candidates.some(({ serviceId }) => reformerIds.has(serviceId));
+  return candidates.some(({ serviceId }) => matchingIds.has(serviceId));
+}
+
+export async function hasPastReformerBooking(contactId: string): Promise<boolean> {
+  return hasPastBookingForDiscipline(
+    contactId,
+    new Set(config.KEY_REFORMER_SERVICE_IDS),
+    /reformer/i,
+  );
+}
+
+export async function hasPastAquabikeBooking(contactId: string): Promise<boolean> {
+  return hasPastBookingForDiscipline(
+    contactId,
+    new Set(config.AQUABIKE_SERVICE_IDS),
+    /aquabike/i,
+  );
 }
 
 // ---------- contacts ----------

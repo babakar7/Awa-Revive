@@ -23,10 +23,10 @@ export type SlotRule = "CALM_SLOT_1230" | "ANY_WEEKDAY_HOUR";
 /**
  * NEVER_REFORMER: the friend must never have done Reformer at Revive (a visit
  * for another class does NOT disqualify) — the Clé invitation rule.
- * NEVER_VISITED: the friend must never have come to Revive at all — the
- * Aquabike invitation rule ("une amie jamais venue").
+ * NEVER_AQUABIKE: the friend must never have done Aquabike at Revive — the
+ * Aquabike invitation rule ("une amie qui n'a jamais fait d'Aquabike").
  */
-export type FriendHistoryRule = "NEVER_REFORMER" | "NEVER_VISITED";
+export type FriendHistoryRule = "NEVER_REFORMER" | "NEVER_AQUABIKE";
 
 export interface InvitationRule {
   /** Wix plan whose offline order grants the friend's free session. */
@@ -159,7 +159,7 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
           planId: config.AQUABIKE_INVITATION_PLAN_ID,
           serviceIds: config.AQUABIKE_SERVICE_IDS,
           slotRule: "ANY_WEEKDAY_HOUR",
-          friendRule: "NEVER_VISITED",
+          friendRule: "NEVER_AQUABIKE",
         },
         bonus: {
           planId: config.AQUABIKE_BONUS_PLAN_ID,

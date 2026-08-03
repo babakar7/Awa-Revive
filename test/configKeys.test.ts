@@ -100,7 +100,7 @@ describe("Clés production preflight", () => {
     const aqua = keyMappingForPlan("aquabike-abo");
     expect(aqua).toMatchObject({ type: "AQUABIKE", family: "AQUABIKE", baseInvitations: 1 });
     expect(aqua?.invitation.slotRule).toBe("ANY_WEEKDAY_HOUR");
-    expect(aqua?.invitation.friendRule).toBe("NEVER_VISITED");
+    expect(aqua?.invitation.friendRule).toBe("NEVER_AQUABIKE");
     const sur = keyMappingForPlan("sur-mesure");
     expect(sur).toMatchObject({ type: "SUR_MESURE", family: "REFORMER", bonus: null });
   });

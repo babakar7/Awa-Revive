@@ -55,7 +55,7 @@ function mapping(type: KeyType): KeyPlanMapping {
         planId: "plan-aquabike-invitation",
         serviceIds: [AQUABIKE_SVC],
         slotRule: "ANY_WEEKDAY_HOUR",
-        friendRule: "NEVER_VISITED",
+        friendRule: "NEVER_AQUABIKE",
       },
       bonus: {
         planId: "plan-aquabike-bonus",

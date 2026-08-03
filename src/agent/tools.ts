@@ -3580,19 +3580,21 @@ export async function executeTool(
       }
       if (friendResolution.kind === "one") {
         try {
-          // Aquabike invitations require the friend never came to Revive at all;
-          // Clé/sur-mesure invitations only require she never did Reformer here.
+          // Each invitation disqualifies only prior practice of ITS discipline
+          // at Revive: Aquabike invitation → never did Aquabike; Clé/sur-mesure
+          // → never did Reformer. Other classes never disqualify.
           const friendRule = invitationFriendRuleForService(serviceId);
           const disqualified =
-            friendRule === "NEVER_VISITED"
-              ? await wix.hasAnyPastReviveBooking(friendResolution.contact.id)
+            friendRule === "NEVER_AQUABIKE"
+              ? await wix.hasPastAquabikeBooking(friendResolution.contact.id)
               : await wix.hasPastReformerBooking(friendResolution.contact.id);
           if (disqualified) {
             return JSON.stringify({
               error: "friend_not_new",
               message:
-                friendRule === "NEVER_VISITED"
-                  ? "L'invitation Aquabike est réservée à une personne qui n'est jamais venue à Revive."
+                friendRule === "NEVER_AQUABIKE"
+                  ? "L'invitation Aquabike est réservée à une personne qui n'a jamais fait d'Aquabike chez Revive. " +
+                    "Une venue pour un autre cours ou service ne la disqualifie pas."
                   : "L'invitation est réservée à une personne qui n'a jamais fait de Reformer chez Revive. " +
                     "Une venue pour un autre cours ou service ne la disqualifie pas.",
             });

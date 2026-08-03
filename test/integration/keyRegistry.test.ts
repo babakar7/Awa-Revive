@@ -37,7 +37,7 @@ const aquabikeMapping = makeMapping("AQUABIKE", {
     planId: "aquabike-invitation-plan",
     serviceIds: ["svc-aquabike"],
     slotRule: "ANY_WEEKDAY_HOUR",
-    friendRule: "NEVER_VISITED",
+    friendRule: "NEVER_AQUABIKE",
   },
   bonus: { planId: "aquabike-bonus", serviceIds: ["svc-reformer"], slotRule: "CALM_SLOT_1230" },
 });
