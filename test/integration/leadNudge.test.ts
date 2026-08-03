@@ -48,13 +48,19 @@ const params = () => ({
   maxAgeHours: config.LEAD_NUDGE_MAX_AGE_HOURS,
 });
 
-/** A lead who clicked the ad, got Awa's pitch, and never wrote back. */
-async function seedSilentLead(opts: {
+/**
+ * A lead who clicked the ad (auto pre-filled message) then had a back-and-forth
+ * with Awa and went quiet. `replies` = genuine typed replies AFTER the
+ * auto-message (2+ = a warm candidate; 0 = reflex clicker; 1 = shallow).
+ * lastAssistantAgoMin controls the stall depth; Awa always answers last.
+ */
+async function seedLead(opts: {
   phone: string;
   name?: string;
   language?: string;
-  triggerAgoH?: number;
-  pitchAgoMin?: number;
+  replies?: number;
+  triggerAgoMin?: number;
+  lastAssistantAgoMin?: number;
   priorHistory?: boolean;
 }) {
   const client = await seedClient({
@@ -63,6 +69,9 @@ async function seedSilentLead(opts: {
     language: opts.language ?? "fr",
   });
   const triggerWamid = `trigger-${opts.phone}`;
+  const triggerAgo = opts.triggerAgoMin ?? 360;
+  const replies = opts.replies ?? 2;
+  const lastAssistantAgo = opts.lastAssistantAgoMin ?? 210;
   await pool.query(
     `insert into campaign_leads (client_id, campaign_key, trigger_message_id, matched_by)
      values ($1, $2, $3, 'meta_referral')`,
@@ -76,16 +85,26 @@ async function seedSilentLead(opts: {
       [client.id],
     );
   }
+  // The auto-filled ad message (the trigger).
   await pool.query(
     `insert into conversations (client_id, role, content, wa_message_id, created_at)
      values ($1, 'user', 'Bonjour, je veux réserver la clé invité', $2,
-             now() - make_interval(hours => $3))`,
-    [client.id, triggerWamid, opts.triggerAgoH ?? 4],
+             now() - make_interval(mins => $3))`,
+    [client.id, triggerWamid, triggerAgo],
   );
+  // R genuine replies after the trigger (spaced so all sit before the last Awa turn).
+  for (let i = 0; i < replies; i++) {
+    await pool.query(
+      `insert into conversations (client_id, role, content, created_at)
+       values ($1, 'user', 'question du lead', now() - make_interval(mins => $2))`,
+      [client.id, triggerAgo - 60 - i * 10],
+    );
+  }
+  // Awa answers last → stalled with the ball in the lead's court.
   await pool.query(
     `insert into conversations (client_id, role, content, created_at)
-     values ($1, 'assistant', 'pitch Awa L''Invitée', now() - make_interval(mins => $2))`,
-    [client.id, opts.pitchAgoMin ?? 210],
+     values ($1, 'assistant', 'réponse Awa L''Invitée', now() - make_interval(mins => $2))`,
+    [client.id, lastAssistantAgo],
   );
   return client;
 }
@@ -97,16 +116,29 @@ async function nudgeRow(clientId: string) {
   return res.rows[0];
 }
 
-describe("manual silent-lead nudge (/admin/relances)", () => {
-  it("lists a silent lead and counts it for the badge", async () => {
-    const c = await seedSilentLead({ phone: "221770001001", name: "Fatou" });
+describe("manual warm-lead nudge (/admin/relances)", () => {
+  it("lists a warm lead (2+ replies) with its exchange count and counts it", async () => {
+    const c = await seedLead({ phone: "221770001001", name: "Fatou", replies: 2 });
     const list = await silentLeadCandidates(params());
-    expect(list.map((r) => r.client_id)).toContain(c.id);
+    const row = list.find((r) => r.client_id === c.id);
+    expect(row).toBeTruthy();
+    expect(row!.replies_after_trigger).toBe(2);
+    expect(row!.last_user_at).toBeTruthy();
     expect(await countSilentLeadCandidates(params())).toBe(1);
   });
 
-  it("sends one nudge on demand: TREATMENT-free MANUAL/SENT, journaled, one-shot", async () => {
-    const c = await seedSilentLead({ phone: "221770001002", name: "Fatou" });
+  it("does NOT list a reflex clicker who never replied (0 replies)", async () => {
+    await seedLead({ phone: "221770001101", replies: 0 });
+    expect(await countSilentLeadCandidates(params())).toBe(0);
+  });
+
+  it("does NOT list a shallow lead with a single reply (1 reply)", async () => {
+    await seedLead({ phone: "221770001102", replies: 1 });
+    expect(await countSilentLeadCandidates(params())).toBe(0);
+  });
+
+  it("sends one nudge on demand: MANUAL/SENT, journaled, one-shot", async () => {
+    const c = await seedLead({ phone: "221770001002", name: "Fatou", replies: 2 });
 
     const result = await sendManualLeadNudge(c.id, "reception", log);
     expect(result.status).toBe("sent");
@@ -140,7 +172,7 @@ describe("manual silent-lead nudge (/admin/relances)", () => {
   });
 
   it("refuses to send (status=gone) when a reply lands before the click (race)", async () => {
-    const c = await seedSilentLead({ phone: "221770001003" });
+    const c = await seedLead({ phone: "221770001003", replies: 2 });
     // The lead replies between page load and the reception clicking Send.
     await pool.query(
       `insert into conversations (client_id, role, content) values ($1, 'user', 'oui le matin')`,
@@ -153,7 +185,7 @@ describe("manual silent-lead nudge (/admin/relances)", () => {
   });
 
   it("skip records a one-shot dismissal and drops the lead off the list", async () => {
-    const c = await seedSilentLead({ phone: "221770001004" });
+    const c = await seedLead({ phone: "221770001004", replies: 2 });
     const result = await skipLeadNudge(c.id, "reception");
     expect(result.status).toBe("skipped");
 
@@ -169,7 +201,7 @@ describe("manual silent-lead nudge (/admin/relances)", () => {
   });
 
   it("excludes a lead already in the payment funnel (EXPIRED plan order)", async () => {
-    const c = await seedSilentLead({ phone: "221770001005" });
+    const c = await seedLead({ phone: "221770001005", replies: 2 });
     await pool.query(
       `insert into pending_plan_orders (client_id, plan_id, plan_name, amount_xof, status, payment_link)
        values ($1, 'plan-invitee', 'L''Invitée — Clé 3 séances', 30000, 'EXPIRED', 'https://pay.wave.com/x')`,
@@ -181,19 +213,19 @@ describe("manual silent-lead nudge (/admin/relances)", () => {
   });
 
   it("still lists an old client with prior history who clicks the ad (trigger anchoring)", async () => {
-    const c = await seedSilentLead({ phone: "221770001006", priorHistory: true });
+    const c = await seedLead({ phone: "221770001006", priorHistory: true, replies: 2 });
     expect((await silentLeadCandidates(params())).map((r) => r.client_id)).toContain(c.id);
   });
 
   it("does not list a lead under an open handoff, and a send is refused", async () => {
-    const c = await seedSilentLead({ phone: "221770001007" });
+    const c = await seedLead({ phone: "221770001007", replies: 2 });
     await pool.query(`insert into handoffs (client_id, status) values ($1, 'OPEN')`, [c.id]);
     expect((await silentLeadCandidates(params())).map((r) => r.client_id)).not.toContain(c.id);
     expect((await sendManualLeadNudge(c.id, "reception", log)).status).toBe("gone");
   });
 
   it("flips SENT→FAILED on an async Meta failure (delivery-rate honesty)", async () => {
-    const c = await seedSilentLead({ phone: "221770001008" });
+    const c = await seedLead({ phone: "221770001008", replies: 2 });
     await sendManualLeadNudge(c.id, "reception", log);
     const before = await nudgeRow(c.id);
     expect(before.outcome).toBe("SENT");
@@ -204,12 +236,24 @@ describe("manual silent-lead nudge (/admin/relances)", () => {
   });
 
   it("does not list a lead before the silence delay has elapsed", async () => {
-    await seedSilentLead({ phone: "221770001009", pitchAgoMin: 30 });
+    // Awa answered only 30 min ago — still a live conversation, not a stall.
+    await seedLead({ phone: "221770001009", replies: 2, lastAssistantAgoMin: 30 });
     expect(await countSilentLeadCandidates(params())).toBe(0);
   });
 
   it("does not list a lead past the 24h window bound", async () => {
-    await seedSilentLead({ phone: "221770001010", triggerAgoH: 23, pitchAgoMin: 1370 });
+    // Last inbound ~23.8h ago — outside the free-text window.
+    await seedLead({ phone: "221770001010", replies: 2, triggerAgoMin: 1500, lastAssistantAgoMin: 1400 });
     expect(await countSilentLeadCandidates(params())).toBe(0);
+  });
+
+  it("treats a fresh reply as un-stalling the lead (Awa now owes them)", async () => {
+    const c = await seedLead({ phone: "221770001011", replies: 2 });
+    // Lead just wrote again → last message is theirs, Awa hasn't answered.
+    await pool.query(
+      `insert into conversations (client_id, role, content) values ($1, 'user', 'une relance du lead')`,
+      [c.id],
+    );
+    expect((await silentLeadCandidates(params())).map((r) => r.client_id)).not.toContain(c.id);
   });
 });

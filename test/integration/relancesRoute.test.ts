@@ -36,14 +36,17 @@ async function seedSilentLead(phone: string, name: string) {
      values ($1, $2, $3, 'meta_referral')`,
     [client.id, PACK_DISCOVERY_CAMPAIGN, wamid],
   );
+  // Auto ad-message (trigger) + a real back-and-forth (2 replies) that stalled.
   await pool.query(
     `insert into conversations (client_id, role, content, wa_message_id, created_at)
-     values ($1, 'user', 'Bonjour, je veux réserver la clé invité', $2, now() - interval '4 hours')`,
+     values ($1, 'user', 'Bonjour, je veux réserver la clé invité', $2, now() - interval '360 minutes')`,
     [client.id, wamid],
   );
   await pool.query(
-    `insert into conversations (client_id, role, content, created_at)
-     values ($1, 'assistant', 'pitch', now() - interval '210 minutes')`,
+    `insert into conversations (client_id, role, content, created_at) values
+       ($1, 'user', 'c''est quoi les horaires ?', now() - interval '300 minutes'),
+       ($1, 'user', 'et le niveau débutant ?', now() - interval '290 minutes'),
+       ($1, 'assistant', 'réponse Awa', now() - interval '210 minutes')`,
     [client.id],
   );
   return client;

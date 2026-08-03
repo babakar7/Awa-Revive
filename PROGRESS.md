@@ -17,6 +17,28 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## /admin/relances recentré sur les leads TIÈDES, pas les cliqueurs réflexes (3 août 2026)
+
+**Décision produit (Babakar) :** ne PAS relancer les leads qui n'ont jamais
+répondu à Awa. Le message « Bonjour, je veux réserver la clé invité » est
+**pré-rempli par la pub** (le lead ne le tape pas) — donc un lead dont c'est le
+seul message n'a montré aucune intention, il a juste cliqué. Cible retenue :
+**« vrais échanges » — ≥2 réponses tapées après le message auto**, puis silence.
+
+**Changement (`silentLeadCandidates` / claim, [src/domain/leadNudgeRepo.ts](src/domain/leadNudgeRepo.ts)) :**
+la garde ne cherche plus « zéro réponse après le trigger » mais :
+- `replies_after_trigger >= 2` (≥2 messages user après le trigger ancré sur
+  `campaign_leads.trigger_message_id`) ;
+- **Awa a répondu en dernier** (`last_assistant_at > last_user_at`) → vrai stall,
+  pas un message qu'Awa doit encore traiter ;
+- fenêtre 24 h calculée sur `last_user_at` (dernier message du lead) ;
+- stall : `last_assistant_at <= now() - delay`.
+Le reste (exclusion funnel paiement, pauses, is_test, one-shot, claim atomique)
+inchangé. La page affiche « N réponses, puis silence » + « a écrit il y a X » +
+compte à rebours de la fenêtre. Un nouveau message du lead le retire de la liste
+(Awa lui doit alors une réponse — flux normal). Tests : cliqueur 0 réponse et
+lead 1 réponse **exclus**, lead 2+ réponses **listé**, « fresh reply un-stalls ».
+
 ## Relance A passée en ENVOI MANUEL — /admin/relances (3 août 2026)
 
 **Décision produit (Babakar) :** pas d'envoi automatique. La réception relit les

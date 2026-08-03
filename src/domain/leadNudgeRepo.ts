@@ -16,6 +16,8 @@ export interface SilentLeadCandidate {
   name: string | null;
   language: string | null;
   trigger_at: Date;
+  last_user_at: Date;
+  replies_after_trigger: number;
 }
 
 export interface LeadNudgeContact {
@@ -55,30 +57,42 @@ const CANDIDATE_CTES = `
              l.lead_created_at
            ) as trigger_at
       from lead l
+  ),
+  eng as (
+    select t.client_id, t.campaign_key, t.trigger_at,
+           (select max(u.created_at) from conversations u
+             where u.client_id = t.client_id and u.role = 'user') as last_user_at,
+           (select max(a.created_at) from conversations a
+             where a.client_id = t.client_id and a.role = 'assistant') as last_assistant_at,
+           (select count(*)::int from conversations u
+             where u.client_id = t.client_id and u.role = 'user'
+               and u.created_at > t.trigger_at) as replies_after_trigger
+      from trig t
   )`;
 
 /**
- * Guards shared verbatim by the review list, the badge count, and the send
- * claim — so what reception sees is exactly what the atomic claim will accept.
- * Param positions: $1 campaignKey, $2 maxAgeHours, $3 delayMinutes.
+ * Warm-stall guards shared verbatim by the review list, the badge count, and
+ * the send claim — so what reception sees is exactly what the atomic claim will
+ * accept. Param positions: $1 campaignKey, $2 maxAgeHours, $3 delayMinutes.
+ *
+ * We deliberately EXCLUDE reflex clickers: the ad pre-fills the first message,
+ * so a lead whose only turns are that auto-message shows no intent. We require
+ * ≥2 genuine replies AFTER the trigger — a real back-and-forth — that then went
+ * quiet with Awa awaiting them, still inside the 24h window.
  */
 const SILENT_LEAD_GUARDS = `
         c.is_test = false
-        -- last inbound (== the trigger, since never replied) still inside the
-        -- 24h WhatsApp window: free text can't be delivered past it
-        and t.trigger_at > now() - make_interval(hours => $2)
-        -- never replied: no user turn strictly after the trigger turn
-        and not exists (select 1 from conversations u
-                         where u.client_id = t.client_id and u.role = 'user'
-                           and u.created_at > t.trigger_at)
-        -- Awa answered the ad message...
-        and exists (select 1 from conversations a
-                     where a.client_id = t.client_id and a.role = 'assistant'
-                       and a.created_at > t.trigger_at)
-        -- ...and has been silent since (so we don't surface a live conversation)
-        and not exists (select 1 from conversations a
-                         where a.client_id = t.client_id and a.role = 'assistant'
-                           and a.created_at > now() - make_interval(mins => $3))
+        -- a real conversation: at least 2 typed replies after the auto ad-message
+        and t.replies_after_trigger >= 2
+        and t.last_user_at is not null and t.last_assistant_at is not null
+        -- Awa answered last → the ball is in the lead's court (a genuine stall,
+        -- not a message Awa still owes them)
+        and t.last_assistant_at > t.last_user_at
+        -- last inbound still inside the 24h WhatsApp window (free text can't be
+        -- delivered past it) — the window resets on the lead's last message
+        and t.last_user_at > now() - make_interval(hours => $2)
+        -- stalled: Awa's last message is at least the delay old, no movement since
+        and t.last_assistant_at <= now() - make_interval(mins => $3)
         -- no payment funnel EVER (any status incl. EXPIRED): the expired-link
         -- nudge / normal flow already owns follow-up there
         and not exists (select 1 from pending_plan_orders p where p.client_id = t.client_id)
@@ -97,9 +111,9 @@ const SILENT_LEAD_GUARDS = `
                          where n.dedup_key = 'LEAD_SILENT:' || t.client_id::text)`;
 
 /**
- * Ad leads that clicked, got Awa's pitch, and never wrote back — the review
- * list. Ordered oldest-click-first so reception treats the leads closest to the
- * 24h window boundary first.
+ * Warm ad leads: engaged in a real back-and-forth with Awa (≥2 replies) then
+ * went quiet without buying — the review list. Ordered by last message so the
+ * leads closest to the 24h window boundary come first.
  */
 export async function silentLeadCandidates(args: {
   campaignKey: string;
@@ -109,11 +123,12 @@ export async function silentLeadCandidates(args: {
 }): Promise<SilentLeadCandidate[]> {
   const res = await pool.query(
     `${CANDIDATE_CTES}
-     select t.client_id, t.campaign_key, c.wa_phone, c.name, c.language, t.trigger_at
-       from trig t
+     select t.client_id, t.campaign_key, c.wa_phone, c.name, c.language,
+            t.trigger_at, t.last_user_at, t.replies_after_trigger
+       from eng t
        join clients c on c.id = t.client_id
       where ${SILENT_LEAD_GUARDS}
-      order by t.trigger_at asc
+      order by t.last_user_at asc
       limit $4`,
     [args.campaignKey, args.maxAgeHours, args.delayMinutes, args.limit ?? 100],
   );
@@ -129,7 +144,7 @@ export async function countSilentLeadCandidates(args: {
   const res = await pool.query(
     `${CANDIDATE_CTES}
      select count(*)::int as n
-       from trig t join clients c on c.id = t.client_id
+       from eng t join clients c on c.id = t.client_id
       where ${SILENT_LEAD_GUARDS}`,
     [args.campaignKey, args.maxAgeHours, args.delayMinutes],
   );
@@ -168,12 +183,23 @@ export async function claimManualLeadNudge(args: {
               ) as trigger_at
          from lead l
      ),
+     eng as (
+       select t.client_id, t.campaign_key, t.trigger_at,
+              (select max(u.created_at) from conversations u
+                where u.client_id = t.client_id and u.role = 'user') as last_user_at,
+              (select max(a.created_at) from conversations a
+                where a.client_id = t.client_id and a.role = 'assistant') as last_assistant_at,
+              (select count(*)::int from conversations u
+                where u.client_id = t.client_id and u.role = 'user'
+                  and u.created_at > t.trigger_at) as replies_after_trigger
+         from trig t
+     ),
      claim as (
        insert into outbound_nudges
          (dedup_key, client_id, campaign_key, kind, arm, outcome, detail)
        select 'LEAD_SILENT:' || t.client_id::text, t.client_id, t.campaign_key,
               'LEAD_SILENT', 'MANUAL', 'CLAIMED', $5
-         from trig t
+         from eng t
          join clients c on c.id = t.client_id
         where ${SILENT_LEAD_GUARDS}
        on conflict (dedup_key) do nothing

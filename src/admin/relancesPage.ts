@@ -8,8 +8,8 @@ import type { SilentLeadCandidate, RecentLeadNudge } from "../domain/leadNudgeRe
  * Nothing is sent automatically; every send is a human click.
  */
 
-function windowLeft(triggerAt: Date, maxAgeHours: number): string {
-  const closeMs = new Date(triggerAt).getTime() + maxAgeHours * 3_600_000;
+function windowLeft(lastUserAt: Date, maxAgeHours: number): string {
+  const closeMs = new Date(lastUserAt).getTime() + maxAgeHours * 3_600_000;
   const mins = Math.round((closeMs - Date.now()) / 60000);
   if (mins <= 0) return `<span class="badge badge--red">fenêtre fermée</span>`;
   if (mins < 120) return `<span class="badge badge--red">ferme dans ${mins} min</span>`;
@@ -18,16 +18,17 @@ function windowLeft(triggerAt: Date, maxAgeHours: number): string {
 
 function candidateCard(c: SilentLeadCandidate, maxAgeHours: number): string {
   const preview = silentLeadNudgeMessage(c.language, c.name);
+  const exchanges = `${c.replies_after_trigger} réponse${c.replies_after_trigger > 1 ? "s" : ""}`;
   return `<article class="task-item">
   <span class="task-priority warn" aria-hidden="true"></span>
   <div class="task-copy">
     <div class="cluster">
-      <span class="badge badge--violet">Clic pub ${ago(c.trigger_at)}</span>
-      ${windowLeft(c.trigger_at, maxAgeHours)}
+      <span class="badge badge--green">${exchanges}, puis silence</span>
+      ${windowLeft(c.last_user_at, maxAgeHours)}
       <span class="badge">${esc((c.language ?? "fr").toUpperCase())}</span>
     </div>
     <b><a href="/admin/conversations/${esc(c.client_id)}">${esc(c.name ?? "Lead")}</a></b>
-    <div class="task-meta"><span class="muted">+${esc(c.wa_phone)}</span></div>
+    <div class="task-meta"><span class="muted">+${esc(c.wa_phone)} · a écrit ${ago(c.last_user_at)} · clic pub ${ago(c.trigger_at)}</span></div>
     <details class="resolution-panel">
       <summary class="muted" style="cursor:pointer">Voir le message qui sera envoyé</summary>
       <p class="internal-note">${esc(preview)}</p>
@@ -79,7 +80,7 @@ export function renderRelancesPage(args: {
   const { candidates, recent, maxAgeHours, banner } = args;
   const list = candidates.length
     ? candidates.map((c) => candidateCard(c, maxAgeHours)).join("")
-    : `<div class="card"><b>Aucun lead à relancer</b><p class="muted">Les leads qui ont cliqué la pub et reçu le message d'Awa sans répondre apparaîtront ici après un moment de silence.</p></div>`;
+    : `<div class="card"><b>Aucun lead à relancer</b><p class="muted">Les leads qui ont vraiment échangé avec Awa (plusieurs messages) puis se sont arrêtés sans réserver apparaîtront ici.</p></div>`;
 
   const history = recent.length
     ? `<details class="resolution-panel"><summary class="act act--ghost act--sm">Historique des relances (${recent.length})</summary><div class="task-list">${recent.map(recentRow).join("")}</div></details>`
@@ -87,10 +88,11 @@ export function renderRelancesPage(args: {
 
   return `${banner}
 <div class="card">
-  <b>Relancer les leads pub silencieux</b>
-  <p class="muted">Un client a cliqué la pub « L'Invitée », reçu le message d'Awa, puis n'a jamais répondu.
-  Tu peux lui envoyer une relance (un seul message, dans la fenêtre WhatsApp de 24 h) ou l'ignorer.
-  Rien n'est envoyé automatiquement.</p>
+  <b>Relancer les leads pub tièdes</b>
+  <p class="muted">Ces clients ont cliqué la pub « L'Invitée » et <b>échangé plusieurs messages avec Awa</b>,
+  puis se sont arrêtés sans réserver — un vrai intérêt resté sans suite. (Ceux qui n'ont fait que cliquer
+  sans jamais répondre ne sont volontairement pas listés.) Tu peux envoyer une relance — un seul message,
+  dans la fenêtre WhatsApp de 24 h — ou ignorer le lead. Rien n'est envoyé automatiquement.</p>
 </div>
 <div class="task-list">${list}</div>
 ${history}`;

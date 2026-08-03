@@ -7,7 +7,9 @@ const candidate = {
   wa_phone: "221770000001",
   name: "Fatou",
   language: "fr",
-  trigger_at: new Date(Date.now() - 4 * 3_600_000),
+  trigger_at: new Date(Date.now() - 6 * 3_600_000),
+  last_user_at: new Date(Date.now() - 4 * 3_600_000),
+  replies_after_trigger: 3,
 };
 
 describe("renderRelancesPage", () => {
@@ -18,6 +20,7 @@ describe("renderRelancesPage", () => {
     expect(html).toContain("Fatou");
     expect(html).toContain("L'Invitée"); // message preview present
     expect(html).toContain("ferme dans"); // 24h window countdown
+    expect(html).toContain("3 réponses, puis silence"); // engagement shown
   });
 
   it("shows an empty state when there is nothing to nudge", () => {
