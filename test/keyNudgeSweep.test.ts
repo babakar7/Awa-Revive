@@ -56,6 +56,7 @@ function activeKey(overrides: Record<string, unknown> = {}) {
     wa_phone: "221770000001",
     wix_contact_id: "contact-1",
     key_type: "RESIDENTE",
+    family: "REFORMER",
     plan_id: "resident-plan",
     starts_at: new Date("2026-07-22T08:00:00Z"),
     effective_ends_at: new Date("2026-09-20T08:00:00Z"),
@@ -98,6 +99,19 @@ describe("Key invitation reminder sweep", () => {
       clientId: "client-1",
     });
     expect(mocks.planRemainingSessions).not.toHaveBeenCalled();
+  });
+
+  it("sends NO Reformer-worded lifecycle nudge to an Aquabike key", async () => {
+    // The lifecycle templates are Reformer/Clé-worded; the Aquabike family must
+    // never receive them (it awaits its own templates).
+    mocks.listActiveKeysForNudges.mockResolvedValue([
+      activeKey({ key_type: "AQUABIKE", family: "AQUABIKE", available_invitations: 1 }),
+    ]);
+    mocks.planRemainingSessions.mockResolvedValue(0);
+
+    await expect(sweepKeyNudges(log)).resolves.toBe(0);
+    expect(mocks.sendTemplate).not.toHaveBeenCalled();
+    expect(mocks.claimKeyNudge).not.toHaveBeenCalled();
   });
 
   it("keeps the J+10 send when the later Wix balance lookup fails", async () => {

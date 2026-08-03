@@ -123,10 +123,17 @@ export async function sweepKeyNudges(log: {
     const name = key.client_name || "toi";
     const label = keyLabel(key.key_type);
 
+    // The lifecycle reminder templates (J+10 invitation, member J-5, finished)
+    // are Reformer/Clé-worded, so they only fire for the REFORMER family. The
+    // Aquabike abonnement (its own family) gets no lifecycle nudge until its own
+    // templates exist — a wrong-worded reminder is worse than none.
+    const reformerFamily = key.family === "REFORMER";
+
     // This reminder is entirely local. Keep it before the Wix balance lookup:
     // a transient Wix failure on the one eligible calendar day must not make
     // the client lose her invitation reminder.
     if (
+      reformerFamily &&
       key.available_invitations > 0 &&
       isCalendarDaysBefore(key.starts_at, now, -10)
     ) {
@@ -222,6 +229,7 @@ export async function sweepKeyNudges(log: {
     }
 
     if (
+      reformerFamily &&
       key.key_type !== "INVITEE" &&
       remaining > 0 &&
       isCalendarDaysBefore(key.effective_ends_at, now, 5)
@@ -269,7 +277,7 @@ export async function sweepKeyNudges(log: {
     }
 
     const lastBooked = facts.reformerBookings.at(-1)?.slot_start;
-    if (remaining === 0 && lastBooked && lastBooked.getTime() <= now.getTime()) {
+    if (reformerFamily && remaining === 0 && lastBooked && lastBooked.getTime() <= now.getTime()) {
       const transcript =
         `[fin des séances Reformer] ${label} terminée — proposition L'Habituée ou La Résidente.`;
       if (

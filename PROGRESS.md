@@ -1,7 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **3 août 2026** — relance A des leads pub silencieux
+> Dernière mise à jour : **3 août 2026** — abonnements généralisés :
+> L'Abonnement Aquabike + plan sur mesure automatisés (familles de clés,
+> coexistence, admin « Abonnements »). Avant : relance A des leads pub silencieux
 > (holdout ITT, OFF par défaut) + budget pub doublé. Avant : coupe-circuit
 > déterministe des conversations sans intention, relais technique fiable,
 > renouvellement des paiements de plan expirés et première séance des Clés.
@@ -16,6 +18,66 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Abonnements généralisés : L'Abonnement Aquabike + plan sur mesure (3 août 2026)
+
+**Contexte :** la machinerie des Clés (registre, cours bonus, invitations,
+prolongation, gate avis Google) ne gérait que 3 types Reformer. On l'a
+généralisée pour deux nouveaux abonnements, en gérant l'axe que les 3 Clés
+n'exerçaient jamais : **la coexistence de deux _familles_ de clés** (REFORMER =
+les Clés + le sur-mesure ; AQUABIKE) actives/programmées chez une même cliente.
+
+**Ce qui est en prod :**
+- **`keyRules`** : 5 types (`KeyType` += `AQUABIKE`, `SUR_MESURE`) ; mapping
+  imbriqué par type (`family`, `invitation{planId,serviceIds,slotRule,friendRule}`,
+  `bonus|null`, `baseInvitations`, `continuityInvitation`, `reviewGateEligible`).
+- **Schéma** : `key_type` CHECK étendu ; `bonus_plan_id` nullable (le sur-mesure
+  n'a pas de cours en plus) ; colonne `family` ; unicité SCHEDULED désormais
+  **par (cliente, famille)** sur `key_registry` ET `pending_plan_orders` (une
+  prochaine Clé ET un prochain Aquabike peuvent coexister). ALTER idempotents.
+- **Continuité résolue PAR FAMILLE dans la requête** (`keyCoveringAt`,
+  `resolveContinuitySource`) : un Aquabike ne masque jamais une Clé, ni
+  l'inverse. **Bug corrigé** : la garantie L'Invitée cherchait la clé active la
+  plus récente (`activeKeyForClient`) — un Aquabike plus récent l'aurait masquée ;
+  passée à `activeKeyOfType(…, 'INVITEE')`.
+- **Gate avis Google** : fondée sur `decision.earlyRenewal` (post-famille) +
+  `mapping.reviewGateEligible` → jamais déclenchée pour AQUABIKE/SUR_MESURE, ni
+  par erreur sur une Résidente achetée pendant un Aquabike actif. **Aucune
+  extension de la gate** (décision Babakar).
+- **Réclamation** (`book_key_invitation`/`book_key_bonus`) : périmètre par
+  candidate (mapping de chaque clé) ; règle d'amie selon le service.
+  **Invitation Aquabike : amie qui n'a jamais fait d'AQUABIKE à Revive**
+  (`NEVER_AQUABIKE` + `wix.hasPastAquabikeBooking`) — pas « jamais venue ».
+  Aquabike : invitation = cours Aquabike lun–ven toute heure ; bonus = 1 séance
+  Reformer au créneau calme 12h30. Plan Wix d'invitation séparé (Invitation
+  Aquabike, connecté au seul service Aquabike).
+- **Relances lifecycle** (`keyNudge`) : les rappels J+10 invitation / J-5 membre
+  / fin de séances sont **réservés à la famille REFORMER** — leurs templates
+  Meta sont formulés « Reformer/Clé ». L'Aquabike n'a pas de relance lifecycle
+  tant que ses propres templates n'existent pas (un message mal formulé est pire
+  qu'aucun). `renewalNudge` exclut désormais tout plan-clé configuré.
+- **Admin** : « Clés de la Maison » → **« Abonnements »** (`/admin/abonnements`,
+  anciennes URL en 301) ; page de référence statique enrichie d'un **catalogue
+  de tous les abonnements + avantages** (`subscriptionsReferencePage.ts`).
+- **Prompt + business-info** : règles bonus/invitation par plan ; le plan sur
+  mesure « 1x Reformer 1x Mat 1x Step » (100 000 F) est **jamais proposé
+  spontanément** (uniquement sur demande nominale).
+
+**Config Wix + Railway (fait) :** plans créés dans Wix ; vars Railway posées —
+`AQUABIKE_ABO_PLAN_ID`, `AQUABIKE_BONUS_PLAN_ID`, `AQUABIKE_INVITATION_PLAN_ID`,
+`AQUABIKE_SERVICE_IDS`, `SUR_MESURE_PLAN_ID`, + sur-mesure dans
+`AWA_SELLABLE_PLAN_IDS`. Le plan bonus Aquabike (« Cours Bonus Reformer - Abo
+Aquabike ») est connecté aux 3 services Reformer (sinon la séance offerte serait
+irréservable). Les bonus des Clés ont été renommés « Cours Bonus — … » (le code
+les référence par ID, aucun impact). Rollout : plomberie d'abord (types dark
+tant que les vars sont vides), puis copie client une fois Wix/Railway prêts.
+
+**Piège découvert :** une cliente ayant déjà l'ancien Aquabike (avant
+l'automatisation) ne reçoit pas rétroactivement le bonus/invitation — activation
+manuelle par la réception (cas Diarra Niang, bonus activé à la main).
+
+**Reste (action Babakar) :** vérifier/dupliquer les templates Meta lifecycle en
+variantes Aquabike si on veut les relances Aquabike ; sinon rien.
 
 ## /admin/relances recentré sur les leads TIÈDES, pas les cliqueurs réflexes (3 août 2026)
 
