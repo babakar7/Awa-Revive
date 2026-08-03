@@ -672,6 +672,7 @@ async function finalizeVerifiedKeyContinuity(
         )
       : null;
     source = await resolveContinuitySource({
+      family: mapping.family,
       clientId: order.client_id,
       contactId: contact?.id ?? null,
       memberId: order.member_id,
@@ -699,7 +700,7 @@ async function finalizeVerifiedKeyContinuity(
     }
   }
   const decision = keyPurchaseContinuityDecision({
-    newKeyType: mapping.type,
+    mapping,
     purchasedAt: paidAt,
     source,
   });
@@ -713,17 +714,19 @@ async function finalizeVerifiedKeyContinuity(
     sourceExpiresAt: decision.sourceExpiresAt,
     sourceRemaining: decision.sourceRemaining,
   });
-  // Google-review gate: the client's FIRST early renewal locks its invitations
-  // until she leaves a review. Created here (runs once per verified Key order,
-  // re-entrant on webhook retries via the idempotent insert) because a chained
-  // renewal's Key row and invitations are only born later, at activation.
-  const earlyRenewal =
-    source !== null && paidAt.getTime() < source.expiresAt.getTime();
+  // Google-review gate: the client's FIRST early Clé renewal locks its
+  // invitations until she leaves a review. Created here (runs once per verified
+  // Key order, re-entrant on webhook retries via the idempotent insert) because
+  // a chained renewal's Key row and invitations are only born later, at
+  // activation. earlyRenewal is taken from the family-scoped decision (never a
+  // raw source presence), so a Résidente bought while an Aquabike is active is
+  // not mis-gated; typeEligible keeps AQUABIKE/SUR_MESURE out entirely.
   if (
     order.client_id &&
     reviewGateApplies({
       featureEnabled: config.KEYS_AUTOMATION_ENABLED && !!config.GOOGLE_REVIEW_URL,
-      earlyRenewal,
+      typeEligible: mapping.reviewGateEligible,
+      earlyRenewal: decision.earlyRenewal,
       clientKnown: !!order.client_id,
       clientAlreadyGated: !!(await keyRepo.reviewGateForClient(order.client_id)),
       invitationCount: decision.invitationCount,
@@ -778,6 +781,7 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
     const currentKey = await keyRepo.activeKeyForClient({
       clientId: order.client_id,
       wixMemberId: order.member_id,
+      family: keyMapping.family,
     });
     const msg = applyFrenchRegister(planConfirmationMessage(
       lang,

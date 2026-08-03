@@ -41,6 +41,7 @@ export async function registerPaidKey(args: {
           clientId: args.clientId,
           wixMemberId: args.wixMemberId,
           before: args.startsAt,
+          family: mapping.family,
         })
       : args.previousKeyId
         ? await keys.getKeyById(args.previousKeyId)
@@ -48,7 +49,7 @@ export async function registerPaidKey(args: {
   const earned =
     args.invitationCount ??
     invitationEarnings(
-      mapping.type,
+      mapping,
       !!args.continuitySourceOrderId || previous !== null,
       args.continuityExpiresAt
         ? purchasedAt.getTime() < args.continuityExpiresAt.getTime()
@@ -90,15 +91,17 @@ export async function registerPaidKey(args: {
 }
 
 async function createOrAttachBonus(row: keys.KeyRegistry): Promise<string> {
+  // Only reached for keys that define a bonus (ensureBonusForKey guards null).
+  const bonusPlanId = row.bonus_plan_id!;
   const existing = await wix.findPlanOrderForMember({
-    planId: row.bonus_plan_id,
+    planId: bonusPlanId,
     memberId: row.wix_member_id!,
     startDate: row.starts_at,
   });
   if (existing) return existing;
   const future = row.starts_at.getTime() > Date.now() + 30_000;
   return wix.createOfflinePlanOrder(
-    row.bonus_plan_id,
+    bonusPlanId,
     row.wix_member_id!,
     future ? row.starts_at.toISOString() : undefined,
   );
@@ -107,7 +110,11 @@ async function createOrAttachBonus(row: keys.KeyRegistry): Promise<string> {
 export async function ensureBonusForKey(paidOrderId: string): Promise<boolean> {
   if (!config.KEYS_AUTOMATION_ENABLED) return false;
   const existing = await keys.getKeyByPaidOrder(paidOrderId);
-  if (!existing || existing.bonus_order_id) return !!existing?.bonus_order_id;
+  if (!existing) return false;
+  // Bonus-less key (sur-mesure): nothing to provision. It was born
+  // bonus_status='ACTIVE', so treat it as fully provisioned.
+  if (!existing.bonus_plan_id) return true;
+  if (existing.bonus_order_id) return true;
   if (!existing.wix_member_id) {
     await keys.markBonusFailure(existing.id, "missing Wix member id", null);
     return false;

@@ -78,7 +78,7 @@ const NAV: NavSection[] = [
     links: [
       { href: "/admin/bookings", label: "Réservations", icon: "booking" },
       { href: "/admin/paiements-om", label: "Paiements OM", icon: "wallet" },
-      { href: "/admin/cles", label: "Clés de la Maison", icon: "key" },
+      { href: "/admin/abonnements", label: "Abonnements", icon: "key" },
       { href: "/admin/staff", label: "Équipe", icon: "team" },
       { href: "/admin/fermetures", label: "Fermetures", icon: "home" },
       { href: "/admin/faq", label: "FAQ Awa", icon: "chat" },

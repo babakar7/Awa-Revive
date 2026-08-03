@@ -3,6 +3,7 @@ import { sendTemplate } from "../lib/whatsapp.js";
 import { toTemplateParam } from "../lib/notify.js";
 import * as wix from "../lib/wix.js";
 import * as repo from "./repo.js";
+import { configuredKeyMappings } from "./keyRules.js";
 
 /**
  * Proactive renewal nudge: a few days before an abonnement ends, Awa reaches
@@ -87,14 +88,12 @@ export async function sweepRenewalNudges(log: {
 
   const [orders, catalog] = await Promise.all([wix.listAllActiveOrders(), wix.listPlans()]);
   const renewablePlanIds = new Set(catalog.filter((p) => p.renewable).map((p) => p.id));
-  // Clés have their own J-5 lifecycle. Prevent the legacy generic renewal
-  // template from creating a duplicate message.
-  for (const planId of [
-    config.INVITEE_PLAN_ID,
-    config.HABITUEE_PLAN_ID,
-    config.RESIDENTE_PLAN_ID,
-  ]) {
-    if (planId) renewablePlanIds.delete(planId);
+  // Every fully-configured key plan (Clés, Aquabike abonnement, sur-mesure) has
+  // its own J-5 lifecycle. Prevent the legacy generic renewal template from
+  // creating a duplicate message. Derived from the mappings so a partially
+  // configured (dark) plan never gets silently excluded.
+  for (const mapping of configuredKeyMappings()) {
+    renewablePlanIds.delete(mapping.planId);
   }
   if (config.KEYS_AUTOMATION_ENABLED) {
     for (const planId of config.LEGACY_REFORMER_PLAN_IDS) {

@@ -222,6 +222,23 @@ export const config = {
   RESIDENTE_PLAN_ID: optional("RESIDENTE_PLAN_ID", ""),
   RESIDENTE_BONUS_PLAN_ID: optional("RESIDENTE_BONUS_PLAN_ID", ""),
   INVITATION_PLAN_ID: optional("INVITATION_PLAN_ID", ""),
+  // Plan sur mesure taillé pour une cliente précise (Reformer + Mat + Step dans
+  // un même pool). Type REFORMER, pas de bonus (Mat/Step déjà couverts par le
+  // plan), 1 invitation Reformer par cycle. Vide = dark (vendu comme plan
+  // normal, aucune automation Clé). Awa ne le propose jamais spontanément.
+  SUR_MESURE_PLAN_ID: optional("SUR_MESURE_PLAN_ID", ""),
+  // L'Abonnement Aquabike : famille de Clé distincte. Son bonus = 1 séance
+  // Reformer sur le créneau calme 12h30 ; son invitation = 1 cours Aquabike
+  // (lun–ven, toute heure) pour une amie jamais venue à Revive. Toutes vides
+  // = type dark. L'invitation utilise un plan Wix SÉPARÉ, connecté uniquement
+  // aux services Aquabike : l'ordre Invitation est créé avant vérification du
+  // bénéfice et conservé pour retry en cas d'échec ; un plan partagé
+  // Reformer/Aquabike rendrait ce crédit résiduel utilisable sur les deux
+  // disciplines, directement dans Wix, hors garde-fous Awa.
+  AQUABIKE_ABO_PLAN_ID: optional("AQUABIKE_ABO_PLAN_ID", ""),
+  AQUABIKE_BONUS_PLAN_ID: optional("AQUABIKE_BONUS_PLAN_ID", ""),
+  AQUABIKE_INVITATION_PLAN_ID: optional("AQUABIKE_INVITATION_PLAN_ID", ""),
+  AQUABIKE_SERVICE_IDS: optional("AQUABIKE_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   KEY_REFORMER_SERVICE_IDS: optional("KEY_REFORMER_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   KEY_BONUS_SERVICE_IDS: optional("KEY_BONUS_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   LEGACY_REFORMER_PLAN_IDS: optional("LEGACY_REFORMER_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),

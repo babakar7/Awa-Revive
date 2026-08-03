@@ -14,6 +14,7 @@ const ctxBase = {
 
 const base = {
   featureEnabled: true,
+  typeEligible: true,
   earlyRenewal: true,
   clientKnown: true,
   clientAlreadyGated: false,
@@ -27,6 +28,7 @@ describe("reviewGateApplies", () => {
 
   it.each([
     ["feature off", { featureEnabled: false }],
+    ["type not eligible", { typeEligible: false }],
     ["not an early renewal", { earlyRenewal: false }],
     ["anonymous purchase", { clientKnown: false }],
     ["client already gated once", { clientAlreadyGated: true }],

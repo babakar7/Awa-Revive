@@ -25,6 +25,24 @@ export function fmtFcfa(n: number): string {
   return `${Number(n).toLocaleString("fr-FR")} F`;
 }
 
+/** Human label for a key_registry.key_type (never show the raw enum). */
+export function keyTypeLabel(type: string): string {
+  switch (type) {
+    case "INVITEE":
+      return "L'Invitée";
+    case "HABITUEE":
+      return "L'Habituée";
+    case "RESIDENTE":
+      return "La Résidente";
+    case "AQUABIKE":
+      return "L'Abonnement Aquabike";
+    case "SUR_MESURE":
+      return "Abonnement sur mesure";
+    default:
+      return type;
+  }
+}
+
 /** Status → badge modifier class (colors live in layout.ts CSS tokens). */
 export const STATUS_BADGE_CLASS: Record<string, string> = {
   BOOKED: "badge--green",

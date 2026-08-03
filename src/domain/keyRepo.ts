@@ -1,5 +1,5 @@
 import { pool } from "../db/index.js";
-import type { KeyPlanMapping, KeyType } from "./keyRules.js";
+import type { ContinuityFamily, KeyPlanMapping, KeyType } from "./keyRules.js";
 
 export interface KeyRegistry {
   id: string;
@@ -10,7 +10,8 @@ export interface KeyRegistry {
   wix_member_id: string | null;
   key_type: KeyType;
   plan_id: string;
-  bonus_plan_id: string;
+  family: ContinuityFamily;
+  bonus_plan_id: string | null;
   starts_at: Date;
   original_ends_at: Date;
   effective_ends_at: Date;
@@ -46,14 +47,18 @@ export async function upsertKey(args: {
   continuityExpiresAt?: Date | null;
   invitationsGranted?: number;
 }): Promise<KeyRegistry> {
+  // A bonus-less key (sur-mesure) is born bonus_status='ACTIVE' so the repair
+  // sweep never touches it and admin never reads it as "activation en attente".
+  const bonusPlanId = args.mapping.bonus?.planId ?? null;
+  const bonusStatus = bonusPlanId ? "PENDING" : "ACTIVE";
   const result = await pool.query(
     `insert into key_registry
        (paid_order_id, client_id, wix_contact_id, wix_member_id, key_type,
-        plan_id, bonus_plan_id, starts_at, original_ends_at, effective_ends_at,
-        status, previous_key_id, purchased_at, continuity_source_kind,
-        continuity_source_order_id, continuity_source_plan_id,
-        continuity_expires_at, invitations_granted)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        plan_id, family, bonus_plan_id, bonus_status, starts_at, original_ends_at,
+        effective_ends_at, status, previous_key_id, purchased_at,
+        continuity_source_kind, continuity_source_order_id,
+        continuity_source_plan_id, continuity_expires_at, invitations_granted)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      on conflict (paid_order_id) do update set
        client_id=coalesce(key_registry.client_id, excluded.client_id),
        wix_contact_id=coalesce(key_registry.wix_contact_id, excluded.wix_contact_id),
@@ -73,7 +78,9 @@ export async function upsertKey(args: {
       args.wixMemberId ?? null,
       args.mapping.type,
       args.mapping.planId,
-      args.mapping.bonusPlanId,
+      args.mapping.family,
+      bonusPlanId,
+      bonusStatus,
       args.startsAt,
       args.endsAt,
       args.status,
@@ -93,6 +100,8 @@ export async function keyCoveringAt(args: {
   clientId?: string | null;
   wixMemberId?: string | null;
   at: Date;
+  /** Restrict to one family. Omitted only by legacy callers that predate families. */
+  family?: ContinuityFamily | null;
   excludePaidOrderId?: string | null;
 }): Promise<KeyRegistry | null> {
   const result = await pool.query(
@@ -101,10 +110,17 @@ export async function keyCoveringAt(args: {
           or ($2::text is not null and wix_member_id=$2))
         and starts_at <= $3 and effective_ends_at > $3
         and ($4::text is null or paid_order_id <> $4)
+        and ($5::text is null or family=$5)
         and status not in ('REFUNDED','CANCELLED')
       order by effective_ends_at desc
       limit 1`,
-    [args.clientId ?? null, args.wixMemberId ?? null, args.at, args.excludePaidOrderId ?? null],
+    [
+      args.clientId ?? null,
+      args.wixMemberId ?? null,
+      args.at,
+      args.excludePaidOrderId ?? null,
+      args.family ?? null,
+    ],
   );
   return result.rows[0] ?? null;
 }
@@ -190,6 +206,7 @@ export async function completeKeyNudge(
 export async function activeKeyForClient(args: {
   clientId: string;
   wixMemberId?: string | null;
+  family?: ContinuityFamily | null;
 }): Promise<KeyRegistry | null> {
   return (await activeKeysForClient(args))[0] ?? null;
 }
@@ -197,16 +214,41 @@ export async function activeKeyForClient(args: {
 export async function activeKeysForClient(args: {
   clientId: string;
   wixMemberId?: string | null;
+  family?: ContinuityFamily | null;
 }): Promise<KeyRegistry[]> {
   const result = await pool.query(
     `select * from key_registry
       where status='ACTIVE'
         and starts_at <= now() and effective_ends_at > now()
         and (client_id=$1 or ($2::text is not null and wix_member_id=$2))
+        and ($3::text is null or family=$3)
       order by starts_at desc`,
-    [args.clientId, args.wixMemberId ?? null],
+    [args.clientId, args.wixMemberId ?? null, args.family ?? null],
   );
   return result.rows;
+}
+
+/**
+ * The client's active key of a specific TYPE — used where the type matters and
+ * must not be masked by a more-recently-started key of another family (e.g. the
+ * L'Invitée guarantee: an active Aquabike key must never hide the Invitée).
+ */
+export async function activeKeyOfType(args: {
+  clientId: string;
+  wixMemberId?: string | null;
+  type: KeyType;
+}): Promise<KeyRegistry | null> {
+  const result = await pool.query(
+    `select * from key_registry
+      where status='ACTIVE'
+        and starts_at <= now() and effective_ends_at > now()
+        and (client_id=$1 or ($2::text is not null and wix_member_id=$2))
+        and key_type=$3
+      order by starts_at desc
+      limit 1`,
+    [args.clientId, args.wixMemberId ?? null, args.type],
+  );
+  return result.rows[0] ?? null;
 }
 
 /**
@@ -220,6 +262,7 @@ export async function releaseScheduledKeysAfterInviteeCompletion(): Promise<stri
     `update pending_plan_orders p
         set starts_at=now(), updated_at=now()
       where p.status='SCHEDULED' and p.is_key and p.starts_at > now()
+        and p.key_family='REFORMER'
         and exists (
           select 1
             from key_registry k
@@ -270,13 +313,17 @@ export async function shiftScheduledNextKey(
   clientId: string | null,
   wixMemberId: string | null,
   days: number,
+  family: ContinuityFamily,
 ): Promise<void> {
   if (!clientId) return;
+  // Extending a key only shifts the next key of the SAME family — an Aquabike
+  // extension must never move a scheduled Clé, nor the reverse.
   await pool.query(
     `update pending_plan_orders
         set starts_at=starts_at + make_interval(days => $2), updated_at=now()
-      where client_id=$1 and is_key and status='SCHEDULED' and starts_at > now()`,
-    [clientId, days],
+      where client_id=$1 and is_key and status='SCHEDULED' and starts_at > now()
+        and key_family=$3`,
+    [clientId, days, family],
   );
 }
 
@@ -514,15 +561,17 @@ export async function latestPreviousKey(args: {
   clientId?: string | null;
   wixMemberId?: string | null;
   before: Date;
+  family?: ContinuityFamily | null;
 }): Promise<KeyRegistry | null> {
   const result = await pool.query(
     `select * from key_registry
       where (($1::uuid is not null and client_id=$1)
           or ($2::text is not null and wix_member_id=$2))
         and starts_at <= $3
+        and ($4::text is null or family=$4)
       order by effective_ends_at desc
       limit 1`,
-    [args.clientId ?? null, args.wixMemberId ?? null, args.before],
+    [args.clientId ?? null, args.wixMemberId ?? null, args.before, args.family ?? null],
   );
   return result.rows[0] ?? null;
 }

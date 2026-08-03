@@ -2,15 +2,53 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, pool } from "../../src/db/index.js";
 import * as keys from "../../src/domain/keyRepo.js";
 import * as repo from "../../src/domain/repo.js";
-import type { KeyPlanMapping } from "../../src/domain/keyRules.js";
+import type { KeyPlanMapping, KeyType } from "../../src/domain/keyRules.js";
 import { inHours, seedClient, truncateAll } from "./helpers.js";
 
-const mapping: KeyPlanMapping = {
-  type: "RESIDENTE",
-  planId: "resident-plan",
-  bonusPlanId: "resident-bonus",
-  durationDays: 60,
-};
+function makeMapping(type: KeyType, over: Partial<KeyPlanMapping> = {}): KeyPlanMapping {
+  const base: KeyPlanMapping = {
+    type,
+    planId: `${type.toLowerCase()}-plan`,
+    family: "REFORMER",
+    durationDays: 60,
+    baseInvitations: type === "RESIDENTE" ? 1 : 0,
+    continuityInvitation: true,
+    reviewGateEligible: true,
+    invitation: {
+      planId: "invitation-plan",
+      serviceIds: ["svc-reformer"],
+      slotRule: "CALM_SLOT_1230",
+      friendRule: "NEVER_REFORMER",
+    },
+    bonus: { planId: `${type.toLowerCase()}-bonus`, serviceIds: ["svc-mat"], slotRule: "ANY_WEEKDAY_HOUR" },
+  };
+  return { ...base, ...over };
+}
+
+const mapping = makeMapping("RESIDENTE", { planId: "resident-plan", bonus: { planId: "resident-bonus", serviceIds: ["svc-mat"], slotRule: "ANY_WEEKDAY_HOUR" } });
+
+const aquabikeMapping = makeMapping("AQUABIKE", {
+  planId: "aquabike-plan",
+  family: "AQUABIKE",
+  baseInvitations: 1,
+  continuityInvitation: false,
+  reviewGateEligible: false,
+  invitation: {
+    planId: "aquabike-invitation-plan",
+    serviceIds: ["svc-aquabike"],
+    slotRule: "ANY_WEEKDAY_HOUR",
+    friendRule: "NEVER_VISITED",
+  },
+  bonus: { planId: "aquabike-bonus", serviceIds: ["svc-reformer"], slotRule: "CALM_SLOT_1230" },
+});
+
+const surMesureMapping = makeMapping("SUR_MESURE", {
+  planId: "sur-mesure-plan",
+  baseInvitations: 1,
+  continuityInvitation: false,
+  reviewGateEligible: false,
+  bonus: null,
+});
 
 beforeAll(async () => {
   await migrate();
@@ -148,7 +186,7 @@ describe("Clés registry", () => {
     expect(new Date(key.purchased_at!).toISOString()).toBe(paidAt.toISOString());
   });
 
-  it("enforces at most one scheduled Key per client", async () => {
+  it("enforces at most one scheduled Key per client PER FAMILY", async () => {
     const client = await seedClient();
     const first = new Date(inHours(24));
     await keys.upsertKey({
@@ -160,6 +198,7 @@ describe("Clés registry", () => {
       endsAt: new Date(first.getTime() + 60 * 86_400_000),
       status: "SCHEDULED",
     });
+    // Same family (REFORMER) → rejected.
     await expect(
       keys.upsertKey({
         paidOrderId: "scheduled-2",
@@ -171,6 +210,98 @@ describe("Clés registry", () => {
         status: "SCHEDULED",
       }),
     ).rejects.toMatchObject({ code: "23505" });
+    // A different family (AQUABIKE) may be scheduled at the same time.
+    const aqua = await keys.upsertKey({
+      paidOrderId: "scheduled-aqua",
+      clientId: client.id,
+      wixMemberId: "member-1",
+      mapping: aquabikeMapping,
+      startsAt: new Date(first.getTime() + 2000),
+      endsAt: new Date(first.getTime() + 30 * 86_400_000),
+      status: "SCHEDULED",
+    });
+    expect(aqua.family).toBe("AQUABIKE");
+  });
+
+  it("registers AQUABIKE and SUR_MESURE rows; a bonus-less key is born ACTIVE and ignored by repairs", async () => {
+    const client = await seedClient();
+    const aqua = await keys.upsertKey({
+      paidOrderId: "aqua-paid",
+      clientId: client.id,
+      wixMemberId: "member-aqua",
+      mapping: aquabikeMapping,
+      startsAt: new Date(inHours(-1)),
+      endsAt: new Date(inHours(30 * 24)),
+      status: "ACTIVE",
+    });
+    expect(aqua).toMatchObject({ key_type: "AQUABIKE", family: "AQUABIKE" });
+    expect(aqua.bonus_plan_id).toBe("aquabike-bonus");
+
+    const sur = await keys.upsertKey({
+      paidOrderId: "sur-paid",
+      clientId: client.id,
+      wixMemberId: "member-sur",
+      mapping: surMesureMapping,
+      startsAt: new Date(inHours(-1)),
+      endsAt: new Date(inHours(30 * 24)),
+      status: "ACTIVE",
+    });
+    expect(sur).toMatchObject({ key_type: "SUR_MESURE", family: "REFORMER" });
+    expect(sur.bonus_plan_id).toBeNull();
+    expect(sur.bonus_status).toBe("ACTIVE"); // no bonus to provision
+
+    // The bonus-less key must not appear in the repair sweep.
+    const due = await keys.dueBonusRepairs();
+    expect(due.map((r) => r.paid_order_id)).not.toContain("sur-paid");
+  });
+
+  it("resolves continuity/guarantee lookups by family and type, never masking across families", async () => {
+    const client = await seedClient();
+    // An Invitée started 10 days ago; an Aquabike started more recently.
+    const invitee = await keys.upsertKey({
+      paidOrderId: "coexist-invitee",
+      clientId: client.id,
+      wixMemberId: "member-x",
+      mapping: makeMapping("INVITEE", { planId: "invitee-plan", durationDays: 21 }),
+      startsAt: new Date(inHours(-10 * 24)),
+      endsAt: new Date(inHours(11 * 24)),
+      status: "ACTIVE",
+    });
+    await keys.upsertKey({
+      paidOrderId: "coexist-aqua",
+      clientId: client.id,
+      wixMemberId: "member-x",
+      mapping: aquabikeMapping,
+      startsAt: new Date(inHours(-1)),
+      endsAt: new Date(inHours(29 * 24)),
+      status: "ACTIVE",
+    });
+
+    // activeKeyOfType finds the Invitée despite the more recent Aquabike.
+    const foundInvitee = await keys.activeKeyOfType({
+      clientId: client.id,
+      wixMemberId: "member-x",
+      type: "INVITEE",
+    });
+    expect(foundInvitee?.id).toBe(invitee.id);
+
+    // keyCoveringAt scoped to AQUABIKE returns the Aquabike, not the Invitée.
+    const aquaCover = await keys.keyCoveringAt({
+      clientId: client.id,
+      wixMemberId: "member-x",
+      at: new Date(),
+      family: "AQUABIKE",
+    });
+    expect(aquaCover?.paid_order_id).toBe("coexist-aqua");
+
+    // keyCoveringAt scoped to REFORMER returns the Invitée.
+    const reformerCover = await keys.keyCoveringAt({
+      clientId: client.id,
+      wixMemberId: "member-x",
+      at: new Date(),
+      family: "REFORMER",
+    });
+    expect(reformerCover?.paid_order_id).toBe("coexist-invitee");
   });
 
   it("keeps benefit bookings final and excludes cancelled Reformer bookings from guarantee facts", async () => {

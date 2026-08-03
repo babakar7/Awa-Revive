@@ -7,8 +7,18 @@ import { inHours, seedClient, truncateAll } from "./helpers.js";
 const mapping: KeyPlanMapping = {
   type: "HABITUEE",
   planId: "habituee-plan",
-  bonusPlanId: "habituee-bonus",
+  family: "REFORMER",
   durationDays: 30,
+  baseInvitations: 0,
+  continuityInvitation: true,
+  reviewGateEligible: true,
+  invitation: {
+    planId: "invitation-plan",
+    serviceIds: ["svc-reformer"],
+    slotRule: "CALM_SLOT_1230",
+    friendRule: "NEVER_REFORMER",
+  },
+  bonus: { planId: "habituee-bonus", serviceIds: ["svc-mat"], slotRule: "ANY_WEEKDAY_HOUR" },
 };
 
 async function seedActiveKey(clientId: string, paidOrderId: string) {

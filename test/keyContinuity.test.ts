@@ -3,6 +3,27 @@ import {
   keyPurchaseContinuityDecision,
   selectLegacyContinuityOrder,
 } from "../src/domain/keyContinuity.js";
+import type { KeyPlanMapping, KeyType } from "../src/domain/keyRules.js";
+
+function mapping(type: KeyType, over: Partial<KeyPlanMapping> = {}): KeyPlanMapping {
+  const reformer = {
+    type,
+    planId: `plan-${type}`,
+    family: "REFORMER" as const,
+    durationDays: 30,
+    baseInvitations: type === "RESIDENTE" ? 1 : 0,
+    continuityInvitation: true,
+    reviewGateEligible: true,
+    invitation: {
+      planId: "plan-invitation",
+      serviceIds: ["svc-reformer"],
+      slotRule: "CALM_SLOT_1230" as const,
+      friendRule: "NEVER_REFORMER" as const,
+    },
+    bonus: { planId: "plan-bonus", serviceIds: ["svc-mat"], slotRule: "ANY_WEEKDAY_HOUR" as const },
+  };
+  return { ...reformer, ...over };
+}
 
 const at = new Date("2026-07-27T12:00:00Z");
 const order = (id: string, planId: string, endDate: string) => ({
@@ -63,17 +84,72 @@ describe("legacy Key continuity", () => {
     };
     expect(
       keyPurchaseContinuityDecision({
-        newKeyType: "RESIDENTE",
+        mapping: mapping("RESIDENTE"),
         purchasedAt: at,
         source,
       }),
     ).toMatchObject({
       startsAt: source.expiresAt,
+      earlyRenewal: true,
       invitationCount: 2,
       sourceKind: "LEGACY_REFORMER",
       sourceOrderId: "legacy",
       sourcePlanId: "legacy-plan",
       sourceRemaining: 3,
     });
+  });
+});
+
+describe("keyPurchaseContinuityDecision — flat-1 plans & early flag", () => {
+  const source = {
+    kind: "KEY" as const,
+    orderId: "prev",
+    planId: "plan-prev",
+    planName: "prev",
+    expiresAt: new Date("2026-08-10T00:00:00Z"),
+    remaining: 2,
+    previousKeyId: "key-prev",
+  };
+
+  it("chains an early SUR_MESURE renewal but still grants exactly 1 invitation", () => {
+    const decision = keyPurchaseContinuityDecision({
+      mapping: mapping("SUR_MESURE", {
+        baseInvitations: 1,
+        continuityInvitation: false,
+        reviewGateEligible: false,
+        bonus: null,
+      }),
+      purchasedAt: at,
+      source,
+    });
+    expect(decision.startsAt).toEqual(source.expiresAt);
+    expect(decision.earlyRenewal).toBe(true);
+    expect(decision.invitationCount).toBe(1); // no continuity +1
+  });
+
+  it("an AQUABIKE renewal chains and grants exactly 1 invitation", () => {
+    const decision = keyPurchaseContinuityDecision({
+      mapping: mapping("AQUABIKE", {
+        family: "AQUABIKE",
+        baseInvitations: 1,
+        continuityInvitation: false,
+        reviewGateEligible: false,
+      }),
+      purchasedAt: at,
+      source,
+    });
+    expect(decision.earlyRenewal).toBe(true);
+    expect(decision.invitationCount).toBe(1);
+  });
+
+  it("with no source, starts now and is not an early renewal", () => {
+    const decision = keyPurchaseContinuityDecision({
+      mapping: mapping("HABITUEE"),
+      purchasedAt: at,
+      source: null,
+    });
+    expect(decision.startsAt).toEqual(at);
+    expect(decision.earlyRenewal).toBe(false);
+    expect(decision.invitationCount).toBe(0);
   });
 });

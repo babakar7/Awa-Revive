@@ -47,9 +47,13 @@ import { recordWixOrderForBooking, type PaymentLog } from "../domain/fulfillment
 import * as keyRepo from "../domain/keyRepo.js";
 import {
   dakarDateKey,
-  isBonusSlotAllowed,
-  isInvitationSlotAllowed,
   keyMappingForPlan,
+  keyMappingForType,
+  anyInvitationScopeAllows,
+  anyBonusScopeAllows,
+  invitationScopeAllows,
+  bonusScopeAllows,
+  invitationFriendRuleForService,
 } from "../domain/keyRules.js";
 import { resolveContinuitySource } from "../domain/keyContinuity.js";
 import { isOmOutageActive } from "../domain/omOutage.js";
@@ -2848,10 +2852,12 @@ export async function executeTool(
         ? await keyRepo.activeKeyForClient({
             clientId: client.id,
             wixMemberId: memberId,
+            family: keyMapping!.family,
           })
         : null;
       const continuitySource = isKeyPlan
         ? await resolveContinuitySource({
+            family: keyMapping!.family,
             clientId: client.id,
             contactId,
             memberId,
@@ -2873,7 +2879,7 @@ export async function executeTool(
         if (endIso) startsAt = new Date(endIso);
         else startFellBack = true;
       }
-      if (isKeyPlan && startsAt && (await repo.hasScheduledKeyOrder(client.id))) {
+      if (isKeyPlan && startsAt && (await repo.hasScheduledKeyOrder(client.id, keyMapping!.family))) {
         return JSON.stringify({
           error: "next_key_already_scheduled",
           message:
@@ -2956,6 +2962,7 @@ export async function executeTool(
         memberId,
         startsAt,
         isKey: isKeyPlan,
+        keyFamily: keyMapping?.family ?? null,
         // Continuity rights are finalized only after a verified payment.
         keyInvitationCount: null,
         continuitySourceKind: continuitySource?.kind,
@@ -3124,6 +3131,7 @@ export async function executeTool(
           memberId,
           startsAt: previous.starts_at,
           isKey: keyMappingForPlan(plan.id) !== null,
+          keyFamily: previous.key_family,
           keyInvitationCount: null,
           continuitySourceKind: previous.continuity_source_kind,
           continuitySourceOrderId: previous.continuity_source_order_id,
@@ -3266,11 +3274,15 @@ export async function executeTool(
         });
       }
       const memberId = await wix.findMemberIdByContactId(contact.id);
-      const key = await keyRepo.activeKeyForClient({
+      // Look the INVITEE up by type: an active key of another family (e.g. a more
+      // recently started Aquabike) must never mask the Invitée and refuse a valid
+      // guarantee request.
+      const key = await keyRepo.activeKeyOfType({
         clientId: client.id,
         wixMemberId: memberId,
+        type: "INVITEE",
       });
-      if (!key || key.key_type !== "INVITEE") {
+      if (!key) {
         return JSON.stringify({
           error: "no_active_invitee_key",
           message:
@@ -3419,18 +3431,18 @@ export async function executeTool(
       if (!slotStart || Number.isNaN(start.getTime()) || start.getTime() <= Date.now()) {
         return JSON.stringify({ error: "invalid_or_past_slot" });
       }
-      const allowedServiceIds = isInvitation
-        ? config.KEY_REFORMER_SERVICE_IDS
-        : config.KEY_BONUS_SERVICE_IDS;
-      const allowedTime = isInvitation
-        ? isInvitationSlotAllowed(start)
-        : isBonusSlotAllowed(start);
-      if (!allowedServiceIds.includes(serviceId) || !allowedTime) {
+      // Scope is per-plan-family: a Clé/sur-mesure invitation is Reformer at
+      // 12h30; an Aquabike invitation is an Aquabike class any weekday hour. The
+      // pair must be admitted by at least one configured mapping's rule.
+      const scopeAllowed = isInvitation
+        ? anyInvitationScopeAllows(serviceId, start)
+        : anyBonusScopeAllows(serviceId, start);
+      if (!scopeAllowed) {
         return JSON.stringify({
           error: isInvitation ? "invitation_slot_not_allowed" : "bonus_slot_not_allowed",
           message: isInvitation
-            ? "L'invitation est limitée au Reformer à 12h30, du lundi au vendredi. Ne propose aucun autre horaire."
-            : "Le cours en plus est limité à Aquabike, Yoga, Mat ou Step, du lundi au vendredi.",
+            ? "L'invitation Clé/sur mesure est limitée au Reformer à 12h30 (lun–ven) ; l'invitation Aquabike à un cours Aquabike (lun–ven, à toute heure). Ne propose aucun autre créneau."
+            : "Le cours en plus est limité à Aquabike, Yoga, Mat ou Step (lun–ven) ; la séance Reformer offerte de l'Abonnement Aquabike se prend au créneau calme de 12h30 (lun–ven).",
         });
       }
       const service = await wix.getService(serviceId);
@@ -3471,12 +3483,16 @@ export async function executeTool(
 
       if (!isInvitation) {
         const eligibleKeys = [...activeKeys]
-          .filter(
-            (candidate) =>
+          .filter((candidate) => {
+            const candidateMapping = keyMappingForType(candidate.key_type);
+            return (
+              !!candidateMapping &&
               start.getTime() < candidate.effective_ends_at.getTime() &&
               candidate.bonus_order_id &&
-              candidate.bonus_status === "ACTIVE",
-          )
+              candidate.bonus_status === "ACTIVE" &&
+              bonusScopeAllows(candidateMapping, serviceId, start)
+            );
+          })
           .sort(
             (a, b) =>
               a.effective_ends_at.getTime() - b.effective_ends_at.getTime(),
@@ -3496,7 +3512,7 @@ export async function executeTool(
           const benefit = await exactBenefitWithShortRetry({
             serviceId,
             contactId: contact.id,
-            planId: candidate.bonus_plan_id,
+            planId: candidate.bonus_plan_id!,
             orderId: candidate.bonus_order_id!,
           });
           if (benefit) {
@@ -3564,12 +3580,21 @@ export async function executeTool(
       }
       if (friendResolution.kind === "one") {
         try {
-          if (await wix.hasPastReformerBooking(friendResolution.contact.id)) {
+          // Aquabike invitations require the friend never came to Revive at all;
+          // Clé/sur-mesure invitations only require she never did Reformer here.
+          const friendRule = invitationFriendRuleForService(serviceId);
+          const disqualified =
+            friendRule === "NEVER_VISITED"
+              ? await wix.hasAnyPastReviveBooking(friendResolution.contact.id)
+              : await wix.hasPastReformerBooking(friendResolution.contact.id);
+          if (disqualified) {
             return JSON.stringify({
               error: "friend_not_new",
               message:
-                "L'invitation est réservée à une personne qui n'a jamais fait de Reformer chez Revive. " +
-                "Une venue pour un autre cours ou service ne la disqualifie pas.",
+                friendRule === "NEVER_VISITED"
+                  ? "L'invitation Aquabike est réservée à une personne qui n'est jamais venue à Revive."
+                  : "L'invitation est réservée à une personne qui n'a jamais fait de Reformer chez Revive. " +
+                    "Une venue pour un autre cours ou service ne la disqualifie pas.",
             });
           }
         } catch (error) {
@@ -3587,6 +3612,10 @@ export async function executeTool(
         (a, b) => a.effective_ends_at.getTime() - b.effective_ends_at.getTime(),
       )) {
         if (start.getTime() >= candidate.effective_ends_at.getTime()) continue;
+        const candidateMapping = keyMappingForType(candidate.key_type);
+        if (!candidateMapping || !invitationScopeAllows(candidateMapping, serviceId, start)) {
+          continue;
+        }
         const invitation = await keyRepo.availableInvitationForKey(candidate.id);
         if (invitation) {
           invitationSelection = { key: candidate, invitation };
@@ -3624,11 +3653,17 @@ export async function executeTool(
           message: "Cette invitation est déjà attribuée. Relance la vérification ou transmets à la réception.",
         });
       }
+      // Family-specific invitation plan: Aquabike uses its own hidden plan
+      // (connected only to Aquabike services) so a retained credit can never be
+      // redeemed on Reformer, and vice versa.
+      const invitationPlanId =
+        keyMappingForType(invitationSelection.key.key_type)?.invitation.planId ??
+        config.INVITATION_PLAN_ID;
       let invitationOrderId = assigned.wix_invitation_order_id;
       try {
         if (!invitationOrderId) {
           invitationOrderId = await wix.createOfflinePlanOrder(
-            config.INVITATION_PLAN_ID,
+            invitationPlanId,
             memberId,
           );
           const stored = await keyRepo.attachInvitationOrder(assigned.id, invitationOrderId);
@@ -3637,7 +3672,7 @@ export async function executeTool(
         const benefit = await exactBenefitWithShortRetry({
           serviceId,
           contactId: contact.id,
-          planId: config.INVITATION_PLAN_ID,
+          planId: invitationPlanId,
           orderId: invitationOrderId,
         });
         if (!benefit) {

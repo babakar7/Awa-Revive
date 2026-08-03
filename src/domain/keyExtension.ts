@@ -19,7 +19,10 @@ export async function extendKeySevenDays(args: {
   }
   const claimed = await keys.claimKeyExtension(args.keyId);
   if (!claimed) return { extended: false, reason: "not_active_or_already_extended" };
-  if (!claimed.bonus_order_id) {
+  // A key that DEFINES a bonus but has not yet provisioned its order can't be
+  // extended (the bonus end date would drift). A bonus-less key (sur-mesure) has
+  // nothing to align and extends on the paid order alone.
+  if (claimed.bonus_plan_id && !claimed.bonus_order_id) {
     await keys.releaseKeyExtension(args.keyId);
     return { extended: false, reason: "bonus_order_missing" };
   }
@@ -30,22 +33,24 @@ export async function extendKeySevenDays(args: {
     await keys.releaseKeyExtension(args.keyId);
     throw error;
   }
-  try {
-    await wix.postponePlanOrderEndDate(claimed.bonus_order_id, newEndDate);
-  } catch (error) {
-    // The paid Key is already extended and Wix has no rollback endpoint. Keep
-    // the one-time claim and local effective date, then ask reception to align
-    // only the bonus. Never retry the paid order with the same end date.
-    await keys.completeKeyExtension(args.keyId, newEndDate);
-    await keys.shiftScheduledNextKey(claimed.client_id, claimed.wix_member_id, 7);
-    notifyReception(
-      "⚠️ Prolongation Clé — bonus à aligner",
-      `La Clé ${claimed.paid_order_id} a été prolongée jusqu'au ${newEndDate.toISOString()}, ` +
-        `mais le plan bonus ${claimed.bonus_order_id} n'a pas suivi. À prolonger manuellement à la même date.`,
-    );
-    throw error;
+  if (claimed.bonus_order_id) {
+    try {
+      await wix.postponePlanOrderEndDate(claimed.bonus_order_id, newEndDate);
+    } catch (error) {
+      // The paid Key is already extended and Wix has no rollback endpoint. Keep
+      // the one-time claim and local effective date, then ask reception to align
+      // only the bonus. Never retry the paid order with the same end date.
+      await keys.completeKeyExtension(args.keyId, newEndDate);
+      await keys.shiftScheduledNextKey(claimed.client_id, claimed.wix_member_id, 7, claimed.family);
+      notifyReception(
+        "⚠️ Prolongation Clé — bonus à aligner",
+        `La Clé ${claimed.paid_order_id} a été prolongée jusqu'au ${newEndDate.toISOString()}, ` +
+          `mais le plan bonus ${claimed.bonus_order_id} n'a pas suivi. À prolonger manuellement à la même date.`,
+      );
+      throw error;
+    }
   }
   await keys.completeKeyExtension(args.keyId, newEndDate);
-  await keys.shiftScheduledNextKey(claimed.client_id, claimed.wix_member_id, 7);
+  await keys.shiftScheduledNextKey(claimed.client_id, claimed.wix_member_id, 7, claimed.family);
   return { extended: true, newEndDate };
 }

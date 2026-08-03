@@ -136,6 +136,7 @@ export function registerWixWebhook(app: FastifyInstance): void {
         clientPhone = wixClient?.phone ?? client?.wa_phone ?? phones[0] ?? null;
       }
       const continuity = await resolveContinuitySource({
+        family: mapping.family,
         clientId,
         contactId,
         memberId,
@@ -143,7 +144,7 @@ export function registerWixWebhook(app: FastifyInstance): void {
         excludePaidOrderId: event.entityId,
       });
       const decision = keyPurchaseContinuityDecision({
-        newKeyType: mapping.type,
+        mapping,
         purchasedAt,
         source: continuity,
       });

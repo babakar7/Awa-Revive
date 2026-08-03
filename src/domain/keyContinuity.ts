@@ -1,7 +1,7 @@
 import { config } from "../config.js";
 import * as wix from "../lib/wix.js";
 import * as keys from "./keyRepo.js";
-import { invitationEarnings, type KeyType } from "./keyRules.js";
+import { invitationEarnings, type ContinuityFamily, type KeyPlanMapping } from "./keyRules.js";
 
 export type ContinuitySourceKind = "KEY" | "LEGACY_REFORMER";
 
@@ -17,6 +17,8 @@ export interface ContinuitySource {
 
 export interface KeyPurchaseContinuityDecision {
   startsAt: Date;
+  /** Purchased before the same-family source expired (drives the review gate). */
+  earlyRenewal: boolean;
   invitationCount: number;
   sourceKind: ContinuitySourceKind | null;
   sourceOrderId: string | null;
@@ -27,17 +29,20 @@ export interface KeyPurchaseContinuityDecision {
 }
 
 export function keyPurchaseContinuityDecision(args: {
-  newKeyType: KeyType;
+  mapping: KeyPlanMapping;
   purchasedAt: Date;
   source: ContinuitySource | null;
 }): KeyPurchaseContinuityDecision {
+  // The source is already family-scoped by resolveContinuitySource, so an
+  // early renewal can only chain onto a same-family subscription.
   const early =
     args.source !== null &&
     args.purchasedAt.getTime() < args.source.expiresAt.getTime();
   return {
     startsAt: args.source && early ? args.source.expiresAt : args.purchasedAt,
+    earlyRenewal: early,
     invitationCount: invitationEarnings(
-      args.newKeyType,
+      args.mapping,
       args.source !== null,
       early,
     ),
@@ -93,11 +98,15 @@ export function selectLegacyContinuityOrder(args: {
 }
 
 /**
- * Resolve the continuity source at the verified purchase time. A Key always
- * wins over a legacy subscription. Among multiple legacy Reformer orders, the
- * latest expiry wins; unrelated Aquafitness/Mat orders are never considered.
+ * Resolve the continuity source at the verified purchase time, WITHIN the
+ * target key's family. A same-family Key always wins over a legacy
+ * subscription. Among multiple legacy Reformer orders, the latest expiry wins;
+ * unrelated Aquafitness/Mat orders are never considered. Because resolution is
+ * family-scoped, an active Aquabike key never masks a Clé (and vice versa), and
+ * a legacy Reformer plan is only a source for the REFORMER family.
  */
 export async function resolveContinuitySource(args: {
+  family: ContinuityFamily;
   clientId?: string | null;
   contactId?: string | null;
   memberId?: string | null;
@@ -108,6 +117,7 @@ export async function resolveContinuitySource(args: {
     clientId: args.clientId,
     wixMemberId: args.memberId,
     at: args.at,
+    family: args.family,
     excludePaidOrderId: args.excludePaidOrderId,
   });
   if (key) {
@@ -136,6 +146,8 @@ export async function resolveContinuitySource(args: {
     };
   }
 
+  // Legacy Reformer subscriptions belong to the REFORMER family only.
+  if (args.family !== "REFORMER") return null;
   if (config.LEGACY_REFORMER_PLAN_IDS.length === 0) return null;
   const legacyIds = new Set(config.LEGACY_REFORMER_PLAN_IDS);
   const selected = selectLegacyContinuityOrder({

@@ -1396,6 +1396,7 @@ export interface PlanOrder {
   discovery_booking_status: string | null;
   discovery_booking_error: string | null;
   is_key: boolean;
+  key_family: "REFORMER" | "AQUABIKE";
   key_invitation_count: number | null;
   paid_at: Date | null;
   continuity_source_kind: "KEY" | "LEGACY_REFORMER" | null;
@@ -1450,6 +1451,7 @@ export async function createDraftPlanOrder(args: {
   slotStart?: string | Date | null;
   slotEnd?: string | Date | null;
   isKey?: boolean;
+  keyFamily?: "REFORMER" | "AQUABIKE" | null;
   keyInvitationCount?: number | null;
   continuitySourceKind?: "KEY" | "LEGACY_REFORMER" | null;
   continuitySourceOrderId?: string | null;
@@ -1465,19 +1467,20 @@ export async function createDraftPlanOrder(args: {
     `insert into pending_plan_orders
        (client_id, plan_id, plan_name, amount_xof, member_id, starts_at, campaign_code,
         service_id, service_name, event_id, slot_json, slot_start, slot_end,
-        discovery_booking_status, is_key, key_invitation_count,
+        discovery_booking_status, is_key, key_family, key_invitation_count,
         continuity_source_kind, continuity_source_order_id,
         continuity_source_plan_id, continuity_expires_at, continuity_remaining,
         retry_of_order_id,
         status)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-             $14, $15, $16, $17, $18, $19, $20, $21, $22, 'DRAFT') returning *`,
+             $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'DRAFT') returning *`,
     [
       args.clientId, args.planId, args.planName, args.amountXof, args.memberId, args.startsAt ?? null,
       campaignCode, args.serviceId ?? null, args.serviceName ?? null, args.eventId ?? null,
       args.slotJson === undefined ? null : JSON.stringify(args.slotJson), args.slotStart ?? null, args.slotEnd ?? null,
       discoveryBookingStatus,
       args.isKey ?? false,
+      args.keyFamily ?? "REFORMER",
       args.keyInvitationCount ?? null,
       args.continuitySourceKind ?? null,
       args.continuitySourceOrderId ?? null,
@@ -1763,12 +1766,16 @@ export async function latestRecentExpiredPlanOrder(
   return res.rows[0] ?? null;
 }
 
-export async function hasScheduledKeyOrder(clientId: string): Promise<boolean> {
+export async function hasScheduledKeyOrder(
+  clientId: string,
+  family?: "REFORMER" | "AQUABIKE" | null,
+): Promise<boolean> {
   const result = await pool.query(
     `select 1 from pending_plan_orders
       where client_id=$1 and is_key and status='SCHEDULED' and starts_at > now()
+        and ($2::text is null or key_family=$2)
       limit 1`,
-    [clientId],
+    [clientId, family ?? null],
   );
   return (result.rowCount ?? 0) > 0;
 }

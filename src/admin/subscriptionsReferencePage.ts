@@ -1,11 +1,12 @@
 /**
- * Mémo opérationnel des Clés de la Maison.
+ * Référence des abonnements (Clés de la Maison, Abonnement Aquabike, plan sur
+ * mesure) — mémo opérationnel réception.
  *
  * Cette page est volontairement statique : elle doit rester disponible même
  * si Wix ou Postgres sont momentanément indisponibles. Elle complète le
- * registre dynamique /admin/cles sans déclencher aucune action métier.
+ * registre dynamique /admin/abonnements sans déclencher aucune action métier.
  */
-export function renderKeyReceptionMemo(): string {
+export function renderSubscriptionsReference(): string {
   return `
 <article class="key-memo">
   <header class="page-header key-memo-header">
@@ -15,7 +16,7 @@ export function renderKeyReceptionMemo(): string {
       <p>Les règles à vérifier au comptoir pour les Clés, cours bonus, invitations, prolongations et garanties.</p>
     </div>
     <div class="page-header-actions key-memo-actions">
-      <a class="act act--ghost" href="/admin/cles">Voir le registre</a>
+      <a class="act act--ghost" href="/admin/abonnements">Voir le registre</a>
       <button class="act" type="button" onclick="window.print()">Imprimer le mémo</button>
     </div>
   </header>

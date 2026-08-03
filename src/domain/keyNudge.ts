@@ -40,6 +40,8 @@ export function thirdSessionDueWithin24h(
 function keyLabel(type: KeyType): string {
   if (type === "INVITEE") return "L'Invitée — Clé 3 séances";
   if (type === "HABITUEE") return "L'Habituée — Clé 6 séances";
+  if (type === "AQUABIKE") return "L'Abonnement Aquabike — 8 séances";
+  if (type === "SUR_MESURE") return "Abonnement sur mesure";
   return "La Résidente — Clé 12 séances";
 }
 

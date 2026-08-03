@@ -62,4 +62,46 @@ describe("Clés production preflight", () => {
 
     expect(() => assertConfig()).toThrow(/HABITUEE_BONUS_PLAN_ID/);
   });
+
+  it("boots with the Aquabike/sur-mesure vars unset (they are never required)", async () => {
+    const { assertConfig } = await loadConfig();
+    // requiredBase never sets SUR_MESURE_/AQUABIKE_* — boot must still succeed.
+    expect(() => assertConfig()).not.toThrow();
+  });
+
+  it("keeps a partially-configured Aquabike plan dark (no mapping, no automation)", async () => {
+    const mod = await loadConfig({
+      AQUABIKE_ABO_PLAN_ID: "aquabike-abo",
+      // bonus, invitation and services intentionally left unset
+    });
+    const { configuredKeyMappings, keyMappingForPlan } = await import(
+      "../src/domain/keyRules.js"
+    );
+    expect(keyMappingForPlan("aquabike-abo")).toBeNull();
+    expect(configuredKeyMappings().some((m) => m.type === "AQUABIKE")).toBe(false);
+    // The three Clés remain configured.
+    expect(configuredKeyMappings().map((m) => m.type).sort()).toEqual([
+      "HABITUEE",
+      "INVITEE",
+      "RESIDENTE",
+    ]);
+    void mod;
+  });
+
+  it("brings the Aquabike + sur-mesure plans alive once fully configured", async () => {
+    await loadConfig({
+      AQUABIKE_ABO_PLAN_ID: "aquabike-abo",
+      AQUABIKE_BONUS_PLAN_ID: "aquabike-bonus",
+      AQUABIKE_INVITATION_PLAN_ID: "aquabike-invitation",
+      AQUABIKE_SERVICE_IDS: "svc-aquabike",
+      SUR_MESURE_PLAN_ID: "sur-mesure",
+    });
+    const { keyMappingForPlan } = await import("../src/domain/keyRules.js");
+    const aqua = keyMappingForPlan("aquabike-abo");
+    expect(aqua).toMatchObject({ type: "AQUABIKE", family: "AQUABIKE", baseInvitations: 1 });
+    expect(aqua?.invitation.slotRule).toBe("ANY_WEEKDAY_HOUR");
+    expect(aqua?.invitation.friendRule).toBe("NEVER_VISITED");
+    const sur = keyMappingForPlan("sur-mesure");
+    expect(sur).toMatchObject({ type: "SUR_MESURE", family: "REFORMER", bonus: null });
+  });
 });

@@ -397,8 +397,15 @@ alter table pending_plan_orders add column if not exists continuity_source_plan_
 alter table pending_plan_orders add column if not exists continuity_expires_at timestamptz;
 alter table pending_plan_orders add column if not exists continuity_remaining integer;
 alter table pending_plan_orders add column if not exists continuity_alerted_at timestamptz;
-create unique index if not exists idx_plan_orders_one_scheduled_key
-  on pending_plan_orders (client_id)
+-- Continuity family of a scheduled key order (REFORMER default; AQUABIKE for the
+-- Aquabike abonnement). Lets a next Aquabike and a next Clé be scheduled at once.
+alter table pending_plan_orders add column if not exists key_family text
+  not null default 'REFORMER';
+update pending_plan_orders set key_family='REFORMER'
+  where is_key and key_family is null;
+drop index if exists idx_plan_orders_one_scheduled_key;
+create unique index if not exists idx_plan_orders_one_scheduled_key_family
+  on pending_plan_orders (client_id, key_family)
   where status='SCHEDULED' and is_key;
 
 -- Bar-only Wave orders: a menu order attached to a booking the client paid
@@ -1725,9 +1732,14 @@ create table if not exists key_registry (
   client_id uuid references clients(id),
   wix_contact_id text,
   wix_member_id text,
-  key_type text not null check (key_type in ('INVITEE','HABITUEE','RESIDENTE')),
+  key_type text not null check (key_type in ('INVITEE','HABITUEE','RESIDENTE','AQUABIKE','SUR_MESURE')),
   plan_id text not null,
-  bonus_plan_id text not null,
+  -- Continuity family: one active/scheduled key per family per client. Reformer
+  -- Clés + sur-mesure = 'REFORMER'; the Aquabike abonnement = 'AQUABIKE'.
+  family text not null default 'REFORMER' check (family in ('REFORMER','AQUABIKE')),
+  -- Nullable: the sur-mesure plan has no "cours en plus" (Mat/Step are covered
+  -- by its own session pool), so it registers no bonus order.
+  bonus_plan_id text,
   starts_at timestamptz not null,
   original_ends_at timestamptz not null,
   effective_ends_at timestamptz not null,
@@ -1748,14 +1760,28 @@ create table if not exists key_registry (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create unique index if not exists idx_key_registry_one_scheduled
-  on key_registry (coalesce(client_id::text, wix_member_id))
-  where status = 'SCHEDULED';
 create index if not exists idx_key_registry_bonus_repair
   on key_registry (bonus_status, bonus_next_retry_at);
 create index if not exists idx_key_registry_member
   on key_registry (wix_member_id, effective_ends_at desc);
 alter table key_registry add column if not exists purchased_at timestamptz;
+-- key_type / bonus_plan_id / family generalization for the Aquabike + sur-mesure
+-- plans. Idempotent — safe to re-run against an existing prod table.
+alter table key_registry drop constraint if exists key_registry_key_type_check;
+alter table key_registry add constraint key_registry_key_type_check
+  check (key_type in ('INVITEE','HABITUEE','RESIDENTE','AQUABIKE','SUR_MESURE'));
+alter table key_registry alter column bonus_plan_id drop not null;
+alter table key_registry add column if not exists family text not null default 'REFORMER';
+alter table key_registry drop constraint if exists key_registry_family_check;
+alter table key_registry add constraint key_registry_family_check
+  check (family in ('REFORMER','AQUABIKE'));
+-- One SCHEDULED key per (client, family): a next Aquabike and a next Clé may be
+-- scheduled at once, but never two of the same family. Replaces the old global
+-- one-scheduled-per-client index.
+drop index if exists idx_key_registry_one_scheduled;
+create unique index if not exists idx_key_registry_one_scheduled_family
+  on key_registry (coalesce(client_id::text, wix_member_id), family)
+  where status = 'SCHEDULED';
 alter table key_registry add column if not exists continuity_source_kind text
   check (continuity_source_kind is null or continuity_source_kind in ('KEY','LEGACY_REFORMER'));
 alter table key_registry add column if not exists continuity_source_order_id text;

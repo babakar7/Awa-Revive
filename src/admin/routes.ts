@@ -144,7 +144,7 @@ import {
   sendWhatsAppNotificationDetailed,
 } from "../lib/notify.js";
 import { formatOwnerAlert } from "../domain/ownerAlertRules.js";
-import { ago, badge, escapeHtml, fmtDate, fmtFcfa } from "./helpers.js";
+import { ago, badge, escapeHtml, fmtDate, fmtFcfa, keyTypeLabel } from "./helpers.js";
 import {
   isConversationLiveSearchReady,
   normalizeConversationSearch,
@@ -177,7 +177,7 @@ import * as adminOps from "../domain/adminOperations.js";
 import { renderAdminReport, renderAuditPage } from "./reportPage.js";
 import { bookingConversionDashboard } from "../domain/bookingFunnel.js";
 import { renderConversionPage } from "./conversionPage.js";
-import { renderKeyReceptionMemo } from "./keyReceptionMemoPage.js";
+import { renderSubscriptionsReference } from "./subscriptionsReferencePage.js";
 import {
   attendanceDetail,
   attendanceLeaders,
@@ -364,34 +364,39 @@ export function registerAdmin(app: FastifyInstance): void {
           .send(await layout("À tester", "/admin/tests", renderTestChecklist(pendingLinks), { subtitle: "Checklist de recette", contentWidth: "standard" }));
       });
 
-      // ---------- Clés de la Maison (réception = registre) ----------
-      admin.get("/cles/memo", async (_req, reply) => {
+      // ---------- Abonnements (réception = registre) ----------
+      // Renamed from "Clés de la Maison" to cover the Aquabike abonnement and
+      // the sur-mesure plan alongside the Clés. Old /admin/cles* URLs redirect.
+      admin.get("/cles", async (_req, reply) => reply.redirect("/admin/abonnements", 301));
+      admin.get("/cles/memo", async (_req, reply) => reply.redirect("/admin/abonnements/memo", 301));
+
+      admin.get("/abonnements/memo", async (_req, reply) => {
         reply
           .type("text/html")
           .send(
             await layout(
-              "Clés de la Maison",
-              "/admin/cles",
-              renderKeyReceptionMemo(),
+              "Abonnements",
+              "/admin/abonnements",
+              renderSubscriptionsReference(),
               {
-                subtitle: "Mémo réception",
+                subtitle: "Référence réception",
                 contentWidth: "standard",
                 badges: emptyNavBadges,
                 breadcrumbs: [
-                  { href: "/admin/cles", label: "Clés" },
-                  { label: "Mémo réception" },
+                  { href: "/admin/abonnements", label: "Abonnements" },
+                  { label: "Référence réception" },
                 ],
               },
             ),
           );
       });
 
-      admin.get("/cles", async (req, reply) => {
+      admin.get("/abonnements", async (req, reply) => {
         const rows = await keyRepo.listKeysForAdmin();
         const query = (req.query ?? {}) as Record<string, string>;
         const banner =
           query.done === "extended"
-            ? `<div class="flash success">Clé et cours en plus prolongés de 7 jours.</div>`
+            ? `<div class="flash success">Abonnement prolongé de 7 jours.</div>`
             : query.err
               ? `<div class="flash error">${escapeHtml(query.err)}</div>`
               : "";
@@ -403,39 +408,43 @@ export function registerAdmin(app: FastifyInstance): void {
                   key.key_type !== "INVITEE" &&
                   !key.extension_used_at &&
                   new Date(key.effective_ends_at).getTime() > Date.now();
+                // A bonus-less plan (sur-mesure) has no "cours en plus" to show.
+                const bonusLine = !key.bonus_plan_id
+                  ? "Cours en plus : sans objet"
+                  : `Cours en plus : ${escapeHtml(key.bonus_order_id || "activation en attente")}`;
                 return `<article class="card">
                   <div class="row"><div><h3>${escapeHtml(key.client_name || key.wix_contact_id || "Cliente Wix")}</h3>
-                  <p>${escapeHtml(key.key_type)} · fin ${fmtDate(key.effective_ends_at)}</p></div>
+                  <p>${escapeHtml(keyTypeLabel(key.key_type))} · fin ${fmtDate(key.effective_ends_at)}</p></div>
                   ${badge(key.status)}</div>
-                  <p><small>Commande Clé : ${escapeHtml(key.paid_order_id)}<br>
-                  Cours en plus : ${escapeHtml(key.bonus_order_id || "activation en attente")}</small></p>
+                  <p><small>Commande abonnement : ${escapeHtml(key.paid_order_id)}<br>
+                  ${bonusLine}</small></p>
                   ${
                     canExtend
-                      ? `<form method="post" action="/admin/cles/${key.id}/extend">
+                      ? `<form method="post" action="/admin/abonnements/${key.id}/extend">
                           <button class="act" type="submit">Prolonger de 7 jours</button>
-                          <small>Le serveur vérifie le solde Reformer en direct dans Wix.</small>
+                          <small>Le serveur vérifie le solde en direct dans Wix.</small>
                         </form>`
                       : `<small>${key.extension_used_at ? "Prolongation déjà utilisée." : "Prolongation indisponible."}</small>`
                   }
                 </article>`;
               })
               .join("")
-          : `<div class="empty-state"><h3>Aucune Clé enregistrée</h3><p>Les activations apparaîtront ici.</p></div>`;
+          : `<div class="empty-state"><h3>Aucun abonnement enregistré</h3><p>Les activations apparaîtront ici.</p></div>`;
         return reply
           .type("text/html")
           .send(
             await layout(
-              "Clés",
-              "/admin/cles",
+              "Abonnements",
+              "/admin/abonnements",
               `${banner}
               <header class="page-header">
                 <div class="page-header-copy">
-                  <span class="eyebrow">Clés de la Maison</span>
+                  <span class="eyebrow">Abonnements</span>
                   <h2>Registre réception</h2>
                   <p>Suivez les activations et validez ici les prolongations autorisées.</p>
                 </div>
                 <div class="page-header-actions">
-                  <a class="act act--ghost" href="/admin/cles/memo">Ouvrir le mémo réception</a>
+                  <a class="act act--ghost" href="/admin/abonnements/memo">Ouvrir la référence réception</a>
                 </div>
               </header>
               <section class="grid">${cards}</section>`,
@@ -444,17 +453,17 @@ export function registerAdmin(app: FastifyInstance): void {
           );
       });
 
-      admin.post("/cles/:id/extend", async (req, reply) => {
+      const handleKeyExtend = async (req: any, reply: any) => {
         const { id } = req.params as { id: string };
         const key = await keyRepo.getKeyById(id);
         if (!key || !key.wix_contact_id || key.key_type === "INVITEE") {
-          return reply.redirect("/admin/cles?err=Cl%C3%A9+non+prolongeable", 303);
+          return reply.redirect("/admin/abonnements?err=Abonnement+non+prolongeable", 303);
         }
         const plans = await listAllActiveOrders();
         const rawOrder = plans.find((order: any) => order?.id === key.paid_order_id);
         const planName = String(rawOrder?.planName ?? "");
         if (!planName) {
-          return reply.redirect("/admin/cles?err=Commande+Wix+active+introuvable", 303);
+          return reply.redirect("/admin/abonnements?err=Commande+Wix+active+introuvable", 303);
         }
         const remaining = await import("../lib/wix.js").then((module) =>
           module.planRemainingSessions(
@@ -465,7 +474,7 @@ export function registerAdmin(app: FastifyInstance): void {
           ),
         );
         if (remaining === null) {
-          return reply.redirect("/admin/cles?err=Solde+Wix+illisible", 303);
+          return reply.redirect("/admin/abonnements?err=Solde+Wix+illisible", 303);
         }
         try {
           const result = await extendKeySevenDays({
@@ -474,17 +483,21 @@ export function registerAdmin(app: FastifyInstance): void {
           });
           if (!result.extended) {
             return reply.redirect(
-              `/admin/cles?err=${encodeURIComponent(result.reason || "Prolongation refusée")}`,
+              `/admin/abonnements?err=${encodeURIComponent(result.reason || "Prolongation refusée")}`,
               303,
             );
           }
           req.log.info({ keyId: key.id, by: req.adminUser }, "Key extended seven days");
-          return reply.redirect("/admin/cles?done=extended", 303);
+          return reply.redirect("/admin/abonnements?done=extended", 303);
         } catch (error) {
           req.log.error({ err: error, keyId: key.id }, "Key extension failed");
-          return reply.redirect("/admin/cles?err=Erreur+Wix%3A+v%C3%A9rifier+le+registre", 303);
+          return reply.redirect("/admin/abonnements?err=Erreur+Wix%3A+v%C3%A9rifier+le+registre", 303);
         }
-      });
+      };
+      // New path plus the old one (a POST can't be 301-redirected without
+      // dropping the form body), so a stale open tab still works.
+      admin.post("/abonnements/:id/extend", handleKeyExtend);
+      admin.post("/cles/:id/extend", handleKeyExtend);
 
       // ---------- À faire (inbox) ----------
       admin.get("/", async (req, reply) => {
