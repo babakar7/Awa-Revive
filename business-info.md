@@ -59,6 +59,11 @@ mémorisée. (Idem prix et créneaux : outils uniquement.)
     ailleurs** ; la déclaration du client suffit, ne demande pas de preuve.
     Ne dis JAMAIS que les cours doivent avoir été faits « chez nous ».
   - Intense : si la coach donne son aval.
+- Femmes enceintes : elles peuvent pratiquer le Pilates avec l'accord de leur
+  médecin, uniquement au niveau Foundation. Si elles pratiquaient déjà le
+  Pilates avant leur grossesse, elles peuvent continuer à n'importe quel stade
+  de la grossesse. Sinon, elles doivent attendre le 3e mois de grossesse avant
+  de commencer.
 
 ## Les Clés de la Maison
 
