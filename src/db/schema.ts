@@ -180,6 +180,9 @@ create table if not exists campaign_leads (
 );
 create unique index if not exists idx_campaign_leads_message
   on campaign_leads (trigger_message_id) where trigger_message_id is not null;
+create index if not exists idx_campaign_leads_meta_source
+  on campaign_leads (campaign_key, source_id, created_at)
+  where matched_by='meta_referral' and source_type='ad' and source_id is not null;
 
 create index if not exists idx_pending_bookings_client_status
   on pending_bookings (client_id, status);
@@ -407,6 +410,9 @@ drop index if exists idx_plan_orders_one_scheduled_key;
 create unique index if not exists idx_plan_orders_one_scheduled_key_family
   on pending_plan_orders (client_id, key_family)
   where status='SCHEDULED' and is_key;
+create index if not exists idx_plan_orders_paid_client
+  on pending_plan_orders (client_id, paid_at, id)
+  where paid_at is not null;
 
 -- Bar-only Wave orders: a menu order attached to a booking the client paid
 -- with their abonnement (that flow has no payment link, so the bar can't ride
@@ -1995,4 +2001,41 @@ alter table outbound_nudges add constraint outbound_nudges_arm_check
 -- Résolution rapide d'un statut Meta 'failed' async → la ligne à repasser FAILED.
 create index if not exists idx_outbound_nudges_wamid
   on outbound_nudges (wa_message_id) where wa_message_id is not null;
+create index if not exists idx_outbound_nudges_kind_assigned
+  on outbound_nudges (kind, assigned_at);
+
+-- Durable, daily read-only projection of Meta Ads Insights.
+create table if not exists ad_insights_daily (
+  day date not null,
+  ad_id text not null,
+  ad_name text,
+  adset_id text,
+  adset_name text,
+  campaign_id text not null,
+  campaign_name text,
+  spend numeric(12,2) not null default 0,
+  impressions integer not null default 0,
+  clicks integer not null default 0,
+  link_clicks integer not null default 0,
+  results integer not null default 0,
+  account_currency text,
+  synced_at timestamptz not null default now(),
+  primary key (day, ad_id)
+);
+create index if not exists idx_ad_insights_day on ad_insights_daily (day);
+create index if not exists idx_ad_insights_campaign
+  on ad_insights_daily (campaign_id, day);
+
+create table if not exists ad_insights_sync_state (
+  id smallint primary key default 1 check (id = 1),
+  last_started_at timestamptz,
+  last_succeeded_at timestamptz,
+  last_error text,
+  record_count integer not null default 0,
+  account_timezone text,
+  account_currency text,
+  account_status integer,
+  updated_at timestamptz not null default now()
+);
+insert into ad_insights_sync_state (id) values (1) on conflict (id) do nothing;
 `;

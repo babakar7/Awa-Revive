@@ -72,6 +72,10 @@ export async function setup(): Promise<void> {
     WA_ACCESS_TOKEN: "test-wa-token",
     WA_APP_SECRET: "test-app-secret",
     WA_VERIFY_TOKEN: "test-verify-token",
+    META_ADS_TOKEN: "test-meta-ads-token",
+    META_AD_ACCOUNT_ID: "act_1873234112963855",
+    META_GRAPH_VERSION: "v25.0",
+    AD_CAMPAIGN_MAP: "9001:pack_decouverte_ctwa",
 
     // Wix
     WIX_API_KEY: "test-wix-key",
@@ -107,6 +111,9 @@ export async function setup(): Promise<void> {
     // App
     BASE_URL: "http://localhost:3000",
     PAYMENT_LINK_TTL_MINUTES: "20",
+    INVITEE_PLAN_ID: "key-invitee",
+    HABITUEE_PLAN_ID: "key-habituee",
+    RESIDENTE_PLAN_ID: "key-residente",
   });
 }
 

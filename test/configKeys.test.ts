@@ -63,6 +63,11 @@ describe("Clés production preflight", () => {
     expect(() => assertConfig()).toThrow(/HABITUEE_BONUS_PLAN_ID/);
   });
 
+  it("never prevents the bot from booting for an invalid optional ads mapping", async () => {
+    const { assertConfig } = await loadConfig({ AD_CAMPAIGN_MAP: "not-a-campaign-map" });
+    expect(() => assertConfig()).not.toThrow();
+  });
+
   it("boots with the Aquabike/sur-mesure vars unset (they are never required)", async () => {
     const { assertConfig } = await loadConfig();
     // requiredBase never sets SUR_MESURE_/AQUABIKE_* — boot must still succeed.

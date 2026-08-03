@@ -5,6 +5,8 @@ import type {
 } from "../domain/bookingFunnel.js";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import { escapeHtml as esc, fmtDate, fmtFcfa } from "./helpers.js";
+import type { AdAcquisitionDashboard } from "../domain/adAcquisition.js";
+import { renderAdAcquisition } from "./adAcquisitionPage.js";
 
 const STAGE_LABELS: Record<string, string> = {
   availability_requested: "Disponibilité demandée",
@@ -49,7 +51,11 @@ function conversionCard(label: string, metrics: BookingConversionMetrics): strin
   </div></article>`;
 }
 
-export function renderConversionPage(data: BookingConversionDashboard): string {
+export function renderConversionPage(
+  data: BookingConversionDashboard,
+  acquisition?: AdAcquisitionDashboard,
+  owner = false,
+): string {
   const stages = data.thirtyDays.stages
     .map((row) => {
       const week = stageAt(data.sevenDays, row.stage);
@@ -75,7 +81,9 @@ export function renderConversionPage(data: BookingConversionDashboard): string {
     .join("");
 
   const recovery = data.thirtyDays.expiryRecovery;
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Conversion commerciale</span><h2>Parcours de réservation</h2><p>Du premier contrôle de disponibilité à la réservation Wix. Les conversations équipe/test sont exclues.</p></div></header>
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Conversion commerciale</span><h2>Acquisition & parcours de réservation</h2><p>Dépense publicitaire, ventes de Clés et conversion jusqu’à la réservation Wix.</p></div></header>
+${acquisition ? renderAdAcquisition(acquisition, owner) : ""}
+<div class="section-header"><div><span class="eyebrow">Funnel existant</span><h2>Parcours de réservation</h2><p class="muted">Du premier contrôle de disponibilité à la réservation Wix. Les conversations équipe/test sont exclues.</p></div></div>
 <div class="col">${conversionCard("7 derniers jours", data.sevenDays)}${conversionCard("30 derniers jours", data.thirtyDays)}</div>
 <div class="section-header"><div><span class="eyebrow">Étapes</span><h2>Où les clients s’arrêtent</h2></div></div>
 <div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Étape</th><th>7 jours</th><th>30 jours</th></tr></thead><tbody>${stages}</tbody></table></div><p class="muted">Un abandon volontaire reste neutre pour la qualité de service, mais ne compte jamais comme une vente terminée ici.</p></div>

@@ -31,6 +31,7 @@ import { closeInactiveBookingJourneys } from "./domain/bookingFunnel.js";
 import { sweepDueKeyBonuses } from "./domain/keyProvisioning.js";
 import { sweepKeyNudges } from "./domain/keyNudge.js";
 import { syncAttendanceLeaderboard } from "./domain/attendanceLeaderboard.js";
+import { syncAdInsights } from "./domain/adInsightsSync.js";
 import { sweepOmVerifications } from "./domain/orangeMoneyVerification.js";
 
 async function main() {
@@ -93,6 +94,9 @@ async function main() {
   // the background and every later run is capped to once per hour.
   void syncAttendanceLeaderboard().catch((err) =>
     app.log.warn({ err }, "Initial Wix attendance sync failed"),
+  );
+  void syncAdInsights().catch((err) =>
+    app.log.warn({ err }, "Initial Meta Ads sync failed"),
   );
 
   // Periodic TTL sweep: AWAITING_PAYMENT past link_expires_at → EXPIRED.
@@ -215,6 +219,12 @@ async function main() {
       if (synced.ran) app.log.info({ attendanceRecords: synced.recordCount }, "Wix attendance synced");
     } catch (err) {
       app.log.warn({ err }, "Wix attendance sync failed");
+    }
+    try {
+      const synced = await syncAdInsights();
+      if (synced.ran) app.log.info({ adInsightRecords: synced.recordCount }, "Meta Ads insights synced");
+    } catch (err) {
+      app.log.warn({ err }, "Meta Ads insights sync failed");
     }
     try {
       // Story Instagram du soir : image des cours de demain envoyée au gérant

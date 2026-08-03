@@ -22,6 +22,14 @@ export const config = {
   WA_ACCESS_TOKEN: required("WA_ACCESS_TOKEN"),
   WA_APP_SECRET: required("WA_APP_SECRET"),
   WA_VERIFY_TOKEN: required("WA_VERIFY_TOKEN"),
+  // Read-only Meta Ads reporting. Optional so ads configuration can never
+  // prevent the WhatsApp service from booting.
+  META_ADS_TOKEN: optional("META_ADS_TOKEN", ""),
+  META_AD_ACCOUNT_ID: optional("META_AD_ACCOUNT_ID", ""),
+  META_GRAPH_VERSION: optional("META_GRAPH_VERSION", "v25.0"),
+  // Comma-separated `campaign_id:campaign_key` pairs. The ads domain parses
+  // this fail-closed and disables only the Meta projection when malformed.
+  AD_CAMPAIGN_MAP: optional("AD_CAMPAIGN_MAP", ""),
   // Approved Utility template used to notify reception when the 24h window is
   // closed (free-form text then fails with error 131047). Empty = no fallback.
   // Must have exactly 2 body variables: {{1}} subject, {{2}} flattened detail.

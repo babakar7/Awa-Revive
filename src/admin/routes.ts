@@ -176,6 +176,8 @@ import { renderClientWorkspace, renderThread, threadSignature } from "./clientWo
 import * as adminOps from "../domain/adminOperations.js";
 import { renderAdminReport, renderAuditPage } from "./reportPage.js";
 import { bookingConversionDashboard } from "../domain/bookingFunnel.js";
+import { adAcquisitionDashboard, setUsdXofRate } from "../domain/adAcquisition.js";
+import { syncAdInsights } from "../domain/adInsightsSync.js";
 import { renderConversionPage } from "./conversionPage.js";
 import { renderSubscriptionsReference } from "./subscriptionsReferencePage.js";
 import {
@@ -566,14 +568,52 @@ export function registerAdmin(app: FastifyInstance): void {
         reply.type("text/html").send(await layout("Rapport", "/admin/rapport", renderAdminReport(report, req.adminRole === "owner"), { subtitle: `${period} jours`, contentWidth: "wide" }));
       });
 
-      admin.get("/conversion", async (_req, reply) => {
-        const dashboard = await bookingConversionDashboard();
+      admin.get("/conversion", async (req, reply) => {
+        const [dashboard, acquisition] = await Promise.all([
+          bookingConversionDashboard(),
+          adAcquisitionDashboard(),
+        ]);
+        const query = req.query as Record<string, string | undefined>;
+        const notice = query.done
+          ? `<div class="card success"><b>${escapeHtml(query.done)}</b></div>`
+          : query.err
+            ? `<div class="card warn"><b>${escapeHtml(query.err)}</b></div>`
+            : "";
         reply.type("text/html").send(
-          await layout("Conversion", "/admin/conversion", renderConversionPage(dashboard), {
-            subtitle: "Parcours de réservation",
+          await layout("Conversion", "/admin/conversion", notice + renderConversionPage(dashboard, acquisition, req.adminRole === "owner"), {
+            subtitle: "Acquisition & réservation",
             contentWidth: "wide",
           }),
         );
+      });
+
+      admin.post("/conversion/resync-ads", async (req, reply) => {
+        if (req.adminRole !== "owner") {
+          return reply.code(403).type("text/plain").send("Accès propriétaire requis.");
+        }
+        try {
+          const result = await syncAdInsights(true);
+          const message = result.ran
+            ? `${result.recordCount} lignes Meta synchronisées.`
+            : result.message ?? "Aucune synchronisation nécessaire.";
+          return reply.redirect(`/admin/conversion?done=${encodeURIComponent(message)}`, 303);
+        } catch (error) {
+          req.log.warn({ err: error }, "Meta Ads manual sync failed");
+          return reply.redirect(`/admin/conversion?err=${encodeURIComponent("Synchronisation Meta indisponible")}`, 303);
+        }
+      });
+
+      admin.post("/conversion/ads-fx", async (req, reply) => {
+        if (req.adminRole !== "owner") {
+          return reply.code(403).type("text/plain").send("Accès propriétaire requis.");
+        }
+        try {
+          const rate = Number((req.body as Record<string, string> | undefined)?.rate);
+          await setUsdXofRate(rate);
+          return reply.redirect(`/admin/conversion?done=${encodeURIComponent("Taux USD→XOF enregistré.")}`, 303);
+        } catch (error) {
+          return reply.redirect(`/admin/conversion?err=${encodeURIComponent(error instanceof Error ? error.message : "Taux invalide")}`, 303);
+        }
       });
 
       // ---------- Classement des présences ----------
