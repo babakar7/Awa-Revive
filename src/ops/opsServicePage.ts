@@ -421,7 +421,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
   // ---- order composer ----
   function overlay(){ return el('div','ov'); }
 
-  // Native confirm() renders OK/Annuler — ambiguous when the question IS
+  // The native confirm dialog renders OK/Annuler — ambiguous when the question IS
   // « Annuler ? ». Here each button carries its verb; escape routes (backdrop
   // tap, initial focus) all mean « garder », the safe default.
   function askConfirm(question,yesLabel,noLabel,onYes){
