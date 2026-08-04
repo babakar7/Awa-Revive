@@ -1,7 +1,8 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **3 août 2026** — garde serveur premier contact et
+> Dernière mise à jour : **4 août 2026** — alerte owner à chaque tentative de
+> paiement OM/Max It. Avant : garde serveur premier contact et
 > questions multiples. Avant : abonnements généralisés :
 > L'Abonnement Aquabike + plan sur mesure automatisés (familles de clés,
 > coexistence, admin « Abonnements »). Avant : relance A des leads pub silencieux
@@ -19,6 +20,30 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Alerte owner à chaque tentative de paiement OM/Max It (4 août 2026)
+
+Tant que les callbacks Sonatel restent silencieusement perdus (panne du 31/07),
+un paiement OM/Max It réel peut ne laisser AUCUNE trace locale. Jusqu'ici
+l'équipe n'était prévenue qu'à l'EXPIRATION du lien (nudge) ou si le client se
+plaignait. Désormais le gérant est alerté sur WhatsApp dès la CRÉATION d'un
+lien/QR OM ou Max It — c'est-à-dire à chaque tentative de paiement — pour
+surveiller le portail marchand et réconcilier via `/admin/paiements-om`.
+
+- Point d'accroche unique : `createClientPaymentSession`
+  ([src/domain/paymentSession.ts](src/domain/paymentSession.ts)) après succès du
+  QR Sonatel → couvre les 7 outils agent (cours, abonnements, bar, livraisons)
+  ET le flux web `/commander`. Wave non concerné.
+- [src/domain/omAttemptAlert.ts](src/domain/omAttemptAlert.ts) : retrouve la
+  commande (union des 4 tables d'ordres, la ligne existe toujours avant la
+  session) + la cliente, puis `notifyReception` avec sujet `⚠️ Paiement …
+  à réconcilier manuellement` → copie owner automatique (marqueur ⚠,
+  cf. `ownerAlertRules`). Numéro Équipe/test → préfixe `🧪 TEST` : journalisé
+  mais ne réveille personne. Fire-and-forget : n'impacte jamais le flux de
+  paiement. Actif panne ou pas (le callback peut se reperdre en silence —
+  c'est exactement l'incident du 31/07).
+- Tests : [test/omAttemptAlert.test.ts](test/omAttemptAlert.test.ts) (format,
+  Max It vs OM, fallback si ligne introuvable, suppression owner sur test).
 
 ## Premier contact + questions multiples : réponse complète avant tout envoi (3 août 2026)
 

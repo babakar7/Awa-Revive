@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import * as wave from "../lib/wave.js";
 import * as om from "../lib/orangeMoney.js";
 import { withTransientRetry } from "../lib/retry.js";
+import { notifyOmPaymentAttempt } from "./omAttemptAlert.js";
 
 export type MobilePaymentMethod = "wave" | "orange_money" | "maxit";
 
@@ -70,5 +71,14 @@ export async function createClientPaymentSession(args: {
       ? new Date(Math.min(qr.validUntil.getTime(), Date.now() + ttlMin * 60_000))
       : new Date(Date.now() + ttlMin * 60_000);
   console.log(`[pay] om/${args.method} session ${Date.now() - t0}ms qrId=${qr.qrId}`);
+  // Les callbacks Sonatel peuvent se perdre silencieusement (panne 31/07) :
+  // le gérant est prévenu de CHAQUE tentative OM/Max It pour pouvoir
+  // réconcilier manuellement via /admin/paiements-om.
+  notifyOmPaymentAttempt({
+    orderId: args.clientReference,
+    method: args.method,
+    amountXof: args.amountXof,
+    fallbackLabel: args.name,
+  });
   return { sessionId: qr.qrId, paymentLink: link, expiresAt, method: args.method };
 }
