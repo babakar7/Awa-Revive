@@ -19,6 +19,20 @@ function loadBusinessInfo(): string {
   }
 }
 
+let mapsUrlCache: string | null | undefined;
+
+/**
+ * Canonical Google Maps link from business-info.md (single source of truth for
+ * the studio address). Used by the coverage guard's deterministic location
+ * append; null when business-info carries no maps link.
+ */
+export function businessMapsUrl(): string | null {
+  if (mapsUrlCache === undefined) {
+    mapsUrlCache = loadBusinessInfo().match(/https:\/\/maps\.app\.goo\.gl\/[A-Za-z0-9]+/)?.[0] ?? null;
+  }
+  return mapsUrlCache;
+}
+
 /**
  * Stable system prompt (SPEC §6). Kept byte-identical across requests so the
  * prompt-cache prefix holds; anything dynamic (date, client state) goes into a

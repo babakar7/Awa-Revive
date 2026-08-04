@@ -8,11 +8,13 @@ import { sendText, sendTypingIndicator, type WhatsAppReferral } from "../lib/wha
 import { findContactByPhone } from "../lib/wix.js";
 import { getCafeMenu } from "../lib/cafeMenu.js";
 import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
-import { systemPrompt, dynamicContext } from "./systemPrompt.js";
+import { systemPrompt, dynamicContext, businessMapsUrl } from "./systemPrompt.js";
 import {
   lintOutboundReply,
   correctiveLintInstruction,
   canToolResultApprovePaymentUrl,
+  extractUrls,
+  isPaymentUrl,
   normalizeUrl,
   TOOL_TRACE_MARKER,
 } from "./outboundLint.js";
@@ -51,6 +53,7 @@ import {
   deriveReplyRequirements,
   logOutboundIntroRepair,
   missingReplyRequirements,
+  appendMissingCoverageInfo,
   repairFirstContactIntro,
   replyRequirementsInstruction,
   type IntroRepairResult,
@@ -1226,9 +1229,13 @@ export async function handleInboundText(args: {
   if (replyOutcome !== "deliver") replyText = null;
   else replyText = stripNoReplySentinel(replyText);
 
-  // Presentation is deterministically repairable. Do it before asking the
-  // model to rewrite so a valid business answer is never thrown away solely
-  // because its greeting or automated identity was omitted.
+  // Coverage policy (04/08 — three lost leads in one morning): a deliverable
+  // reply is NEVER discarded for coverage reasons. Presentation is repaired in
+  // place, static facts are appended after the lint stage, and ONE model
+  // rewrite is attempted only when something non-appendable is missing AND the
+  // reply carries no server-approved payment link — a rewrite must never risk
+  // dropping a real checkout link (Bitty 04/08: a paid Wave link was thrown
+  // away over a stray question mark). Only the safety lint below may block.
   if (replyText) {
     introRepair = repairFirstContactIntro(replyText, replyRequirements, {
       language: client.language ?? lang,
@@ -1237,7 +1244,10 @@ export async function handleInboundText(args: {
     });
     replyText = introRepair.text;
     const missing = missingReplyRequirements(replyText, replyRequirements);
-    if (missing.length > 0) {
+    const carriesApprovedPaymentLink = extractUrls(replyText).some(
+      (url) => isPaymentUrl(url) && approvedPaymentUrls.has(normalizeUrl(url)),
+    );
+    if (missing.length > 0 && !carriesApprovedPaymentLink) {
       console.warn(`Outbound reply missing required business coverage (${missing.join(", ")}) — corrective retry`);
       try {
         const corrected = await withOverloadRetry(
@@ -1268,16 +1278,11 @@ export async function handleInboundText(args: {
         ) {
           introRepair = repairedRetry;
           replyText = repairedRetry.text;
-        } else {
-          introRepair = null;
-          replyText = null;
-          loopError = loopError ?? new Error(`outbound_coverage_failed:${missing.join(",")}`);
         }
+        // A failed rewrite keeps the repaired original — the append stage
+        // below completes what it can; delivery is never sacrificed.
       } catch (err) {
-        console.error("Corrective coverage retry failed:", err);
-        introRepair = null;
-        replyText = null;
-        loopError = loopError ?? new Error("outbound_coverage_retry_error");
+        console.error("Corrective coverage retry failed — delivering the repaired original:", err);
       }
     }
   }
@@ -1315,9 +1320,10 @@ export async function handleInboundText(args: {
         if (
           retried &&
           repairedRetry.segments.every((segment) => segment.length <= 4096) &&
-          lintOutboundReply(repairedRetry.text, approvedPaymentUrls).ok &&
-          missingReplyRequirements(repairedRetry.text, replyRequirements).length === 0
+          lintOutboundReply(repairedRetry.text, approvedPaymentUrls).ok
         ) {
+          // Safety is the only gate here — any coverage gap left in the
+          // rewrite is completed or logged by the append stage below.
           introRepair = repairedRetry;
           replyText = repairedRetry.text;
         } else {
@@ -1330,6 +1336,44 @@ export async function handleInboundText(args: {
         replyText = null;
         loopError = loopError ?? new Error("outbound_lint_retry_error");
       }
+    }
+  }
+
+  // Deterministic completion — LAST, on whatever text survived the safety
+  // lint: append the server-known static facts still missing (address, booking
+  // method, planning link) instead of ever degrading to the technical
+  // fallback. Anything non-appendable (e.g. a stray question) is logged for
+  // the review sweep, never fatal.
+  if (replyText) {
+    const stillMissing = missingReplyRequirements(replyText, replyRequirements);
+    if (stillMissing.length > 0) {
+      const appendResult = appendMissingCoverageInfo(replyText, stillMissing, {
+        language: client.language ?? lang,
+        formal: client.fr_register === "vous",
+        mapsUrl: businessMapsUrl(),
+      });
+      if (appendResult.appended.length > 0 && introRepair) {
+        const merged = appendResult.text;
+        if (introRepair.segments.length === 1 && merged.length <= 4096) {
+          introRepair = { ...introRepair, text: merged, segments: [merged] };
+          replyText = merged;
+        } else {
+          // Preserve the existing safe split; the facts ride as their own message.
+          introRepair = {
+            ...introRepair,
+            text: merged,
+            segments: [...introRepair.segments, appendResult.lines.join("\n")],
+          };
+          replyText = merged;
+        }
+      } else if (appendResult.appended.length > 0) {
+        replyText = appendResult.text;
+      }
+      const remaining = missingReplyRequirements(replyText, replyRequirements);
+      console.warn(
+        `[outbound_coverage_degraded] client=${client.id} appended=${appendResult.appended.join(",") || "none"} ` +
+          `remaining=${remaining.join(",") || "none"}`,
+      );
     }
   }
 

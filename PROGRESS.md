@@ -1,7 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **4 août 2026** — retard client = simple accusé de
+> Dernière mise à jour : **4 août 2026** — le garde de couverture ne peut PLUS
+> jeter une réponse livrable (réparation + ajout déterministe, seul le lint
+> sécurité bloque). Avant : retard client = simple accusé de
 > réception ; langue ancrée sur les messages du CLIENT (pas le prefill web).
 > Avant : alerte owner à chaque tentative de
 > paiement OM/Max It. Avant : garde serveur premier contact et
@@ -22,6 +24,45 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Le garde de couverture ne sacrifie PLUS JAMAIS une réponse livrable (4 août 2026)
+
+Trois leads perdus le même matin par le même mécanisme, dont un CHECKOUT PAYANT :
+
+- **Awa Ka 09:31** : premier contact « Clé Invité » → salutation/identité
+  manquantes → 2 échecs → « problème technique » (garde v1, avant la réparation).
+- **Aicha Sy Gaye 10:05** : même rejet `present_options`, puis le déploiement du
+  correctif v2 (3ea7380) a remplacé le conteneur PENDANT sa réécriture — le
+  drain SIGTERM est plafonné à 25 s, le process est mort en vol : aucune
+  réponse, aucun fallback, aucun alerte (webhook déjà ACKé → jamais relivré).
+- **Bitty 11:56** : « Ok pour le paiement et m'envoyer la localisation » → lien
+  Wave L'Invitée CRÉÉ (30 000 F), réponse du modèle avec le lien… bloquée DEUX
+  fois par `no_unsolicited_question` (un « ? » de trop, et « ok pour le
+  paiement » n'était pas reconnu comme signal d'achat) → le lien payé est jeté,
+  la cliente reçoit « problème technique », Awa en pause 12 h.
+
+Décision (« une fois pour toutes ») : **une réponse livrable n'est JAMAIS
+convertie en panne pour une raison de couverture.** Le pipeline final devient :
+
+1. Réparation présentation (salutation/identité) — inchangé (v2).
+2. UNE réécriture modèle seulement s'il manque du non-ajoutable ET que la
+   réponse ne porte PAS de lien de paiement approuvé serveur (une réécriture ne
+   doit jamais risquer de perdre un vrai lien de checkout). Échec de réécriture
+   → on garde l'original réparé, on ne jette plus rien.
+3. Lint sécurité (lien fabriqué / syntaxe outil) — SEUL bloqueur restant, avec
+   sa retry ; l'acceptation de la retry ne dépend plus de la couverture.
+4. Ajout déterministe FINAL des faits statiques manquants : adresse (lien Maps
+   extrait de business-info.md via `businessMapsUrl()`), méthode de réservation
+   (fr/en/wo, tu/vous), lien planning. Le reste (ex. question superflue) est
+   loggé `[outbound_coverage_degraded]`, jamais fatal.
+
+Aussi : `hasBuyingSignal` reconnaît désormais « ok pour le paiement », « je
+paie », etc. — une confirmation d'achat n'impose plus le zéro-question.
+Fichiers : [src/agent/replyCoverage.ts](src/agent/replyCoverage.ts)
+(`appendMissingCoverageInfo`), [src/agent/index.ts](src/agent/index.ts)
+(pipeline final), [src/agent/systemPrompt.ts](src/agent/systemPrompt.ts)
+(`businessMapsUrl`). Reste ouvert (PHASE2) : file d'attente durable des
+messages entrants pour survivre au remplacement de conteneur (cas Aicha).
 
 ## Retard client + ancrage de langue (conversation Sourcils Senegal, 4 août 2026)
 

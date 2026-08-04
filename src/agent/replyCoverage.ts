@@ -73,7 +73,14 @@ function hasBuyingSignal(text: string): boolean {
     /\b(?:je veux|je voudrais|j aimerais|je souhaite|on veut|nous voulons)\b.{0,25}\b(?:reserv|book)/.test(text) ||
     /\b(?:pouvez[- ]vous|peux[- ]tu|can you)\b.{0,30}\b(?:reserv|book)/.test(text) ||
     /\b(?:reserve|reservez|book)\b.{0,12}\b(?:moi|nous|me|us)\b/.test(text) ||
-    /\b(?:je prends|je choisis)\b/.test(text)
+    /\b(?:je prends|je choisis)\b/.test(text) ||
+    // Mid-checkout confirmations ("Ok pour le paiement et la localisation",
+    // prod Bitty 04/08): agreeing to pay IS a buying signal even without a
+    // "réserver" verb — the informational side-question must not turn the
+    // reply into a no-CTA-required informational answer.
+    /\b(?:ok|oui|d accord|dacc?ord|go|allons[- ]y)\b.{0,20}\b(?:paiement|paye?r|payment|pay)\b/.test(text) ||
+    /\b(?:je|i)\b.{0,12}\b(?:paie|paye|pay)\b/.test(text) ||
+    /\b(?:paiement|payment)\b.{0,10}\b(?:ok|oui|valide|confirme)\b/.test(text)
   );
 }
 
@@ -218,6 +225,56 @@ export function repairFirstContactIntro(
   const after = original.slice(insertionAt);
   const segments = [`${before}${inserted}`.trimEnd(), after].filter((segment) => segment.length > 0);
   return { text, segments, repaired: true, added, language };
+}
+
+export interface CoverageAppendResult {
+  text: string;
+  appended: ReplyRequirement[];
+  /** The appended lines alone — for callers that must ship them as their own segment. */
+  lines: string[];
+}
+
+/**
+ * Last-resort deterministic completion: append the static facts the reply
+ * still misses instead of ever discarding a deliverable answer. Only
+ * requirements whose answer is server-known static truth are appendable
+ * (location, booking method, planning link); anything else stays a logged
+ * gap. Never touches the model-authored text above the appended lines.
+ */
+export function appendMissingCoverageInfo(
+  reply: string,
+  missing: readonly ReplyRequirement[],
+  options: { language?: string | null; formal?: boolean; mapsUrl?: string | null } = {},
+): CoverageAppendResult {
+  const language = repairLanguage(options.language);
+  const lines: string[] = [];
+  const appended: ReplyRequirement[] = [];
+  if (missing.includes("location") && options.mapsUrl) {
+    lines.push(`📍 Revive — Almadies, Dakar : ${options.mapsUrl}`);
+    appended.push("location");
+  }
+  if (missing.includes("booking_method")) {
+    lines.push(
+      language === "en"
+        ? "You can book directly here with me 😊 (or on www.revive.sn)"
+        : language === "wo"
+          ? "Mën nga réserver fii ak man 😊 (walla ci www.revive.sn)"
+          : options.formal === true
+            ? "Vous pouvez réserver directement ici avec moi 😊 (ou sur www.revive.sn)"
+            : "Tu peux réserver directement ici avec moi 😊 (ou sur www.revive.sn)",
+    );
+    appended.push("booking_method");
+  }
+  if (missing.includes("schedule_overview")) {
+    lines.push(
+      language === "en"
+        ? "Full weekly schedule: www.revive.sn/planning"
+        : "Planning complet de la semaine : www.revive.sn/planning",
+    );
+    appended.push("schedule_overview");
+  }
+  if (lines.length === 0) return { text: reply, appended, lines };
+  return { text: `${reply.trim()}\n\n${lines.join("\n")}`, appended, lines };
 }
 
 export function logOutboundIntroRepair(args: {

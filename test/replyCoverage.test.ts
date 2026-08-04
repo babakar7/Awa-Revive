@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendMissingCoverageInfo,
   deriveReplyRequirements,
   missingReplyRequirements,
   repairFirstContactIntro,
@@ -180,5 +181,61 @@ describe("get_class_schedule tool contract", () => {
       ],
     });
     expect(result.message).toContain("Nothing was sent");
+  });
+});
+
+describe("mid-checkout buying signal (prod Bitty 04/08)", () => {
+  it("never adds no_unsolicited_question when the client agrees to pay", () => {
+    const requirements = deriveReplyRequirements(
+      "Bonjour Awa\nOk pour le paiement et m’envoyer la localisation par la même occasion",
+      false,
+    );
+    expect(requirements).toContain("location");
+    expect(requirements).not.toContain("no_unsolicited_question");
+  });
+
+  it("still treats a pure informational ask as no-CTA", () => {
+    const requirements = deriveReplyRequirements("Vous êtes où exactement ?", false);
+    expect(requirements).toContain("location");
+    expect(requirements).toContain("no_unsolicited_question");
+  });
+});
+
+describe("appendMissingCoverageInfo", () => {
+  const MAPS = "https://maps.app.goo.gl/jJS8rS3sV5j41SGc9";
+
+  it("appends the address and satisfies the location requirement", () => {
+    const reply = "Voici ton lien Wave : https://pay.wave.com/c/cos-x?a=30000";
+    const result = appendMissingCoverageInfo(reply, ["location"], { language: "fr", mapsUrl: MAPS });
+    expect(result.appended).toEqual(["location"]);
+    expect(result.text.startsWith(reply)).toBe(true);
+    expect(missingReplyRequirements(result.text, ["location"])).toEqual([]);
+  });
+
+  it("appends booking method (register- and language-aware) and the planning link", () => {
+    const formal = appendMissingCoverageInfo("Bien reçu.", ["booking_method", "schedule_overview"], {
+      language: "fr",
+      formal: true,
+    });
+    expect(formal.text).toContain("Vous pouvez réserver directement ici");
+    expect(formal.text).toContain("www.revive.sn/planning");
+    expect(missingReplyRequirements(formal.text, ["booking_method"])).toEqual([]);
+
+    const english = appendMissingCoverageInfo("Got it.", ["booking_method"], { language: "en" });
+    expect(english.text).toContain("You can book directly here with me");
+    expect(missingReplyRequirements(english.text, ["booking_method"])).toEqual([]);
+  });
+
+  it("leaves the reply untouched when nothing is appendable", () => {
+    const reply = "Tu préfères quel créneau ?";
+    const result = appendMissingCoverageInfo(reply, ["no_unsolicited_question"], { language: "fr" });
+    expect(result.appended).toEqual([]);
+    expect(result.text).toBe(reply);
+  });
+
+  it("skips the location line without a maps url rather than inventing one", () => {
+    const result = appendMissingCoverageInfo("Ok.", ["location"], { language: "fr", mapsUrl: null });
+    expect(result.appended).toEqual([]);
+    expect(result.text).toBe("Ok.");
   });
 });
