@@ -29,7 +29,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v13";
+const ASSET_VERSION = "v14";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -112,6 +112,9 @@ min-height:2.75rem;padding:.45rem .9rem;font-size:.85rem;font-weight:700}
 #bell[hidden]{display:none}
 #hist{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
 min-height:2.75rem;padding:.45rem .8rem;font-size:1rem;font-weight:700}
+.sndbtn{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
+min-height:2.75rem;padding:.45rem .8rem;font-size:1rem;font-weight:700}
+.sndbtn.off{background:var(--cream-100);color:var(--ink-500);border-color:var(--border)}
 /* Occupied-tile indicative subtotal (a service aid; the POS is the ledger). */
 .subtot{display:flex;align-items:baseline;gap:.5rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border-soft)}
 .subtot .sl{font-size:.8rem;color:var(--ink-500)}
@@ -201,7 +204,7 @@ export function serviceBoardPage(bootJson: string): string {
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Salle")}<title>Salle Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
-<header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="hist" aria-label="Tables récentes">🕐</button><button id="bell" hidden>🔔 Alertes</button><span class="count" id="count"></span></header>
+<header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="hist" aria-label="Tables récentes">🕐</button><button id="snd" class="sndbtn" aria-label="Activer/couper le son">🔊</button><button id="bell" hidden>🔔 Alertes</button><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
 <script>window.__BOOT__=${bootJson}</script>
@@ -281,14 +284,49 @@ export const SERVICE_APP_JS = String.raw`(function(){
   function ticketsOf(sid){ var out=[]; tickets.forEach(function(t){ if(t.session_id===sid) out.push(t); }); return out.sort(function(a,b){return new Date(a.created_at)-new Date(b.created_at);}); }
   function capLabel(sp){ if(sp.capacity==null) return ''; return sp.capacity_max? sp.capacity+'–'+sp.capacity_max+' pers.' : sp.capacity+' pers.'; }
 
-  // ---- audio (unlocked on first gesture) ----
+  // ---- sound & voice (unlocked on first gesture; iOS requirement) ----
+  // Servers aren't glued to the iPad, so the board speaks new commandes (Web
+  // Speech API, OS voices, no network). Header 🔊/🔇 toggle (persisted) mutes both.
+  var sndBtn=document.getElementById('snd');
+  var muted=false; try{ muted=localStorage.getItem('service.sound')==='off'; }catch(e){}
+  function paintSnd(){ if(sndBtn){ sndBtn.textContent=muted?'🔇':'🔊'; sndBtn.classList.toggle('off',muted); } }
+  paintSnd();
+  // Voices load asynchronously — grab them now and whenever the browser fires
+  // voiceschanged, so the first real announcement isn't spoken into the void.
+  var voices=[];
+  function loadVoices(){ if(!window.speechSynthesis) return; try{ voices=speechSynthesis.getVoices()||[]; }catch(e){} }
+  if(window.speechSynthesis){ loadVoices(); try{ speechSynthesis.onvoiceschanged=loadVoices; }catch(e){} }
+  function frVoice(){ for(var i=0;i<voices.length;i++){ if(((voices[i].lang||'').toLowerCase()).indexOf('fr')===0) return voices[i]; } return null; }
   var actx=null;
-  function unlock(){ if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(actx&&actx.state==='suspended'){ actx.resume(); } }
+  function unlock(){ if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(actx&&actx.state==='suspended'){ actx.resume(); }
+    // Warm speech on the gesture: resume any paused queue + ensure voices are loaded.
+    if(window.speechSynthesis){ try{ speechSynthesis.resume(); loadVoices(); }catch(e){} } }
   document.addEventListener('touchstart',unlock);
   document.addEventListener('click',unlock);
-  function beep(){ if(!actx) return; try{ var o=actx.createOscillator(),g=actx.createGain();
+  // Toggling the sound ON speaks a confirmation — a direct user gesture is the most
+  // reliable way to prove TTS works (and it primes it for the SSE-driven alerts).
+  if(sndBtn) sndBtn.onclick=function(){ muted=!muted; try{ localStorage.setItem('service.sound',muted?'off':'on'); }catch(e){} paintSnd();
+    if(muted){ try{ speechSynthesis.cancel(); }catch(e){} } else { unlock(); speak('Son activé'); } };
+  function beep(){ if(muted||!actx) return; try{ var o=actx.createOscillator(),g=actx.createGain();
     o.type='sine';o.frequency.value=760;g.gain.value=.001;o.connect(g);g.connect(actx.destination);
     var t=actx.currentTime;g.gain.exponentialRampToValueAtTime(.25,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.5);o.start(t);o.stop(t+.5);}catch(e){} }
+  function speak(text){ if(muted||!text||!window.speechSynthesis) return; try{
+    speechSynthesis.resume();                        // Chrome pauses the queue at times
+    var u=new SpeechSynthesisUtterance(text); u.lang='fr-FR'; var v=frVoice(); if(v) u.voice=v;
+    speechSynthesis.speak(u); }catch(e){} }
+  // Voice text mirrors the cuisine board: spot name first, then every line with
+  // qty, multi-option selections and per-line notes — nothing shown is unsaid.
+  function linePicked(l){ return Array.isArray(l.selections)&&l.selections.length>1
+    ? l.selections.map(function(s){return s.label+' : '+s.value;}).join(' · ')
+    : (l.choice||''); }
+  function itemsSpeech(t){ return (t.items||[]).map(function(l){ var p=linePicked(l);
+    return l.qty+' '+l.name+(p?', '+p:'')+(l.note?', '+l.note:''); }).join('. '); }
+  // Say the spot the servers know (Canapé/Terrasse/Pergola), not the ticket code.
+  function spotSpeech(t){ var s=t.session_id&&sessions.get(t.session_id);
+    if(s){ for(var i=0;i<SPOTS.length;i++){ if(SPOTS[i].id===s.spot_id) return SPOTS[i].label; } }
+    return t.subheading||t.heading||''; }
+  function newSpeech(t){ var w=spotSpeech(t); var it=itemsSpeech(t);
+    return 'Nouvelle commande'+(t.takeaway?' à emporter':'')+(w?', '+w:'')+(it?'. '+it:''); }
 
   function post(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
 
@@ -634,7 +672,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
   es.addEventListener('session_new',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); flashSpot(s.spot_id); });
   es.addEventListener('session_update',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); });
   es.addEventListener('session_closed',function(e){ var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
-  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; tickets.set(t.id,t); render(); });
+  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var isNew=!tickets.has(t.id); tickets.set(t.id,t); render(); if(isNew){ beep(); speak(newSpeech(t)); } });
   es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ beep(); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
   es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); render(); });
 
