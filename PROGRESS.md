@@ -25,6 +25,27 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## La salle parle : voix sur /ops/service pour les nouvelles commandes (4 août 2026)
+
+Demande Babakar : que la voix « dise la commande » quand une nouvelle commande
+arrive, sur /ops/cuisine ET /ops/service. Constat : la cuisine le faisait déjà
+(commit `5605c38`, la voix lit espace + lignes) ; **la salle n'avait aucune
+voix** — juste un bip, et seulement au passage READY.
+
+- /ops/service embarque désormais la même stack Web Speech que la cuisine :
+  à chaque `ticket_new` TABLE inédit, bip + annonce « Nouvelle commande
+  [à emporter], {espace}. {qté} {article}, {options}, {note}… ». La voix dit
+  le **nom de l'espace** (Canapé/Terrasse/Pergola) résolu via la session, pas
+  le code ticket (C-24) affiché en cuisine ; repli sur subheading/heading si
+  la session n'est pas encore dans le modèle.
+- Toggle 🔊/🔇 persisté (`localStorage service.sound`) dans le header, comme en
+  cuisine ; il coupe bip + voix, et l'activation prononce « Son activé » (le
+  geste utilisateur qui déverrouille TTS sur iOS).
+- `ASSET_VERSION` v13 → v14 pour purger le cache du service worker des iPads
+  (sinon l'app.js embarqué reste l'ancien et « rien ne change » en salle).
+- Le READY reste bip seul (pas de voix) — non demandé ; à élargir si l'accueil
+  le réclame.
+
 ## Le garde de couverture ne sacrifie PLUS JAMAIS une réponse livrable (4 août 2026)
 
 Trois leads perdus le même matin par le même mécanisme, dont un CHECKOUT PAYANT :
