@@ -91,7 +91,7 @@ export const ADMIN_CLIENT_JS = `
       panels.forEach(function(panel){
         panel.hidden=panel.getAttribute('data-acquisition-period-panel')!==period;
       });
-      if(copy)copy.textContent=period==='yesterday'?"Résultats d’hier":period==='30'?'Résultats des 30 derniers jours':'Résultats des 7 derniers jours';
+      if(copy)copy.textContent=period==='today'?"Résultats d’aujourd’hui":period==='yesterday'?"Résultats d’hier":period==='30'?'Résultats des 30 derniers jours':'Résultats des 7 derniers jours';
     }
     buttons.forEach(function(button,index){
       button.addEventListener('click',function(){selectAcquisitionPeriod(button.getAttribute('data-acquisition-period')||'7',false);});

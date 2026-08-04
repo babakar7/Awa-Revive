@@ -27,6 +27,7 @@ function dashboard(overrides: Partial<AdAcquisitionDashboard> = {}): AdAcquisiti
     sync:{last_started_at:new Date(),last_succeeded_at:new Date(),last_error:null,record_count:2,
       account_timezone:"America/Los_Angeles",account_currency:"USD",account_status:1,updated_at:new Date()},
     stale:false,currency:"USD",timezone:"America/Los_Angeles",fxRate:610,fxUpdatedAt:new Date(),
+    today:{...period,label:"Aujourd’hui",start:"2026-08-04",endExclusive:"2026-08-05"},
     yesterday:{...period,label:"Hier",start:"2026-08-02",endExclusive:"2026-08-03"},
     sevenDays:{...period,label:"7 jours"},thirtyDays:period,weeks:[],...overrides,
   };
@@ -42,11 +43,14 @@ describe("Meta acquisition admin section", () => {
     expect(html).toContain("&lt;Cinema&gt;");
     expect(html).not.toContain("<Cinema>");
     expect(html).toContain('role="tablist"');
+    expect(html).toContain('data-acquisition-period="today" aria-selected="false"');
     expect(html).toContain('data-acquisition-period="yesterday" aria-selected="false"');
     expect(html).toContain('data-acquisition-period="7" aria-selected="true"');
     expect(html).toContain('data-acquisition-period="30" aria-selected="false"');
     expect(html).toContain('data-acquisition-period-panel="30" role="tabpanel" aria-labelledby="acquisition-tab-30" hidden');
+    expect(html).toContain('data-acquisition-period-panel="today" role="tabpanel" aria-labelledby="acquisition-tab-today" hidden');
     expect(html).toContain('data-acquisition-period-panel="yesterday" role="tabpanel" aria-labelledby="acquisition-tab-yesterday" hidden');
+    expect(html).toContain("jour en cours");
     expect(html.indexOf("ad-roas-primary")).toBeLessThan(html.indexOf("Dépense livrée"));
   });
 

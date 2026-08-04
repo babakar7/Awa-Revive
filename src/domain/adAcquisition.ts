@@ -83,6 +83,7 @@ export interface AdAcquisitionDashboard {
   timezone: string;
   fxRate: number;
   fxUpdatedAt: Date | null;
+  today: AcquisitionPeriod;
   yesterday: AcquisitionPeriod;
   sevenDays: AcquisitionPeriod;
   thirtyDays: AcquisitionPeriod;
@@ -496,7 +497,8 @@ export async function adAcquisitionDashboard(): Promise<AdAcquisitionDashboard> 
   const startYesterday = addCalendarDays(today,-1);
   const start7 = addCalendarDays(today,-6);
   const start30 = addCalendarDays(today,-29);
-  const [yesterday,sevenDays,thirtyDays,weeks] = await Promise.all([
+  const [todayPeriod,yesterday,sevenDays,thirtyDays,weeks] = await Promise.all([
+    period({label:"Aujourd’hui",start:today,endExclusive,...args}),
     period({label:"Hier",start:startYesterday,endExclusive:today,...args}),
     period({label:"7 jours",start:start7,endExclusive,...args}),
     period({label:"30 jours",start:start30,endExclusive,...args}),
@@ -510,6 +512,6 @@ export async function adAcquisitionDashboard(): Promise<AdAcquisitionDashboard> 
     eligibilityError,
     sync,
     stale: !sync.last_succeeded_at || Date.now()-new Date(sync.last_succeeded_at).getTime()>2*60*60*1_000,
-    currency,timezone,fxRate:fx.rate,fxUpdatedAt:fx.updatedAt,yesterday,sevenDays,thirtyDays,weeks,
+    currency,timezone,fxRate:fx.rate,fxUpdatedAt:fx.updatedAt,today:todayPeriod,yesterday,sevenDays,thirtyDays,weeks,
   };
 }

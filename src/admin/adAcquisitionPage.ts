@@ -96,7 +96,7 @@ function cashSummary(period: AcquisitionPeriod, data: AdAcquisitionDashboard, fi
 }
 
 function periodPanel(
-  key: "yesterday" | "7" | "30",
+  key: "today" | "yesterday" | "7" | "30",
   period: AcquisitionPeriod,
   data: AdAcquisitionDashboard,
   financialReady: boolean,
@@ -106,7 +106,11 @@ function periodPanel(
   const delivery = metaUnavailable
     ? `<div class="card empty"><b>Dépense indisponible</b><p>Rattache la campagne Meta pour afficher la dépense ; les blocs DB ci-dessous restent disponibles.</p></div>`
     : deliveryCard(period.label,period.delivery,data.currency,data.fxRate,key!=="yesterday");
+  const partialNote = key === "today"
+    ? `<div class="card"><p><span class="badge badge--amber">jour en cours</span> Journée non close : dépense, leads et ventes s’accumulent encore. Un chiffre bas en cours de journée n’est pas une contre-performance — compare plutôt à Hier.</p></div>`
+    : "";
   return `<section id="acquisition-panel-${key}" data-acquisition-period-panel="${key}" role="tabpanel" aria-labelledby="acquisition-tab-${key}"${hidden}>
+${partialNote}
 ${financialReady&&!metaUnavailable?cohortSummary(period,data):""}
 ${delivery}
 <div class="section-header"><div><span class="eyebrow">Performance par pub · ${esc(period.label)}</span><h2>Dépense, Clés et ROAS</h2></div></div>
@@ -141,11 +145,13 @@ export function renderAdAcquisition(data: AdAcquisitionDashboard, owner: boolean
   const metaUnavailable = mappingUnavailable || !data.sync.last_succeeded_at;
   return `<section data-acquisition-dashboard><div class="section-header activity-section-header"><div><span class="eyebrow">Acquisition pubs Meta</span><h2>Dépense → conversations → Clés</h2><p class="activity-period-copy" data-acquisition-period-copy aria-live="polite">Résultats des 7 derniers jours</p></div>
 <div class="period-toggle" role="tablist" aria-label="Période des statistiques publicitaires">
+  <button id="acquisition-tab-today" type="button" role="tab" data-acquisition-period="today" aria-selected="false" aria-controls="acquisition-panel-today" tabindex="-1">Aujourd’hui</button>
   <button id="acquisition-tab-yesterday" type="button" role="tab" data-acquisition-period="yesterday" aria-selected="false" aria-controls="acquisition-panel-yesterday" tabindex="-1">Hier</button>
   <button id="acquisition-tab-7" type="button" role="tab" class="active" data-acquisition-period="7" aria-selected="true" aria-controls="acquisition-panel-7" tabindex="0">7 jours</button>
   <button id="acquisition-tab-30" type="button" role="tab" data-acquisition-period="30" aria-selected="false" aria-controls="acquisition-panel-30" tabindex="-1">30 jours</button>
 </div></div>
 ${warnings}
+${periodPanel("today",data.today,data,financialReady,metaUnavailable)}
 ${periodPanel("yesterday",data.yesterday,data,financialReady,metaUnavailable)}
 ${periodPanel("7",data.sevenDays,data,financialReady,metaUnavailable)}
 ${periodPanel("30",data.thirtyDays,data,financialReady,metaUnavailable)}
