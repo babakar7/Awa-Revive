@@ -1,10 +1,9 @@
 /**
  * Deterministic coverage guard for information-heavy client messages.
  *
- * Prompt instructions are useful guidance, but they cannot be the last word
- * when a tool sends directly to WhatsApp. These requirements are derived from
- * the inbound message before the model runs, then checked before any direct
- * tool delivery and again before ordinary model text is sent.
+ * First-contact presentation is repairable: omitting it must never erase an
+ * otherwise useful business answer. Business facts and unsafe content remain
+ * blocking requirements.
  */
 
 export type ReplyRequirement =
@@ -18,6 +17,17 @@ export type ReplyRequirement =
 export interface ReplyCoverageEvidence {
   /** The current message is the caption of the weekly schedule image. */
   scheduleAttached?: boolean;
+}
+
+export type IntroRepairLanguage = "fr" | "en" | "wo";
+
+export interface IntroRepairResult {
+  text: string;
+  /** One message normally; split only to preserve content at a channel limit. */
+  segments: string[];
+  repaired: boolean;
+  added: Array<"first_contact_greeting" | "automated_identity">;
+  language: IntroRepairLanguage;
 }
 
 function normalized(value: string): string {
@@ -90,18 +100,30 @@ export function deriveReplyRequirements(
   return requirements;
 }
 
+const GREETING_RE =
+  /\b(?:bonjour|bonsoir|salut|coucou|hello|hi|hey|good\s+(?:morning|afternoon|evening)|salam(?:aale[yi]kum)?|salaam(?:\s+maalekum)?|asalaam(?:u\s+maalekum)?|nanga\s+def)\b/i;
+
+function hasGreeting(reply: string): boolean {
+  return GREETING_RE.test(normalized(reply));
+}
+
+function hasAutomatedIdentity(reply: string): boolean {
+  const text = normalized(reply);
+  const automated =
+    /\bassistante? automatisee?\b/.test(text) ||
+    /\bautomated assistant\b/.test(text) ||
+    /\bassistant(?:e)? (?:bu|buy) automat/.test(text);
+  return automated && /\bawa\b/.test(text);
+}
+
 function satisfies(requirement: ReplyRequirement, reply: string, evidence: ReplyCoverageEvidence): boolean {
   const text = normalized(reply);
   const lower = reply.toLowerCase();
   switch (requirement) {
     case "first_contact_greeting":
-      return /\b(?:bonjour|bonsoir|salut|hello|hi|salam|salaam)\b/.test(text);
+      return hasGreeting(reply);
     case "automated_identity":
-      return (
-        /\bassistante? automatisee?\b/.test(text) ||
-        /\bautomated assistant\b/.test(text) ||
-        /\bassistant(?:e)? (?:bu|buy) automat/.test(text)
-      );
+      return hasAutomatedIdentity(reply);
     case "booking_method":
       return (
         /\b(?:reserv|book)/.test(text) &&
@@ -131,6 +153,85 @@ export function missingReplyRequirements(
   return requirements.filter((requirement) => !satisfies(requirement, reply, evidence));
 }
 
+function repairLanguage(language: string | null | undefined): IntroRepairLanguage {
+  return language === "en" || language === "wo" ? language : "fr";
+}
+
+function fixedIntro(language: IntroRepairLanguage, formal: boolean): { greeting: string; identity: string } {
+  if (language === "en") {
+    return { greeting: "Hi!", identity: "I’m Awa, Revive’s automated assistant 😊" };
+  }
+  if (language === "wo") {
+    return { greeting: "Nanga def!", identity: "Man Awa laa, Revive assistant bu otomaatig laa 😊" };
+  }
+  return {
+    greeting: formal ? "Bonjour !" : "Salut !",
+    identity: "Moi c'est Awa, je suis une assistante automatisée de Revive 😊",
+  };
+}
+
+function greetingEnd(text: string): number {
+  const match = GREETING_RE.exec(text);
+  if (!match || match.index === undefined) return 0;
+  const tail = text.slice(match.index + match[0].length).match(/^\s*[!,.…?]+/u)?.[0] ?? "";
+  const punctuationEnd = match.index + match[0].length + tail.length;
+  const spacing = text.slice(punctuationEnd).match(/^\s*/u)?.[0] ?? "";
+  return punctuationEnd + spacing.length;
+}
+
+/** Repair presentation only, retaining the complete model-authored answer. */
+export function repairFirstContactIntro(
+  reply: string,
+  requirements: readonly ReplyRequirement[],
+  options: { language?: string | null; formal?: boolean; maxLength?: number } = {},
+): IntroRepairResult {
+  const original = reply.trim();
+  const language = repairLanguage(options.language);
+  const maxLength = options.maxLength ?? Number.POSITIVE_INFINITY;
+  const needsGreeting = requirements.includes("first_contact_greeting") && !hasGreeting(original);
+  const needsIdentity = requirements.includes("automated_identity") && !hasAutomatedIdentity(original);
+  const added: IntroRepairResult["added"] = [];
+  if (needsGreeting) added.push("first_contact_greeting");
+  if (needsIdentity) added.push("automated_identity");
+  if (added.length === 0) {
+    return { text: original, segments: [original], repaired: false, added, language };
+  }
+
+  const intro = fixedIntro(language, options.formal === true);
+  let insertionAt = 0;
+  let inserted: string;
+  if (needsGreeting && needsIdentity) {
+    inserted = `${intro.greeting} ${intro.identity}\n\n`;
+  } else if (needsGreeting) {
+    inserted = `${intro.greeting}\n\n`;
+  } else {
+    insertionAt = greetingEnd(original);
+    inserted = `${insertionAt > 0 && !/\s$/u.test(original.slice(0, insertionAt)) ? " " : ""}${intro.identity}`;
+    if (original.slice(insertionAt).trim()) inserted += "\n\n";
+  }
+
+  const text = original.slice(0, insertionAt) + inserted + original.slice(insertionAt);
+  if (text.length <= maxLength || original.length > maxLength) {
+    return { text, segments: [text], repaired: true, added, language };
+  }
+  const before = original.slice(0, insertionAt);
+  const after = original.slice(insertionAt);
+  const segments = [`${before}${inserted}`.trimEnd(), after].filter((segment) => segment.length > 0);
+  return { text, segments, repaired: true, added, language };
+}
+
+export function logOutboundIntroRepair(args: {
+  clientId: string;
+  channel: "text" | "present_options" | "schedule_caption";
+  repair: IntroRepairResult;
+}): void {
+  if (!args.repair.repaired) return;
+  console.info(
+    `[outbound_intro_repaired] client=${args.clientId} channel=${args.channel} ` +
+      `language=${args.repair.language} added=${args.repair.added.join(",")}`,
+  );
+}
+
 const REQUIREMENT_INSTRUCTIONS: Record<ReplyRequirement, string> = {
   first_contact_greeting: "Open with a warm greeting that mirrors the client's language/register.",
   automated_identity: 'Introduce Awa explicitly as Revive\'s automated assistant (French exact words: "je suis une assistante automatisée").',
@@ -145,14 +246,15 @@ export function replyRequirementsInstruction(requirements: readonly ReplyRequire
   return (
     "\n\nCURRENT-TURN REQUIRED COVERAGE — server-enforced before WhatsApp delivery:\n" +
     requirements.map((requirement) => `- ${REQUIREMENT_INSTRUCTIONS[requirement]}`).join("\n") +
-    "\nIf you use present_options, its body must satisfy these requirements. If you use get_class_schedule, pass the complete client-facing answer in its message field; the image caption is the whole reply, so output <NO_REPLY> after it succeeds."
+    "\nFirst-contact greeting and automated identity are repaired deterministically if omitted. " +
+    "If you use present_options, its body must satisfy these requirements. If you use get_class_schedule, pass the complete client-facing answer in its message field; the image caption is the whole reply, so output <NO_REPLY> after it succeeds."
   );
 }
 
 export function correctiveCoverageInstruction(missing: readonly ReplyRequirement[]): string {
   return (
     "Your previous draft was blocked because it did not fully answer the client's current message. " +
-    "Rewrite one concise WhatsApp reply and satisfy every missing requirement below. Do not mention this validation.\n" +
+    "Rewrite one concise WhatsApp reply and satisfy every missing business requirement below. Do not mention this validation.\n" +
     missing.map((requirement) => `- ${REQUIREMENT_INSTRUCTIONS[requirement]}`).join("\n")
   );
 }

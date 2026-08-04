@@ -75,6 +75,40 @@ describe("normalizeVerdictForTranscript", () => {
     );
     expect(verdict).toMatchObject({ outcome: "dropoff", suggested_action: "" });
   });
+
+  it("does not blame list_plans when it succeeded before an output-filter rejection", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const verdict = normalizeVerdictForTranscript(
+      {
+        outcome: "technical_failure",
+        need_category: "membership",
+        severity: "severe",
+        summary: "L'outil de récupération des plans a échoué et bloqué la demande.",
+        suggested_action: "Recontacter la cliente.",
+      },
+      [
+        turn("tool", 'list_plans({}) -> [{"id":"invitee","name":"L’Invitée"}]'),
+        turn("tool", 'outbound_filter({}) -> {"error":"output_filter","detail":"outbound_coverage_failed:first_contact_greeting,automated_identity"}'),
+      ],
+    );
+    expect(verdict.summary).toContain("outils métier ont réussi");
+    expect(verdict.summary).toContain("filtre de sortie");
+    expect(verdict.summary).not.toMatch(/plans? a échoué/i);
+  });
+
+  it("keeps a real tool failure when its trace contains an error", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const original = {
+      outcome: "technical_failure" as const,
+      need_category: "membership" as const,
+      severity: "normal" as const,
+      summary: "L'outil list_plans a échoué.",
+      suggested_action: "Réessayer.",
+    };
+    expect(normalizeVerdictForTranscript(original, [
+      turn("tool", 'list_plans({}) -> {"error":"wix_unavailable"}'),
+    ])).toEqual(original);
+  });
 });
 
 describe("parseVerdict", () => {

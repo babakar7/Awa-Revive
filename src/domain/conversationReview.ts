@@ -107,7 +107,10 @@ email code, and hands off to human reception when she can't help.
 
 The conversation went silent: classify HOW it ended for the client, from the transcript alone.
 Turns prefixed "tool:" are Awa's tool calls with their results — trust them over wording (e.g. a
-booked:true result means the booking really happened).
+booked:true result means the booking really happened). You may say a tool failed ONLY when that
+tool trace actually contains an error result. A successful list_plans trace followed by the fixed
+technical message is NOT a list_plans failure. When an outbound_filter trace is present, identify
+the incident as a reply/output-filter rejection, not as a failure of the preceding business tool.
 Turns prefixed "human_team:" were written by a Revive employee who temporarily took over. Treat
 them as context and client outcome, but NEVER attribute their wording, promises, or mistakes to
 Awa. Score only Awa's own assistant/tool behavior.
@@ -147,6 +150,36 @@ export function normalizeVerdictForTranscript(
   verdict: ReviewVerdict,
   turns: ReviewTurn[],
 ): ReviewVerdict {
+  const toolTraces = turns
+    .filter((turn) => turn.role === "tool")
+    .map((turn) => parseToolTrace(turn.content))
+    .filter((trace): trace is ToolTraceStatus => trace !== null);
+  const outputFilterRejected = toolTraces.some(
+    (trace) => trace.name === "outbound_filter" || /outbound_(?:coverage|lint)|output_filter/.test(trace.raw),
+  );
+  const anyToolError = toolTraces.some((trace) => trace.error);
+  const claimsToolFailure = /(?:outil|list[_ ]plans?|plans?).{0,70}(?:echec|echou|erreur|panne|crash|fail|souci technique)|(?:echec|echou|erreur|panne|crash|fail).{0,70}(?:outil|list[_ ]plans?|plans?)/i.test(
+    normalizedReviewText(verdict.summary),
+  );
+
+  if (outputFilterRejected) {
+    return {
+      ...verdict,
+      outcome: "technical_failure",
+      summary: "Les outils métier ont réussi, mais la réponse au client a ensuite été bloquée par le filtre de sortie.",
+      suggested_action:
+        verdict.suggested_action || "Recontacter le client pour reprendre sa demande avec les résultats déjà obtenus.",
+    };
+  }
+  if (claimsToolFailure && toolTraces.length > 0 && !anyToolError) {
+    return {
+      ...verdict,
+      summary: "Les traces ne montrent aucun échec des outils métier ; la demande n’a pas abouti après leur exécution.",
+      suggested_action:
+        verdict.suggested_action || "Recontacter le client pour reprendre sa demande avec les résultats déjà obtenus.",
+    };
+  }
+
   const lastHumanFacing = [...turns]
     .reverse()
     .find(
@@ -158,6 +191,30 @@ export function normalizeVerdictForTranscript(
     return { ...verdict, outcome: "dropoff", suggested_action: "" };
   }
   return verdict;
+}
+
+interface ToolTraceStatus {
+  name: string;
+  error: boolean;
+  raw: string;
+}
+
+function normalizedReviewText(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function parseToolTrace(content: string): ToolTraceStatus | null {
+  const match = content.match(/^\s*([a-z][a-z0-9_]*)\s*\([\s\S]*?\)\s*->\s*([\s\S]*)$/i);
+  if (!match) return null;
+  const raw = match[2].trim();
+  let error = false;
+  try {
+    const result = JSON.parse(raw) as { error?: unknown };
+    error = typeof result?.error === "string" && result.error.trim().length > 0;
+  } catch {
+    // Non-JSON prose is not evidence that a tool failed.
+  }
+  return { name: match[1].toLowerCase(), error, raw: normalizedReviewText(raw) };
 }
 
 /** Valide/normalise la sortie du tool (pur, testé) — jamais de valeur inventée. */

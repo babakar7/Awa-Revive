@@ -49,8 +49,11 @@ import { isOmOutageActive } from "../domain/omOutage.js";
 import {
   correctiveCoverageInstruction,
   deriveReplyRequirements,
+  logOutboundIntroRepair,
   missingReplyRequirements,
+  repairFirstContactIntro,
   replyRequirementsInstruction,
+  type IntroRepairResult,
 } from "./replyCoverage.js";
 
 // Explicit timeout + retries: without them the SDK default is a ~10 min per-request
@@ -956,6 +959,7 @@ export async function handleInboundText(args: {
   let interactiveSent = false;
   let scheduleReplySent = false;
   let terminalHandled = false;
+  let introRepair: IntroRepairResult | null = null;
   // Allowlist for the outbound payment-link guard (prod 25/07 fabricated link):
   // exact URLs the SERVER issued — active DB payment records + any link a real
   // payment tool returns this turn (added in the loop below).
@@ -1049,7 +1053,12 @@ export async function handleInboundText(args: {
             client,
             block.name,
             block.input as Record<string, unknown>,
-            { replyRequirements },
+            {
+              replyRequirements,
+              language: client.language ?? lang,
+              formal: client.fr_register === "vous",
+              approvedPaymentUrls,
+            },
           );
           if (
             (block.name === "present_options" || block.name === "get_class_schedule") &&
@@ -1217,13 +1226,19 @@ export async function handleInboundText(args: {
   if (replyOutcome !== "deliver") replyText = null;
   else replyText = stripNoReplySentinel(replyText);
 
-  // Coverage guard for first-contact identity and explicit information asks.
-  // Direct-send tools enforce the same contract before their own side effect;
-  // this path covers ordinary model text and schedule-text fallback.
+  // Presentation is deterministically repairable. Do it before asking the
+  // model to rewrite so a valid business answer is never thrown away solely
+  // because its greeting or automated identity was omitted.
   if (replyText) {
+    introRepair = repairFirstContactIntro(replyText, replyRequirements, {
+      language: client.language ?? lang,
+      formal: client.fr_register === "vous",
+      maxLength: 4096,
+    });
+    replyText = introRepair.text;
     const missing = missingReplyRequirements(replyText, replyRequirements);
     if (missing.length > 0) {
-      console.warn(`Outbound reply missing required coverage (${missing.join(", ")}) — corrective retry`);
+      console.warn(`Outbound reply missing required business coverage (${missing.join(", ")}) — corrective retry`);
       try {
         const corrected = await withOverloadRetry(
           () =>
@@ -1240,18 +1255,27 @@ export async function handleInboundText(args: {
           () => void sendTypingIndicator(args.waMessageId),
         );
         const retried = stripNoReplySentinel(extractText(corrected));
+        const repairedRetry = repairFirstContactIntro(retried, replyRequirements, {
+          language: client.language ?? lang,
+          formal: client.fr_register === "vous",
+          maxLength: 4096,
+        });
         if (
           retried &&
-          missingReplyRequirements(retried, replyRequirements).length === 0 &&
-          lintOutboundReply(retried, approvedPaymentUrls).ok
+          repairedRetry.segments.every((segment) => segment.length <= 4096) &&
+          missingReplyRequirements(repairedRetry.text, replyRequirements).length === 0 &&
+          lintOutboundReply(repairedRetry.text, approvedPaymentUrls).ok
         ) {
-          replyText = retried;
+          introRepair = repairedRetry;
+          replyText = repairedRetry.text;
         } else {
+          introRepair = null;
           replyText = null;
           loopError = loopError ?? new Error(`outbound_coverage_failed:${missing.join(",")}`);
         }
       } catch (err) {
         console.error("Corrective coverage retry failed:", err);
+        introRepair = null;
         replyText = null;
         loopError = loopError ?? new Error("outbound_coverage_retry_error");
       }
@@ -1283,13 +1307,21 @@ export async function handleInboundText(args: {
           () => void sendTypingIndicator(args.waMessageId),
         );
         const retried = stripNoReplySentinel(extractText(corrected));
+        const repairedRetry = repairFirstContactIntro(retried, replyRequirements, {
+          language: client.language ?? lang,
+          formal: client.fr_register === "vous",
+          maxLength: 4096,
+        });
         if (
           retried &&
-          lintOutboundReply(retried, approvedPaymentUrls).ok &&
-          missingReplyRequirements(retried, replyRequirements).length === 0
+          repairedRetry.segments.every((segment) => segment.length <= 4096) &&
+          lintOutboundReply(repairedRetry.text, approvedPaymentUrls).ok &&
+          missingReplyRequirements(repairedRetry.text, replyRequirements).length === 0
         ) {
-          replyText = retried;
+          introRepair = repairedRetry;
+          replyText = repairedRetry.text;
         } else {
+          introRepair = null;
           replyText = null;
           loopError = loopError ?? new Error(`outbound_lint_failed:${lint.reason}`);
         }
@@ -1320,8 +1352,13 @@ export async function handleInboundText(args: {
   if (replyText) {
     // Keep the outbound wamid so a 👍 reaction to this message can be matched
     // to the question it answers.
-    const wamid = await sendText(args.waPhone, replyText);
-    await repo.addTurn(client.id, "assistant", replyText, wamid ?? undefined);
+    for (const segment of introRepair?.segments ?? [replyText]) {
+      const wamid = await sendText(args.waPhone, segment);
+      await repo.addTurn(client.id, "assistant", segment, wamid ?? undefined);
+    }
+    if (introRepair) {
+      logOutboundIntroRepair({ clientId: client.id, channel: "text", repair: introRepair });
+    }
   }
 
   // NOTE: no proactive account-linking invitation here anymore. Pushing "do you

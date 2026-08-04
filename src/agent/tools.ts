@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import { notifyReception, sendVerificationCodeEmail } from "../lib/notify.js";
-import { sendInteractive, sendImage, sendDocument } from "../lib/whatsapp.js";
+import { sendInteractive, sendImage, sendDocument, sendText } from "../lib/whatsapp.js";
 import {
   buildWeeklyGrid,
   renderScheduleImage,
@@ -43,6 +43,7 @@ import { PACK_DISCOVERY_CAMPAIGN, isCampaignReformerService } from "../domain/pa
 import { isPlanSellableByAwa } from "../domain/planSaleGuard.js";
 import { planNamesConflict } from "../domain/planNameGuard.js";
 import { resolveServiceAlias } from "../domain/serviceAlias.js";
+import { lintOutboundReply } from "./outboundLint.js";
 import { recordWixOrderForBooking, type PaymentLog } from "../domain/fulfillment.js";
 import * as keyRepo from "../domain/keyRepo.js";
 import {
@@ -58,8 +59,10 @@ import {
 import { resolveContinuitySource } from "../domain/keyContinuity.js";
 import { isOmOutageActive } from "../domain/omOutage.js";
 import {
+  logOutboundIntroRepair,
   missingReplyRequirements,
   missingRequirementsToolResult,
+  repairFirstContactIntro,
   type ReplyRequirement,
 } from "./replyCoverage.js";
 import {
@@ -1513,7 +1516,12 @@ export async function executeTool(
   client: Client,
   name: string,
   input: Record<string, unknown>,
-  turnContext: { replyRequirements?: readonly ReplyRequirement[] } = {},
+  turnContext: {
+    replyRequirements?: readonly ReplyRequirement[];
+    language?: string | null;
+    formal?: boolean;
+    approvedPaymentUrls?: Iterable<string>;
+  } = {},
 ): Promise<string> {
   switch (name) {
     case "list_classes": {
@@ -5188,19 +5196,35 @@ export async function executeTool(
     }
 
     case "get_class_schedule": {
-      // This tool has a WhatsApp side effect. Validate the exact caption that
-      // Meta will receive BEFORE rendering/uploading anything, so the model
-      // cannot send the image first and omit the greeting or sibling questions.
-      const message = String(input.message ?? "").trim().slice(0, 1024);
+      const rawMessage = String(input.message ?? "").trim();
+      const repair = repairFirstContactIntro(
+        rawMessage,
+        turnContext.replyRequirements ?? [],
+        { language: turnContext.language, formal: turnContext.formal, maxLength: 1024 },
+      );
       const missing = missingReplyRequirements(
-        message,
+        repair.text,
         turnContext.replyRequirements ?? [],
         { scheduleAttached: true },
       );
-      if (!message || missing.length > 0) {
+      if (!rawMessage || missing.length > 0) {
         return missingRequirementsToolResult(
           missing.length > 0 ? missing : ["schedule_overview"],
         );
+      }
+      if (repair.segments.some((segment) => segment.length === 0 || segment.length > 1024)) {
+        return JSON.stringify({
+          error: "reply_too_long",
+          message: "Nothing was sent. Shorten the schedule caption without dropping any required business information, then retry.",
+        });
+      }
+      const safe = lintOutboundReply(repair.text, turnContext.approvedPaymentUrls ?? []);
+      if (!safe.ok) {
+        return JSON.stringify({
+          error: "unsafe_outbound_reply",
+          reason: safe.reason,
+          message: "Nothing was sent. Remove the unsafe payment link or tool syntax, then retry.",
+        });
       }
       // Build (or reuse) the weekly grid + PNG. The grid is the standing
       // Mon→Sun timetable — dateless by design — so a 30 min cache is safe
@@ -5238,6 +5262,11 @@ export async function executeTool(
       const text = scheduleText(cached.entries);
       if (cached.png) {
         try {
+          for (const introSegment of repair.segments.slice(0, -1)) {
+            const introWamid = await sendText(client.wa_phone, introSegment);
+            await repo.addTurn(client.id, "assistant", introSegment, introWamid ?? undefined);
+          }
+          const message = repair.segments.at(-1)!;
           const wamid = await sendImage(client.wa_phone, cached.png, message);
           await repo.addTurn(
             client.id,
@@ -5245,6 +5274,7 @@ export async function executeTool(
             `${message}\n[image envoyée : planning hebdomadaire des cours]\n${text}`,
             wamid ?? undefined,
           );
+          logOutboundIntroRepair({ clientId: client.id, channel: "schedule_caption", repair });
           return JSON.stringify({
             sent: true,
             schedule: text,
@@ -5268,7 +5298,13 @@ export async function executeTool(
     }
 
     case "present_options": {
-      const body = String(input.body ?? "").trim();
+      const rawBody = String(input.body ?? "").trim();
+      const repair = repairFirstContactIntro(
+        rawBody,
+        turnContext.replyRequirements ?? [],
+        { language: turnContext.language, formal: turnContext.formal, maxLength: 1024 },
+      );
+      const body = repair.segments.at(-1) ?? "";
       const buttonLabel = String(input.button_label ?? "Choisir").trim();
       const options = (Array.isArray(input.options) ? input.options : [])
         .map((o: any) => ({
@@ -5280,11 +5316,25 @@ export async function executeTool(
         .filter((o) => o.id && o.title);
       const uniqueIds = new Set(options.map((o) => o.id));
       const missing = missingReplyRequirements(
-        body,
+        repair.text,
         turnContext.replyRequirements ?? [],
       );
       if (missing.length > 0) return missingRequirementsToolResult(missing);
-      if (!body || options.length === 0 || options.length > 10 || uniqueIds.size !== options.length) {
+      if (repair.segments.some((segment) => segment.length === 0 || segment.length > 1024)) {
+        return JSON.stringify({
+          error: "reply_too_long",
+          message: "Nothing was sent. Shorten the interactive body without dropping any required business information, then retry.",
+        });
+      }
+      const safe = lintOutboundReply(repair.text, turnContext.approvedPaymentUrls ?? []);
+      if (!safe.ok) {
+        return JSON.stringify({
+          error: "unsafe_outbound_reply",
+          reason: safe.reason,
+          message: "Nothing was sent. Remove the unsafe payment link or tool syntax, then retry.",
+        });
+      }
+      if (!rawBody || !body || options.length === 0 || options.length > 10 || uniqueIds.size !== options.length) {
         return JSON.stringify({
           error: "invalid_options",
           message:
@@ -5309,6 +5359,10 @@ export async function executeTool(
             "Re-run check_availability and pass ONLY the choice_ids it returns. Nothing was sent.",
         });
       }
+      for (const introSegment of repair.segments.slice(0, -1)) {
+        const introWamid = await sendText(client.wa_phone, introSegment);
+        await repo.addTurn(client.id, "assistant", introSegment, introWamid ?? undefined);
+      }
       const { kind, wamid } = await sendInteractive(client.wa_phone, body, buttonLabel, options);
       await repo.savePresentedChoices(
         client.id,
@@ -5324,6 +5378,7 @@ export async function executeTool(
         `${body}\n[message interactif ${kind} — options : ${options.map((o) => o.title).join(" · ")}]`,
         wamid ?? undefined,
       );
+      logOutboundIntroRepair({ clientId: client.id, channel: "present_options", repair });
       // Once-per-conversation window for vague-opener capability menus.
       if (options.some((o) => isCapabilityOptionId(o.id))) {
         await repo.markCapabilityMenuShown(client.id).catch((err) =>

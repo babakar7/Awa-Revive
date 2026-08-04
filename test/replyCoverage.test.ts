@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveReplyRequirements,
   missingReplyRequirements,
+  repairFirstContactIntro,
   replyRequirementsInstruction,
 } from "../src/agent/replyCoverage.js";
 import { executeTool, TOOL_DEFINITIONS } from "../src/agent/tools.js";
@@ -15,6 +16,52 @@ const COMPLETE_FIRST_REPLY =
   "Vous pouvez réserver directement ici avec moi ou sur www.revive.sn. " +
   "Voici aussi le planning à jour : www.revive.sn/planning.\n\n" +
   "Revive se trouve aux Almadies, Dakar : https://maps.app.goo.gl/jJS8rS3sV5j41SGc9";
+
+const PLAN_ANSWER =
+  "L’Invitée — Clé 3 séances comprend 3 séances de Pilates Reformer sur 2 semaines pour 30 000 FCFA. " +
+  "La première séance est satisfaite ou remboursée et une boisson est offerte. " +
+  "As-tu déjà pratiqué le Pilates Reformer chez Revive ?";
+
+describe("first-contact intro repair", () => {
+  const requirements = deriveReplyRequirements("Bonjour, je veux réserver la Clé Invité", true);
+
+  it("preserves the successful list_plans answer when both intro elements are missing", () => {
+    const repaired = repairFirstContactIntro(PLAN_ANSWER, requirements, { language: "fr" });
+    expect(repaired.text).toBe(
+      "Salut ! Moi c'est Awa, je suis une assistante automatisée de Revive 😊\n\n" + PLAN_ANSWER,
+    );
+    expect(missingReplyRequirements(repaired.text, requirements)).toEqual([]);
+  });
+
+  it("repairs greeting only, identity only, and does not duplicate a compliant intro", () => {
+    const identity = "Moi c'est Awa, je suis une assistante automatisée de Revive 😊 Voici L’Invitée.";
+    expect(repairFirstContactIntro(identity, requirements, { language: "fr" }).added).toEqual([
+      "first_contact_greeting",
+    ]);
+    expect(repairFirstContactIntro(`Bonjour ! ${PLAN_ANSWER}`, requirements, { language: "fr" }).text)
+      .toBe(`Bonjour ! Moi c'est Awa, je suis une assistante automatisée de Revive 😊\n\n${PLAN_ANSWER}`);
+    const compliant = `Salut ! Moi c'est Awa, je suis une assistante automatisée de Revive 😊\n\n${PLAN_ANSWER}`;
+    expect(repairFirstContactIntro(compliant, requirements)).toMatchObject({ repaired: false, text: compliant });
+  });
+
+  it("uses fixed formal French, English and Wolof intros, with French as fallback", () => {
+    expect(repairFirstContactIntro(PLAN_ANSWER, requirements, { language: "fr", formal: true }).text)
+      .toMatch(/^Bonjour ! Moi c'est Awa/);
+    expect(repairFirstContactIntro("Offer details", requirements, { language: "en" }).text)
+      .toMatch(/^Hi! I’m Awa, Revive’s automated assistant/);
+    expect(repairFirstContactIntro("Clé bi", requirements, { language: "wo" }).text)
+      .toMatch(/^Nanga def! Man Awa laa, Revive assistant bu otomaatig laa/);
+    expect(repairFirstContactIntro(PLAN_ANSWER, requirements, { language: "pt" }).language).toBe("fr");
+  });
+
+  it("splits instead of truncating the original answer at a channel limit", () => {
+    const original = "x".repeat(1000);
+    const repaired = repairFirstContactIntro(original, requirements, { maxLength: 1024 });
+    expect(repaired.segments).toHaveLength(2);
+    expect(repaired.segments[1]).toBe(original);
+    expect(repaired.segments.every((segment) => segment.length <= 1024)).toBe(true);
+  });
+});
 
 describe("reply coverage requirements", () => {
   it("derives every requirement from the exact 03/08 production incident", () => {
@@ -128,8 +175,6 @@ describe("get_class_schedule tool contract", () => {
     expect(result).toMatchObject({
       error: "reply_requirements_missing",
       missing: [
-        "first_contact_greeting",
-        "automated_identity",
         "booking_method",
         "location",
       ],

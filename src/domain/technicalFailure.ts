@@ -133,6 +133,17 @@ export async function handleTechnicalFailure(args: TechnicalFailureArgs): Promis
   );
 
   if (args.sendClient === false) return;
+
+  // Preserve the real failure boundary for conversation review: a preceding
+  // business tool may have succeeded even though its reply was filtered.
+  if (args.stage === "output_filter") {
+    await repo.addTurn(
+      args.client.id,
+      "tool",
+      `outbound_filter({}) -> ${JSON.stringify({ error: "output_filter", detail: cause })}`,
+    ).catch((error) => console.error("Output-filter trace logging failed:", error));
+  }
+
   const clientKey = `${prefix}:client`;
   let clientClaimed = true;
   try {
