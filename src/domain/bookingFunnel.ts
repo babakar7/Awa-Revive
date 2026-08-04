@@ -419,6 +419,7 @@ export interface ConversionFailureRow {
 }
 
 export interface BookingConversionDashboard {
+  today: BookingConversionMetrics;
   sevenDays: BookingConversionMetrics;
   thirtyDays: BookingConversionMetrics;
   incidents: ConversionIncident[];
@@ -465,7 +466,16 @@ export async function bookingConversionDashboard(): Promise<BookingConversionDas
       .filter((j) => new Date(j.started_at).getTime() >= now - 7 * 86_400_000)
       .map((j) => j.id as string),
   );
+  // Dakar is UTC year-round, so UTC midnight IS the local start of day.
+  const midnight = new Date(now);
+  midnight.setUTCHours(0, 0, 0, 0);
+  const idsToday = new Set(
+    journeys.rows
+      .filter((j) => new Date(j.started_at).getTime() >= midnight.getTime())
+      .map((j) => j.id as string),
+  );
   return {
+    today: calculateBookingConversion(events, idsToday),
     sevenDays: calculateBookingConversion(events, ids7),
     thirtyDays: calculateBookingConversion(events, ids30),
     incidents: incidents.rows,

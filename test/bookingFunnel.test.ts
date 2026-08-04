@@ -152,6 +152,7 @@ describe("booking conversion quick wins", () => {
   it("renders incident links and escapes client-controlled labels", () => {
     const empty = calculateBookingConversion([]);
     const html = renderConversionPage({
+      today: empty,
       sevenDays: empty,
       thirtyDays: empty,
       incidents: [
@@ -172,5 +173,6 @@ describe("booking conversion quick wins", () => {
     expect(html).toContain("&lt;script&gt;Awa&lt;/script&gt;");
     expect(html).not.toContain("<script>Awa</script>");
     expect(html).toContain("équipe/tests exclus");
+    expect(html).toContain("Aujourd’hui");
   });
 });

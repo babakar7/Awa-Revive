@@ -84,6 +84,7 @@ describe("booking funnel persistence", () => {
     const dashboard = await bookingConversionDashboard();
     expect(dashboard.thirtyDays.journeys).toBe(1);
     expect(dashboard.thirtyDays.paymentLinkToBooked).toBe(100);
+    expect(dashboard.today.journeys).toBe(1);
   });
 
   it("closes an inactive journey and starts a new one after 24 hours", async () => {
