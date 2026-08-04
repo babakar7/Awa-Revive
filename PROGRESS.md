@@ -25,6 +25,22 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Confirmations /ops/service : le verbe sur les boutons (4 août 2026)
+
+Retour Babakar : le `confirm()` natif d'annulation affichait « Annuler / OK » —
+illisible quand la question est justement « Annuler cette commande ? » (le
+bouton « Annuler » du dialogue veut dire… garder la commande). Remplacé par un
+dialogue maison (`askConfirm`) où chaque bouton porte son verbe :
+
+- ✕ ticket → « Annuler cette commande ? » avec **Oui, annuler la commande**
+  (rouge) / **Non, garder la commande** ; fermeture du composeur avec panier →
+  « Abandonner cette commande ? » avec **Oui, abandonner** / **Non, continuer
+  la saisie**.
+- Échappatoires sûres : tap sur le fond = garder ; focus initial sur « Non ».
+  `role=alertdialog`. Plus aucun `confirm()` natif dans l'app salle (verrouillé
+  par test : `opsServiceAssets.test.ts`).
+- `ASSET_VERSION` v14 → v15 (purge du cache SW des iPads).
+
 ## La salle parle : voix sur /ops/service pour les nouvelles commandes (4 août 2026)
 
 Demande Babakar : que la voix « dise la commande » quand une nouvelle commande

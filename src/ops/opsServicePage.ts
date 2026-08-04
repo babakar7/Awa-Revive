@@ -29,7 +29,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v14";
+const ASSET_VERSION = "v15";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -136,6 +136,16 @@ min-height:2.75rem;padding:.45rem .8rem;font-size:1rem;font-weight:700}
 .ov{position:fixed;inset:0;z-index:20;background:rgba(33,25,33,.45);display:flex;align-items:flex-end;justify-content:center;
 animation:ov-in .2s var(--ease)}
 @keyframes ov-in{0%{opacity:0}100%{opacity:1}}
+/* Confirm dialog — the verb lives ON each button. The native confirm() showed
+   OK/Annuler, ambiguous when the question itself is « Annuler ? ». */
+.ov.center{align-items:center;padding:1rem}
+.cfm{background:var(--surface);border-radius:var(--radius-xl);box-shadow:var(--shadow-2);padding:1.2rem;
+width:100%;max-width:22rem;animation:sheet-up .25s var(--ease)}
+.cfm p{font-size:1.05rem;font-weight:600;margin:.1rem 0 1rem;color:var(--ink-900)}
+.cfm .cfmacts{display:flex;flex-direction:column;gap:.55rem}
+.cfm button{min-height:3rem;border-radius:var(--radius);border:1px solid var(--border-strong);
+background:#fff;color:var(--ink-700);font-weight:700;font-size:1rem}
+.cfm button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
 /* Stable height + internal scroll: switching categories changes only the inner
    list, never the sheet box, so the sheet never jumps as list size varies. */
 .sheet{position:relative;display:flex;flex-direction:column;background:var(--surface);width:100%;max-width:34rem;
@@ -357,7 +367,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
       ug.onclick=function(){ ug.disabled=true; post('/tickets/'+t.id+'/urgent',{urgent:!t.urgent}).then(function(r){if(!r.ok)ug.disabled=false;}).catch(function(){ug.disabled=false;}); };
       acts2.appendChild(ug);
       var cx=el('button','act cancel','✕'); cx.title='Annuler cette commande'; cx.setAttribute('aria-label','Annuler cette commande');
-      cx.onclick=function(){ if(!confirm('Annuler cette commande ?'))return; cx.disabled=true; post('/tickets/'+t.id+'/cancel',{reason:'annulée en salle'}).then(function(r){if(!r.ok)cx.disabled=false;}).catch(function(){cx.disabled=false;}); };
+      cx.onclick=function(){ askConfirm('Annuler cette commande ?','Oui, annuler la commande','Non, garder la commande',function(){ cx.disabled=true; post('/tickets/'+t.id+'/cancel',{reason:'annulée en salle'}).then(function(r){if(!r.ok)cx.disabled=false;}).catch(function(){cx.disabled=false;}); }); };
       acts2.appendChild(cx); d.appendChild(acts2);
     }
     return d;
@@ -411,6 +421,24 @@ export const SERVICE_APP_JS = String.raw`(function(){
   // ---- order composer ----
   function overlay(){ return el('div','ov'); }
 
+  // Native confirm() renders OK/Annuler — ambiguous when the question IS
+  // « Annuler ? ». Here each button carries its verb; escape routes (backdrop
+  // tap, initial focus) all mean « garder », the safe default.
+  function askConfirm(question,yesLabel,noLabel,onYes){
+    var ov=el('div','ov center'); var box=el('div','cfm');
+    box.setAttribute('role','alertdialog'); box.setAttribute('aria-modal','true'); box.setAttribute('aria-label',question);
+    box.appendChild(el('p',null,question));
+    var acts=el('div','cfmacts');
+    var yes=el('button','danger',yesLabel);
+    var no=el('button',null,noLabel);
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); }
+    yes.onclick=function(){ close(); onYes(); };
+    no.onclick=close;
+    ov.onclick=function(e){ if(e.target===ov) close(); };
+    acts.appendChild(yes); acts.appendChild(no); box.appendChild(acts); ov.appendChild(box);
+    document.body.appendChild(ov); try{ no.focus(); }catch(e){}
+  }
+
   function normalize(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
 
   function openOrder(sp,session,trigger){
@@ -425,7 +453,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
         t=host&&host.tagName==='BUTTON'?host:(host?host.querySelector('button'):null); }
       if(t&&t.focus){ try{ t.focus(); }catch(e){} } }
     function closeSheet(){ if(ov.parentNode) document.body.removeChild(ov); document.body.style.overflow=prevOverflow; returnFocus(); }
-    function requestClose(){ if(cartCount()>0 && !confirm('Abandonner la commande ?')) return; closeSheet(); }
+    function requestClose(){ if(cartCount()>0){ askConfirm('Abandonner cette commande ?','Oui, abandonner','Non, continuer la saisie',closeSheet); return; } closeSheet(); }
     ov.onclick=function(e){ if(e.target===ov) requestClose(); };
     var x=el('button','close-x','×'); x.setAttribute('aria-label','Fermer la commande'); x.onclick=requestClose; sh.appendChild(x);
     sh.appendChild(el('h2','Commande — '+sp.label));

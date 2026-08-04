@@ -38,7 +38,18 @@ describe("service PWA assets", () => {
   it("composer sheet has dialog semantics and guards an unfinished order", () => {
     expect(SERVICE_APP_JS).toContain("'aria-modal'");
     expect(SERVICE_APP_JS).toContain("'dialog'");
-    expect(SERVICE_APP_JS).toContain("Abandonner la commande");
+    expect(SERVICE_APP_JS).toContain("Abandonner cette commande ?");
+  });
+
+  // The native confirm() renders OK/Annuler — ambiguous when the question is
+  // « Annuler cette commande ? ». Both destructive guards go through the custom
+  // dialog whose buttons carry their verb.
+  it("confirmations put the verb on the buttons (no native confirm)", () => {
+    expect(SERVICE_APP_JS).not.toContain("confirm(");
+    expect(SERVICE_APP_JS).toContain("'alertdialog'");
+    expect(SERVICE_APP_JS).toContain("Oui, annuler la commande");
+    expect(SERVICE_APP_JS).toContain("Non, garder la commande");
+    expect(SERVICE_APP_JS).toContain("Oui, abandonner");
   });
 
   it("offers the sur place / à emporter choice and sends it in the order body", () => {
