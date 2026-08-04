@@ -1,7 +1,9 @@
 # PROGRESS — Revive Bookings ("Awa")
 
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
-> Dernière mise à jour : **4 août 2026** — alerte owner à chaque tentative de
+> Dernière mise à jour : **4 août 2026** — retard client = simple accusé de
+> réception ; langue ancrée sur les messages du CLIENT (pas le prefill web).
+> Avant : alerte owner à chaque tentative de
 > paiement OM/Max It. Avant : garde serveur premier contact et
 > questions multiples. Avant : abonnements généralisés :
 > L'Abonnement Aquabike + plan sur mesure automatisés (familles de clés,
@@ -20,6 +22,30 @@
 > `OM-LINKS-HOW-TO.md` (créer un lien de test), `WIX-WEBHOOK-PLAN.md` (EN VEILLE),
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
+
+## Retard client + ancrage de langue (conversation Sourcils Senegal, 4 août 2026)
+
+Deux corrections prompt issues de la même conversation prod (cliente anglophone
+arrivée via le bouton wa.me du site) :
+
+- **« Je serai en retard » → simple accusé de réception.** Awa répondait
+  « préviens juste l'équipe en arrivant » + rappel de l'heure du cours. Feedback
+  Babakar : la cliente n'a rien à faire, on accuse réception gentiment et c'est
+  tout. Nouvelle règle prompt (section annulation/no-show) : UNE phrase
+  chaleureuse, pas de consigne « préviens l'équipe », pas de rappel d'horaire.
+- **Langue : les messages du CLIENT font foi, pas le prefill du site.** Premier
+  message = texte prérempli français du bouton web (« Bonjour, je souhaite
+  réserver un cours », arrivé même URL-encodé — l'encodage du lien wa.me côté
+  site Wix est à corriger sur le site). La cliente écrivait ensuite en anglais ;
+  `detectLanguage` avait bien flippé `clients.language` à `en`, mais le modèle
+  imitait ses propres 20 réponses françaises. Règles ajoutées : les réponses
+  d'Awa ne comptent JAMAIS comme signal de langue, un prefill français ne dit
+  rien de la langue du client, bascule dès que ses messages sont clairement dans
+  une autre langue ; la note de contexte dynamique le répète explicitement.
+
+À noter (même conversation) : la question compte/email post-paiement a bien été
+posée (une fois, optionnelle par design) — la cliente a répondu « Merci » sans
+donner d'email → contact Wix auto-créé au nom du profil WhatsApp, sans email.
 
 ## Alerte owner à chaque tentative de paiement OM/Max It (4 août 2026)
 
