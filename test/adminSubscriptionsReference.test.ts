@@ -19,6 +19,9 @@ describe("Abonnements — référence réception", () => {
     expect(html).toContain("Reformer à 12h30, du lundi au vendredi");
     expect(html).toContain("Prolongation de 7 jours");
     expect(html).toContain("Membres Fondatrices");
+    expect(html).toContain("Carnet de 10 Bébé nageur et Natation — 70 000 F");
+    expect(html).not.toContain("Carnet de 10 Reformer");
+    expect(html).not.toContain("Carnet de 10 Aquabike");
     expect(html).toContain("ne rien créer en double dans Wix");
   });
 

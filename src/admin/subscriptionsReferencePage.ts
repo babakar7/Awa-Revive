@@ -208,10 +208,8 @@ export function renderSubscriptionsReference(): string {
         <p class="key-cat-note">Plan dédié à une cliente précise : Awa ne le propose jamais spontanément.</p>
       </article>
       <article class="key-cat-card key-cat-card--plain">
-        <header><h3>Carnets (sans avantages annexes)</h3><span class="key-cat-price">séances à utiliser librement</span></header>
+        <header><h3>Carnet natation (sans avantages annexes)</h3><span class="key-cat-price">10 séances à utiliser librement</span></header>
         <ul>
-          <li>Carnet de 10 Reformer — 120 000 F</li>
-          <li>Carnet de 10 Aquabike — 100 000 F</li>
           <li>Carnet de 10 Bébé nageur et Natation — 70 000 F</li>
         </ul>
       </article>
