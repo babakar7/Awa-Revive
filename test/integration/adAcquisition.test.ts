@@ -147,6 +147,17 @@ describe("Meta acquisition dashboard", () => {
     await sale(test,`${yesterday}T12:30:00Z`);
 
     const dashboard = await adAcquisitionDashboard();
+    expect(dashboard.yesterday).toMatchObject({
+      label:"Hier",
+      start:yesterday,
+      endExclusive:today,
+      delivery:{spend:5,leads:2},
+    });
+    expect(dashboard.yesterday.ads.find((row) => row.adId === "7001")).toMatchObject({
+      acquisitionSales:1,
+      acquisitionRevenueXof:30000,
+      influencedRenewals:1,
+    });
     expect(dashboard.thirtyDays.delivery.spend).toBe(18);
     expect(dashboard.thirtyDays.delivery.leads).toBe(2);
     const cinema = dashboard.thirtyDays.ads.find((row) => row.adId === "7001");

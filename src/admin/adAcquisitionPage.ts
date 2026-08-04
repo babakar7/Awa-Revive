@@ -17,9 +17,9 @@ function nativeMoney(value: number, currency: string): string {
   return new Intl.NumberFormat("fr-FR", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
 }
 
-function deliveryCard(label: string, row: DeliveryMetrics, currency: string, fxRate: number): string {
+function deliveryCard(label: string, row: DeliveryMetrics, currency: string, fxRate: number, inProgress: boolean): string {
   const xof = currency === "USD" ? `≈ ${fmtFcfa(Math.round(row.spend*fxRate))}` : currency === "XOF" ? fmtFcfa(row.spend) : "conversion indisponible";
-  return `<article class="card"><span class="eyebrow">${esc(label)} · <span class="badge badge--amber">en cours</span></span><div class="stat-grid report-stat-grid">
+  return `<article class="card"><span class="eyebrow">${esc(label)}${inProgress?` · <span class="badge badge--amber">en cours</span>`:""}</span><div class="stat-grid report-stat-grid">
   <div class="stat"><span>Dépense livrée</span><b>${nativeMoney(row.spend,currency)}</b><span>${xof} · facturée par Meta</span></div>
   <div class="stat"><span>Leads DB</span><b>${row.leads}</b><span>${row.results} résultats Meta</span></div>
   <div class="stat"><span>Coût / lead DB</span><b>${row.costPerLead===null?"—":nativeMoney(row.costPerLead,currency)}</b><span>dates et fuseau alignés</span></div>
@@ -96,16 +96,16 @@ function cashSummary(period: AcquisitionPeriod, data: AdAcquisitionDashboard, fi
 }
 
 function periodPanel(
-  key: "7" | "30",
+  key: "yesterday" | "7" | "30",
   period: AcquisitionPeriod,
   data: AdAcquisitionDashboard,
   financialReady: boolean,
   metaUnavailable: boolean,
 ): string {
-  const hidden = key === "30" ? " hidden" : "";
+  const hidden = key === "7" ? "" : " hidden";
   const delivery = metaUnavailable
     ? `<div class="card empty"><b>Dépense indisponible</b><p>Rattache la campagne Meta pour afficher la dépense ; les blocs DB ci-dessous restent disponibles.</p></div>`
-    : deliveryCard(period.label,period.delivery,data.currency,data.fxRate);
+    : deliveryCard(period.label,period.delivery,data.currency,data.fxRate,key!=="yesterday");
   return `<section id="acquisition-panel-${key}" data-acquisition-period-panel="${key}" role="tabpanel" aria-labelledby="acquisition-tab-${key}"${hidden}>
 ${financialReady&&!metaUnavailable?cohortSummary(period,data):""}
 ${delivery}
@@ -141,10 +141,12 @@ export function renderAdAcquisition(data: AdAcquisitionDashboard, owner: boolean
   const metaUnavailable = mappingUnavailable || !data.sync.last_succeeded_at;
   return `<section data-acquisition-dashboard><div class="section-header activity-section-header"><div><span class="eyebrow">Acquisition pubs Meta</span><h2>Dépense → conversations → Clés</h2><p class="activity-period-copy" data-acquisition-period-copy aria-live="polite">Résultats des 7 derniers jours</p></div>
 <div class="period-toggle" role="tablist" aria-label="Période des statistiques publicitaires">
+  <button id="acquisition-tab-yesterday" type="button" role="tab" data-acquisition-period="yesterday" aria-selected="false" aria-controls="acquisition-panel-yesterday" tabindex="-1">Hier</button>
   <button id="acquisition-tab-7" type="button" role="tab" class="active" data-acquisition-period="7" aria-selected="true" aria-controls="acquisition-panel-7" tabindex="0">7 jours</button>
   <button id="acquisition-tab-30" type="button" role="tab" data-acquisition-period="30" aria-selected="false" aria-controls="acquisition-panel-30" tabindex="-1">30 jours</button>
 </div></div>
 ${warnings}
+${periodPanel("yesterday",data.yesterday,data,financialReady,metaUnavailable)}
 ${periodPanel("7",data.sevenDays,data,financialReady,metaUnavailable)}
 ${periodPanel("30",data.thirtyDays,data,financialReady,metaUnavailable)}
 <div class="section-header"><div><span class="eyebrow">Tendance</span><h2>Performance hebdomadaire</h2></div></div>
