@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
-import { notifyReception, sendVerificationCodeEmail } from "../lib/notify.js";
+import { notifyOwner, notifyReception, sendVerificationCodeEmail } from "../lib/notify.js";
 import { sendInteractive, sendImage, sendDocument, sendText } from "../lib/whatsapp.js";
 import {
   buildWeeklyGrid,
@@ -911,10 +911,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     description:
       "Escalate the conversation to the human reception team. Triggers: the client wants to call or speak to " +
       "a person (e.g. \"je peux vous appeler ?\"), complaints, alleged Revive-fault refund claims, " +
-      "different-class changes, cancelling or rescheduling less than 16h before the class, partial group cancellations, " +
+      "different-class changes, rescheduling less than 16h before the class, partial group cancellations, " +
       "medical questions, factures needing special legal mentions or covering payments send_invoice " +
       "doesn't list, anything off-script. Records the handoff, notifies reception with a one-tap link to " +
-      "message the client, and the client is simply told reception will reach out to them — they send nothing.",
+      "message the client, and the client is simply told reception will reach out to them — they send nothing. " +
+      "SPECIAL CASE: a client insisting on cancelling less than 16h before the class (an exceptional " +
+      "cancellation) — pass exceptional_cancellation:true; that routes to the gérant instead of reception " +
+      "and the client is told to CALL the gérant directly.",
     input_schema: {
       type: "object",
       properties: {
@@ -925,6 +928,14 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             "directly to reception. Example: \"Je souhaite parler directement à quelqu'un de l'équipe Revive\". " +
             "Never write \"le client souhaite\". Keep it high-level: no internal ids, amounts, full transcript, " +
             "or sensitive medical details.",
+        },
+        exceptional_cancellation: {
+          type: "boolean",
+          description:
+            "Set true ONLY when the client insists on cancelling a booking less than 16h before the class " +
+            "(annulation exceptionnelle). Routes the alert to the gérant (not reception); the result tells you " +
+            "to have the client CALL the gérant at the returned gerant_phone. Never set it for reschedules, " +
+            "different-class changes, or alleged Revive faults — those stay with reception.",
         },
       },
       required: ["reason"],
@@ -4368,9 +4379,9 @@ export async function executeTool(
             hours_before_class: Math.max(0, Math.round(hoursLeftStudio * 10) / 10),
             message:
               "Cancellation refused: less than 16 hours before the class, the session is due (studio policy). " +
-              "Politely explain the 16h rule. If they insist on an exceptional situation, call handoff_to_human " +
-              "and reception will reach out to them. " +
-              "Do NOT suggest examples of valid excuses.",
+              "Politely explain the 16h rule. If they still insist on an EXCEPTIONAL cancellation, call " +
+              "handoff_to_human with exceptional_cancellation:true — the client will then be told to call the " +
+              "gérant directly. Do NOT suggest examples of valid excuses.",
           });
         }
         return JSON.stringify({
@@ -4415,9 +4426,9 @@ export async function executeTool(
           hours_before_class: Math.max(0, Math.round(hoursLeft * 10) / 10),
           message:
             "Cancellation refused: less than 16 hours before the class, the session is due (studio policy). " +
-            "Politely explain the 16h rule. If they insist on an exceptional situation, call handoff_to_human " +
-            "and reception will reach out to them. " +
-            "Do NOT suggest examples of valid excuses.",
+            "Politely explain the 16h rule. If they still insist on an EXCEPTIONAL cancellation, call " +
+            "handoff_to_human with exceptional_cancellation:true — the client will then be told to call the " +
+            "gérant directly. Do NOT suggest examples of valid excuses.",
         });
       }
 
@@ -5163,6 +5174,29 @@ export async function executeTool(
     case "handoff_to_human": {
       const reason = String(input.reason ?? "unspecified").slice(0, 500);
       await repo.recordHandoff(client.id, reason);
+
+      // Exceptional <16h cancellation: the client phones the gérant directly, so
+      // reception is intentionally left out. We still record the handoff (trace)
+      // and alert the gérant so they expect the call.
+      if (input.exceptional_cancellation === true) {
+        notifyOwner(
+          `📞 Annulation exceptionnelle <16h — le client va vous appeler`,
+          `Une cliente/un client demande une annulation exceptionnelle à moins de 16h et va vous appeler :\n` +
+            `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
+            `  Motif : ${reason}\n\n` +
+            `Extrait de la conversation dans le registre handoffs (npm run summary).`,
+        );
+        return JSON.stringify({
+          owner_notified: true,
+          gerant_phone: config.OWNER_PHONE,
+          note:
+            "Exceptional cancellation recorded and the gérant alerted. Tell the client, in their language, to " +
+            "CALL the gérant directly at gerant_phone for their annulation exceptionnelle — it is handled by " +
+            "phone with the gérant, not here. Promise no outcome (no refund, no guarantee it is accepted) and " +
+            "do NOT suggest examples of valid excuses. Do not tell them reception will reach out.",
+        });
+      }
+
       const outreach = clientOutreachLink(client.wa_phone, client.name);
       notifyReception(
         `🙋🏾 Handoff client — ${reason.slice(0, 60)}`,

@@ -291,6 +291,16 @@ export function notifyNewConversation(args: NewConversationNotificationArgs): vo
  * est fermée, et Meta accepte (200) puis jette silencieusement un free-text
  * hors fenêtre. Fire-and-forget, journalisé source='owner_alert'.
  */
+/**
+ * Fire-and-forget alert to the gérant/owner ONLY (never reception), on the same
+ * template-first OWNER_PHONE path as the owner copy of a reception alert. Use
+ * when the client is being told to phone the gérant directly (an exceptional
+ * <16h cancellation), so reception is intentionally left out of the loop.
+ */
+export function notifyOwner(subject: string, body: string): void {
+  alertOwner(subject, body);
+}
+
 function alertOwner(subject: string, body: string): void {
   if (!config.OWNER_ALERT_ENABLED || config.OWNER_PHONE === "") return;
   // La réception et le gérant partagent parfois le même numéro : une seule alerte.

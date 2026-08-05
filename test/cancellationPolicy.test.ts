@@ -36,6 +36,28 @@ describe("Awa cancellation policy", () => {
     expect(handoffTool?.description).not.toMatch(/session transfers/);
   });
 
+  it("routes an exceptional <16h cancellation to the gérant, not reception", () => {
+    const cancellationSection = systemPrompt().match(
+      /# Cancellations \(cancel_booking\)([\s\S]*?)# Rescheduling/,
+    )?.[1];
+    expect(cancellationSection).toMatch(/exceptional_cancellation:true/);
+    expect(cancellationSection).toMatch(/g[ée]rant/i);
+
+    const handoffTool = TOOL_DEFINITIONS.find((c) => c.name === "handoff_to_human");
+    expect(handoffTool?.input_schema).toMatchObject({
+      properties: { exceptional_cancellation: { type: "boolean" } },
+    });
+    expect(handoffTool?.description).toMatch(/exceptional cancellation/i);
+  });
+
+  it("keeps <16h reschedules on the reception handoff, not the gérant", () => {
+    const reschedule = systemPrompt().match(
+      /# Rescheduling([\s\S]*?)# Transfer a session/,
+    )?.[1];
+    expect(reschedule).toBeTruthy();
+    expect(reschedule).not.toMatch(/g[ée]rant/i);
+  });
+
   it("requires explicit no-refund acceptance in the cancellation tool contract", () => {
     const tool = TOOL_DEFINITIONS.find((candidate) => candidate.name === "cancel_booking");
 
