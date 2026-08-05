@@ -230,11 +230,19 @@ export const config = {
   RESIDENTE_PLAN_ID: optional("RESIDENTE_PLAN_ID", ""),
   RESIDENTE_BONUS_PLAN_ID: optional("RESIDENTE_BONUS_PLAN_ID", ""),
   INVITATION_PLAN_ID: optional("INVITATION_PLAN_ID", ""),
-  // Plan sur mesure taillé pour une cliente précise (Reformer + Mat + Step dans
-  // un même pool). Type REFORMER, pas de bonus (Mat/Step déjà couverts par le
-  // plan), 1 invitation Reformer par cycle. Vide = dark (vendu comme plan
-  // normal, aucune automation Clé). Awa ne le propose jamais spontanément.
-  SUR_MESURE_PLAN_ID: optional("SUR_MESURE_PLAN_ID", ""),
+  // Plans sur mesure taillés chacun pour une cliente précise (leurs cours dans
+  // un même pool Wix). Type REFORMER, pas de bonus (les autres cours sont déjà
+  // couverts par le plan), 1 invitation Reformer par cycle. Liste séparée par
+  // virgules ; SUR_MESURE_PLAN_ID (singulier, historique) reste accepté et
+  // fusionné. Vide = dark (vendu comme plan normal, aucune automation Clé).
+  // Awa ne les propose jamais spontanément.
+  SUR_MESURE_PLAN_IDS: [
+    ...new Set(
+      [optional("SUR_MESURE_PLAN_ID", ""), ...optional("SUR_MESURE_PLAN_IDS", "").split(",")]
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ],
   // L'Abonnement Aquabike : famille de Clé distincte. Son bonus = 1 séance
   // Reformer sur le créneau calme 12h30 ; son invitation = 1 cours Aquabike
   // (lun–ven, toute heure) pour une amie jamais venue à Revive. Toutes vides

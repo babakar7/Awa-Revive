@@ -121,14 +121,18 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
         bonus: clePlanBonus(config.RESIDENTE_BONUS_PLAN_ID),
       },
     },
-    {
-      // Sur mesure: Reformer family, no bonus (Mat/Step live in its own pool),
-      // 1 invitation/cycle. Only needs its own plan id to come alive.
-      requires: [config.SUR_MESURE_PLAN_ID],
+    // Sur mesure: Reformer family, no bonus (the plan's own pool already covers
+    // its non-Reformer classes), 1 invitation/cycle. One mapping per configured
+    // plan id — several clientes can each have their own tailor-made plan.
+    // Every SUR_MESURE mapping shares the exact same rule fields (only planId
+    // differs), which keeps keyMappingForType() correct even though the type
+    // is no longer unique in this list.
+    ...config.SUR_MESURE_PLAN_IDS.map((planId) => ({
+      requires: [planId] as unknown[],
       mapping: {
-        type: "SUR_MESURE",
-        planId: config.SUR_MESURE_PLAN_ID,
-        family: "REFORMER",
+        type: "SUR_MESURE" as const,
+        planId,
+        family: "REFORMER" as const,
         durationDays: 30,
         baseInvitations: 1,
         continuityInvitation: false,
@@ -136,7 +140,7 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
         invitation: reformerInvitation(),
         bonus: null,
       },
-    },
+    })),
     {
       // Aquabike: its own family. Bonus = 1 Reformer session on the calm 12h30
       // slot; invitation = 1 Aquabike class (any weekday hour) for a friend who

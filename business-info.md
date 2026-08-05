@@ -167,17 +167,22 @@ ni recrédité (sauf annulation par Revive) — Awa l'annonce avant de réserver
 règles diffèrent des Clés : côté Clés l'invitation est du Reformer à 12h30 et le
 bonus un cours Aquabike/Yoga/Mat/Step ; côté Aquabike c'est l'inverse.
 
-## Plan sur mesure « 1x Reformer 1x Mat 1x Step »
+## Plans sur mesure (une cliente précise chacun)
 
-Abonnement **taillé pour une cliente précise** : 12 séances sur 30 jours au choix
-entre Reformer (Foundation/Sculpt/Intense), Pilates Mat et Step (prix depuis
-`list_plans`). Avantages : piscine les jours de séance (serviette comprise),
-bibliothèque, massage au tarif membre, **1 invitation Reformer** (12h30,
-lun–ven, amie qui n'a jamais fait de Reformer chez Revive), prolongation 7 jours.
-**Pas de cours en plus** (Mat et Step sont déjà couverts par le plan). **Awa ne
-le propose JAMAIS spontanément** — ni dans la qualification, ni dans une liste
-d'offres ; elle ne le présente que si une cliente le demande explicitement par
-son nom.
+Abonnements **taillés chacun pour une cliente précise** (prix et contenu depuis
+`list_plans`). Avantages communs : bibliothèque, massage au tarif membre,
+**1 invitation Reformer** (12h30, lun–ven, amie qui n'a jamais fait de Reformer
+chez Revive), prolongation 7 jours. **Pas de cours en plus** (leurs autres cours
+sont déjà couverts par le plan). **Awa ne les propose JAMAIS spontanément** —
+ni dans la qualification, ni dans une liste d'offres ; elle ne les présente que
+si une cliente les demande explicitement par leur nom.
+
+- **« 1x Reformer 1x Mat 1x Step »** : 12 séances sur 30 jours au choix entre
+  Reformer (Foundation/Sculpt/Intense), Pilates Mat et Step. Piscine **les jours
+  de séance** (serviette comprise).
+- **« 2x Reformer 1x Yoga 1x Step »** : 16 séances sur 30 jours au choix entre
+  Reformer (Foundation/Sculpt/Intense), Power Yoga et Step. Piscine **pendant
+  toute la durée de la formule** (serviette comprise).
 
 Les clientes qui détiennent encore un ancien abonnement couvrant le Reformer
 sont **Membres Fondatrices jusqu'à son échéance** : piscine les jours de séance,

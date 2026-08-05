@@ -109,4 +109,29 @@ describe("Clés production preflight", () => {
     const sur = keyMappingForPlan("sur-mesure");
     expect(sur).toMatchObject({ type: "SUR_MESURE", family: "REFORMER", bonus: null });
   });
+
+  it("supports several sur-mesure plans and merges the legacy singular var", async () => {
+    await loadConfig({
+      SUR_MESURE_PLAN_ID: "sur-mesure-legacy",
+      SUR_MESURE_PLAN_IDS: "sur-mesure-legacy, sur-mesure-2",
+    });
+    const { configuredKeyMappings, keyMappingForPlan, keyMappingForType } = await import(
+      "../src/domain/keyRules.js"
+    );
+    // The overlapping id is deduped: exactly one mapping per plan.
+    const surMesure = configuredKeyMappings().filter((m) => m.type === "SUR_MESURE");
+    expect(surMesure.map((m) => m.planId).sort()).toEqual([
+      "sur-mesure-2",
+      "sur-mesure-legacy",
+    ]);
+    expect(keyMappingForPlan("sur-mesure-2")).toMatchObject({
+      type: "SUR_MESURE",
+      family: "REFORMER",
+      durationDays: 30,
+      baseInvitations: 1,
+      bonus: null,
+    });
+    // Type lookup stays safe: every SUR_MESURE mapping carries identical rules.
+    expect(keyMappingForType("SUR_MESURE")?.invitation.slotRule).toBe("CALM_SLOT_1230");
+  });
 });

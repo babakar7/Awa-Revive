@@ -207,6 +207,16 @@ export function renderSubscriptionsReference(): string {
         </ul>
         <p class="key-cat-note">Plan dédié à une cliente précise : Awa ne le propose jamais spontanément.</p>
       </article>
+      <article class="key-cat-card key-cat-card--accent">
+        <header><h3>2x Reformer · 1x Yoga · 1x Step (par semaine)</h3><span class="key-cat-price">148 000 F · 16 séances · 30 j</span></header>
+        <ul>
+          <li>16 séances au choix : Reformer (Foundation/Sculpt/Intense), Power Yoga, Step</li>
+          <li>Accès piscine pendant toute la durée de la formule (serviette comprise) · bibliothèque · massage membre 25 000 F</li>
+          <li>1 invitation Reformer (12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
+          <li>7 jours de plus sur demande avant expiration · pas de cours en plus (Yoga/Step déjà couverts)</li>
+        </ul>
+        <p class="key-cat-note">Plan dédié à une cliente précise : Awa ne le propose jamais spontanément. Piscine plus large que l’autre plan sur mesure : toute la durée, pas seulement les jours de séance.</p>
+      </article>
       <article class="key-cat-card key-cat-card--plain">
         <header><h3>Carnet natation (sans avantages annexes)</h3><span class="key-cat-price">10 séances à utiliser librement</span></header>
         <ul>
