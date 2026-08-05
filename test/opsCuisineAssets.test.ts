@@ -57,6 +57,14 @@ describe("cuisine PWA assets", () => {
     expect(CUISINE_APP_JS).toContain("cuisine.sound");
   });
 
+  it("keeps the voice alive on a long-running kiosk and labels mute loudly", () => {
+    // WebKit stalls TTS after hours idle — a resume() heartbeat prevents the
+    // board from going silently mute (prod incident 05/08).
+    expect(CUISINE_APP_JS).toMatch(/setInterval\([\s\S]{0,80}speechSynthesis\.resume/);
+    // Muted is an incident, not a preference: the toggle says so in words.
+    expect(CUISINE_APP_JS).toContain("Son coupé");
+  });
+
   it("renders per-item notes on the card AND reads them in the voice", () => {
     // The P0 fix: a per-line instruction ("sans sucre") must reach the kitchen.
     expect(CUISINE_APP_JS).toContain("lnote");

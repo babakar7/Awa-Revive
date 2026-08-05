@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v14";
+const ASSET_VERSION = "v15";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -113,7 +113,9 @@ button.act.undo{background:var(--warn)}
 #clock{font-variant-numeric:tabular-nums;font-weight:600;font-size:.95rem;color:var(--ink-500)}
 .sndbtn{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
 min-height:2.5rem;padding:.3rem .7rem;font-size:1rem;font-weight:700}
-.sndbtn.off{background:var(--cream-100);color:var(--ink-500);border-color:var(--border)}
+/* Muted = incident styling (warn colors), not a dimmed neutral: a silent kitchen
+   board loses orders, so the state must be readable from across the room. */
+.sndbtn.off{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-border);font-size:.85rem}
 .histbtn{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
 min-height:2.5rem;padding:.3rem .7rem;font-size:1rem;font-weight:700}
 .empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:20vh;font-family:var(--serif);font-size:1.3rem;font-style:italic}
@@ -204,7 +206,9 @@ export const CUISINE_APP_JS = String.raw`(function(){
   // OS voices, no network). A header 🔊/🔇 toggle (persisted) mutes bip + voix.
   var sndBtn=document.getElementById('snd');
   var muted=false; try{ muted=localStorage.getItem('cuisine.sound')==='off'; }catch(e){}
-  function paintSnd(){ if(sndBtn){ sndBtn.textContent=muted?'🔇':'🔊'; sndBtn.classList.toggle('off',muted); } }
+  // Muted on a kitchen board is an incident, not a preference — label it loudly
+  // so "the tablet went silent" is diagnosable from across the room.
+  function paintSnd(){ if(sndBtn){ sndBtn.textContent=muted?'🔇 Son coupé':'🔊'; sndBtn.classList.toggle('off',muted); } }
   paintSnd();
   // Voices load asynchronously — grab them now and whenever the browser fires
   // voiceschanged, so the first real announcement isn't spoken into the void.
@@ -232,6 +236,12 @@ export const CUISINE_APP_JS = String.raw`(function(){
     var u=new SpeechSynthesisUtterance(text); u.lang='fr-FR'; var v=frVoice(); if(v) u.voice=v;
     if(urgent){ u.rate=1.05; u.pitch=1.1; }
     speechSynthesis.speak(u); }catch(e){} }
+  // WebKit quirk on long-running kiosks: after hours of idle the TTS engine
+  // silently pauses and every later utterance queues without ever playing — the
+  // board "goes mute" until a reload. A resume() heartbeat (harmless when idle)
+  // plus a kick when the tab returns to the foreground keeps it speaking.
+  if(window.speechSynthesis){ setInterval(function(){ try{ speechSynthesis.resume(); }catch(e){} },4000); }
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'&&window.speechSynthesis){ try{ speechSynthesis.resume(); loadVoices(); }catch(e){} } });
   // ---- one place to format an order line (choice + note) ----
   // Reused by the normal card, the compact READY card, the batching banner AND
   // the voice — so multi-option selections and per-line notes are never dropped

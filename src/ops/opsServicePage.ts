@@ -29,7 +29,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v16";
+const ASSET_VERSION = "v17";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -334,6 +334,11 @@ export const SERVICE_APP_JS = String.raw`(function(){
     speechSynthesis.resume();                        // Chrome pauses the queue at times
     var u=new SpeechSynthesisUtterance(text); u.lang='fr-FR'; var v=frVoice(); if(v) u.voice=v;
     speechSynthesis.speak(u); }catch(e){} }
+  // WebKit quirk on long-running pages: after hours of idle the TTS engine
+  // silently pauses and later utterances queue without playing. A resume()
+  // heartbeat (harmless when idle) + a kick on return-to-foreground prevent it.
+  if(window.speechSynthesis){ setInterval(function(){ try{ speechSynthesis.resume(); }catch(e){} },4000); }
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'&&window.speechSynthesis){ try{ speechSynthesis.resume(); loadVoices(); }catch(e){} } });
   // Voice text mirrors the cuisine board: spot name first, then every line with
   // qty, multi-option selections and per-line notes — nothing shown is unsaid.
   function linePicked(l){ return Array.isArray(l.selections)&&l.selections.length>1
@@ -694,7 +699,17 @@ export const SERVICE_APP_JS = String.raw`(function(){
       } else if(!pushSupported()){
         msg.textContent='Ce téléphone ne supporte pas les alertes. Mets à jour iOS (16.4 minimum) puis réessaie.';
       } else if(('Notification' in window) && Notification.permission==='denied'){
-        msg.textContent='Notifications bloquées pour cette app. Va dans Réglages iOS → Salle Revive → Notifications, puis autorise-les.';
+        // iOS only lists a web app in Réglages → Notifications after it has shown
+        // the permission prompt at least once; a stuck « denied » with no entry
+        // there can only be reset by reinstalling the icon (which also wipes the
+        // pairing cookie — hence the re-pair step).
+        msg.textContent='Notifications bloquées pour cette app. Cherche « Salle » dans Réglages → Notifications ; si elle n’y figure pas, réinitialise-la :';
+        var rsteps=el('ol','asteps');
+        rsteps.appendChild(el('li',null,'Supprime l’icône Salle de l’écran d’accueil'));
+        rsteps.appendChild(el('li',null,'Rouvre la page dans Safari → Partager → « Sur l’écran d’accueil »'));
+        rsteps.appendChild(el('li',null,'Rouvre l’app et réappaire le téléphone (code à créer sur /admin/appareils)'));
+        rsteps.appendChild(el('li',null,'Reviens ici → « Activer les alertes » → autorise'));
+        box.appendChild(rsteps);
       } else if(subscribed){
         msg.textContent='✓ Alertes activées sur ce téléphone.';
         var test=el('button','primary','🔔 Tester la sonnerie');

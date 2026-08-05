@@ -25,6 +25,29 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Voix cuisine muette + faux chemin Réglages iOS — durcissement (5 août 2026)
+
+Deux retours de Babakar après le lot précédent :
+
+- **« La tablette cuisine ne parle plus »** — la DB prod montre le board vivant
+  (tickets ackés en <1 s), donc panne audio côté client. Causes possibles :
+  toggle 🔇 (persisté en localStorage, survit aux relances !), volume iPad, ou
+  le bug WebKit connu : après des heures d'inactivité le moteur TTS se met en
+  pause silencieuse et toutes les phrases suivantes s'empilent sans jamais
+  jouer. Correctifs (cuisine **v15**, service **v17**) :
+  - **Heartbeat `speechSynthesis.resume()` toutes les 4 s** (inoffensif à vide)
+    + relance au retour premier plan, sur les DEUX boards.
+  - Le mute cuisine est maintenant **criant** : bouton « 🔇 Son coupé » en
+    style warn (un board muet est un incident, pas une préférence).
+  - Diagnostic terrain : si « Son activé » ne se prononce pas quand on réactive
+    le 🔊, fermer/rouvrir l'app (moteur TTS bloqué) et vérifier le volume.
+- **« Réglages → Salle Revive → Notifications n'existe pas »** — vrai : iOS ne
+  liste une web app dans Réglages → Notifications qu'APRÈS un premier prompt de
+  permission. Un état « refusé » sans entrée visible ne se réinitialise qu'en
+  **réinstallant l'icône** (ce qui efface aussi le cookie d'appairage). Le
+  panneau 🔔 donne désormais le vrai pas-à-pas : supprimer l'icône → Safari →
+  « Sur l'écran d'accueil » → **réappairer** (/admin/appareils) → réactiver.
+
 ## /ops/service — sonnerie + vibration fiables « commande prête » (5 août 2026)
 
 Retour Babakar : les téléphones accueil ne sonnaient pas au passage READY, alors

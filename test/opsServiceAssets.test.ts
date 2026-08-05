@@ -63,6 +63,18 @@ describe("service PWA assets", () => {
     expect(SERVICE_SW).toContain("vibrate:");
   });
 
+  it("keeps the voice alive on a long-running page (TTS resume heartbeat)", () => {
+    expect(SERVICE_APP_JS).toMatch(/setInterval\([\s\S]{0,80}speechSynthesis\.resume/);
+  });
+
+  it("blocked-notifications help gives the reinstall reset (no bogus Réglages path)", () => {
+    // iOS lists a web app in Réglages → Notifications only after a first prompt;
+    // a stuck « denied » is reset by reinstalling the icon (then re-pairing).
+    expect(SERVICE_APP_JS).toContain("Supprime l’icône Salle");
+    expect(SERVICE_APP_JS).toContain("réappaire");
+    expect(SERVICE_APP_JS).not.toContain("Réglages iOS → Salle Revive");
+  });
+
   it("the 🔔 alerts panel is always shown and walks install → enable → test", () => {
     // Bell is no longer auto-hidden; it dims until subscribed.
     expect(serviceBoardPage("{}")).not.toContain('id="bell" hidden');
