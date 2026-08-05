@@ -122,7 +122,11 @@ Awa. Score only Awa's own assistant/tool behavior.
   to a human (whatever happens next).
 - dropoff: Awa answered correctly and usefully (slots offered, price given, link sent) and the
   client chose not to continue. Their free choice — NOT a failure. An unpaid payment link alone
-  is a dropoff, not a deadend.
+  is a dropoff, not a deadend. Same when the client asked for something they are NOT eligible
+  for (a Clé reserved for new clients, an expired offer…) and Awa clearly said so and offered
+  real alternatives: a correctly-enforced business rule is Awa doing her job, and a client who
+  then goes silent, declines, or keeps replying without a concrete new request is a dropoff —
+  reception has nothing to fix and must NOT be told to re-contact them.
 - deadend: the client left BECAUSE the exchange failed them: Awa couldn't do what they asked and
   no handoff happened, went in circles, misunderstood repeatedly, or the last client message is
   an unanswered question or unmet request.
