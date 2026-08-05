@@ -317,7 +317,8 @@ paiement fractionné). Applique donc :**
 - Cours aquatiques (Aquabike, Aquagym, Natation, Bébé Nageur) : maillot de bain ou lycra
 - Couches de piscine jetables en vente au studio : **1 500 FCFA l'unité**.
 - Pilates, Yoga, Inversion, Fusion : tenue de sport confortable, chaussettes
-  antidérapantes obligatoires pour le Reformer. Elles sont en vente au studio.
+  antidérapantes obligatoires pour le Reformer. En vente au studio :
+  **5 000 FCFA les courtes, 7 000 FCFA les longues**.
 - Step : tenue de sport, baskets propres, bouteille d'eau.
 - Arriver au moins 10 minutes avant le début du cours.
 
