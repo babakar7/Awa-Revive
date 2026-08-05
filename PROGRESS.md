@@ -25,6 +25,31 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## La supervision (owner) peut aussi PRENDRE une commande (5 août 2026)
+
+Demande Babakar : sur la vue superviseur (/ops/owner), pouvoir aussi prendre une
+commande. Le board owner était volontairement lecture seule. Ajouté un bouton
+header **« ＋ Commande »** qui ouvre un composeur allégé (choix de l'espace dans
+une liste déroulante — l'owner n'a pas de tuiles —, articles avec quantités,
+choix obligatoires et notes par ligne, sur place / à emporter, prénom optionnel).
+
+Principe **« le serveur décide »** respecté sans duplication de logique :
+- Le corps de création de commande est extrait en `createSpotOrder(deviceLabel,
+  spotId, body)` dans [opsRoutes.ts](src/ops/opsRoutes.ts), **partagé** par
+  l'endpoint accueil `POST /ops/service/spots/:id/orders` ET le nouveau
+  `POST /ops/owner/spots/:id/orders`. Prix/choix validés côté serveur, session
+  ouverte/réutilisée côté serveur, heading/subheading dérivés de la session.
+- `ownerBootData()` + `/ops/owner/state` exposent désormais `spots` + `menu`
+  (même `pickerMenu()` que la salle et /commander — source unique).
+- La commande créée par l'owner atterrit sur les boards cuisine + accueil via le
+  canal d'événements partagé (bip/voix/push habituels).
+- Le board owner reste **watch-only pour tout le reste** : aucune mutation de
+  ticket existant (verrouillé par test : plus de /preparing,/ready,/urgent,
+  /served,/cancel). Bump `ASSET_VERSION` owner v1→v2.
+- Le composeur salle (réception) n'a PAS été touché — zéro risque de régression
+  sur le flux critique ; l'owner a sa propre variante plus légère (pas de
+  recherche/favoris, inutile pour une prise occasionnelle).
+
 ## Panneau 🔔 conscient de la plateforme — Android débloqué (5 août 2026)
 
 L'un des téléphones accueil est un **Android** (pas tous iPhones) : le panneau

@@ -22,13 +22,25 @@ describe("owner supervision PWA assets", () => {
     expect(() => new Function(OWNER_APP_JS)).not.toThrow();
   });
 
-  it("is strictly read-only — no ticket mutation calls", () => {
-    // The owner watches; it must never POST a state change.
+  it("never MUTATES an existing ticket (watch-only over the live board)", () => {
+    // The owner may take a NEW order, but must never drive a ticket's state.
     expect(OWNER_APP_JS).not.toContain("/preparing");
     expect(OWNER_APP_JS).not.toContain("/ready");
     expect(OWNER_APP_JS).not.toContain("/urgent");
     expect(OWNER_APP_JS).not.toContain("/served");
-    expect(OWNER_APP_JS).not.toMatch(/method:\s*['"]POST['"]/);
+    expect(OWNER_APP_JS).not.toContain("/cancel");
+  });
+
+  it("can take a salle order: spot picker + menu composer posting to /spots/:id/orders", () => {
+    // The one write the owner is allowed: create an order (server decides prices).
+    expect(OWNER_APP_JS).toContain("/spots/");
+    expect(OWNER_APP_JS).toContain("/orders");
+    expect(OWNER_APP_JS).toMatch(/method:\s*['"]POST['"]/);
+    // Required-choice guard + per-line note are carried (no dropped data).
+    expect(OWNER_APP_JS).toContain("obligatoire");
+    expect(OWNER_APP_JS).toContain("e.note=d.note");
+    // The header entry point.
+    expect(ownerBoardPage("{}")).toContain('id="take"');
   });
 
   it("service worker parses, never caches live data, purges only its own caches", () => {

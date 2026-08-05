@@ -389,6 +389,54 @@ export async function serveServiceRoot(_req: FastifyRequest, reply: FastifyReply
   return reply.redirect(`${SERVICE_BASE}/`, 302);
 }
 
+/**
+ * Create a TABLE order at a fixed spot — the shared body behind BOTH the accueil
+ * salle board and the owner supervision board. Server is the single decision
+ * point: prices/choices from the menu snapshot, session opened/reused here, the
+ * heading/subheading derived from the session (never the client). Returns an HTTP
+ * code + JSON body so each caller just forwards it.
+ */
+async function createSpotOrder(
+  deviceLabel: string,
+  spotId: string,
+  b: any,
+): Promise<{ code: number; body: Record<string, unknown> }> {
+  // Validate the ORDER first — a rejected order must never open a table (else the
+  // spot shows "Occupé — aucune commande en cours" with nothing in it).
+  const result = computeExtras(getCafeMenu().items, b.items, { requireChoices: true });
+  if (!result.ok) {
+    return { code: 400, body: { ok: false, message: result.message } };
+  }
+  // Now open the spot's session (or reuse the open one).
+  let session = await getOpenSessionBySpot(spotId);
+  if (!session) {
+    session = await openSessionAtSpot({ spotId, firstName: b.first_name, openedBy: deviceLabel });
+  }
+  if (!session) {
+    return { code: 400, body: { ok: false, message: "Emplacement inconnu." } };
+  }
+  const note = typeof b.note === "string" ? b.note.trim().slice(0, 280) || null : null;
+  const clientRequestId = String(b.client_request_id ?? "").slice(0, 80) || newOpsToken();
+  // Packaging mode is a server-side boolean — the client sends a flag, never trust
+  // anything else. Default (and any non-true value) = sur place.
+  const takeaway = b.takeaway === true;
+  const { ticket } = await createTableTicket({
+    sessionId: session.id,
+    heading: session.short_code,
+    subheading: session.area_name + (session.first_name ? ` · ${session.first_name}` : ""),
+    lines: result.lines,
+    amountXof: result.totalXof,
+    note,
+    clientRequestId,
+    isTest: false,
+    takeaway,
+  });
+  // Refresh the spot's live subtotal on the reception boards (aggregate isn't
+  // carried by the ticket event). Best-effort — never fails the order.
+  await publishOpenSessionUpdate(session.id).catch(() => {});
+  return { code: 200, body: { ok: true, session_id: session.id, id: ticket.id } };
+}
+
 function registerServiceRoutes(app: FastifyInstance): void {
   // ── Static PWA assets ──
   app.get(`${SERVICE_BASE}/manifest.webmanifest`, async (_req, reply) => {
@@ -465,46 +513,12 @@ function registerServiceRoutes(app: FastifyInstance): void {
   // Take an order at a FIXED spot: opens the spot's session if free (or reuses the
   // open one), then creates the kitchen ticket. Prices ALWAYS from the server menu
   // (a required choice is enforced); the heading/subheading come from the spot's
-  // session, never the client.
+  // session, never the client. Shared by the accueil (salle) and owner boards.
   app.post(`${SERVICE_BASE}/spots/:id/orders`, async (req, reply) => {
     const device = await requireAccueil(req, reply);
     if (!device) return reply;
-    const spotId = (req.params as any).id;
-    const b = (req.body as any) ?? {};
-    // Validate the ORDER first — a rejected order must never open a table (else the
-    // spot shows "Occupé — aucune commande en cours" with nothing in it).
-    const result = computeExtras(getCafeMenu().items, b.items, { requireChoices: true });
-    if (!result.ok) {
-      return reply.code(400).type("application/json").send({ ok: false, message: result.message });
-    }
-    // Now open the spot's session (or reuse the open one).
-    let session = await getOpenSessionBySpot(spotId);
-    if (!session) {
-      session = await openSessionAtSpot({ spotId, firstName: b.first_name, openedBy: device.label });
-    }
-    if (!session) {
-      return reply.code(400).type("application/json").send({ ok: false, message: "Emplacement inconnu." });
-    }
-    const note = typeof b.note === "string" ? b.note.trim().slice(0, 280) || null : null;
-    const clientRequestId = String(b.client_request_id ?? "").slice(0, 80) || newOpsToken();
-    // Packaging mode is a server-side boolean — the client sends a flag, never trust
-    // anything else. Default (and any non-true value) = sur place.
-    const takeaway = b.takeaway === true;
-    const { ticket } = await createTableTicket({
-      sessionId: session.id,
-      heading: session.short_code,
-      subheading: session.area_name + (session.first_name ? ` · ${session.first_name}` : ""),
-      lines: result.lines,
-      amountXof: result.totalXof,
-      note,
-      clientRequestId,
-      isTest: false,
-      takeaway,
-    });
-    // Refresh the spot's live subtotal on the reception boards (aggregate isn't
-    // carried by the ticket event). Best-effort — never fails the order.
-    await publishOpenSessionUpdate(session.id).catch(() => {});
-    return reply.type("application/json").send({ ok: true, session_id: session.id, id: ticket.id });
+    const { code, body } = await createSpotOrder(device.label, (req.params as any).id, (req.body as any) ?? {});
+    return reply.code(code).type("application/json").send(body);
   });
 
   // A table auto-clears once its LAST open ticket leaves (served or cancelled) —
@@ -608,20 +622,24 @@ function registerServiceRoutes(app: FastifyInstance): void {
   });
 }
 
-// ═══ Owner supervision PWA (/ops/owner, role "owner") — READ-ONLY ═══
+// ═══ Owner supervision PWA (/ops/owner, role "owner") ═══
 // A manager overview: today's KPIs, device status, and every live ticket (both
-// sources), urgents first. No mutations. Subscribes to the cuisine channel (which
-// already carries all tickets) and exposes /stats for the aggregates.
+// sources), urgents first. Read-only EXCEPT it can also take a salle order (same
+// server-decided createSpotOrder path as the accueil). Subscribes to the cuisine
+// channel (which already carries all tickets) and exposes /stats for the aggregates.
 const OWNER_BASE = "/ops/owner";
 
 async function ownerBootData(): Promise<unknown> {
-  const [tickets, cursor, stats, devices] = await Promise.all([
+  const [tickets, cursor, stats, devices, spots] = await Promise.all([
     listOpenKitchenTickets(),
     latestOpsEventId(CUISINE_CHANNEL),
     ticketStatsToday(),
     listOpsDevices(),
+    listActiveSpots(),
   ]);
-  return { cursor, tickets: tickets.map(kitchenTicketView), stats, devices };
+  // spots + menu let the owner board also TAKE an order (server still decides
+  // prices/choices); the composer reuses the same picker menu as the salle.
+  return { cursor, tickets: tickets.map(kitchenTicketView), stats, devices, spots, menu: buildServiceMenu() };
 }
 
 async function serveOwnerHome(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
@@ -707,5 +725,14 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     const device = await deviceFromReq(req, "owner");
     if (!device) return reply.code(401).send({ error: "unpaired" });
     return pipeOpsEvents(req, reply, CUISINE_CHANNEL);
+  });
+
+  // The owner can ALSO take an order (same server-decided path as the salle). The
+  // new ticket lands on the cuisine + accueil boards via the shared event channel.
+  app.post(`${OWNER_BASE}/spots/:id/orders`, async (req, reply) => {
+    const device = await deviceFromReq(req, "owner");
+    if (!device) return reply.code(401).type("application/json").send({ ok: false, message: "unpaired" });
+    const { code, body } = await createSpotOrder(device.label, (req.params as any).id, (req.body as any) ?? {});
+    return reply.code(code).type("application/json").send(body);
   });
 }

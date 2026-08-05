@@ -53,6 +53,7 @@ const LINES: ExtraLine[] = [
 
 let canapeSpot: string;
 let terrasseSpot: string;
+let pergolaSpot: string;
 
 beforeAll(async () => {
   await migrate();
@@ -66,6 +67,7 @@ beforeEach(async () => {
   const spots = await listActiveSpots();
   canapeSpot = spots.find((s) => s.label === "Canapé")!.id;
   terrasseSpot = spots.find((s) => s.label === "Terrasse")!.id;
+  pergolaSpot = spots.find((s) => s.label === "Pergola")!.id;
 });
 
 let reqSeq = 0;
@@ -445,6 +447,17 @@ describe("service PWA over HTTP", () => {
     return String(pair.headers["set-cookie"]).split(";")[0];
   }
 
+  async function pairOwner(): Promise<string> {
+    const code = newPairCode();
+    await createPairingDevice("Patron", "owner", hashOpsToken(code), new Date(Date.now() + 60_000));
+    const pair = await app.inject({
+      method: "POST", url: "/ops/owner/pair",
+      payload: `code=${code}`, headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    expect(pair.statusCode).toBe(303);
+    return String(pair.headers["set-cookie"]).split(";")[0];
+  }
+
   // Order at a spot, drive it READY, serve it → the table closes. Returns cookie.
   async function orderServeClose(cookie: string, spot: string, reqSuffix: string): Promise<void> {
     const ordered = await app.inject({
@@ -566,5 +579,40 @@ describe("service PWA over HTTP", () => {
     expect((JSON.parse(rec.body).tickets as any[]).length).toBeGreaterThanOrEqual(1);
     // An accueil cookie must NOT reach the cuisine recall (role mismatch → 401).
     expect((await app.inject({ method: "GET", url: "/ops/cuisine/recent", headers: { cookie: accueil } })).statusCode).toBe(401);
+  });
+
+  it("owner boot exposes spots + menu so its composer can take an order", async () => {
+    const cookie = await pairOwner();
+    const st = await app.inject({ method: "GET", url: "/ops/owner/state", headers: { cookie } });
+    expect(st.statusCode).toBe(200);
+    const boot = JSON.parse(st.body);
+    expect((boot.spots as any[]).some((s) => s.label === "Canapé")).toBe(true);
+    expect((boot.menu as any[]).flatMap((c) => c.items).some((i) => i.id === "JANTBI")).toBe(true);
+  });
+
+  it("owner can take a salle order (same server-decided path as the accueil)", async () => {
+    const cookie = await pairOwner();
+    const ordered = await app.inject({
+      method: "POST", url: `/ops/owner/spots/${pergolaSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 1, note: "bien frais" }], first_name: "Patron", client_request_id: "req-owner-1" },
+    });
+    expect(ordered.statusCode).toBe(200);
+    expect(JSON.parse(ordered.body).ok).toBe(true);
+    // The order really seated a session at the spot (visible to the whole ops floor).
+    expect(await getOpenSessionBySpot(pergolaSpot)).not.toBeNull();
+  });
+
+  it("owner order-taking still enforces the device cookie + validates the menu", async () => {
+    // No cookie → 401 (an owner endpoint, not open).
+    const denied = await app.inject({ method: "POST", url: `/ops/owner/spots/${canapeSpot}/orders`, payload: { items: [] } });
+    expect(denied.statusCode).toBe(401);
+    // Paired but a bogus item → 400 and no table seated.
+    const cookie = await pairOwner();
+    const bad = await app.inject({
+      method: "POST", url: `/ops/owner/spots/${canapeSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "NOPE_UNKNOWN", qty: 1 }], client_request_id: "req-owner-bad" },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(await getOpenSessionBySpot(canapeSpot)).toBeNull();
   });
 });

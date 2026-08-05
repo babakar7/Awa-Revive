@@ -11,16 +11,17 @@ import {
 } from "./opsTheme.js";
 
 /**
- * The owner supervision PWA (owner.revive.sn) — a READ-ONLY overview of all live
- * activity for the manager: today's KPIs, device status, and every in-progress
- * ticket (cuisine + salle + livraison), urgents first. Same house style as the
- * cuisine kiosque (inline strings, DOM via textContent, shared Revive theme) but
- * with NO actions — the owner watches, never operates. Subscribes to the cuisine
- * channel (which already carries every ticket) and polls /stats for the aggregates.
+ * The owner supervision PWA (owner.revive.sn) — an overview of all live activity
+ * for the manager: today's KPIs, device status, and every in-progress ticket
+ * (cuisine + salle + livraison), urgents first. Same house style as the cuisine
+ * kiosque (inline strings, DOM via textContent, shared Revive theme). Mostly a
+ * watch-only board, with ONE action: the owner can also take a salle order
+ * (＋ Commande) through the same server-decided path as the accueil. Subscribes to
+ * the cuisine channel (which already carries every ticket) and polls /stats.
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v1";
+const ASSET_VERSION = "v2";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -92,14 +93,67 @@ padding:.22rem .6rem;border-radius:999px;background:var(--plum-50);color:var(--p
 .pill.preparing{background:var(--warn-bg);color:var(--warn)}
 .pill.ready{background:var(--ok-bg);color:var(--ok)}
 #clock{font-variant-numeric:tabular-nums;font-weight:600;font-size:.95rem;color:var(--ink-500)}
-.empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:16vh;font-family:var(--serif);font-size:1.3rem;font-style:italic}`;
+.empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:16vh;font-family:var(--serif);font-size:1.3rem;font-style:italic}
+/* "＋ Commande" — the owner can also take an order. */
+#take{background:var(--plum-600);color:#fff;border:1px solid var(--plum-600);border-radius:999px;
+min-height:2.5rem;padding:.35rem .9rem;font-size:.9rem;font-weight:700}
+/* Order composer (a lean variant of the salle sheet; server still decides prices). */
+.ov{position:fixed;inset:0;z-index:20;background:rgba(33,25,33,.45);display:flex;align-items:flex-end;justify-content:center;animation:pop .2s var(--ease)}
+.sheet{position:relative;display:flex;flex-direction:column;background:var(--surface);width:100%;max-width:34rem;
+height:90vh;height:90dvh;overflow:hidden;overscroll-behavior:contain;
+border-radius:var(--radius-xl) var(--radius-xl) 0 0;box-shadow:var(--shadow-2);
+padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom))}
+.sheet::before{content:"";display:block;width:2.6rem;height:.3rem;border-radius:99px;background:var(--border-strong);margin:0 auto .7rem}
+.sheet h2{font-family:var(--serif);font-size:1.3rem;font-weight:600;letter-spacing:-.02em;margin:.1rem 0 .8rem}
+.sheet select,.sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:var(--radius);border:1px solid var(--border);
+background:#fff;color:var(--ink-900);font-size:1rem;font-family:inherit;margin-bottom:.6rem}
+.sheet textarea{min-height:3rem}
+.modeseg{display:flex;gap:.45rem;margin:0 0 .7rem}
+.modeseg .mode{flex:1;min-height:2.75rem;padding:.7rem;border-radius:var(--radius);border:1px solid var(--border);
+background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:.95rem}
+.modeseg .mode.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.modeseg .mode.away.sel{background:var(--info);border-color:var(--info);color:#fff}
+.list{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.cat{font-family:var(--serif);font-size:.95rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+color:var(--plum-600);border-bottom:1px solid var(--rose);padding-bottom:.35rem;margin:.9rem 0 .3rem}
+.mi{display:flex;align-items:center;gap:.6rem;padding:.6rem 0;border-bottom:1px solid var(--border-soft);flex-wrap:wrap}
+.mi.on{background:var(--plum-50);border-radius:var(--radius);padding:.6rem;margin:.2rem 0;border-bottom:0}
+.mi .nm{flex:1;min-width:8rem;font-size:1.02rem}
+.mi .nm .pr{display:block;color:var(--ink-500);font-size:.82rem;font-weight:500}
+.mi .qbadge{background:var(--ok-strong);color:#fff;border-radius:999px;font-size:.8rem;font-weight:800;
+padding:.12rem .5rem;margin-left:.4rem;animation:pop .18s var(--ease)}
+.stepper{display:flex;align-items:center;gap:.55rem}
+.stepper button{width:2.75rem;height:2.75rem;border-radius:50%;border:1px solid var(--border-strong);
+background:#fff;color:var(--ink-900);font-size:1.35rem;font-weight:700;line-height:1}
+.stepper button.plus{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.stepper button:active{transform:scale(.88)}
+.stepper .qv{min-width:1.3rem;text-align:center;font-weight:800;font-size:1.1rem}
+.creq{margin-top:.5rem;border:1px solid var(--border-soft);border-radius:var(--radius);padding:.55rem .65rem;background:var(--surface-raised)}
+.creq.missing{border-color:var(--warn-border);background:var(--warn-bg)}
+.clab{font-size:.75rem;font-weight:700;color:var(--ink-500);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.05em}
+.creq.missing .clab{color:var(--warn)}
+.cpills{display:flex;gap:.45rem;flex-wrap:wrap}
+.cpill{padding:.55rem .9rem;border-radius:999px;border:1px solid var(--border-strong);background:#fff;color:var(--ink-700);font-weight:600;font-size:.95rem}
+.cpill.sel{background:var(--ok-strong);border-color:var(--ok-strong);color:#fff}
+.mi.needchoice{outline:2px solid var(--warn-border);outline-offset:2px;border-radius:var(--radius)}
+.mi .ln{margin-top:.5rem;font-size:.92rem;padding:.55rem}
+.mi .lnlab{font-size:.75rem;color:var(--ink-500);margin-top:.5rem}
+.wrap{width:100%}
+.nores{color:var(--ink-500);text-align:center;padding:2rem 0}
+.foot{position:sticky;bottom:0;background:var(--surface);padding:.6rem 0 .2rem;display:flex;gap:.6rem;align-items:center;border-top:1px solid var(--border-soft)}
+.total{font-weight:800;font-size:1.05rem;white-space:nowrap}
+.total small{color:var(--ink-500);font-weight:500}
+.foot button.go{flex:1;padding:.95rem;border:none;border-radius:12px;background:var(--ok-strong);color:#fff;font-weight:800;font-size:1.02rem;box-shadow:var(--shadow-1)}
+.foot button.go:disabled{opacity:.45}
+.close-x{position:absolute;top:.55rem;right:.6rem;background:none;border:none;color:var(--ink-500);font-size:1.7rem;line-height:1;z-index:4;min-width:2.75rem;min-height:2.75rem}
+.msg{color:var(--danger);font-size:.9rem;margin:.4rem 0}`;
 
 export function ownerBoardPage(bootJson: string): string {
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Supervision")}<title>Supervision Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Supervision</h1><span id="clock"></span><span class="spacer"></span>
-<span class="count" id="count"></span></header>
+<button id="take" type="button">＋ Commande</button><span class="count" id="count"></span></header>
 <section id="kpi" class="kpi-bar"></section>
 <section id="devs" class="dev-bar"></section>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
@@ -142,8 +196,10 @@ self.addEventListener('fetch',e=>{
 // ── Client app (read-only; SSE cuisine channel + /stats poll) ────────────────
 export const OWNER_APP_JS = String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
-  var boot=window.__BOOT__||{cursor:0,tickets:[],stats:{},devices:[]};
+  var boot=window.__BOOT__||{cursor:0,tickets:[],stats:{},devices:[],spots:[],menu:[]};
   var cursor=boot.cursor||0;
+  var SPOTS=(boot.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
+  var MENU=boot.menu||[];
   var model=new Map();
   (boot.tickets||[]).forEach(function(t){model.set(t.id,t);});
   var board=document.getElementById('board');
@@ -237,6 +293,9 @@ export const OWNER_APP_JS = String.raw`(function(){
   function refreshState(){
     fetch(BASE+'/state',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
       if(!d)return; model=new Map(); (d.tickets||[]).forEach(function(t){model.set(t.id,t);});
+      // Self-heal the composer inputs on a stale cached page.
+      if(d.spots) SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
+      if(d.menu&&d.menu.length) MENU=d.menu;
       if(d.stats)renderStats(d.stats); if(d.devices)renderDevices(d.devices); render();
     }).catch(function(){});
   }
@@ -256,6 +315,108 @@ export const OWNER_APP_JS = String.raw`(function(){
   es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
   es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
   es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); model.delete(d.id); bump(e); render(); });
+
+  // ---- Take an order (the owner can also compose a salle order) ----
+  // Lean variant of the salle composer: pick an espace, add items (required
+  // choices + per-line notes preserved), send. The SERVER decides prices/choices
+  // and opens/reuses the spot's session — same endpoint contract as the salle.
+  function uuid(){ try{ return crypto.randomUUID(); }catch(e){ return 'r-'+Date.now()+'-'+Math.round(Math.random()*1e9); } }
+  function findItem(id){ for(var i=0;i<MENU.length;i++){ for(var j=0;j<MENU[i].items.length;j++){ if(MENU[i].items[j].id===id) return MENU[i].items[j]; } } return null; }
+  function postJSON(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
+  var takeBtn=document.getElementById('take');
+  function openComposer(){
+    var ov=el('div','ov'); var sh=el('div','sheet');
+    sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true'); sh.setAttribute('aria-label','Prendre une commande');
+    var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); document.body.style.overflow=prevOverflow; if(takeBtn&&takeBtn.focus){try{takeBtn.focus();}catch(e){}} }
+    ov.onclick=function(e){ if(e.target===ov) close(); };
+    var x=el('button','close-x','×'); x.setAttribute('aria-label','Fermer'); x.onclick=close; sh.appendChild(x);
+    sh.appendChild(el('h2',null,'Prendre une commande'));
+
+    // Spot picker (owner has no tiles) — server opens/reuses the session.
+    var spotSel=document.createElement('select'); spotSel.setAttribute('aria-label','Espace');
+    var opt0=el('option',null,'— Choisir un espace —'); opt0.value=''; spotSel.appendChild(opt0);
+    SPOTS.forEach(function(sp){ var o=el('option',null,sp.label); o.value=sp.id; spotSel.appendChild(o); });
+    sh.appendChild(spotSel);
+    var fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; sh.appendChild(fn);
+
+    var draft={}; var state={takeaway:false};
+    var modeseg=el('div','modeseg');
+    var mHere=el('button','mode sel'); mHere.type='button'; mHere.textContent='🍽️ Sur place';
+    var mAway=el('button','mode away'); mAway.type='button'; mAway.textContent='📦 À emporter';
+    mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false');
+    mHere.onclick=function(){ state.takeaway=false; mHere.classList.add('sel'); mAway.classList.remove('sel'); mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false'); };
+    mAway.onclick=function(){ state.takeaway=true; mAway.classList.add('sel'); mHere.classList.remove('sel'); mAway.setAttribute('aria-pressed','true'); mHere.setAttribute('aria-pressed','false'); };
+    modeseg.appendChild(mHere); modeseg.appendChild(mAway); sh.appendChild(modeseg);
+
+    var listEl=el('div','list'); sh.appendChild(listEl);
+    var totalEl;
+    function recompute(){ var tot=0; Object.keys(draft).forEach(function(id){ var it=findItem(id); if(it&&draft[id].qty>0) tot+=it.price*draft[id].qty; });
+      totalEl.textContent=''; totalEl.appendChild(document.createTextNode(tot+' F ')); totalEl.appendChild(el('small',null,'(indicatif)')); }
+
+    function itemRow(it){
+      var d=draft[it.id]||{qty:0,choice:'',note:''};
+      var needsChoice=it.choices && it.choices.length;
+      var row=el('div','mi'+(d.qty>0?' on':'')); row.dataset.id=it.id;
+      var nm=el('div','nm'); nm.appendChild(el('span',null,it.name));
+      if(d.qty>0){ nm.appendChild(el('span','qbadge','×'+d.qty)); }
+      nm.appendChild(el('span','pr',it.price+' F')); row.appendChild(nm);
+      var stp=el('div','stepper');
+      var minus=el('button',null,'−'); var qv=el('span','qv',String(d.qty)); var plus=el('button','plus','+');
+      var extra=el('div','wrap'); extra.style.display=d.qty>0?'block':'none';
+      var creq=null;
+      function markChoice(){ if(!creq)return; var dd=draft[it.id]||{qty:0}; var miss=dd.qty>0 && !dd.choice; creq.classList.toggle('missing',miss); row.classList.toggle('needchoice',miss); }
+      function sync(){ var dd=draft[it.id]||{qty:0}; qv.textContent=dd.qty; extra.style.display=dd.qty>0?'block':'none'; row.classList.toggle('on',dd.qty>0);
+        var old=nm.querySelector('.qbadge'); if(old) nm.removeChild(old);
+        if(dd.qty>0){ var b=el('span','qbadge','×'+dd.qty); nm.insertBefore(b,nm.querySelector('.pr')); }
+        markChoice(); recompute(); }
+      minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); };
+      plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync(); };
+      stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
+      if(needsChoice){
+        creq=el('div','creq'); creq.appendChild(el('div','clab',(it.optionLabel||'Choix')+' · obligatoire'));
+        var pills=el('div','cpills');
+        it.choices.forEach(function(ch){ var p=el('button','cpill'+(d.choice===ch?' sel':''),ch);
+          p.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.choice=ch; draft[it.id]=dd;
+            Array.from(pills.children).forEach(function(c){c.classList.remove('sel');}); p.classList.add('sel'); markChoice(); };
+          pills.appendChild(p); });
+        creq.appendChild(pills); extra.appendChild(creq);
+      }
+      extra.appendChild(el('div','lnlab','Note (optionnel)'));
+      var ntn=el('input','ln'); ntn.placeholder='ex: sans sucre, bien chaud…'; ntn.maxLength=140; ntn.value=d.note||'';
+      ntn.oninput=function(){ var dd=draft[it.id]||{qty:0}; dd.note=ntn.value; draft[it.id]=dd; }; extra.appendChild(ntn);
+      row.appendChild(extra); markChoice();
+      return row;
+    }
+    function renderList(){ listEl.textContent='';
+      if(!MENU.length){ listEl.appendChild(el('div','nores','Menu indisponible.')); return; }
+      MENU.forEach(function(cat){ if(!cat.items.length) return; listEl.appendChild(el('div','cat',cat.category));
+        cat.items.forEach(function(it){ listEl.appendChild(itemRow(it)); }); });
+    }
+
+    var gnote=el('textarea'); gnote.placeholder='Note générale (optionnel)'; gnote.maxLength=280; sh.appendChild(gnote);
+    var msg=el('div','msg'); msg.style.display='none'; sh.appendChild(msg);
+    var foot=el('div','foot'); totalEl=el('div','total'); foot.appendChild(totalEl);
+    var go=el('button','go','Envoyer en cuisine');
+    go.onclick=function(){
+      if(!spotSel.value){ msg.textContent='Choisissez un espace.'; msg.style.display='block'; return; }
+      var miss=null; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0 && !miss){ var it=findItem(id); if(it&&it.choices&&it.choices.length&&!d.choice) miss=it; } });
+      if(miss){ msg.textContent='Choisissez « '+(miss.optionLabel||'option')+' » pour '+miss.name+'.'; msg.style.display='block';
+        var r=listEl.querySelector('[data-id="'+miss.id+'"]'); if(r&&r.scrollIntoView) r.scrollIntoView({block:'center'}); return; }
+      var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
+      if(!items.length){ msg.textContent='Ajoutez au moins un article.'; msg.style.display='block'; return; }
+      go.disabled=true; msg.style.display='none';
+      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway}; if(fn.value) body.first_name=fn.value;
+      postJSON('/spots/'+spotSel.value+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
+        if(j&&j.ok){ close(); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
+      }).catch(function(){ go.disabled=false; msg.textContent='Erreur réseau.'; msg.style.display='block'; });
+    };
+    foot.appendChild(go); sh.appendChild(foot);
+    ov.appendChild(sh); document.body.appendChild(ov);
+    renderList(); recompute();
+    try{ spotSel.focus(); }catch(e){}
+  }
+  if(takeBtn) takeBtn.onclick=openComposer;
 
   // Keep the supervision screen awake while open; re-acquire on visibility return.
   var wakeLock=null;
