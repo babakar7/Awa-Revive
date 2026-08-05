@@ -25,6 +25,19 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Panneau 🔔 conscient de la plateforme — Android débloqué (5 août 2026)
+
+L'un des téléphones accueil est un **Android** (pas tous iPhones) : le panneau
+🔔 v16/v17 testait « installée sur l'écran d'accueil » EN PREMIER et montrait
+les étapes Safari/iPhone sans jamais offrir « Activer les alertes » — alors
+qu'Android Chrome pousse très bien depuis un simple onglet. Corrigé (SW
+**v18**) : le gate d'installation ne s'applique qu'à iOS (`IOS &&
+!isStandalone()`), textes par plateforme (déblocage Android en place — 🔒 →
+Autorisations → Notifications — sans réinstallation ; astuce d'installation
+Chrome ; « Ne pas déranger » au lieu du bouton silencieux). Runbook : sur
+l'Android accueil, ouvrir 🔔 → « Activer les alertes » → « Tester la
+sonnerie ».
+
 ## Voix cuisine muette + faux chemin Réglages iOS — durcissement (5 août 2026)
 
 Deux retours de Babakar après le lot précédent :

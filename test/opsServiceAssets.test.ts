@@ -75,6 +75,16 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).not.toContain("Réglages iOS → Salle Revive");
   });
 
+  it("the alerts panel is platform-aware: Android is never gated on install", () => {
+    // Home-screen install is an iOS-only prerequisite for push; on Android the
+    // enable button must be offered even from a plain Chrome tab.
+    expect(SERVICE_APP_JS).toMatch(/IOS\s*&&\s*!isStandalone\(\)/);
+    // Android-specific unblock path (no reinstall) + install tip.
+    expect(SERVICE_APP_JS).toContain("Autorisations → Notifications");
+    expect(SERVICE_APP_JS).toContain("Ajouter à l’écran d’accueil");
+    expect(SERVICE_APP_JS).toContain("Ne pas déranger");
+  });
+
   it("the 🔔 alerts panel is always shown and walks install → enable → test", () => {
     // Bell is no longer auto-hidden; it dims until subscribed.
     expect(serviceBoardPage("{}")).not.toContain('id="bell" hidden');

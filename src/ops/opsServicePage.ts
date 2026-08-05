@@ -29,7 +29,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v17";
+const ASSET_VERSION = "v18";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -648,6 +648,9 @@ export const SERVICE_APP_JS = String.raw`(function(){
   function urlB64(b64){ var pad='='.repeat((4-b64.length%4)%4); var s=(b64+pad).replace(/-/g,'+').replace(/_/g,'/');
     var raw=atob(s); var a=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++)a[i]=raw.charCodeAt(i); return a; }
   // iOS only allows web-push once the PWA runs from the home screen (not Safari).
+  // Android Chrome pushes fine from a plain tab — installing is a nicety there,
+  // never a gate. Branch the walkthrough on the actual platform.
+  var IOS=/iPhone|iPad|iPod/.test(navigator.userAgent||'');
   function isStandalone(){ try{ return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone===true; }catch(e){ return false; } }
   function pushSupported(){ return !!VAPID && ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
   function postSub(sub){ post('/push/subscribe',sub.toJSON()).catch(function(){}); }
@@ -688,7 +691,8 @@ export const SERVICE_APP_JS = String.raw`(function(){
       box.appendChild(el('h3',null,'🔔 Alertes commandes prêtes'));
       var msg=el('p','amsg'); box.appendChild(msg);
       var acts=el('div','cfmacts');
-      if(!isStandalone()){
+      if(IOS && !isStandalone()){
+        // iOS hard-gates push behind a home-screen install — no button to offer yet.
         msg.textContent='Pour être alerté quand une commande est prête, même écran verrouillé, installe l’app sur l’écran d’accueil :';
         var steps=el('ol','asteps');
         steps.appendChild(el('li',null,'Ouvre cette page dans Safari'));
@@ -697,19 +701,30 @@ export const SERVICE_APP_JS = String.raw`(function(){
         box.appendChild(steps);
         box.appendChild(el('p','anote','iPhone : iOS 16.4 ou plus récent requis.'));
       } else if(!pushSupported()){
-        msg.textContent='Ce téléphone ne supporte pas les alertes. Mets à jour iOS (16.4 minimum) puis réessaie.';
+        msg.textContent=IOS?'Ce téléphone ne supporte pas les alertes. Mets à jour iOS (16.4 minimum) puis réessaie.'
+          :'Ce navigateur ne supporte pas les alertes. Ouvre cette page avec Chrome, puis réessaie.';
       } else if(('Notification' in window) && Notification.permission==='denied'){
-        // iOS only lists a web app in Réglages → Notifications after it has shown
-        // the permission prompt at least once; a stuck « denied » with no entry
-        // there can only be reset by reinstalling the icon (which also wipes the
-        // pairing cookie — hence the re-pair step).
-        msg.textContent='Notifications bloquées pour cette app. Cherche « Salle » dans Réglages → Notifications ; si elle n’y figure pas, réinitialise-la :';
-        var rsteps=el('ol','asteps');
-        rsteps.appendChild(el('li',null,'Supprime l’icône Salle de l’écran d’accueil'));
-        rsteps.appendChild(el('li',null,'Rouvre la page dans Safari → Partager → « Sur l’écran d’accueil »'));
-        rsteps.appendChild(el('li',null,'Rouvre l’app et réappaire le téléphone (code à créer sur /admin/appareils)'));
-        rsteps.appendChild(el('li',null,'Reviens ici → « Activer les alertes » → autorise'));
-        box.appendChild(rsteps);
+        if(IOS){
+          // iOS only lists a web app in Réglages → Notifications after it has shown
+          // the permission prompt at least once; a stuck « denied » with no entry
+          // there can only be reset by reinstalling the icon (which also wipes the
+          // pairing cookie — hence the re-pair step).
+          msg.textContent='Notifications bloquées pour cette app. Cherche « Salle » dans Réglages → Notifications ; si elle n’y figure pas, réinitialise-la :';
+          var rsteps=el('ol','asteps');
+          rsteps.appendChild(el('li',null,'Supprime l’icône Salle de l’écran d’accueil'));
+          rsteps.appendChild(el('li',null,'Rouvre la page dans Safari → Partager → « Sur l’écran d’accueil »'));
+          rsteps.appendChild(el('li',null,'Rouvre l’app et réappaire le téléphone (code à créer sur /admin/appareils)'));
+          rsteps.appendChild(el('li',null,'Reviens ici → « Activer les alertes » → autorise'));
+          box.appendChild(rsteps);
+        } else {
+          // Android needs no reinstall: re-allow in place, then come back.
+          msg.textContent='Notifications bloquées. Réautorise-les puis reviens ici :';
+          var asteps=el('ol','asteps');
+          asteps.appendChild(el('li',null,'Dans Chrome : icône 🔒 à gauche de l’adresse → Autorisations → Notifications → Autoriser'));
+          asteps.appendChild(el('li',null,'Ou : appui long sur l’icône de l’app Salle → Infos → Notifications → Autoriser'));
+          asteps.appendChild(el('li',null,'Reviens ici → « Activer les alertes »'));
+          box.appendChild(asteps);
+        }
       } else if(subscribed){
         msg.textContent='✓ Alertes activées sur ce téléphone.';
         var test=el('button','primary','🔔 Tester la sonnerie');
@@ -721,13 +736,15 @@ export const SERVICE_APP_JS = String.raw`(function(){
           }).catch(function(){ test.disabled=false; test.textContent='🔔 Tester la sonnerie'; msg.textContent='Erreur réseau — réessaie.'; });
         };
         acts.appendChild(test);
-        box.appendChild(el('p','anote','Pas de son ? Vérifie le bouton silencieux (côté du téléphone) et le volume.'));
+        box.appendChild(el('p','anote',IOS?'Pas de son ? Vérifie le bouton silencieux (côté du téléphone) et le volume.'
+          :'Pas de son ? Vérifie le volume des notifications et le mode Ne pas déranger.'));
       } else {
         msg.textContent='Active les alertes pour être prévenu dès qu’une commande est prête, même écran verrouillé.';
         var go=el('button','primary','Activer les alertes');
         go.onclick=function(){ go.disabled=true; go.textContent='…';
           subscribeNow(function(){ go.disabled=false; go.textContent='Activer les alertes'; paint(); }); };
         acts.appendChild(go);
+        if(!IOS && !isStandalone()) box.appendChild(el('p','anote','Astuce : installe aussi l’app (menu Chrome ⋮ → « Ajouter à l’écran d’accueil ») pour des alertes plus fiables.'));
       }
       var closeb=el('button',null,'Fermer'); closeb.onclick=close; acts.appendChild(closeb);
       box.appendChild(acts);
