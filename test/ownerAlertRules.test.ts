@@ -6,6 +6,7 @@ import {
   isKnownInformationalSubject,
   ownerAlertVerdict,
   shouldAlertOwner,
+  shouldNotifyReception,
 } from "../src/domain/ownerAlertRules.js";
 
 describe("ownerAlertVerdict", () => {
@@ -68,6 +69,29 @@ describe("ownerAlertVerdict", () => {
 
   it("reports an unknown subject as unclassified rather than guessing", () => {
     expect(ownerAlertVerdict("Bulletin météo")).toEqual({ alert: false, reason: "unclassified" });
+  });
+});
+
+describe("shouldNotifyReception", () => {
+  it("stops sending reception the daily recap and bare 'departure authorized'", () => {
+    expect(shouldNotifyReception("📋 Récap du jour — conversations & suivis")).toBe(false);
+    expect(shouldNotifyReception("✅ Livraison payée — départ autorisé")).toBe(false);
+    expect(shouldNotifyReception("🧪 TEST — ✅ Livraison payée — départ autorisé")).toBe(false);
+  });
+
+  it("still notifies reception for interventions and the delivery/cash FYIs it acts on", () => {
+    const kept = [
+      "🙋🏾 Handoff client — la cliente veut parler à quelqu'un",
+      "💸 REMBOURSEMENT à faire — 15000 FCFA",
+      "⚠️ Résa abonnement à confirmer manuellement",
+      "🔴 Conversation à reprendre — cas grave",
+      "🛵 Nouvelle commande livraison",
+      "🗓️ Nouvelle livraison programmée",
+      "💵 Espèces choisies — livraison",
+    ];
+    for (const subject of kept) {
+      expect(shouldNotifyReception(subject), subject).toBe(true);
+    }
   });
 });
 

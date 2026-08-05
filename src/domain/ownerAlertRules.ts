@@ -100,6 +100,22 @@ export function shouldAlertOwner(subject: string, override?: boolean): boolean {
 }
 
 /**
+ * Sujets informatifs que la RÉCEPTION ne reçoit plus (le gérant ne les a de
+ * toute façon jamais reçus). Tout le reste continue de partir vers la réception :
+ * les alertes d'intervention ET les FYI livraison qu'elle traite (nouvelle
+ * commande, espèces à encaisser). Seuls le récap quotidien et le simple « départ
+ * autorisé » d'une livraison déjà payée en ligne sont coupés.
+ * NB : ces sujets restent classés « informatif » côté gérant
+ * (INFORMATIONAL_SUBJECT_PATTERNS) ; cette liste ne concerne QUE la réception.
+ */
+const RECEPTION_SUPPRESSED_PATTERNS: RegExp[] = [/départ autorisé/i, /récap du jour/i];
+
+/** La réception (désormais WhatsApp uniquement) doit-elle recevoir ce sujet ? */
+export function shouldNotifyReception(subject: string): boolean {
+  return !RECEPTION_SUPPRESSED_PATTERNS.some((pattern) => pattern.test(subject));
+}
+
+/**
  * Le sujet est-il explicitement rangé du côté « information » ? Utilisé par le
  * test de couverture qui balaie le dépôt : il exige que chaque sujet réel soit
  * soit une intervention, soit informatif — jamais « unclassified » par oubli.

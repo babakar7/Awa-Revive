@@ -7,7 +7,7 @@ import {
   recordReceptionLog,
 } from "../domain/notificationRepo.js";
 import { STAFF_FOOTER } from "../domain/notificationRules.js";
-import { formatOwnerAlert, shouldAlertOwner } from "../domain/ownerAlertRules.js";
+import { formatOwnerAlert, shouldAlertOwner, shouldNotifyReception } from "../domain/ownerAlertRules.js";
 
 /**
  * Automatic notifications to the reception team — handoffs, refunds,
@@ -324,11 +324,10 @@ function alertOwner(subject: string, body: string): void {
 
 export interface NotifyReceptionOpts {
   /**
-   * Café/bar orders: reception lives on WhatsApp, so make WhatsApp the primary
-   * channel and only fall back to email if the WhatsApp send ultimately fails.
-   * Left off (default) for money/escalation paths (refunds, handoffs, crash
-   * alerts), which keep the belt-and-braces dual-channel send — email is still
-   * the reliable channel there while the reception template is pending.
+   * DEPRECATED / no-op. Reception is now WhatsApp-only (the email leg was
+   * removed), so there is no longer a "WhatsApp-first, email-fallback" vs
+   * "dual-channel" distinction. Kept on the type so existing callers that still
+   * pass `whatsappFirst: true` keep compiling; it no longer changes behaviour.
    */
   whatsappFirst?: boolean;
   /**
@@ -366,40 +365,16 @@ export function notifyReception(
   // DEFAULT here; a caller that knows the window is open can pass preferTemplate:false.
   const preferTemplate = opts.preferTemplate ?? true;
 
-  // Le propriétaire est prévenu en parallèle, jamais en cascade : une réception
+  // Le gérant est prévenu en parallèle, jamais en cascade : une réception
   // injoignable (fenêtre fermée, template refusé) ne doit pas emporter l'alerte
-  // du gérant avec elle. C'est tout l'intérêt d'un second canal.
+  // du gérant avec elle. Toute alerte d'intervention lui part sur WhatsApp.
   if (shouldAlertOwner(subject, opts.ownerAlert)) alertOwner(subject, body);
 
-  if (opts.whatsappFirst) {
-    // WhatsApp primary; email only as a safety net if WhatsApp fails.
-    sendReceptionWhatsAppDetailed(subject, body, { preferTemplate })
-      .then(({ path, waMessageId }) => {
-        console.log(`[notify] Reception notified on WhatsApp (${path}): ${subject}`);
-        void recordReceptionLog(config.RECEPTION_PHONE, logBody, path, null, waMessageId);
-      })
-      .catch((err) => {
-        console.error(`[notify] Café WhatsApp to reception failed (${subject}):`, err);
-        void recordReceptionLog(config.RECEPTION_PHONE, logBody, "failed", String(err).slice(0, 300));
-        if (emailNotificationsEnabled()) {
-          sendReceptionEmail(subject, body)
-            .then(() => console.log(`[notify] Reception emailed (WhatsApp fallback): ${subject}`))
-            .catch((e) => console.error(`[notify] Email fallback also failed (${subject}):`, e));
-        } else {
-          console.warn(`[notify] BREVO_API_KEY not set — no email fallback for: ${subject}`);
-        }
-      });
-    return;
-  }
-
-  // Default: independent dual-channel (email is the reliable leg for critical paths).
-  if (!emailNotificationsEnabled()) {
-    console.warn(`[notify] BREVO_API_KEY not set — reception NOT emailed: ${subject}`);
-  } else {
-    sendReceptionEmail(subject, body)
-      .then(() => console.log(`[notify] Reception emailed: ${subject}`))
-      .catch((err) => console.error(`[notify] Failed to email reception (${subject}):`, err));
-  }
+  // Réception = WhatsApp UNIQUEMENT (l'e-mail réception a été retiré), et
+  // seulement les sujets qu'elle doit voir : le récap quotidien et le simple
+  // « départ autorisé » ne partent plus (voir shouldNotifyReception). Les FYI
+  // commande/espèces livraison, elles, continuent d'arriver.
+  if (!shouldNotifyReception(subject)) return;
 
   sendReceptionWhatsAppDetailed(subject, body, { preferTemplate })
     .then(({ path, waMessageId }) => {
