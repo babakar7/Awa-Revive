@@ -25,6 +25,42 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## /ops/service — sonnerie + vibration fiables « commande prête » (5 août 2026)
+
+Retour Babakar : les téléphones accueil ne sonnaient pas au passage READY, alors
+que les réglages iOS semblaient OK. Diagnostic (vérifié en prod) :
+
+- Le serveur **envoyait déjà** un push web au TABLE→READY vers le rôle `accueil`
+  ([opsRoutes.ts](src/ops/opsRoutes.ts) `/tickets/:id/ready`), clés VAPID bien
+  présentes sur Railway. Le tuyau marchait.
+- **Cause réelle** : sur 3 iPhones accueil, **1 seul était abonné** (Syndel, DB
+  prod). Sur iPhone le push PWA exige l'app **installée sur l'écran d'accueil**
+  (iOS 16.4+) ; ouverte dans Safari, l'ancienne cloche 🔔 était *cachée*
+  (`pushSupported()`→false) et l'app n'apparaissait jamais dans Réglages iOS →
+  d'où « les réglages ne montrent rien ». Meryl et LInsey jamais abonnées.
+
+Corrections livrées (SW **v16**) :
+
+- **Panneau 🔔 Alertes toujours visible** (fini l'auto-masquage), atténué tant
+  que CE téléphone n'est pas abonné → couverture visible d'un coup d'œil. Il
+  guide selon l'état : pas installée → pas-à-pas « Partager → Sur l'écran
+  d'accueil » ; permission à demander → « Activer les alertes » ; refusée →
+  chemin Réglages iOS ; abonnée → « ✓ activées » + **« Tester la sonnerie »**.
+- **Endpoint `POST /ops/service/push/test`** (`pushToDevice`) qui sonne
+  UNIQUEMENT ce téléphone → preuve immédiate sans attendre une vraie commande.
+- **Vibration** ajoutée à la notif push (`vibrate:[…]`) et **alerte premier plan
+  renforcée** au READY : triple bip + vibration + voix « Commande prête,
+  {espace} » (respecte le toggle 🔊).
+- `.env.example` documente enfin `VAPID_PUBLIC_KEY/PRIVATE_KEY/SUBJECT`
+  (`npx web-push generate-vapid-keys`).
+
+**Runbook ops (à faire sur CHAQUE iPhone accueil)** : installer la PWA sur
+l'écran d'accueil → ouvrir 🔔 → « Activer les alertes » → « Tester la sonnerie »
+(écran verrouillé). Au 5/08 seule Syndel était abonnée ; **Meryl et LInsey
+restent à faire**. Rappel : **mode silencieux (bouton latéral) = pas de son**,
+seulement la vibration — le son de notif est le son système, non
+personnalisable.
+
 ## Confirmations /ops/service : le verbe sur les boutons (4 août 2026)
 
 Retour Babakar : le `confirm()` natif d'annulation affichait « Annuler / OK » —

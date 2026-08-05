@@ -52,6 +52,29 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("Oui, abandonner");
   });
 
+  it("READY alert reinforces beep + vibration + voice (foreground)", () => {
+    // The ticket_update READY branch routes through readyAlert, not a bare beep.
+    expect(SERVICE_APP_JS).toContain("readyAlert(t)");
+    expect(SERVICE_APP_JS).toContain("Commande prête");
+    expect(SERVICE_APP_JS).toContain("navigator.vibrate");
+  });
+
+  it("the SW push notification vibrates the phone", () => {
+    expect(SERVICE_SW).toContain("vibrate:");
+  });
+
+  it("the 🔔 alerts panel is always shown and walks install → enable → test", () => {
+    // Bell is no longer auto-hidden; it dims until subscribed.
+    expect(serviceBoardPage("{}")).not.toContain('id="bell" hidden');
+    expect(SERVICE_APP_JS).toContain("paintBell");
+    expect(SERVICE_APP_JS).toContain("isStandalone");
+    expect(SERVICE_APP_JS).toContain("Sur l’écran d’accueil");
+    expect(SERVICE_APP_JS).toContain("Activer les alertes");
+    expect(SERVICE_APP_JS).toContain("Tester la sonnerie");
+    // Test button hits the per-device endpoint.
+    expect(SERVICE_APP_JS).toContain("/push/test");
+  });
+
   it("offers the sur place / à emporter choice and sends it in the order body", () => {
     expect(SERVICE_APP_JS).toContain("Sur place");
     expect(SERVICE_APP_JS).toContain("À emporter");

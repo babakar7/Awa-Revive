@@ -3,7 +3,9 @@ import { config } from "../config.js";
 import type { OpsDeviceRole } from "../domain/opsDeviceRepo.js";
 import {
   listPushSubscriptionsForRole,
+  listPushSubscriptionsForDevice,
   deletePushSubscription,
+  type PushSubscription,
 } from "../domain/pushRepo.js";
 
 /**
@@ -44,13 +46,10 @@ export interface PushPayload {
 }
 
 /**
- * Send a notification to every active subscription of a role (e.g. all reception
- * phones). Fire-and-forget friendly: never throws; prunes Gone subscriptions.
- * Returns how many were delivered without error.
+ * Fan a payload out to a set of subscriptions. Never throws; prunes Gone (404/410)
+ * subscriptions so the table self-cleans. Returns how many delivered without error.
  */
-export async function pushToRole(role: OpsDeviceRole, payload: PushPayload): Promise<number> {
-  if (!pushEnabled()) return 0;
-  const subs = await listPushSubscriptionsForRole(role);
+async function fanOut(subs: PushSubscription[], payload: PushPayload): Promise<number> {
   if (subs.length === 0) return 0;
   const body = JSON.stringify(payload);
   let delivered = 0;
@@ -71,4 +70,23 @@ export async function pushToRole(role: OpsDeviceRole, payload: PushPayload): Pro
     }),
   );
   return delivered;
+}
+
+/**
+ * Send a notification to every active subscription of a role (e.g. all reception
+ * phones). Fire-and-forget friendly: never throws; prunes Gone subscriptions.
+ * Returns how many were delivered without error.
+ */
+export async function pushToRole(role: OpsDeviceRole, payload: PushPayload): Promise<number> {
+  if (!pushEnabled()) return 0;
+  return fanOut(await listPushSubscriptionsForRole(role), payload);
+}
+
+/**
+ * Send to a single device's subscriptions only — powers the in-app "Tester la
+ * sonnerie" button so a phone can prove its lock-screen alert works.
+ */
+export async function pushToDevice(deviceId: string, payload: PushPayload): Promise<number> {
+  if (!pushEnabled()) return 0;
+  return fanOut(await listPushSubscriptionsForDevice(deviceId), payload);
 }

@@ -46,3 +46,14 @@ export async function listPushSubscriptionsForRole(
   );
   return res.rows as PushSubscription[];
 }
+
+/** A single device's subscriptions — used by the "Tester la sonnerie" self-check. */
+export async function listPushSubscriptionsForDevice(
+  deviceId: string,
+): Promise<PushSubscription[]> {
+  const res = await pool.query(
+    `select endpoint, p256dh, auth from push_subscriptions where device_id = $1`,
+    [deviceId],
+  );
+  return res.rows as PushSubscription[];
+}

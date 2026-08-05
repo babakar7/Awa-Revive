@@ -38,7 +38,7 @@ import {
 } from "../domain/serviceSessionRepo.js";
 import { getCafeMenu, computeExtras, pickerMenu } from "../lib/cafeMenu.js";
 import { savePushSubscription } from "../domain/pushRepo.js";
-import { pushToRole } from "./pushSender.js";
+import { pushToRole, pushToDevice } from "./pushSender.js";
 import { ticketItemsSummary } from "../domain/kitchenTicketRules.js";
 import { renderOpsIcon } from "./opsIcon.js";
 import {
@@ -566,6 +566,20 @@ function registerServiceRoutes(app: FastifyInstance): void {
     }
     await savePushSubscription(device.id, { endpoint, p256dh, auth });
     return reply.type("application/json").send({ ok: true });
+  });
+
+  // Self-check: ring THIS phone's lock screen so staff can prove alerts work
+  // (and catch a silent-mode / low-volume phone) without waiting on a real order.
+  app.post(`${SERVICE_BASE}/push/test`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const sent = await pushToDevice(device.id, {
+      title: "🔔 Test — la sonnerie fonctionne",
+      body: "Si tu vois et entends ceci, les alertes commandes prêtes sont bien actives.",
+      url: "/ops/service/",
+      tag: "push-test",
+    });
+    return reply.type("application/json").send({ sent });
   });
 
   // Fresh board state (JSON) — the client re-fetches this on load so a stale

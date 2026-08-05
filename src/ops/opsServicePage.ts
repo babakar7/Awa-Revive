@@ -29,7 +29,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v15";
+const ASSET_VERSION = "v16";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -109,6 +109,8 @@ button.add{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 .empty button{font-family:var(--sans);font-style:normal}
 #bell{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border);border-radius:999px;
 min-height:2.75rem;padding:.45rem .9rem;font-size:.85rem;font-weight:700}
+/* Dimmed until THIS phone is subscribed — coverage visible at a glance. */
+#bell.off{background:var(--cream-100);color:var(--ink-500);border-color:var(--border)}
 #bell[hidden]{display:none}
 #hist{background:var(--rose);color:var(--plum-700);border:1px solid var(--plum-200);border-radius:999px;
 min-height:2.75rem;padding:.45rem .8rem;font-size:1rem;font-weight:700}
@@ -146,6 +148,13 @@ width:100%;max-width:22rem;animation:sheet-up .25s var(--ease)}
 .cfm button{min-height:3rem;border-radius:var(--radius);border:1px solid var(--border-strong);
 background:#fff;color:var(--ink-700);font-weight:700;font-size:1rem}
 .cfm button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+.cfm button.primary{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.cfm button:disabled{opacity:.5}
+/* Alerts panel (🔔) — install/enable/test walkthrough. */
+.cfm h3{font-family:var(--serif);font-size:1.2rem;font-weight:600;margin:.1rem 0 .7rem}
+.cfm .amsg{font-size:1rem;font-weight:500;color:var(--ink-800);margin:0 0 .8rem}
+.cfm .asteps{margin:0 0 .8rem 1.1rem;padding:0;font-size:.95rem;color:var(--ink-700);line-height:1.55}
+.cfm .anote{font-size:.82rem;font-weight:400;color:var(--ink-500);margin:.7rem 0 0}
 /* Stable height + internal scroll: switching categories changes only the inner
    list, never the sheet box, so the sheet never jumps as list size varies. */
 .sheet{position:relative;display:flex;flex-direction:column;background:var(--surface);width:100%;max-width:34rem;
@@ -214,7 +223,7 @@ export function serviceBoardPage(bootJson: string): string {
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Salle")}<title>Salle Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
-<header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="hist" aria-label="Tables récentes">🕐</button><button id="snd" class="sndbtn" aria-label="Activer/couper le son">🔊</button><button id="bell" hidden>🔔 Alertes</button><span class="count" id="count"></span></header>
+<header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="hist" aria-label="Tables récentes">🕐</button><button id="snd" class="sndbtn" aria-label="Activer/couper le son">🔊</button><button id="bell" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
 <script>window.__BOOT__=${bootJson}</script>
@@ -258,6 +267,7 @@ self.addEventListener('push',e=>{
   const title=d.title||'Revive';
   e.waitUntil(self.registration.showNotification(title,{
     body:d.body||'', tag:d.tag, renotify:true, requireInteraction:true,
+    vibrate:[200,100,200,100,300],   // Android vibrates; iOS vibrates per system settings
     icon:'${BASE}/icon-192.png', badge:'${BASE}/icon-192.png',
     data:{url:d.url||'${BASE}/'}
   }));
@@ -337,6 +347,11 @@ export const SERVICE_APP_JS = String.raw`(function(){
     return t.subheading||t.heading||''; }
   function newSpeech(t){ var w=spotSpeech(t); var it=itemsSpeech(t);
     return 'Nouvelle commande'+(t.takeaway?' à emporter':'')+(w?', '+w:'')+(it?'. '+it:''); }
+  // A dish going READY is the moment a server must act on — hit it harder than a
+  // new order: triple bip + vibration (no-op on iOS but free) + a spoken cue.
+  function vibrate(pattern){ try{ if(navigator.vibrate) navigator.vibrate(pattern); }catch(e){} }
+  function readyAlert(t){ if(muted) return; beep(); setTimeout(beep,260); setTimeout(beep,520);
+    vibrate([200,100,200,100,300]); speak('Commande prête'+((function(){var w=spotSpeech(t);return w?', '+w:'';})())); }
 
   function post(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
 
@@ -622,30 +637,90 @@ export const SERVICE_APP_JS = String.raw`(function(){
   }
 
   // ---- Web Push (lock-screen "commande prête") ----
+  // The bell is ALWAYS visible and dims (.off) until THIS phone is subscribed, so
+  // a phone that won't ring is obvious. Tapping opens a panel that walks staff
+  // from « installe la PWA » → « active les alertes » → « teste la sonnerie ».
   function urlB64(b64){ var pad='='.repeat((4-b64.length%4)%4); var s=(b64+pad).replace(/-/g,'+').replace(/_/g,'/');
     var raw=atob(s); var a=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++)a[i]=raw.charCodeAt(i); return a; }
-  function pushSupported(){ return VAPID && ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
+  // iOS only allows web-push once the PWA runs from the home screen (not Safari).
+  function isStandalone(){ try{ return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone===true; }catch(e){ return false; } }
+  function pushSupported(){ return !!VAPID && ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
   function postSub(sub){ post('/push/subscribe',sub.toJSON()).catch(function(){}); }
+  var subscribed=false;
+  function paintBell(){ if(bell) bell.classList.toggle('off',!subscribed); }
+  paintBell();
   function initPush(){
-    if(!pushSupported()){ bell.hidden=true; return; }
+    if(!('serviceWorker' in navigator)){ subscribed=false; paintBell(); return; }
     navigator.serviceWorker.ready.then(function(reg){
       return reg.pushManager.getSubscription().then(function(sub){
-        if(sub && Notification.permission==='granted'){ bell.hidden=true; postSub(sub); }
-        else { bell.hidden=false; }
+        subscribed=!!(sub && (!('Notification' in window) || Notification.permission==='granted'));
+        if(sub && subscribed) postSub(sub);   // self-heal the server row on every load
+        paintBell();
       });
-    }).catch(function(){});
+    }).catch(function(){ subscribed=false; paintBell(); });
   }
-  bell.onclick=function(){
-    if(!pushSupported())return; unlock();
+  // Ask permission + subscribe; onDone(true) on success. Must run from a gesture.
+  function subscribeNow(onDone){
+    unlock();
+    if(!pushSupported()){ onDone(false); return; }
     Notification.requestPermission().then(function(p){
-      if(p!=='granted'){ alert('Notifications refusées. Activez-les dans les réglages du téléphone pour être alerté des commandes prêtes.'); return; }
+      if(p!=='granted'){ subscribed=false; paintBell(); onDone(false); return; }
       navigator.serviceWorker.ready.then(function(reg){
         reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64(VAPID)}).then(function(sub){
-          postSub(sub); bell.hidden=true;
-        }).catch(function(){ alert('Impossible d\'activer les alertes sur cet appareil.'); });
+          postSub(sub); subscribed=true; paintBell(); onDone(true);
+        }).catch(function(){ onDone(false); });
       });
-    });
-  };
+    }).catch(function(){ onDone(false); });
+  }
+  function openAlerts(){
+    unlock();
+    var ov=el('div','ov center'); var box=el('div','cfm');
+    box.setAttribute('role','dialog'); box.setAttribute('aria-modal','true'); box.setAttribute('aria-label','Alertes commandes prêtes');
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); }
+    ov.onclick=function(e){ if(e.target===ov) close(); };
+    function paint(){
+      box.textContent='';
+      box.appendChild(el('h3',null,'🔔 Alertes commandes prêtes'));
+      var msg=el('p','amsg'); box.appendChild(msg);
+      var acts=el('div','cfmacts');
+      if(!isStandalone()){
+        msg.textContent='Pour être alerté quand une commande est prête, même écran verrouillé, installe l’app sur l’écran d’accueil :';
+        var steps=el('ol','asteps');
+        steps.appendChild(el('li',null,'Ouvre cette page dans Safari'));
+        steps.appendChild(el('li',null,'Bouton Partager, puis « Sur l’écran d’accueil »'));
+        steps.appendChild(el('li',null,'Rouvre l’app depuis son icône, puis reviens ici'));
+        box.appendChild(steps);
+        box.appendChild(el('p','anote','iPhone : iOS 16.4 ou plus récent requis.'));
+      } else if(!pushSupported()){
+        msg.textContent='Ce téléphone ne supporte pas les alertes. Mets à jour iOS (16.4 minimum) puis réessaie.';
+      } else if(('Notification' in window) && Notification.permission==='denied'){
+        msg.textContent='Notifications bloquées pour cette app. Va dans Réglages iOS → Salle Revive → Notifications, puis autorise-les.';
+      } else if(subscribed){
+        msg.textContent='✓ Alertes activées sur ce téléphone.';
+        var test=el('button','primary','🔔 Tester la sonnerie');
+        test.onclick=function(){ test.disabled=true; test.textContent='Envoi…';
+          post('/push/test',{}).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
+            test.disabled=false; test.textContent='🔔 Tester la sonnerie';
+            if(j&&j.sent>0){ msg.textContent='Envoyé ✓ — verrouille l’écran : tu dois entendre la sonnerie et vibrer dans quelques secondes.'; }
+            else { subscribed=false; paintBell(); paint(); }
+          }).catch(function(){ test.disabled=false; test.textContent='🔔 Tester la sonnerie'; msg.textContent='Erreur réseau — réessaie.'; });
+        };
+        acts.appendChild(test);
+        box.appendChild(el('p','anote','Pas de son ? Vérifie le bouton silencieux (côté du téléphone) et le volume.'));
+      } else {
+        msg.textContent='Active les alertes pour être prévenu dès qu’une commande est prête, même écran verrouillé.';
+        var go=el('button','primary','Activer les alertes');
+        go.onclick=function(){ go.disabled=true; go.textContent='…';
+          subscribeNow(function(){ go.disabled=false; go.textContent='Activer les alertes'; paint(); }); };
+        acts.appendChild(go);
+      }
+      var closeb=el('button',null,'Fermer'); closeb.onclick=close; acts.appendChild(closeb);
+      box.appendChild(acts);
+    }
+    paint();
+    ov.appendChild(box); document.body.appendChild(ov); try{ box.querySelector('button').focus(); }catch(e){}
+  }
+  if(bell) bell.onclick=openAlerts;
 
   // ---- Recent history (read-only): today's closed tables + indicative subtotal ----
   // The "addition" a client asks for after their table was auto-freed on the last
@@ -701,7 +776,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
   es.addEventListener('session_update',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); });
   es.addEventListener('session_closed',function(e){ var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
   es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var isNew=!tickets.has(t.id); tickets.set(t.id,t); render(); if(isNew){ beep(); speak(newSpeech(t)); } });
-  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ beep(); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
+  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ readyAlert(t); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
   es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); render(); });
 
   // Keep the reception screen awake while the board is open. Wake Lock drops when
