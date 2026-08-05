@@ -4722,3 +4722,30 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   les panneaux, la cohérence cockpit/fiche, la préparation globale, la panne
   Wix, les erreurs DB isolées, le double clic, l'union/résolution Wix unique et
   la conservation des décisions manuelles.
+
+## 2026-08-05 — Deuxième plan sur mesure « 2x Reformer 1x Yoga 1x Step »
+
+- Nouveau plan Wix taillé pour une cliente précise : **148 000 F · 16 séances ·
+  30 jours** (2x Reformer + 1x Yoga + 1x Step par semaine), créé à la main dans
+  Wix (`d0fe7f79-…`), connecté aux services Reformer (3 niveaux), Power Yoga et
+  Step. Description Wix remplie via l'API v3. Tarification retenue : Reformer
+  12 000 F, Yoga **baissé à 7 000 F** (décision Babakar, aligné sur le Mat),
+  Step 6 000 F — total exact 148 000 F, pas d'arrondi.
+- **`SUR_MESURE_PLAN_IDS` remplace `SUR_MESURE_PLAN_ID`** (liste séparée par
+  virgules, le singulier historique reste accepté et fusionné) : un mapping
+  `SUR_MESURE` par plan dans `configuredKeyMappings()`. Tous les mappings
+  SUR_MESURE partagent exactement les mêmes règles (seul le planId change), ce
+  qui garde `keyMappingForType()` sûr alors que le type n'est plus unique.
+- Avantages branchés comme l'autre sur mesure : 1 invitation Reformer
+  (12h30 lun–ven), prolongation 7 jours, bibliothèque, massage membre, pas de
+  cours en plus. **Différence voulue : piscine pendant TOUTE la durée de la
+  formule** (l'autre plan = jours de séance uniquement) — mémo et
+  business-info le précisent.
+- Railway : `SUR_MESURE_PLAN_IDS` posé avec les deux ids ; le nouveau plan
+  ajouté à `AWA_SELLABLE_PLAN_IDS` (Awa peut vendre par lien de paiement si la
+  cliente le demande par son nom — jamais proposé spontanément, prompt et
+  business-info généralisés aux deux plans).
+- Piège évité : créer le plan dans Wix ne suffit pas — sans l'id dans
+  `SUR_MESURE_PLAN_IDS` le plan reste « dark » (vendu comme plan normal, zéro
+  automation Clé), et sans `AWA_SELLABLE_PLAN_IDS` Awa refuse le lien de
+  paiement.
