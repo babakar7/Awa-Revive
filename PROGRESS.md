@@ -25,6 +25,23 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Review : trace `outbound_filter` périmée re-flaguait des conversations saines (6 août 2026)
+
+Faux positif « À reprendre » 06/08 16:30 (Bitty, +221776375930) : sa réservation
+Reformer du 11/08 était **confirmée et le message envoyé**, pourtant la review a
+produit « bloquée par le filtre de sortie ». Cause : `reviewTurns` relit les
+**30 derniers tours**, et `normalizeVerdictForTranscript` forçait
+`technical_failure` dès qu'une trace `outbound_filter` apparaissait **n'importe
+où** dans la fenêtre — ici celle du 04/08, incident déjà reviewé (2 items) et
+depuis corrigé (coverage guard ne bloque plus). Tout client ayant un jour subi
+un blocage aurait été re-signalé à chaque conversation tant que la trace restait
+dans la fenêtre.
+
+Correctif : l'override ne se déclenche que si la trace filtre est **postérieure
+au dernier message client** (le blocage appartient au dernier échange). Tests :
+`test/conversationReview.test.ts` (trace périmée ignorée / blocage frais toujours
+forcé).
+
 ## `<NO_REPLY>` périmé après une liste interactive — garde tour courant (6 août 2026)
 
 Incident prod 06/08 14:25 (Mareme Diatta, +221787979416) : prospecte L'Invitée

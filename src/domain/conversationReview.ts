@@ -158,9 +158,20 @@ export function normalizeVerdictForTranscript(
     .filter((turn) => turn.role === "tool")
     .map((turn) => parseToolTrace(turn.content))
     .filter((trace): trace is ToolTraceStatus => trace !== null);
-  const outputFilterRejected = toolTraces.some(
-    (trace) => trace.name === "outbound_filter" || /outbound_(?:coverage|lint)|output_filter/.test(trace.raw),
-  );
+  // La fenêtre de review relit les 30 derniers tours : une trace outbound_filter
+  // d'un incident déjà reviewé re-forçait technical_failure sur chaque
+  // conversation saine suivante (Bitty 06/08 : réservation confirmée, pourtant
+  // re-signalée à cause du filtre du 04/08). Le rejet ne force le verdict que
+  // s'il appartient au dernier échange, après le dernier message client.
+  const lastUserIdx = turns.reduce((last, turn, i) => (turn.role === "user" ? i : last), -1);
+  const outputFilterRejected = turns.some((turn, i) => {
+    if (i <= lastUserIdx || turn.role !== "tool") return false;
+    const trace = parseToolTrace(turn.content);
+    return (
+      trace !== null &&
+      (trace.name === "outbound_filter" || /outbound_(?:coverage|lint)|output_filter/.test(trace.raw))
+    );
+  });
   const anyToolError = toolTraces.some((trace) => trace.error);
   const claimsToolFailure = /(?:outil|list[_ ]plans?|plans?).{0,70}(?:echec|echou|erreur|panne|crash|fail|souci technique)|(?:echec|echou|erreur|panne|crash|fail).{0,70}(?:outil|list[_ ]plans?|plans?)/i.test(
     normalizedReviewText(verdict.summary),

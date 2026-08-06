@@ -96,6 +96,49 @@ describe("normalizeVerdictForTranscript", () => {
     expect(verdict.summary).not.toMatch(/plans? a échoué/i);
   });
 
+  it("ignores an output-filter rejection from a PREVIOUS exchange (stale trace in the 30-turn window)", () => {
+    // Bitty 06/08 : le filtre avait bloqué une réponse le 04/08 (déjà reviewé) ;
+    // deux jours après, sa réservation confirmée était re-signalée à tort.
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const original = {
+      outcome: "resolved" as const,
+      need_category: "booking" as const,
+      severity: "normal" as const,
+      summary: "Réservation confirmée via son abonnement.",
+      suggested_action: "",
+    };
+    expect(normalizeVerdictForTranscript(original, [
+      turn("user", "Ok pour le paiement"),
+      turn("tool", 'create_plan_payment_link({}) -> {"payment_link":"https://pay.wave.com/c/x"}'),
+      turn("tool", 'outbound_filter({}) -> {"error":"output_filter","detail":"outbound_coverage_failed:no_unsolicited_question"}'),
+      turn("assistant", "Désolée, un problème technique m'empêche de terminer."),
+      turn("user", "Peux-tu me réserver mardi 12h30 ?"),
+      turn("tool", 'book_with_membership({}) -> {"booked":true,"remaining_sessions":1}'),
+      turn("assistant", "C'est confirmé ✅ mardi 11 août à 12h30."),
+    ])).toEqual(original);
+  });
+
+  it("still forces technical_failure when the filter blocked the reply to the LAST client message", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const verdict = normalizeVerdictForTranscript(
+      {
+        outcome: "resolved",
+        need_category: "membership",
+        severity: "normal",
+        summary: "Lien de paiement envoyé.",
+        suggested_action: "",
+      },
+      [
+        turn("user", "Ok pour le paiement"),
+        turn("tool", 'create_plan_payment_link({}) -> {"payment_link":"https://pay.wave.com/c/x"}'),
+        turn("tool", 'outbound_filter({}) -> {"error":"output_filter","detail":"outbound_coverage_failed:no_unsolicited_question"}'),
+        turn("assistant", "Désolée, un problème technique m'empêche de terminer."),
+      ],
+    );
+    expect(verdict.outcome).toBe("technical_failure");
+    expect(verdict.summary).toContain("filtre de sortie");
+  });
+
   it("keeps a real tool failure when its trace contains an error", () => {
     const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
     const original = {
