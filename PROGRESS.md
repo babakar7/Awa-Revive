@@ -25,6 +25,33 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## `<NO_REPLY>` périmé après une liste interactive — garde tour courant (6 août 2026)
+
+Incident prod 06/08 14:25 (Mareme Diatta, +221787979416) : prospecte L'Invitée
+chaude (éligible, date choisie, liste de créneaux Foundation reçue) répond en
+texte libre « Oui niveau debutant je n'ai jamais fait de Pilate » **sans choisir
+de créneau**. Le modèle a reconduit la discipline `<NO_REPLY>` de
+`present_options` sur CE tour et s'est tu **deux fois** — y compris à travers la
+relance de récupération sans outils — → fallback technique + handoff
+`agent_empty_reply`, lead gelé (takeover 12 h, personne n'a répondu pendant
+1 h 30).
+
+Correctif (`218f14e`) :
+- **Garde serveur** : quand la dernière liste `presented_choices` est encore
+  ouverte et que le texte entrant ne résout AUCUNE de ses options
+  (`resolveFreeTextChoice` → null), `dynamicContext()` injecte un bloc
+  « PENDING INTERACTIVE LIST » qui interdit explicitement le sentinelle sur le
+  tour courant et impose une réponse normale (+ ré-invitation à choisir).
+- **Prompt statique** : la règle `present_options` précise désormais que
+  `<NO_REPLY>` ne vaut QUE pour le tour où le tool a rendu `sent:true`.
+- Test : `test/pendingInteractiveListPrompt.test.ts`.
+
+Leçon : la relance de récupération (« Do not output <NO_REPLY> ») ne suffit pas
+face à un historique qui répète la discipline du sentinelle — il faut pré-armer
+le contexte AVANT le premier appel, pas rattraper après. Réponse manuelle à
+Mareme envoyée depuis /admin + « Rendre à Awa » (le takeover technique de 12 h
+aurait sinon muselé Awa jusqu'à 02 h 25).
+
 ## Massage (Ruffine) — tarif abonné 25 000 / plein tarif 35 000 (6 août 2026)
 
 Nouveau service **Massage** (Relaxant ou Tonique), 45 min, animé par **Ruffine**,
