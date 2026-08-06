@@ -25,6 +25,27 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## /ops/service — « Je prends » en une étape + fin du blocage « Chargement… » (6 août 2026)
+
+Deux retours Babakar sur le board salle (v20) :
+
+- **Prise en une étape** : le double « Je prends » (claim) puis « Servie »
+  (complete) sur une commande PRÊTE devenait UN seul bouton **« 🙋 Je prends »**
+  qui complète directement (l'endpoint `/served` termine n'importe quel ticket
+  READY, sans claim préalable). Fini l'état intermédiaire « Pris par X » (le
+  bouton `/take` backend reste mais n'est plus utilisé par l'UI). Plus simple.
+- **Plus de « Chargement… » figé** (bug « ça remarche si je ferme/rouvre l'app ») :
+  le boot inline est bloqué par notre CSP stricte (`script-src 'self'`), donc le
+  vrai premier rendu vient de `GET /state`. Désormais `render()`+`refreshState()`
+  s'exécutent **en tout premier**, avant l'init audio/push/composeur — un throw
+  dans ces parties optionnelles ne peut plus laisser le board vide. Ajout d'un
+  garde `loaded` + `retryLoad()` : un échec réseau du premier `/state` réessaie
+  ~5×/2s puis bascule sur « Aucun espace — ↻ Recharger » au lieu de rester coincé
+  sur « Chargement… ». La création de l'`EventSource` est aussi sous try/catch.
+
+Tests : 1106 unit + 40 integration (flux servir inchangé), + assertions asset
+(bouton unique, garde de chargement, render joué avant l'audio).
+
 ## CI rouge bloquait tous les déploiements — e-mail réception retiré sans `--full` (6 août 2026)
 
 Prod est restée figée sur `21cb2f9` (05/08 18:42) alors que plusieurs commits

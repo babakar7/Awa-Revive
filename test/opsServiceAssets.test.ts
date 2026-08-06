@@ -52,6 +52,27 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("Oui, abandonner");
   });
 
+  it("a READY ticket has ONE serve action (no two-step take/serve)", () => {
+    // One tap "Je prends" completes the ready ticket via /served; the old claim
+    // step (/take, "Servie", "Pris par") is gone.
+    expect(SERVICE_APP_JS).toContain("🙋 Je prends");
+    expect(SERVICE_APP_JS).toContain("/served");
+    expect(SERVICE_APP_JS).not.toContain("/tickets/'+t.id+'/take");
+    expect(SERVICE_APP_JS).not.toContain("Pris par");
+  });
+
+  it("never gets stuck on 'Chargement…': load guard + retry + reachable-first render", () => {
+    // The board loads via /state (inline boot is CSP-blocked). A load guard keeps
+    // it honest and self-heals a transient failure instead of hanging.
+    expect(SERVICE_APP_JS).toContain("function retryLoad");
+    expect(SERVICE_APP_JS).toContain("loaded?'Aucun espace chargé.':'Chargement…'");
+    // render()+refreshState() run before the optional audio/push setup.
+    const firstRender = SERVICE_APP_JS.indexOf("render();\n  refreshState();");
+    const audioInit = SERVICE_APP_JS.indexOf("sound & voice");
+    expect(firstRender).toBeGreaterThan(0);
+    expect(firstRender).toBeLessThan(audioInit);
+  });
+
   it("READY alert reinforces beep + vibration + voice (foreground)", () => {
     // The ticket_update READY branch routes through readyAlert, not a bare beep.
     expect(SERVICE_APP_JS).toContain("readyAlert(t)");

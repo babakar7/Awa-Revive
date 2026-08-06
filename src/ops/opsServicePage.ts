@@ -30,7 +30,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v19";
+const ASSET_VERSION = "v20";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -290,6 +290,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var SPOTS=(boot.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
   var MENU=boot.menu||[];
   var TOP=boot.top||[];
+  var loaded=false, loadTries=0;   // load-state guard (see refreshState/retryLoad)
   var sessions=new Map(); (boot.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
   var tickets=new Map(); (boot.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
   var board=document.getElementById('board');
@@ -298,6 +299,13 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var offline=document.getElementById('offline');
   var bell=document.getElementById('bell');
   var VAPID=boot.vapidKey||'';
+
+  // Paint + load the board FIRST, before any optional audio/push/composer setup —
+  // so a throw in any of that can never leave the board stuck on "Chargement…"
+  // (the "works again if I close and reopen the app" bug). Helpers below are
+  // function declarations, hoisted, so they're callable here.
+  render();
+  refreshState();
 
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
   function uuid(){ try{ return crypto.randomUUID(); }catch(e){ return 'r-'+Date.now()+'-'+Math.round(Math.random()*1e9); } }
@@ -374,11 +382,12 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     if(t.note) d.appendChild(el('div','tnote','📝 '+t.note));
     if(t.takeaway) d.appendChild(el('div','away','📦 À emporter'));
     if(t.urgent) d.appendChild(el('div','urg','⚡ Urgent'));
-    if(t.serve_by) d.appendChild(el('div','taken','🙋 Pris par '+t.serve_by));
     if(t.status==='READY'){
       var acts=el('div','tacts');
-      if(!t.serve_by){ var tk=el('button','act take','Je prends'); tk.onclick=function(){ tk.disabled=true; post('/tickets/'+t.id+'/take',{}).then(function(r){if(!r.ok)tk.disabled=false;}).catch(function(){tk.disabled=false;}); }; acts.appendChild(tk); }
-      var sv=el('button','act serve','Servie'); sv.onclick=function(){ sv.disabled=true; post('/tickets/'+t.id+'/served',{}).then(function(r){if(!r.ok)sv.disabled=false;}).catch(function(){sv.disabled=false;}); }; acts.appendChild(sv);
+      // ONE tap: the server takes the ready order to the client. It both claims and
+      // completes the ticket (the /served endpoint completes any READY ticket), so
+      // the old two-step "Je prends" → "Servie" is gone — simpler for everyone.
+      var sv=el('button','act serve','🙋 Je prends'); sv.onclick=function(){ sv.disabled=true; post('/tickets/'+t.id+'/served',{}).then(function(r){if(!r.ok)sv.disabled=false;}).catch(function(){sv.disabled=false;}); }; acts.appendChild(sv);
       d.appendChild(acts);
     } else {
       var acts2=el('div','tacts');
@@ -426,13 +435,16 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   function render(){
     board.textContent='';
     if(!SPOTS.length){
-      // Spots come from the initial boot (not SSE); a tab opened before they were
-      // available stays empty — offer a one-tap reload rather than a dead end.
-      var e=el('p','empty','Aucun espace chargé.');
-      e.appendChild(document.createElement('br'));
-      var b=el('button','sec','↻ Recharger'); b.style.marginTop='1rem'; b.style.maxWidth='12rem';
-      b.onclick=function(){ location.reload(); };
-      e.appendChild(b);
+      // Before the first /state resolves, keep the honest "Chargement…"; only once
+      // loaded (or given up after retries) do we offer the one-tap reload — so a
+      // slow first load never looks like a dead "aucun espace" end.
+      var e=el('p','empty', loaded?'Aucun espace chargé.':'Chargement…');
+      if(loaded){
+        e.appendChild(document.createElement('br'));
+        var b=el('button','sec','↻ Recharger'); b.style.marginTop='1rem'; b.style.maxWidth='12rem';
+        b.onclick=function(){ location.reload(); };
+        e.appendChild(b);
+      }
       board.appendChild(e); return;
     }
     SPOTS.forEach(function(sp){ board.appendChild(spotTile(sp)); });
@@ -644,20 +656,27 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     else if(!downTimer){ downTimer=setTimeout(function(){ downTimer=null; dot.classList.remove('on'); offline.classList.add('show'); },5000); }
   }
 
-  // Re-fetch the authoritative board state on load, so a stale cached page (an old
-  // inline boot without spots) self-heals to the current spots/sessions/menu.
+  // Re-fetch the authoritative board state on load (the inline boot is blocked by
+  // our strict CSP, so /state is the REAL first paint). This must never leave the
+  // board stuck on "Chargement…": a transient failure retries a few times, then
+  // falls back to an actionable reload button (loaded=true) instead of hanging —
+  // the "sometimes stuck until I reopen the app" bug.
   function refreshState(){
+    loadTries++;
     fetch(BASE+'/state',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
-      if(!d)return;
+      if(!d){ retryLoad(); return; }
       SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
       if(d.menu&&d.menu.length) MENU=d.menu;
       if(d.top) TOP=d.top;
       if(d.vapidKey){ VAPID=d.vapidKey; }
       sessions=new Map(); (d.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
       tickets=new Map(); (d.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
-      render(); initPush();
-    }).catch(function(){});
+      loaded=true; render(); initPush();
+    }).catch(function(){ retryLoad(); });
   }
+  // Retry a failed first load a few times (~2s apart), then stop hanging: mark
+  // loaded so render() swaps "Chargement…" for a one-tap "↻ Recharger".
+  function retryLoad(){ if(loaded) return; if(loadTries<5){ setTimeout(refreshState,2000); } else { loaded=true; render(); } }
 
   // ---- Web Push (lock-screen "commande prête") ----
   // The bell is ALWAYS visible and dims (.off) until THIS phone is subscribed, so
@@ -814,20 +833,22 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   }
   if(histBtn) histBtn.onclick=openRecent;
 
-  render();
-  refreshState();
-
+  // Live updates. Guarded: if EventSource construction ever throws, the board is
+  // already painted + loading (render/refreshState ran first), so no live updates
+  // is a soft degradation, never a blank "Chargement…".
+  function bump(e){ if(e.lastEventId)cursor=+e.lastEventId; }
+  function flashSpot(spotId){ var c=board.querySelector('[data-spot="'+spotId+'"]'); if(c)c.classList.add('flash'); }
+  try{
   var es=new EventSource(BASE+'/events?since='+cursor);
   es.onopen=function(){setOnline(true);};
   es.onerror=function(){setOnline(false);};
-  function bump(e){ if(e.lastEventId)cursor=+e.lastEventId; }
-  function flashSpot(spotId){ var c=board.querySelector('[data-spot="'+spotId+'"]'); if(c)c.classList.add('flash'); }
   es.addEventListener('session_new',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); flashSpot(s.spot_id); });
   es.addEventListener('session_update',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); });
   es.addEventListener('session_closed',function(e){ var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
   es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var isNew=!tickets.has(t.id); tickets.set(t.id,t); render(); if(isNew){ beep(); speak(newSpeech(t)); } });
   es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ readyAlert(t); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
   es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); render(); });
+  }catch(e){}
 
   // Keep the reception screen awake while the board is open. Wake Lock drops when
   // the page hides, so re-acquire on visibility return; a no-op where unsupported.
