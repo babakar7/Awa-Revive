@@ -282,13 +282,11 @@ describe("refund paths", () => {
     );
     expect(texts[0]).toContain("remboursé");
 
-    // Reception: email (Brevo) + WhatsApp to the reception number.
-    await waitFor(async () => (mock.emailCalls().length > 0 ? true : null), "reception email");
+    // Reception: WhatsApp only now (email leg removed 06/08).
     const receptionTexts = await waitFor(
       async () => (mock.waTextsTo("221780000000").length > 0 ? mock.waTextsTo("221780000000") : null),
       "reception WhatsApp",
     );
-    expect(mock.emailCalls()[0].body.subject).toContain("REMBOURSEMENT");
     expect(receptionTexts[0]).toContain("REMBOURSEMENT");
     const funnel = await pool.query(
       `select stage, failure_code from booking_funnel_events

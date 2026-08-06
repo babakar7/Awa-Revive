@@ -244,8 +244,11 @@ describe("verify-by-lookup guards (anti-forgery)", () => {
     await settle(600);
     expect((await bookingById(booking.id)).status).toBe("AWAITING_PAYMENT");
     expect(mock.wixCreateBookingCalls()).toHaveLength(0);
-    await waitFor(async () => (mock.emailCalls().length > 0 ? true : null), "mismatch email");
-    expect(JSON.stringify(mock.emailCalls()[0].body)).toMatch(/mismatch|amount/i);
+    const mismatchTexts = await waitFor(
+      async () => (mock.waTextsTo("221780000000").length > 0 ? mock.waTextsTo("221780000000") : null),
+      "mismatch reception WhatsApp",
+    );
+    expect(mismatchTexts.join("\n")).toMatch(/mismatch|amount/i);
     const failure = await pool.query(
       `select stage, failure_code from booking_funnel_events where booking_id=$1`,
       [booking.id],
@@ -359,8 +362,11 @@ describe("idempotency & retriability", () => {
       [transactionId],
     );
     await sweepOmVerifications(app.log);
-    await waitFor(async () => (mock.emailCalls().length === 1 ? true : null), "delayed OM alert");
-    expect(JSON.stringify(mock.emailCalls()[0].body)).toMatch(/confirmation retardée/i);
+    await waitFor(
+      async () =>
+        mock.waTextsTo("221780000000").some((t) => /confirmation retardée/i.test(t)) ? true : null,
+      "delayed OM alert",
+    );
 
     await pool.query(
       `update orange_money_verifications set next_attempt_at=now()-interval '1 second' where transaction_id=$1`,
@@ -368,7 +374,10 @@ describe("idempotency & retriability", () => {
     );
     await sweepOmVerifications(app.log);
     await settle(200);
-    expect(mock.emailCalls()).toHaveLength(1);
+    // Alerted reception exactly once (email leg removed 06/08 → WhatsApp only).
+    expect(
+      mock.waTextsTo("221780000000").filter((t) => /confirmation retardée/i.test(t)),
+    ).toHaveLength(1);
   });
 
   it("a different transactionId after BOOKED does not re-create the Wix booking", async () => {

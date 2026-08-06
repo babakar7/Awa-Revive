@@ -25,6 +25,23 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## CI rouge bloquait tous les déploiements — e-mail réception retiré sans `--full` (6 août 2026)
+
+Prod est restée figée sur `21cb2f9` (05/08 18:42) alors que plusieurs commits
+étaient sur `main` : Railway a **"Wait for CI"** activé et **ne promeut que les
+commits dont la CI est verte**. Or la CI (`.github/workflows/ci.yml` : tsc + `npm
+test` + **`npm run test:integration`**) était rouge depuis `c7709fa` (retrait de
+l'e-mail réception, réception WhatsApp-only). `agent:ship` ne lance PAS
+l'intégration sans `--full` ; le changement ne touchait pas le flux paiement donc
+`--full` a été zappé — mais 4 tests d'intégration paiement (`planFulfillment`,
+`wave-webhook`, `orange-money-webhook`) asseraient encore que la réception reçoit
+un **e-mail** (`mock.emailCalls()`). CI rouge → aucun auto-deploy → e-mails de
+handoff toujours envoyés en prod. Corrigé : ces tests vérifient désormais le
+WhatsApp réception (`waTextsTo("221780000000")`, texte libre car
+`WA_RECEPTION_TEMPLATE=""` en test). **Leçon : tout changement à `notify` /
+routage réception se livre avec `agent:ship -- --full`.** Auto-deploy s'était
+aussi "manqué" plusieurs pushes → c'était la garde CI, pas un webhook cassé.
+
 ## Findability des composeurs de commande — 🔥 Populaires + tri (6 août 2026)
 
 Babakar : « trouver un article doit être ultra simple » (best-sellers : matchas,

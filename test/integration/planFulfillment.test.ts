@@ -130,7 +130,8 @@ describe("plan payment fulfillment", () => {
     expect(stored?.status).toBe("PAID");
     expect(stored?.reception_notified_at).toBeTruthy();
     expect(mock.wix.offlinePlanOrderIds).toHaveLength(0);
-    expect(mock.emailCalls()).toHaveLength(1);
+    // Reception is WhatsApp-only now (email leg removed 06/08): notified once.
+    expect(mock.waTextsTo("221780000000")).toHaveLength(1);
     expect(
       mock.waTextsTo(client.wa_phone).filter((text) => /finalise son activation/i.test(text)),
     ).toHaveLength(1);
