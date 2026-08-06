@@ -25,6 +25,25 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Disengage sur une prospecte en plein funnel — garde serveur (6 août 2026)
+
+Incident prod 05/08 19:13 (Codette, +221775048261) : prospecte L'Invitée
+qualifiée (« Non jamais » → éligible → Foundation), créneaux matinée présentés,
+elle répond « En semaine plutôt » — et le modèle appelle
+`disengage_conversation` (« Conversation répétitive sans intention Revive ») :
+ligne de clôture envoyée, Awa muette 24h, lead perdu en silence (le disengage ne
+pingue personne, par design). Cause : ses trois réponses courtes rapides ont
+pattern-matché « rapid loop of unclear fragments » ; le garde n'existait que
+dans le prompt. Fix : garde SERVEUR (« le modèle propose, le serveur décide ») —
+`repo.hasRecentBookingActivity(clientId, 60)` détecte un tool de
+réservation/vente (check_availability, present_options, create_payment_link…)
+dans l'heure, et `disengage_conversation` refuse alors avec
+`client_engaged_in_booking` + instruction de continuer la vente. Description du
+tool durcie (une préférence de créneau n'est pas un « fragment »). Récupération :
+flags levés à la main + message de reprise avec les créneaux Foundation
+semaine/matin réels envoyé et journalisé. Tests : refus si activité récente,
+disengage normal sinon.
+
 ## La supervision (owner) peut aussi PRENDRE une commande (5 août 2026)
 
 Demande Babakar : sur la vue superviseur (/ops/owner), pouvoir aussi prendre une

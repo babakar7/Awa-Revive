@@ -104,6 +104,30 @@ export async function setClientTest(clientId: string, isTest: boolean): Promise<
  * (no team notification) until the timestamp passes. Mirrors startHumanTakeover,
  * but self-triggered by Awa (or the admin pause button) — default 24h release.
  */
+/**
+ * True when this client drove a booking/sales tool in the last `minutes` —
+ * the server-side signal that they are a real prospect mid-funnel. Used to
+ * refuse disengage_conversation: a client picking slots is NEVER a non-serious
+ * contact, however short their messages look (prod incident 05/08 : une
+ * prospecte qualifiée, en plein choix de créneau — « En matinée », « En
+ * semaine plutôt » — a été coupée 24h pour « conversation répétitive »).
+ */
+export async function hasRecentBookingActivity(
+  clientId: string,
+  minutes = 60,
+): Promise<boolean> {
+  const { rows } = await pool.query(
+    `select 1 from conversations
+      where client_id = $1
+        and role = 'tool'
+        and created_at > now() - make_interval(mins => $2)
+        and content ~ '^(list_classes|check_availability|present_options|list_plans|check_membership|get_my_bookings|create_payment_link|create_plan_payment_link|refresh_expired_plan_payment_link|book_with_membership|start_multi_session_commitment|add_spots_to_booking|reschedule_booking|join_waitlist|request_email_verification|submit_verification_code)\\('
+      limit 1`,
+    [clientId, minutes],
+  );
+  return rows.length > 0;
+}
+
 export async function setAwaDisengaged(
   clientId: string,
   reason: string,

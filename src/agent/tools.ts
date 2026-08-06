@@ -949,7 +949,10 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "advances toward Awa, someone plainly toying with the bot, or a sustained rapid loop of greetings, " +
       "goodbyes or unclear fragments after Awa already redirected them, with no booking/studio intent. Do NOT use " +
       "this for a single awkward or ambiguous line, ordinary warmth or a compliment, a complaint, or a real " +
-      "client who flirts but also has a genuine studio need (serve the need, ignore the flirtation). After you " +
+      "client who flirts but also has a genuine studio need (serve the need, ignore the flirtation). NEVER use " +
+      "it on a client inside a booking/sales exchange: short answers like a day or slot preference ('En " +
+      "matinée', 'En semaine plutôt') are normal funnel replies, not meaningless fragments — the server " +
+      "refuses the call when the client used a booking tool within the last hour. After you " +
       "call it, send exactly ONE short, polite, firm closing line re-anchoring to the studio, then nothing else: " +
       "the system automatically stops replying to this contact afterwards (auto-resumes after ~24h; reception " +
       "can lift it). No refund/booking side effects — it only silences Awa for this contact.",
@@ -5219,6 +5222,21 @@ export async function executeTool(
 
     case "disengage_conversation": {
       const reason = String(input.reason ?? "Contact non sérieux").slice(0, 500);
+      // Le modèle propose, le serveur décide : un client qui vient d'utiliser le
+      // parcours réservation/vente est un vrai prospect — de courtes réponses
+      // (« En matinée », « En semaine plutôt ») ne sont pas des « fragments sans
+      // intention ». Incident prod 05/08 : une prospecte qualifiée en plein
+      // choix de créneau a été coupée 24h. Refus serveur, pas de pause.
+      if (await repo.hasRecentBookingActivity(client.id, 60)) {
+        return JSON.stringify({
+          error: "client_engaged_in_booking",
+          message:
+            "Refused: this client used the booking/sales flow within the last hour — they are a real " +
+            "prospect, not a non-serious contact. A short reply (a slot or day preference, 'oui', 'non') " +
+            "is a normal funnel answer, never a meaningless fragment. Do NOT disengage and do NOT send a " +
+            "closing line: answer their last message helpfully and continue the booking.",
+        });
+      }
       await repo.setAwaDisengaged(client.id, reason, 24, "nonserious");
       return JSON.stringify({
         disengaged: true,
