@@ -13,7 +13,6 @@ import {
   verifyWixSharedSecret,
   type WixWebhookEvent,
 } from "../lib/wixWebhook.js";
-import { notifyReception } from "../lib/notify.js";
 import * as wix from "../lib/wix.js";
 
 function orderFromEvent(event: WixWebhookEvent): any {
@@ -122,18 +121,13 @@ export function registerWixWebhook(app: FastifyInstance): void {
       }
       const contactId = String(order?.buyer?.contactId ?? "") || null;
       let clientId: string | null = null;
-      let clientName: string | null = null;
-      let clientPhone: string | null = null;
       if (contactId) {
         const contact = await wix.getContactById(contactId);
-        const wixClient = wix.wixDeliveryClientFromContact(contact);
         const phones = (contact?.info?.phones?.items ?? [])
           .map((phone: any) => String(phone?.e164Phone ?? phone?.phone ?? ""))
           .filter(Boolean);
         const client = await repo.findClientByPhone(phones);
         clientId = client?.id ?? null;
-        clientName = wixClient?.name ?? client?.name ?? null;
-        clientPhone = wixClient?.phone ?? client?.wa_phone ?? phones[0] ?? null;
       }
       const continuity = await resolveContinuitySource({
         family: mapping.family,
@@ -148,33 +142,11 @@ export function registerWixWebhook(app: FastifyInstance): void {
         purchasedAt,
         source: continuity,
       });
-      if (continuity && shouldAlertKeyOverlap(start, continuity.expiresAt)) {
-        notifyReception(
-          "⚠️ Clé comptoir démarrée avant la fin de l'abonnement",
-          formatKeyOverlapAlert({
-            newOrderId: event.entityId,
-            newStart: start,
-            previousKind: continuity.kind,
-            previousOrderId: continuity.orderId,
-            previousEnd: continuity.expiresAt,
-            clientName,
-            clientPhone,
-            clientId,
-            wixContactId: contactId,
-            baseUrl: config.BASE_URL,
-          }),
-        );
-      }
-      if (
-        continuity?.kind === "LEGACY_REFORMER" &&
-        (continuity.remaining === 0 || continuity.remaining === null)
-      ) {
-        notifyReception(
-          "⚠️ Démarrage d'une Clé comptoir à vérifier",
-          `La source legacy ${continuity.orderId} a un solde ` +
-            `${continuity.remaining === 0 ? "à 0" : "illisible"}. Vérifier si la Clé ${event.entityId} doit démarrer plus tôt.`,
-        );
-      }
+      // Key start-timing alerts (overlap with an active plan; legacy-balance
+      // "should it start earlier?") were dropped 06/08 — never actionable in
+      // practice, pure noise for reception and owner (Babakar). The paid Key is
+      // registered normally regardless. formatKeyOverlapAlert/shouldAlertKeyOverlap
+      // are kept (still unit-tested) in case the check is ever re-enabled.
       await registerAndEnsureKey({
         paidOrderId: event.entityId,
         planId,
