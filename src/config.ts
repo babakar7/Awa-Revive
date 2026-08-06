@@ -263,6 +263,19 @@ export const config = {
   INVITEE_HISTORY_PLAN_IDS: optional("INVITEE_HISTORY_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   INVITATION_SLOT_HOUR: parseInt(optional("INVITATION_SLOT_HOUR", "12"), 10),
   INVITATION_SLOT_MINUTE: parseInt(optional("INVITATION_SLOT_MINUTE", "30"), 10),
+  // Massage subscriber rate (server-decided, never the model). Holders of a
+  // qualifying abonnement pay MASSAGE_MEMBER_RATE_XOF for the services listed in
+  // MASSAGE_SERVICE_IDS instead of the Wix catalog price; everyone else pays the
+  // catalog price. The whole feature is INERT until both lists are set — an
+  // empty MASSAGE_SERVICE_IDS or MASSAGE_MEMBER_PLAN_IDS means "no member rate",
+  // so it ships dark and is switched on with Railway vars once the massage Class
+  // exists. NOTE: only linked (verified) members are ever detected, so the rate
+  // can never be claimed — it applies from the client's real active plan only.
+  // When a new custom (sur-mesure) plan of >=3x/week is created, add its id here
+  // too (see the sur-mesure checklist).
+  MASSAGE_SERVICE_IDS: optional("MASSAGE_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  MASSAGE_MEMBER_PLAN_IDS: optional("MASSAGE_MEMBER_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
+  MASSAGE_MEMBER_RATE_XOF: parseInt(optional("MASSAGE_MEMBER_RATE_XOF", "25000"), 10),
   // Google-review gate on a client's FIRST early Key renewal. Empty = feature
   // dark (invitations grant unconditionally, as before). Effective only with
   // KEYS_AUTOMATION_ENABLED. The link is sent verbatim to the client; it is not

@@ -25,6 +25,47 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Massage (Ruffine) — tarif abonné 25 000 / plein tarif 35 000 (6 août 2026)
+
+Nouveau service **Massage** (Relaxant ou Tonique), 45 min, animé par **Ruffine**,
+le **samedi 11 h → 13 h** (2 créneaux de 45 min : 11 h 00 et 11 h 45). Prix plein
+**35 000 FCFA** ; les abonnés d'un plan qualifiant paient **25 000 FCFA**.
+
+**Wix ne sait pas faire un « tarif membre » par service** (un plan couvre un
+service ou pas — pas de prix réduit). Le rabais est donc géré par canal :
+
+- **Awa (WhatsApp)** — règle SERVEUR (jamais le modèle) dans `create_payment_link`
+  ([src/domain/massageMemberRate.ts](src/domain/massageMemberRate.ts)). Si le
+  client détient un plan qualifiant (identité VÉRIFIÉE via son numéro), le lien
+  Wave/OM est émis à 25 000, sinon 35 000. Le massage n'est **connecté à aucun
+  plan dans Wix** → c'est toujours un lien payant, jamais un décompte de séance.
+  Piloté par config, **inerte tant que non configuré** :
+  - `MASSAGE_SERVICE_IDS` = id du service Massage (Class capacité 1).
+  - `MASSAGE_MEMBER_PLAN_IDS` = L'Habituée, La Résidente, + plans sur-mesure ≥ 3×/sem
+    (aujourd'hui « 1x Reformer 1x Mat 1x Step » et « 2x Reformer 1x Yoga 1x Step »).
+    **Exclus** : L'Invitée (3 séances) et les carnets Aquabike / Bébé nageur.
+  - `MASSAGE_MEMBER_RATE_XOF` = 25000 (garde-fou : si ≥ prix catalogue, on retombe
+    sur le catalogue — jamais de surfacturation).
+  - **À ajouter à la checklist sur-mesure** : tout nouveau plan sur-mesure ≥ 3×/sem
+    doit être ajouté à `MASSAGE_MEMBER_PLAN_IDS`.
+
+- **Réception (appel téléphonique)** — RÈGLE MANUELLE. Quand la réception réserve
+  un massage pour un client qui appelle, elle **applique 25 000 à la main** si le
+  client détient L'Habituée, La Résidente ou un plan sur-mesure ≥ 3×/sem (visible
+  sur sa fiche Wix). Sinon 35 000. Aucun code ne le fait à sa place.
+
+- **Site web** — Wix facturerait 35 000 à tout le monde (pas de rabais membre
+  possible). Décision : **ne pas mettre le massage sur les pages de réservation du
+  site** — tout passe par Awa (25 000 auto) et la réception (25 000 manuel).
+  ⚠️ Ne PAS utiliser le toggle « masqué » de Wix : `listServices` filtre les
+  services `hidden`, donc Awa ne le verrait plus non plus. Le laisser visible pour
+  l'API, juste absent du menu de réservation du site.
+
+Setup Wix restant (côté studio) : convertir le service en **Class capacité 1**,
+ne garder que **Ruffine** (retirer les 9 autres staff), la restreindre au
+**samedi 11 h–13 h** (retirer ses heures du jeudi), **max 1 place / réservation**.
+Une fois la Class créée, renseigner `MASSAGE_SERVICE_IDS` avec son nouvel id.
+
 ## /ops/service — « Je prends » en une étape + fin du blocage « Chargement… » (6 août 2026)
 
 Deux retours Babakar sur le board salle (v20) :

@@ -41,6 +41,7 @@ import { createClientPaymentSession } from "../domain/paymentSession.js";
 import * as deliveries from "../domain/deliveryRepo.js";
 import { PACK_DISCOVERY_CAMPAIGN, isCampaignReformerService } from "../domain/packDiscoveryCampaign.js";
 import { isPlanSellableByAwa } from "../domain/planSaleGuard.js";
+import { resolveMassageUnitPrice } from "../domain/massageMemberRate.js";
 import { planNamesConflict } from "../domain/planNameGuard.js";
 import { resolveServiceAlias } from "../domain/serviceAlias.js";
 import { lintOutboundReply } from "./outboundLint.js";
@@ -2099,7 +2100,28 @@ export async function executeTool(
       // the campaign-plan branch so an email/account issue never invalidates
       // another usable direct-class link.
       await repo.expireActiveBookings(client.id);
-      const totalXof = campaign ? 10_000 : service.priceXof * participants;
+      // Subscriber massage rate (server decides): holders of a qualifying plan
+      // pay the reduced flat price for the massage service. Inert unless
+      // configured. A lookup miss falls back to the catalog price (a member may
+      // pay full, but we never silently undercharge on a flaky read). Never
+      // applies to the Pack Découverte campaign branch (its own 10 000 wins).
+      let unitXof = service.priceXof;
+      let massageMemberRateApplied = false;
+      if (!campaign) {
+        try {
+          const massageMembership = await activeMemberships(client);
+          const rate = resolveMassageUnitPrice({
+            serviceId,
+            catalogPriceXof: service.priceXof,
+            activePlanIds: massageMembership?.plans.map((p) => p.planId) ?? [],
+          });
+          unitXof = rate.unitXof;
+          massageMemberRateApplied = rate.memberRateApplied;
+        } catch (err) {
+          console.error("Massage member-rate lookup skipped (using catalog price):", err);
+        }
+      }
+      const totalXof = campaign ? 10_000 : unitXof * participants;
       const draft = await repo.createDraftBooking({
         clientId: client.id,
         serviceId,
@@ -2168,12 +2190,16 @@ export async function executeTool(
         amount_fcfa: totalXof,
         class_total_fcfa: totalXof,
         participants,
-        price_per_person_fcfa: service.priceXof,
+        price_per_person_fcfa: unitXof,
+        member_rate_applied: massageMemberRateApplied || undefined,
         expires_in_minutes: config.PAYMENT_LINK_TTL_MINUTES,
         class: service.name,
         slot_start: fresh.startDate,
         slot_start_dakar: fmtDakar(fresh.startDate),
         note:
+          (massageMemberRateApplied
+            ? `This client's active abonnement grants the subscriber rate — the amount above is the reduced member price. You may tell them it's their tarif abonné. `
+            : ``) +
           `Your reply must contain ONLY the class, amount, expiry, and payment link. ` +
           `Do not add the bar, another class, an upsell, or any unrelated suggestion while payment is unresolved. ` +
           `The client chose ${appLabel}; confirmation arrives automatically after verified payment.` +
