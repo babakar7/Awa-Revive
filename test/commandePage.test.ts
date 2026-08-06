@@ -40,6 +40,14 @@ describe("/commander page assets", () => {
     expect(COMMANDER_APP_JS).toContain("/menu.json");
   });
 
+  it("leads with a 🔥 Populaires section from server best-sellers + sorted categories", () => {
+    expect(COMMANDER_APP_JS).toContain("🔥 Populaires");
+    expect(COMMANDER_APP_JS).toContain("window.__pick.top");
+    expect(COMMANDER_APP_JS).toContain("window.__pick.sortItems");
+    expect(COMMANDER_APP_JS).toContain("TOP=d.top");   // reads best-sellers from menu.json
+    expect(COMMANDER_APP_JS).toContain("window.__pick=");
+  });
+
   it("has static thank-you and error return pages", () => {
     expect(commandeMerciPage()).toContain("Paiement reçu");
     expect(commandeErreurPage()).toContain("Paiement non abouti");

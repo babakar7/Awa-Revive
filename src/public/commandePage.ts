@@ -5,6 +5,7 @@ import {
   OPS_TOKENS,
   opsHead,
 } from "../ops/opsTheme.js";
+import { OPS_PICKER_HELPERS } from "../ops/opsPicker.js";
 
 /**
  * The customer-facing ordering app (/commander) — the QR-in-the-changing-rooms
@@ -17,7 +18,7 @@ import {
  */
 
 const BASE = "/commander";
-const ASSET_VERSION = "v1";
+const ASSET_VERSION = "v2";
 
 /** noindex, no-store, same relaxed-but-sandboxed CSP as the ops PWAs (script/
  *  connect/style 'self' only; no external origin). */
@@ -137,13 +138,13 @@ export const COMMANDER_MENU_VERSION = ASSET_VERSION;
 export { BASE as COMMANDER_BASE };
 
 // ── Client app (composer; DOM built with textContent; prices shown, never sent) ──
-export const COMMANDER_APP_JS = String.raw`(function(){
+export const COMMANDER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
   var app=document.getElementById('app');
   var foot=document.getElementById('foot');
   var totalEl=document.getElementById('total');
   var goBtn=document.getElementById('go');
-  var MENU=[], OM=false, FEE=0, HOURS={open:false,deliveryOpen:false,reopensLabel:null};
+  var MENU=[], TOP=[], OM=false, FEE=0, HOURS={open:false,deliveryOpen:false,reopensLabel:null};
   var draft={};                 // id -> {qty, selections:{label:value}, note}
   var state={cat:'__ALL__', q:'', mode:'SUR_PLACE', method:'wave'};
   // Idempotency: one request id for this page load survives double-tap / retry.
@@ -235,22 +236,30 @@ export const COMMANDER_APP_JS = String.raw`(function(){
     row.appendChild(extra); markChoices();
     return row;
   }
+  function section(label,items){ if(!items.length) return; listEl.appendChild(el('div','cat',label));
+    items.forEach(function(it){ listEl.appendChild(itemRow(it)); }); }
   function renderList(){
     if(chipAll) chipAll.classList.toggle('sel',state.cat==='__ALL__'&&!state.q);
     if(chipFav) chipFav.classList.toggle('sel',state.cat==='__FAV__'&&!state.q);
     Object.keys(catChips).forEach(function(k){ catChips[k].classList.toggle('sel',state.cat===k&&!state.q); });
     listEl.textContent='';
     var q=norm(state.q); var any=false;
+    // Default view leads with 🔥 Populaires (server best-sellers), each item shown
+    // once (skipped in its category below), then favourites-first / add-ons-last.
+    var isDefault=!q && state.cat==='__ALL__'; var popIds={};
+    if(isDefault){
+      var pop=window.__pick.top(MENU,TOP,8); pop.forEach(function(it){ popIds[it.id]=1; });
+      if(pop.length){ section('🔥 Populaires',pop); any=true; }
+    }
     MENU.forEach(function(cat){
       var items=cat.items.filter(function(it){
         if(q) return norm(it.name).indexOf(q)>=0;
         if(state.cat==='__FAV__') return !!it.fav;
         if(state.cat!=='__ALL__') return cat.category===state.cat;
-        return true;
+        return !popIds[it.id];
       });
       if(!items.length) return;
-      listEl.appendChild(el('div','cat',cat.category));
-      items.forEach(function(it){ listEl.appendChild(itemRow(it)); any=true; });
+      section(cat.category, window.__pick.sortItems(items)); any=true;
     });
     if(!any) listEl.appendChild(el('div','nores','Aucun article.'));
   }
@@ -273,7 +282,7 @@ export const COMMANDER_APP_JS = String.raw`(function(){
     controls=el('div'); app.appendChild(controls);
 
     var toolbar=el('div','toolbar');
-    var search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search');
+    var search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search'); search.setAttribute('enterkeyhint','search'); search.setAttribute('autocomplete','off');
     search.oninput=function(){ state.q=search.value; renderList(); }; toolbar.appendChild(search);
     var chips=el('div','chips');
     chipAll=el('button','chip','Tout'); chipAll.onclick=function(){ state.cat='__ALL__'; state.q=''; search.value=''; renderList(); }; chips.appendChild(chipAll);
@@ -341,7 +350,7 @@ export const COMMANDER_APP_JS = String.raw`(function(){
 
   fetch(BASE+'/menu.json',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
     if(!d){ app.textContent=''; app.appendChild(el('p','nores','Menu indisponible. Recharge la page.')); return; }
-    MENU=d.menu||[]; OM=!!d.om; FEE=d.deliveryFeeXof||0; HOURS=d.hours||HOURS;
+    MENU=d.menu||[]; TOP=d.top||[]; OM=!!d.om; FEE=d.deliveryFeeXof||0; HOURS=d.hours||HOURS;
     build();
   }).catch(function(){ app.textContent=''; app.appendChild(el('p','nores','Menu indisponible. Recharge la page.')); });
 })();`;

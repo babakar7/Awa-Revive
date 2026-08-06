@@ -729,6 +729,41 @@ export async function ticketStatsToday(): Promise<TicketStatsToday> {
   };
 }
 
+/**
+ * Item ids ordered by how often they've SOLD over the last `days` (default 30),
+ * most first — powers the "🔥 Populaires" section of the order pickers. One jsonb
+ * scan over kitchen_tickets.items_json: cancelled/test tickets and "Supplément…"
+ * add-ons are excluded (add-ons aren't standalone dishes). Memoized 5 min because
+ * it's read on every board boot / menu.json and the ranking barely moves.
+ */
+let topCache: { ids: string[]; at: number } | null = null;
+const TOP_TTL_MS = 5 * 60_000;
+export async function topOrderedItemIds(days = 30, limit = 8): Promise<string[]> {
+  if (topCache && Date.now() - topCache.at < TOP_TTL_MS) return topCache.ids.slice(0, limit);
+  const res = await pool.query(
+    `select l->>'id' as id, sum((l->>'qty')::int) as n
+       from kitchen_tickets t,
+            lateral jsonb_array_elements(t.items_json) l
+      where t.created_at >= now() - ($1::int * interval '1 day')
+        and t.status <> 'CANCELLED'
+        and t.is_test = false
+        and coalesce(l->>'id','') <> ''
+        and l->>'name' not ilike 'suppl%'
+      group by l->>'id'
+      order by n desc
+      limit 24`,
+    [days],
+  );
+  const ids = res.rows.map((r) => String(r.id));
+  topCache = { ids, at: Date.now() };
+  return ids.slice(0, limit);
+}
+
+/** Test-only: drop the memoized ranking so a freshly-seeded DB isn't masked. */
+export function __resetTopCache(): void {
+  topCache = null;
+}
+
 export async function ticketByDeliveryOrder(orderId: string): Promise<KitchenTicket | null> {
   if (!UUID_RE.test(String(orderId))) return null;
   const res = await pool.query(

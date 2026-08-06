@@ -9,6 +9,7 @@ import {
   esc,
   opsHead,
 } from "./opsTheme.js";
+import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 
 /**
  * The reception PWA (service.revive.sn) — HTML shell, manifest, service worker
@@ -29,7 +30,7 @@ import {
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v18";
+const ASSET_VERSION = "v19";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -282,12 +283,13 @@ self.addEventListener('notificationclick',e=>{
 });`;
 
 // ── Client app ───────────────────────────────────────────────────────────────
-export const SERVICE_APP_JS = String.raw`(function(){
+export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
-  var boot=window.__BOOT__||{cursor:0,spots:[],sessions:[],tickets:[],menu:[]};
+  var boot=window.__BOOT__||{cursor:0,spots:[],sessions:[],tickets:[],menu:[],top:[]};
   var cursor=boot.cursor||0;
   var SPOTS=(boot.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
   var MENU=boot.menu||[];
+  var TOP=boot.top||[];
   var sessions=new Map(); (boot.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
   var tickets=new Map(); (boot.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
   var board=document.getElementById('board');
@@ -503,7 +505,8 @@ export const SERVICE_APP_JS = String.raw`(function(){
 
     // ── sticky toolbar: search + category chips + cart ──
     var toolbar=el('div','toolbar');
-    var search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search');
+    var search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search'); search.setAttribute('enterkeyhint','search'); search.setAttribute('autocomplete','off'); search.setAttribute('aria-label','Rechercher un article');
+    // Real-time filter: results update on every keystroke, no Enter needed.
     search.oninput=function(){ state.q=search.value; if(state.q) state.cartOnly=false; renderList(); };
     toolbar.appendChild(search);
     var chips=el('div','chips');
@@ -563,6 +566,8 @@ export const SERVICE_APP_JS = String.raw`(function(){
       return row;
     }
 
+    function section(label,items){ if(!items.length) return; listEl.appendChild(el('div','cat',label));
+      items.forEach(function(it){ listEl.appendChild(itemRow(it)); }); }
     function renderList(){
       // sync chip highlight
       chipAll.classList.toggle('sel',state.cat==='__ALL__'&&!state.q&&!state.cartOnly);
@@ -572,17 +577,29 @@ export const SERVICE_APP_JS = String.raw`(function(){
       listEl.textContent='';
       var q=normalize(state.q);
       var any=false;
+      // The default "Tout" view leads with 🔥 Populaires (best-sellers, server-
+      // computed) so matchas/toasts/brunch are reachable with zero scrolling. Those
+      // items are then skipped in their own category so each appears exactly once
+      // (no duplicate row → no qty-badge desync).
+      var isDefault=!q && !state.cartOnly && state.cat==='__ALL__';
+      var popIds={};
+      if(isDefault){
+        var pop=window.__pick.top(MENU,TOP,8);
+        pop.forEach(function(it){ popIds[it.id]=1; });
+        if(pop.length){ section('🔥 Populaires',pop); any=true; }
+      }
       MENU.forEach(function(cat){
         var items=cat.items.filter(function(it){
           if(state.cartOnly) return (draft[it.id]&&draft[it.id].qty>0);
           if(q) return normalize(it.name).indexOf(q)>=0;
           if(state.cat==='__FAV__') return !!it.fav;
           if(state.cat!=='__ALL__') return cat.category===state.cat;
-          return true;
+          return !popIds[it.id];   // default view: don't repeat a Populaire below
         });
         if(!items.length) return;
-        listEl.appendChild(el('div','cat',cat.category));
-        items.forEach(function(it){ listEl.appendChild(itemRow(it)); any=true; });
+        // ⭐ favourites first, "Supplément…" add-ons last, else server order.
+        section(cat.category, window.__pick.sortItems(items));
+        any=true;
       });
       if(!any){ listEl.appendChild(el('div','nores', state.cartOnly?'Panier vide — ajoutez des articles.':'Aucun article trouvé.')); }
     }
@@ -634,6 +651,7 @@ export const SERVICE_APP_JS = String.raw`(function(){
       if(!d)return;
       SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
       if(d.menu&&d.menu.length) MENU=d.menu;
+      if(d.top) TOP=d.top;
       if(d.vapidKey){ VAPID=d.vapidKey; }
       sessions=new Map(); (d.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
       tickets=new Map(); (d.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });

@@ -109,6 +109,18 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("/urgent");
   });
 
+  it("leads the default picker with a 🔥 Populaires section + real-time search + sort", () => {
+    // Best-sellers on top (server `top` ids), resolved via the shared helper.
+    expect(SERVICE_APP_JS).toContain("🔥 Populaires");
+    expect(SERVICE_APP_JS).toContain("window.__pick.top");
+    expect(SERVICE_APP_JS).toContain("window.__pick.sortItems");
+    // Search filters on input (no Enter) and hints the keyboard.
+    expect(SERVICE_APP_JS).toContain("search.oninput");
+    expect(SERVICE_APP_JS).toContain("enterkeyhint");
+    // The shared helper snippet is bundled ahead of the app IIFE.
+    expect(SERVICE_APP_JS).toContain("window.__pick=");
+  });
+
   it("offers a ⭐ Favoris shortcut via the __FAV__ sentinel category", () => {
     expect(SERVICE_APP_JS).toContain("Favoris");
     expect(SERVICE_APP_JS).toContain("__FAV__");

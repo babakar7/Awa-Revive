@@ -9,6 +9,7 @@ import {
   esc,
   opsHead,
 } from "./opsTheme.js";
+import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 
 /**
  * The owner supervision PWA (owner.revive.sn) — an overview of all live activity
@@ -21,7 +22,7 @@ import {
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v2";
+const ASSET_VERSION = "v3";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -113,6 +114,15 @@ background:#fff;color:var(--ink-900);font-size:1rem;font-family:inherit;margin-b
 background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:.95rem}
 .modeseg .mode.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 .modeseg .mode.away.sel{background:var(--info);border-color:var(--info);color:#fff}
+.toolbar{position:sticky;top:0;z-index:3;background:var(--surface);padding:.2rem 0 .5rem}
+.search{margin-bottom:.5rem}
+.chips{display:flex;gap:.4rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:.2rem;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;padding:.55rem .95rem;border-radius:999px;background:var(--rose);border:1px solid transparent;
+color:var(--plum-600);font-size:.88rem;font-weight:600;white-space:nowrap}
+.chip.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.chip.fav{background:var(--warn-bg);border-color:transparent;color:var(--warn)}
+.chip.fav.sel{background:var(--warn);border-color:var(--warn);color:#fff}
 .list{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .cat{font-family:var(--serif);font-size:.95rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
 color:var(--plum-600);border-bottom:1px solid var(--rose);padding-bottom:.35rem;margin:.9rem 0 .3rem}
@@ -193,13 +203,14 @@ self.addEventListener('fetch',e=>{
   }
 });`;
 
-// ── Client app (read-only; SSE cuisine channel + /stats poll) ────────────────
-export const OWNER_APP_JS = String.raw`(function(){
+// ── Client app (SSE cuisine channel + /stats poll; can also take an order) ───
+export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
-  var boot=window.__BOOT__||{cursor:0,tickets:[],stats:{},devices:[],spots:[],menu:[]};
+  var boot=window.__BOOT__||{cursor:0,tickets:[],stats:{},devices:[],spots:[],menu:[],top:[]};
   var cursor=boot.cursor||0;
   var SPOTS=(boot.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
   var MENU=boot.menu||[];
+  var TOP=boot.top||[];
   var model=new Map();
   (boot.tickets||[]).forEach(function(t){model.set(t.id,t);});
   var board=document.getElementById('board');
@@ -296,6 +307,7 @@ export const OWNER_APP_JS = String.raw`(function(){
       // Self-heal the composer inputs on a stale cached page.
       if(d.spots) SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
       if(d.menu&&d.menu.length) MENU=d.menu;
+      if(d.top) TOP=d.top;
       if(d.stats)renderStats(d.stats); if(d.devices)renderDevices(d.devices); render();
     }).catch(function(){});
   }
@@ -322,6 +334,7 @@ export const OWNER_APP_JS = String.raw`(function(){
   // and opens/reuses the spot's session — same endpoint contract as the salle.
   function uuid(){ try{ return crypto.randomUUID(); }catch(e){ return 'r-'+Date.now()+'-'+Math.round(Math.random()*1e9); } }
   function findItem(id){ for(var i=0;i<MENU.length;i++){ for(var j=0;j<MENU[i].items.length;j++){ if(MENU[i].items[j].id===id) return MENU[i].items[j]; } } return null; }
+  function normalize(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
   function postJSON(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
   var takeBtn=document.getElementById('take');
   function openComposer(){
@@ -340,7 +353,7 @@ export const OWNER_APP_JS = String.raw`(function(){
     sh.appendChild(spotSel);
     var fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; sh.appendChild(fn);
 
-    var draft={}; var state={takeaway:false};
+    var draft={}; var state={takeaway:false, cat:'__ALL__', q:''};
     var modeseg=el('div','modeseg');
     var mHere=el('button','mode sel'); mHere.type='button'; mHere.textContent='🍽️ Sur place';
     var mAway=el('button','mode away'); mAway.type='button'; mAway.textContent='📦 À emporter';
@@ -348,6 +361,21 @@ export const OWNER_APP_JS = String.raw`(function(){
     mHere.onclick=function(){ state.takeaway=false; mHere.classList.add('sel'); mAway.classList.remove('sel'); mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false'); };
     mAway.onclick=function(){ state.takeaway=true; mAway.classList.add('sel'); mHere.classList.remove('sel'); mAway.setAttribute('aria-pressed','true'); mHere.setAttribute('aria-pressed','false'); };
     modeseg.appendChild(mHere); modeseg.appendChild(mAway); sh.appendChild(modeseg);
+
+    // ── sticky toolbar: real-time search + category chips (same as the salle) ──
+    var toolbar=el('div','toolbar');
+    var search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search'); search.setAttribute('enterkeyhint','search'); search.setAttribute('autocomplete','off'); search.setAttribute('aria-label','Rechercher un article');
+    search.oninput=function(){ state.q=search.value; renderList(); };   // live, no Enter
+    toolbar.appendChild(search);
+    var chips=el('div','chips');
+    function setCat(c){ state.cat=c; renderList(); }
+    var chipAll=el('button','chip','Tout'); chipAll.onclick=function(){ setCat('__ALL__'); }; chips.appendChild(chipAll);
+    var anyFav=MENU.some(function(c){ return c.items.some(function(it){ return it.fav; }); });
+    var chipFav=anyFav?el('button','chip fav','⭐ Favoris'):null;
+    if(chipFav){ chipFav.onclick=function(){ setCat('__FAV__'); }; chips.appendChild(chipFav); }
+    var catChips={};
+    MENU.forEach(function(cat){ var ch=el('button','chip',cat.category); ch.onclick=(function(name){return function(){ setCat(name); };})(cat.category); catChips[cat.category]=ch; chips.appendChild(ch); });
+    toolbar.appendChild(chips); sh.appendChild(toolbar);
 
     var listEl=el('div','list'); sh.appendChild(listEl);
     var totalEl;
@@ -388,10 +416,31 @@ export const OWNER_APP_JS = String.raw`(function(){
       row.appendChild(extra); markChoice();
       return row;
     }
-    function renderList(){ listEl.textContent='';
+    function section(label,items){ if(!items.length) return; listEl.appendChild(el('div','cat',label));
+      items.forEach(function(it){ listEl.appendChild(itemRow(it)); }); }
+    function renderList(){
+      chipAll.classList.toggle('sel',state.cat==='__ALL__'&&!state.q);
+      if(chipFav) chipFav.classList.toggle('sel',state.cat==='__FAV__'&&!state.q);
+      Object.keys(catChips).forEach(function(k){ catChips[k].classList.toggle('sel',state.cat===k&&!state.q); });
+      listEl.textContent='';
       if(!MENU.length){ listEl.appendChild(el('div','nores','Menu indisponible.')); return; }
-      MENU.forEach(function(cat){ if(!cat.items.length) return; listEl.appendChild(el('div','cat',cat.category));
-        cat.items.forEach(function(it){ listEl.appendChild(itemRow(it)); }); });
+      var q=normalize(state.q); var any=false;
+      var isDefault=!q && state.cat==='__ALL__'; var popIds={};
+      if(isDefault){
+        var pop=window.__pick.top(MENU,TOP,8); pop.forEach(function(it){ popIds[it.id]=1; });
+        if(pop.length){ section('🔥 Populaires',pop); any=true; }
+      }
+      MENU.forEach(function(cat){
+        var items=cat.items.filter(function(it){
+          if(q) return normalize(it.name).indexOf(q)>=0;
+          if(state.cat==='__FAV__') return !!it.fav;
+          if(state.cat!=='__ALL__') return cat.category===state.cat;
+          return !popIds[it.id];
+        });
+        if(!items.length) return;
+        section(cat.category, window.__pick.sortItems(items)); any=true;
+      });
+      if(!any){ listEl.appendChild(el('div','nores','Aucun article trouvé.')); }
     }
 
     var gnote=el('textarea'); gnote.placeholder='Note générale (optionnel)'; gnote.maxLength=280; sh.appendChild(gnote);

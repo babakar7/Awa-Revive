@@ -21,6 +21,7 @@ import {
   cancelTableTicket,
   setTicketUrgent,
   ticketStatsToday,
+  topOrderedItemIds,
   ticketsForSession,
   listRecentClosedTickets,
 } from "../domain/kitchenTicketRepo.js";
@@ -350,11 +351,12 @@ function buildServiceMenu(): Array<{ category: string; items: unknown[] }> {
 async function serviceBootData(): Promise<unknown> {
   // Self-heal: free any table left with no open order (orphan / all-served).
   await closeEmptyOpenSessions().catch(() => {});
-  const [spots, sessions, tickets, cursor] = await Promise.all([
+  const [spots, sessions, tickets, cursor, top] = await Promise.all([
     listActiveSpots(),
     listOpenSessions(),
     listOpenKitchenTickets(),
     latestOpsEventId(ACCUEIL_CHANNEL),
+    topOrderedItemIds(),
   ]);
   return {
     cursor,
@@ -362,6 +364,8 @@ async function serviceBootData(): Promise<unknown> {
     sessions,
     tickets: tickets.filter((t) => t.source === "TABLE").map(kitchenTicketView),
     menu: buildServiceMenu(),
+    // Item ids best-sellers-first for the "🔥 Populaires" picker section.
+    top,
     // Public VAPID key so the PWA can subscribe to push; "" = push disabled.
     vapidKey: config.VAPID_PUBLIC_KEY,
   };
@@ -630,16 +634,17 @@ function registerServiceRoutes(app: FastifyInstance): void {
 const OWNER_BASE = "/ops/owner";
 
 async function ownerBootData(): Promise<unknown> {
-  const [tickets, cursor, stats, devices, spots] = await Promise.all([
+  const [tickets, cursor, stats, devices, spots, top] = await Promise.all([
     listOpenKitchenTickets(),
     latestOpsEventId(CUISINE_CHANNEL),
     ticketStatsToday(),
     listOpsDevices(),
     listActiveSpots(),
+    topOrderedItemIds(),
   ]);
-  // spots + menu let the owner board also TAKE an order (server still decides
-  // prices/choices); the composer reuses the same picker menu as the salle.
-  return { cursor, tickets: tickets.map(kitchenTicketView), stats, devices, spots, menu: buildServiceMenu() };
+  // spots + menu + top let the owner board also TAKE an order with the same
+  // findability as the salle (server still decides prices/choices).
+  return { cursor, tickets: tickets.map(kitchenTicketView), stats, devices, spots, menu: buildServiceMenu(), top };
 }
 
 async function serveOwnerHome(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {

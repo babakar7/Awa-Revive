@@ -43,6 +43,16 @@ describe("owner supervision PWA assets", () => {
     expect(ownerBoardPage("{}")).toContain('id="take"');
   });
 
+  it("the owner composer has the SAME findability as the salle (search + chips + Populaires)", () => {
+    expect(OWNER_APP_JS).toContain("window.__pick=");         // shared helper bundled
+    expect(OWNER_APP_JS).toContain("🔥 Populaires");
+    expect(OWNER_APP_JS).toContain("window.__pick.top");
+    expect(OWNER_APP_JS).toContain("window.__pick.sortItems");
+    expect(OWNER_APP_JS).toContain("search.oninput");         // real-time search
+    expect(OWNER_APP_JS).toContain("enterkeyhint");
+    expect(OWNER_APP_JS).toContain("⭐ Favoris");             // category chips incl. favs
+  });
+
   it("service worker parses, never caches live data, purges only its own caches", () => {
     expect(() => new Function(OWNER_SW)).not.toThrow();
     expect(OWNER_SW).toContain("e.request.method==='GET'");

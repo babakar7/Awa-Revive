@@ -25,6 +25,37 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Findability des composeurs de commande — 🔥 Populaires + tri (6 août 2026)
+
+Babakar : « trouver un article doit être ultra simple » (best-sellers : matchas,
+toasts, brunch) + « la recherche doit filtrer en temps réel, sans Enter ». Les
+composeurs noyaient les vraies entrées (suppléments au milieu, ~49 articles triés
+par `sort_order` non éditable).
+
+Livré sur les **trois** pickers (salle **v19**, supervision **v3**, /commander
+**v2**) :
+
+- **Section « 🔥 Populaires » en tête** de la vue par défaut, calculée sur les
+  ventes réelles (30 j) : nouvelle `topOrderedItemIds()`
+  ([kitchenTicketRepo.ts](src/domain/kitchenTicketRepo.ts)) — un seul scan jsonb
+  sur `kitchen_tickets.items_json`, exclut annulés / test / « Supplément… »,
+  mémoïsé 5 min. Exposée comme `top: string[]` dans `serviceBootData`,
+  `ownerBootData` et le `menu.json` de /commander. Chaque populaire n'apparaît
+  qu'une fois (retiré de sa catégorie en vue défaut → pas de double compteur).
+- **Tri intra-catégorie** : ⭐ favoris d'abord, « Supplément… » en dernier, sinon
+  ordre serveur. Logique volatile partagée en UN endroit :
+  [src/ops/opsPicker.ts](src/ops/opsPicker.ts) (`window.__pick.top/sortItems`),
+  inlinée dans les trois bundles (fini la triplication / le drift).
+- **Recherche temps réel** : déjà `oninput` sur salle/commander (aucun Enter) —
+  confirmé + `enterkeyhint=search`. La **supervision** n'en avait AUCUNE : elle
+  gagne la barre recherche + chips catégories + Favoris + Populaires (même UX
+  que la salle ; « my UX sucks » résolu).
+- Le serveur reste seul décideur (prix/choix inchangés, `pickerMenu()` intact).
+
+**À nettoyer côté données** (via /admin/menu, pas touché — je le signale) :
+doublons menu prod — « Salade Light » / « Salade light », « Salade soleil » ×2
+(dont 1 désactivée). À dédoublonner par Babakar.
+
 ## Disengage sur une prospecte en plein funnel — garde serveur (6 août 2026)
 
 Incident prod 05/08 19:13 (Codette, +221775048261) : prospecte L'Invitée

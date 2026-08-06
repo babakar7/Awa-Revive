@@ -31,6 +31,8 @@ import {
   listOpenKitchenTickets,
   listRecentClosedTickets,
   claimStaleServeEscalations,
+  topOrderedItemIds,
+  __resetTopCache,
 } from "../../src/domain/kitchenTicketRepo.js";
 import {
   savePushSubscription,
@@ -64,6 +66,7 @@ beforeEach(async () => {
   await pool.query(
     "truncate kitchen_tickets, ops_devices, ops_events, service_sessions, push_subscriptions restart identity cascade",
   );
+  __resetTopCache(); // the 5-min best-seller memo must not leak across truncations
   const spots = await listActiveSpots();
   canapeSpot = spots.find((s) => s.label === "Canapé")!.id;
   terrasseSpot = spots.find((s) => s.label === "Terrasse")!.id;
@@ -216,6 +219,47 @@ describe("createTableTicket", () => {
     expect(stats.urgentToday).toBeGreaterThanOrEqual(1);
     expect(stats.inProgress).toBeGreaterThanOrEqual(1);
     expect(stats.avgPrepSecs).not.toBeNull();
+  });
+});
+
+describe("topOrderedItemIds (🔥 Populaires ranking)", () => {
+  const line = (id: string, name: string, qty: number): ExtraLine => ({
+    id, name, qty, unitPriceXof: 1000, lineTotalXof: 1000 * qty, note: null,
+  });
+  async function order(sessionId: string, heading: string, lines: ExtraLine[], opts: { isTest?: boolean } = {}) {
+    return createTableTicket({
+      sessionId, heading, subheading: "x", lines, amountXof: 1000,
+      note: null, clientRequestId: reqId(), isTest: opts.isTest ?? false,
+    });
+  }
+
+  it("ranks by total qty sold, excludes suppléments / test / cancelled", async () => {
+    const s = await seat(canapeSpot);
+    await order(s.id, s.short_code, [line("TOAST", "Tuna Toast", 5), line("MATCHA", "Iced Matcha", 1)]);
+    await order(s.id, s.short_code, [line("MATCHA", "Iced Matcha", 4), line("SUPP", "Supplément œufs", 9)]);
+    // A test ticket and a cancelled one must NOT feed the ranking.
+    await order(s.id, s.short_code, [line("BRUNCH", "Brunch", 50)], { isTest: true });
+    const cancelled = await order(s.id, s.short_code, [line("MATCHA", "Iced Matcha", 50)]);
+    await cancelTableTicket(cancelled.ticket.id, "annulé");
+
+    __resetTopCache();
+    const top = await topOrderedItemIds(30, 8);
+    // TOAST=5, MATCHA=1+4=5 (order between the two is a tie, don't pin it);
+    // SUPP (add-on), BRUNCH (is_test) and the cancelled matcha all excluded.
+    expect(top.slice().sort()).toEqual(["MATCHA", "TOAST"]);
+    expect(top).not.toContain("SUPP");
+    expect(top).not.toContain("BRUNCH");
+  });
+
+  it("memoizes within the TTL and returns [] on an empty window", async () => {
+    __resetTopCache();
+    expect(await topOrderedItemIds(30, 8)).toEqual([]); // no sales yet
+    const s = await seat(terrasseSpot);
+    await order(s.id, s.short_code, [line("MATCHA", "Iced Matcha", 3)]);
+    // Still cached as empty until the memo is reset.
+    expect(await topOrderedItemIds(30, 8)).toEqual([]);
+    __resetTopCache();
+    expect(await topOrderedItemIds(30, 8)).toEqual(["MATCHA"]);
   });
 });
 
@@ -554,9 +598,11 @@ describe("service PWA over HTTP", () => {
   it("/state exposes the favourite flag so the picker can build its ⭐ shortcut", async () => {
     const cookie = await pairAccueil();
     const st = await app.inject({ method: "GET", url: "/ops/service/state", headers: { cookie } });
-    const menu = JSON.parse(st.body).menu as Array<{ items: any[] }>;
+    const body = JSON.parse(st.body);
+    const menu = body.menu as Array<{ items: any[] }>;
     const item = menu.flatMap((c) => c.items).find((i) => i.id === "JANTBI");
     expect(item.fav).toBe(true);
+    expect(Array.isArray(body.top)).toBe(true); // best-seller ids for 🔥 Populaires
   });
 
   it("service /recent returns today's closed tables with their subtotal; 401 unpaired", async () => {
@@ -588,6 +634,7 @@ describe("service PWA over HTTP", () => {
     const boot = JSON.parse(st.body);
     expect((boot.spots as any[]).some((s) => s.label === "Canapé")).toBe(true);
     expect((boot.menu as any[]).flatMap((c) => c.items).some((i) => i.id === "JANTBI")).toBe(true);
+    expect(Array.isArray(boot.top)).toBe(true); // 🔥 Populaires ids for the owner composer
   });
 
   it("owner can take a salle order (same server-decided path as the accueil)", async () => {

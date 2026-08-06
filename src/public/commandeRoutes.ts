@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { getCafeMenu, computeExtras, pickerMenu } from "../lib/cafeMenu.js";
+import { topOrderedItemIds } from "../domain/kitchenTicketRepo.js";
 import { barOpenNow } from "../domain/openingHours.js";
 import { isOmEnabled } from "../lib/orangeMoney.js";
 import { allowPublicOrder } from "../lib/rateLimit.js";
@@ -67,9 +68,11 @@ export function registerCommande(app: FastifyInstance): void {
   // because the strict CSP forbids an inline boot script.
   app.get(`${BASE}/menu.json`, async (_req, reply) => {
     hardenCommande(reply);
-    const hours = await barOpenNow();
+    const [hours, top] = await Promise.all([barOpenNow(), topOrderedItemIds()]);
     return reply.type("application/json").send({
       menu: pickerMenu(),
+      // Best-seller item ids (server-computed) for the "🔥 Populaires" section.
+      top,
       om: isOmEnabled(),
       deliveryFeeXof: config.DELIVERY_FEE_XOF > 0 ? config.DELIVERY_FEE_XOF : 0,
       hours,
