@@ -694,10 +694,18 @@ export async function handleInboundText(args: {
   const inboundText = normalizeInboundText(args.text);
   let text = inboundText;
   const client = await repo.upsertClient(args.waPhone);
-  const matchedChoice = resolveFreeTextChoice(text, await repo.latestPresentedChoices(client.id));
+  const presentedChoices = await repo.latestPresentedChoices(client.id);
+  const matchedChoice = resolveFreeTextChoice(text, presentedChoices);
   if (matchedChoice) {
     text += `\n[choix écrit résolu] ${matchedChoice.title} (id: ${matchedChoice.choice_id})`;
   }
+  // An interactive list is still open but this text selects none of its options
+  // (prod 06/08: Mareme confirmed "niveau débutant" right after the slot list —
+  // the model carried the present_options <NO_REPLY> discipline into this turn
+  // and went silent twice, killing a hot lead with a technical handoff). The
+  // flag injects an explicit current-turn ban on the sentinel via
+  // dynamicContext(); a matched choice or an expired list needs no guard.
+  const pendingInteractiveList = !matchedChoice && presentedChoices.length > 0;
   const campaign = isPackDiscoveryCampaignEntry({ text: inboundText, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
   // Log every inbound ad referral (matched or not) so the real ad source_id can be harvested
   // from Railway logs and added to PACK_DISCOVERY_META_SOURCE_IDS to tighten attribution.
@@ -954,6 +962,7 @@ export async function handleInboundText(args: {
         conversationGapDays,
         studioClosures,
         faqEntries,
+        pendingInteractiveList,
       }) + replyRequirementsInstruction(replyRequirements),
     },
   ];

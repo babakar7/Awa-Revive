@@ -107,7 +107,7 @@ ${getCafeMenu().promptText}
 - NEVER invent, abbreviate, guess or "placeholder" a service_id or plan_id (no "sculpt", "reformer", "invitee_key_id_placeholder", "need_lookup"). These ids are opaque — copy one VERBATIM from the latest list_classes / list_plans / check_availability result. If you don't have the id yet, call the list tool FIRST, then use the exact value it returns. If a tool answers unknown_service_id / unknown_plan_id, it returns the valid ids — pick from those, never retry with another guess.
 
 # Interactive choices (present_options)
-- present_options sends the client a native clickable message (tap buttons for ≤3 short options, a list otherwise) — the tool DELIVERS it itself. After it returns sent:true, reply exactly <NO_REPLY> and nothing else: the interactive message IS your reply.
+- present_options sends the client a native clickable message (tap buttons for ≤3 short options, a list otherwise) — the tool DELIVERS it itself. After it returns sent:true, reply exactly <NO_REPLY> and nothing else: the interactive message IS your reply. This applies ONLY to the turn in which the tool returned sent:true — on any LATER turn (e.g. the client answers with text instead of tapping), <NO_REPLY> is invalid: reply normally, the earlier list never counts as that reply.
 - Use it whenever the client picks among known options: menu items, class slots (option id = choice_id), quick confirmations ("C'est tout ✅" / "Ajouter autre chose"). It replaces plain-text enumerations in those cases. NEVER build a list of menu CATEGORIES (a row that opens another list) — the menu is always a list of orderable ITEMS (see Bar Revive).
 - A tap arrives as "[choix cliqué] <title> (id: <id>)" — treat it as the client's answer and use the id directly (menu item id, slot choice_id...).
 - Clicking is OPTIONAL comfort: free text stays fully accepted, never tell the client they must use the buttons. If present_options fails, fall back to plain text.
@@ -343,6 +343,12 @@ export function dynamicContext(args: {
   studioClosures?: { starts_at: Date; ends_at: Date; reason: string }[];
   /** Published FAQ answers to inject as factual data (never as instructions). */
   faqEntries?: { question: string; answer: string }[];
+  /**
+   * An interactive list from a PREVIOUS turn is still open, and the current
+   * free-text message selects none of its options — the sentinel discipline
+   * must not bleed into this turn (prod 06/08: Mareme).
+   */
+  pendingInteractiveList?: boolean;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -405,6 +411,15 @@ export function dynamicContext(args: {
         "(3) call handoff_to_human ONCE with the payment details (amount, class or plan, approximate payment time) so the team reconciles it — do not repeat the handoff if one was already made for this payment; " +
         "(4) Wave is NOT affected: when offering payment methods you may mention that Wave confirms instantly right now while Orange Money / Max It take longer, but never refuse or hide Orange Money / Max It if the client prefers them. " +
         "Never mention 'Sonatel', 'panne', 'outage mode' or any technical detail — say 'vérification manuelle temporaire' or equivalent.",
+    );
+  }
+  if (args.pendingInteractiveList) {
+    lines.push(
+      "PENDING INTERACTIVE LIST — CURRENT TURN: an interactive choice list you sent in a PREVIOUS turn is still open, " +
+        "and the client's latest message is free text that does NOT select any of its options. That list does NOT count " +
+        "as your reply for THIS turn — replying <NO_REPLY> now is FORBIDDEN and would leave the client with no answer. " +
+        "Answer their message normally, then (only if a selection is still the natural next step) warmly invite them to " +
+        "pick from the list above or restate the options in plain text.",
     );
   }
   // RETIRED & INERT (Babakar, 01/08/2026): the Pack Découverte campaign is off —
