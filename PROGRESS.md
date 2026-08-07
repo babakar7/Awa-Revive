@@ -25,6 +25,27 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Handoffs « Compte non relié » : auto-fermeture à la résolution (7 août 2026)
+
+Deux pastilles « intervention humaine » fantômes le 07/08 : **Aida Fall**
+(+221766395117) — sweep 30 min → handoff 15:52, la cliente revient à 16:46,
+compte créé + Clé payée + séance réservée, pastille intacte ; **Charles Gomis**
+(+221773565079) — demande écartée d'un clic « Ignorer » dans /admin/crm
+(owner, 15:41), pastille intacte aussi. Cause : un handoff n'avait QU'UN seul
+chemin de fermeture, le bouton « traité » de la page Handoffs — rien ne le
+reliait au sort de la demande de liaison qui l'avait ouvert (contraste :
+les `conversation_reviews`, elles, s'auto-fermaient déjà).
+
+Correctif (`domain/linkRequests.ts`) : `autoCloseAccountLinkHandoffs(requestId,
+doneBy)` ferme les handoffs OPEN préfixés « Compte non relié » du client, appelé
+aux trois sorties de la demande : `markVerified` (code accepté, done_by `auto`),
+`markLinked` (liaison admin, done_by = l'admin) et `dismiss` (« Ignorer » CRM,
+done_by = l'admin). Jamais de retouche d'un handoff déjà traité à la main ; ne
+lève jamais (le ménage ne casse pas l'opération). Tests :
+`test/integration/linkHandoffAutoclose.test.ts` (4 cas, dont le garde-fou).
+Backfill prod : les handoffs de liaison OPEN dont le client n'a plus aucune
+demande ouverte ont été fermés (`done_by` `auto-backfill`).
+
 ## Rebonds email des codes de vérification : webhook Brevo + repli sans-vérif (7 août 2026)
 
 Vente perdue 05–07/08 (+221786603672, kaeva18@gmail.com) : sa boîte Gmail est

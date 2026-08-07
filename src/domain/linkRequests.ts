@@ -153,6 +153,35 @@ export async function markVerified(id: string, contactId: string): Promise<void>
       where id = $1`,
     [id, contactId],
   );
+  await autoCloseAccountLinkHandoffs(id, "auto");
+}
+
+/**
+ * La situation « Compte non relié » de ce client vient de se conclure — code
+ * accepté (markVerified), liaison faite par la réception (markLinked) ou
+ * demande écartée d'un clic « Ignorer » (dismiss) : ferme les handoffs OPEN
+ * ouverts pour elle. Sans ça, la pastille « intervention humaine » survivait
+ * pour toujours à une situation pourtant réglée — le seul chemin de fermeture
+ * était le bouton « traité » de la page Handoffs (Aida Fall 07/08 : compte
+ * créé + Clé payée + séance réservée, flag intact ; Charles Gomis 07/08 :
+ * demande ignorée dans /admin/crm, flag intact). Ne lève jamais : ce ménage
+ * ne doit pas casser l'opération qui vient d'aboutir.
+ */
+async function autoCloseAccountLinkHandoffs(requestId: string, doneBy: string): Promise<void> {
+  try {
+    await pool.query(
+      `update handoffs h
+          set status = 'DONE', done_by = $3, done_at = now()
+         from link_requests lr
+        where lr.id = $1
+          and h.client_id = lr.client_id
+          and h.status = 'OPEN'
+          and h.reason like $2`,
+      [requestId, `${HANDOFF_PREFIX}%`, doneBy],
+    );
+  } catch (err) {
+    console.error(`Auto-close of link handoffs failed for request ${requestId} (non-blocking):`, err);
+  }
 }
 
 /**
@@ -218,6 +247,7 @@ export async function markLinked(
       where id = $1`,
     [id, contactId, adminUser],
   );
+  await autoCloseAccountLinkHandoffs(id, adminUser);
 }
 
 export async function dismiss(id: string, adminUser: string): Promise<void> {
@@ -227,6 +257,7 @@ export async function dismiss(id: string, adminUser: string): Promise<void> {
       where id = $1`,
     [id, adminUser],
   );
+  await autoCloseAccountLinkHandoffs(id, adminUser);
 }
 
 export interface ReceptionQueueEntry extends LinkRequest {
