@@ -43,8 +43,9 @@ aux trois sorties de la demande : `markVerified` (code accepté, done_by `auto`)
 done_by = l'admin). Jamais de retouche d'un handoff déjà traité à la main ; ne
 lève jamais (le ménage ne casse pas l'opération). Tests :
 `test/integration/linkHandoffAutoclose.test.ts` (4 cas, dont le garde-fou).
-Backfill prod : les handoffs de liaison OPEN dont le client n'a plus aucune
-demande ouverte ont été fermés (`done_by` `auto-backfill`).
+Pas de backfill nécessaire : les deux pastilles ont été fermées à la main
+(« traité », owner) juste avant le déploiement, et la requête de contrôle ne
+trouve plus aucun handoff de liaison orphelin en prod.
 
 ## Rebonds email des codes de vérification : webhook Brevo + repli sans-vérif (7 août 2026)
 
