@@ -98,6 +98,7 @@ const NAV: NavSection[] = [
     links: [
       { href: "/admin/orders", label: "Commandes payées", icon: "orders" },
       { href: "/admin/livraisons", label: "Livraisons", icon: "delivery", badgeKey: "livraisons" },
+      { href: "/admin/historique-commandes", label: "Historique", icon: "review" },
       { href: "/admin/menu", label: "Menu", icon: "menu" },
     ],
   },

@@ -739,6 +739,285 @@ export async function adminReport(periodDays: 1 | 7 | 30): Promise<AdminReport> 
   };
 }
 
+// ---------- historique des commandes bar/restaurant (/admin/historique-commandes) ----------
+
+/**
+ * Historique unifié de TOUTES les commandes bar/restaurant, tous canaux :
+ * sur place, à emporter, retrait, livraison. Il n'existe pas de table
+ * « commandes » unique — la donnée vit dans trois tables. On normalise chacune
+ * sur les mêmes colonnes puis on UNION, en évitant les doubles comptages :
+ *
+ *  1. kitchen_tickets : la file cuisine unifiée (depuis les iPads de service,
+ *     ~fin juillet 2026). Couvre BAR / TABLE / DELIVERY. Le canal et le moyen de
+ *     paiement d'un ticket BAR viennent de la commande cafe source, reliée par
+ *     client_request_id = 'bar:cafe:<id>'. TABLE = salle (POS = source
+ *     comptable, montant indicatif). DELIVERY est relié via delivery_order_id.
+ *  2. delivery_orders SANS ticket cuisine : livraisons antérieures aux tickets
+ *     (le ticket DELIVERY naît à l'activation, donc l'historique ancien n'en a
+ *     pas). NOT EXISTS pour ne pas doubler le point 1.
+ *  3. pending_cafe_orders PAYÉES sans ticket BAR ET sans livraison rattachée :
+ *     commandes WhatsApp/web anciennes qui n'ont jamais produit de ticket.
+ *
+ * `channel` ∈ SUR_PLACE | A_EMPORTER | RETRAIT | LIVRAISON ; `status` normalisé
+ * en COMPLETED | OPEN | CANCELLED. Montants = entiers XOF.
+ */
+const ORDER_HISTORY_BASE_CTE = `base as (
+  select
+    'kt:' || kt.id::text as id,
+    kt.created_at,
+    case
+      when kt.source = 'DELIVERY' then 'LIVRAISON'
+      when kt.source = 'TABLE' then 'SUR_PLACE'
+      when pco.service_mode in ('SUR_PLACE','A_EMPORTER','RETRAIT','LIVRAISON') then pco.service_mode
+      when kt.takeaway then 'A_EMPORTER'
+      else 'RETRAIT'
+    end as channel,
+    case
+      when kt.status = 'CANCELLED' then 'CANCELLED'
+      when kt.source = 'DELIVERY' and d.status = 'CANCELLED' then 'CANCELLED'
+      when kt.status = 'COMPLETED' then 'COMPLETED'
+      else 'OPEN'
+    end as status,
+    kt.amount_xof,
+    kt.heading,
+    coalesce(nullif(kt.subheading, ''), ss.short_code) as detail,
+    kt.items_json,
+    pco.client_id,
+    kt.is_test
+  from kitchen_tickets kt
+  left join delivery_orders d on d.id = kt.delivery_order_id
+  left join pending_cafe_orders pco
+    on pco.id = (case when kt.source = 'BAR' and kt.client_request_id like 'bar:cafe:%'
+                      then substring(kt.client_request_id from 10) end)::uuid
+  left join service_sessions ss on ss.id = kt.session_id
+  union all
+  select
+    'do:' || d.id::text,
+    d.created_at,
+    'LIVRAISON',
+    case d.status when 'DELIVERED' then 'COMPLETED' when 'CANCELLED' then 'CANCELLED' else 'OPEN' end,
+    d.amount_xof,
+    d.client_name,
+    d.address,
+    d.items_json,
+    null::uuid,
+    d.is_test
+  from delivery_orders d
+  where not exists (select 1 from kitchen_tickets kt where kt.delivery_order_id = d.id)
+  union all
+  select
+    'co:' || pco.id::text,
+    pco.created_at,
+    case when pco.service_mode in ('SUR_PLACE','A_EMPORTER','RETRAIT','LIVRAISON') then pco.service_mode else 'RETRAIT' end,
+    'COMPLETED',
+    pco.amount_xof,
+    coalesce(nullif(pco.customer_name, ''), cl.name, 'Client'),
+    pco.service_name,
+    pco.extras_json,
+    pco.client_id,
+    cl.is_test
+  from pending_cafe_orders pco
+  join clients cl on cl.id = pco.client_id
+  where pco.status = 'PAID'
+    and not exists (select 1 from kitchen_tickets kt where kt.client_request_id = 'bar:cafe:' || pco.id::text)
+    and not exists (select 1 from delivery_orders d where d.source_cafe_order_id = pco.id)
+)`;
+
+export type OrderChannel = "SUR_PLACE" | "A_EMPORTER" | "RETRAIT" | "LIVRAISON";
+export type OrderStatusNorm = "COMPLETED" | "OPEN" | "CANCELLED";
+export type OrderPeriod = "today" | "7" | "30" | "all";
+
+export interface OrderHistoryFilters {
+  period: OrderPeriod;
+  channel: OrderChannel | "all";
+  status: OrderStatusNorm | "all";
+  page: number;
+}
+
+export interface OrderHistoryRow {
+  id: string;
+  created_at: Date;
+  channel: OrderChannel;
+  status: OrderStatusNorm;
+  amount_xof: number;
+  heading: string;
+  detail: string | null;
+  items_json: unknown;
+  client_id: string | null;
+}
+
+/** Current-window predicate (excludes tests) shared by list/channel/daily. */
+function orderWindowClause(filters: OrderHistoryFilters, params: unknown[]): string {
+  const conds = ["is_test = false"];
+  if (filters.period === "today") conds.push("created_at >= current_date");
+  else if (filters.period === "7" || filters.period === "30") {
+    params.push(Number(filters.period));
+    conds.push(`created_at > now() - make_interval(days => $${params.length}::int)`);
+  }
+  if (filters.channel !== "all") {
+    params.push(filters.channel);
+    conds.push(`channel = $${params.length}`);
+  }
+  return conds.join(" and ");
+}
+
+export async function listOrderHistory(
+  filters: OrderHistoryFilters,
+): Promise<PageResult<OrderHistoryRow>> {
+  const page = Math.max(1, Math.trunc(filters.page || 1));
+  const pageSize = 50;
+  const params: unknown[] = [];
+  const where = orderWindowClause(filters, params);
+  const conds = [where];
+  if (filters.status !== "all") {
+    params.push(filters.status);
+    conds.push(`status = $${params.length}`);
+  }
+  params.push(pageSize, (page - 1) * pageSize);
+  const res = await pool.query(
+    `with ${ORDER_HISTORY_BASE_CTE}
+     select id, created_at, channel, status, amount_xof, heading, detail, items_json, client_id,
+            count(*) over()::int as total_count
+       from base
+      where ${conds.join(" and ")}
+      order by created_at desc
+      limit $${params.length - 1} offset $${params.length}`,
+    params,
+  );
+  const total = res.rows[0]?.total_count ?? 0;
+  return {
+    rows: res.rows.map(({ total_count: _t, ...row }) => row as OrderHistoryRow),
+    page,
+    pageSize,
+    total,
+    pages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
+export interface OrderHistoryStats {
+  completed: number;
+  cancelled: number;
+  open: number;
+  revenueXof: number;
+  avgTicketXof: number;
+  previousCompleted: number;
+  previousRevenueXof: number;
+  firstOrderAt: Date | null;
+}
+
+/** Top-line KPIs for the selected window plus the equal previous window. */
+export async function orderHistoryStats(filters: OrderHistoryFilters): Promise<OrderHistoryStats> {
+  // params: $1 period, $2 channel
+  const res = await pool.query(
+    `with ${ORDER_HISTORY_BASE_CTE},
+     bounds as (
+       select
+         case when $1='today' then current_date::timestamptz
+              when $1='7' then now() - make_interval(days=>7)
+              when $1='30' then now() - make_interval(days=>30)
+              else null end as cur_start,
+         case when $1='today' then (current_date - 1)::timestamptz
+              when $1='7' then now() - make_interval(days=>14)
+              when $1='30' then now() - make_interval(days=>60)
+              else null end as prev_start
+     ),
+     scoped as (
+       select b.*, bd.cur_start
+         from base b cross join bounds bd
+        where b.is_test = false
+          and ($2 = 'all' or b.channel = $2)
+          and (bd.cur_start is null or b.created_at >= bd.prev_start)
+     )
+     select
+       count(*) filter (where status='COMPLETED' and (cur_start is null or created_at >= cur_start))::int as completed,
+       count(*) filter (where status='CANCELLED' and (cur_start is null or created_at >= cur_start))::int as cancelled,
+       count(*) filter (where status='OPEN' and (cur_start is null or created_at >= cur_start))::int as open_count,
+       coalesce(sum(amount_xof) filter (where status='COMPLETED' and (cur_start is null or created_at >= cur_start)),0)::int as revenue,
+       coalesce(round(avg(amount_xof) filter (where status='COMPLETED' and amount_xof>0 and (cur_start is null or created_at >= cur_start))),0)::int as avg_ticket,
+       count(*) filter (where status='COMPLETED' and cur_start is not null and created_at < cur_start)::int as prev_completed,
+       coalesce(sum(amount_xof) filter (where status='COMPLETED' and cur_start is not null and created_at < cur_start),0)::int as prev_revenue,
+       (select min(created_at) from base where is_test=false) as first_order_at
+     from scoped`,
+    [filters.period, filters.channel],
+  );
+  const r = res.rows[0] ?? {};
+  return {
+    completed: r.completed ?? 0,
+    cancelled: r.cancelled ?? 0,
+    open: r.open_count ?? 0,
+    revenueXof: r.revenue ?? 0,
+    avgTicketXof: r.avg_ticket ?? 0,
+    previousCompleted: r.prev_completed ?? 0,
+    previousRevenueXof: r.prev_revenue ?? 0,
+    firstOrderAt: r.first_order_at ?? null,
+  };
+}
+
+export interface OrderChannelRow {
+  channel: OrderChannel;
+  orders: number;
+  revenueXof: number;
+}
+
+/** Completed-order revenue split by channel over the selected window. */
+export async function orderHistoryByChannel(
+  filters: OrderHistoryFilters,
+): Promise<OrderChannelRow[]> {
+  const params: unknown[] = [];
+  const where = orderWindowClause(filters, params);
+  const res = await pool.query(
+    `with ${ORDER_HISTORY_BASE_CTE}
+     select channel, count(*)::int as orders, coalesce(sum(amount_xof),0)::int as revenue
+       from base
+      where ${where} and status = 'COMPLETED'
+      group by channel`,
+    params,
+  );
+  const byChannel = new Map<string, OrderChannelRow>(
+    res.rows.map((row: any) => [
+      row.channel,
+      { channel: row.channel, orders: row.orders, revenueXof: row.revenue },
+    ]),
+  );
+  const order: OrderChannel[] = ["SUR_PLACE", "A_EMPORTER", "RETRAIT", "LIVRAISON"];
+  return order.map(
+    (channel) => byChannel.get(channel) ?? { channel, orders: 0, revenueXof: 0 },
+  );
+}
+
+export interface OrderDailyPoint {
+  day: string;
+  orders: number;
+  revenueXof: number;
+}
+
+/** Per-day completed orders + revenue for the CSS bar trend (period 7/30 only). */
+export async function orderHistoryDaily(filters: OrderHistoryFilters): Promise<OrderDailyPoint[]> {
+  if (filters.period !== "7" && filters.period !== "30") return [];
+  const days = Number(filters.period);
+  const params: unknown[] = [days];
+  const channelClause = filters.channel === "all" ? "" : `and b.channel = $2`;
+  if (filters.channel !== "all") params.push(filters.channel);
+  const res = await pool.query(
+    `with ${ORDER_HISTORY_BASE_CTE}
+     select to_char(d::date, 'YYYY-MM-DD') as day,
+            count(b.id) filter (where b.status='COMPLETED')::int as orders,
+            coalesce(sum(b.amount_xof) filter (where b.status='COMPLETED'),0)::int as revenue
+       from generate_series(current_date - ($1::int - 1), current_date, interval '1 day') d
+       left join base b
+         on b.is_test = false
+        and b.created_at >= d and b.created_at < d + interval '1 day'
+        ${channelClause}
+      group by d order by d`,
+    params,
+  );
+  return res.rows.map((row: any) => ({
+    day: row.day,
+    orders: row.orders,
+    revenueXof: row.revenue,
+  }));
+}
+
 // ---------- hygiène CRM : groupes de doublons marqués « traités » ----------
 
 /**

@@ -65,6 +65,7 @@ import {
   renderLivraisonsBoard,
   renderLivraisonsBoardFragment,
 } from "./livraisonsPage.js";
+import { renderHistoriqueCommandes } from "./historiqueCommandesPage.js";
 import * as q from "./queries.js";
 import {
   auditActiveSubscribers,
@@ -1123,6 +1124,42 @@ ${
           .header("Cache-Control", "no-store")
           .type("text/html")
           .send(renderLivraisonsBoardFragment({ open, recent }));
+      });
+
+      admin.get("/historique-commandes", async (req, reply) => {
+        const raw = req.query as Record<string, string | undefined>;
+        const period: q.OrderPeriod = ["today", "7", "30", "all"].includes(raw.period ?? "")
+          ? (raw.period as q.OrderPeriod)
+          : "7";
+        const channel: q.OrderHistoryFilters["channel"] = [
+          "SUR_PLACE",
+          "A_EMPORTER",
+          "RETRAIT",
+          "LIVRAISON",
+        ].includes(raw.channel ?? "")
+          ? (raw.channel as q.OrderChannel)
+          : "all";
+        const status: q.OrderHistoryFilters["status"] = ["COMPLETED", "OPEN", "CANCELLED"].includes(
+          raw.status ?? "",
+        )
+          ? (raw.status as q.OrderStatusNorm)
+          : "all";
+        const page = Math.max(1, Number.parseInt(raw.page ?? "1", 10) || 1);
+        const filters: q.OrderHistoryFilters = { period, channel, status, page };
+        const [result, stats, byChannel, daily] = await Promise.all([
+          q.listOrderHistory(filters),
+          q.orderHistoryStats(filters),
+          q.orderHistoryByChannel(filters),
+          q.orderHistoryDaily(filters),
+        ]);
+        reply.type("text/html").send(
+          await layout(
+            "Historique des commandes",
+            "/admin/historique-commandes",
+            renderHistoriqueCommandes({ result, stats, byChannel, daily, filters }),
+            { subtitle: "Bar & restaurant", contentWidth: "wide" },
+          ),
+        );
       });
 
       admin.get("/livraisons/new", async (req, reply) => {

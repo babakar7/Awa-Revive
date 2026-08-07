@@ -310,6 +310,14 @@ form.inline{display:inline}
 .report-breakdown>div:last-child{border:0}
 .report-breakdown span{color:var(--ink-500);font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 
+/* Historique commandes — mini graphe en barres CSS (pas de lib de charts) */
+.trend-bars{display:flex;align-items:flex-end;gap:.3rem;height:140px;padding:.4rem .2rem 0;overflow-x:auto}
+.trend-bars .trend-col{flex:1 1 0;min-width:14px;display:flex;flex-direction:column;align-items:center;gap:.3rem;height:100%}
+.trend-bars .trend-track{flex:1;width:100%;display:flex;align-items:flex-end;justify-content:center}
+.trend-bars .trend-bar{width:70%;min-height:2px;border-radius:5px 5px 0 0;background:linear-gradient(180deg,var(--brand),var(--plum-300))}
+.trend-bars .trend-bar.is-zero{background:var(--border);min-height:2px}
+.trend-bars .trend-label{font-size:.66rem;color:var(--ink-500);white-space:nowrap}
+
 /* Clés de la Maison — reception memo */
 .key-memo{max-width:980px;margin:0 auto}
 .key-memo-header{margin-bottom:1rem}
