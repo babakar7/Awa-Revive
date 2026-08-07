@@ -2038,4 +2038,24 @@ create table if not exists ad_insights_sync_state (
   updated_at timestamptz not null default now()
 );
 insert into ad_insights_sync_state (id) values (1) on conflict (id) do nothing;
+
+-- Rebonds d'emails transactionnels remontés par le webhook Brevo (boîte
+-- pleine, adresse invalide, blocage). Consulté avant tout renvoi d'un code de
+-- vérification vers la même adresse : renvoyer vers une boîte morte faisait
+-- boucler « je n'ai pas reçu » sans issue (cas réel kaeva18@, 05-07/08).
+create table if not exists email_bounces (
+  id uuid primary key default gen_random_uuid(),
+  email text not null,
+  event text not null,
+  reason text,
+  message_id text,
+  occurred_at timestamptz not null default now()
+);
+create index if not exists idx_email_bounces_email
+  on email_bounces (email, occurred_at desc);
+
+-- Une seule alerte WhatsApp proactive « ton code a rebondi » par demande de
+-- vérification (claim atomique, même motif que reception_notified_at).
+alter table link_requests
+  add column if not exists bounce_notified_at timestamptz;
 `;

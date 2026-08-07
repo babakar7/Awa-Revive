@@ -148,6 +148,9 @@ export const config = {
   // Brevo HTTP API: Railway blocks outbound SMTP, so plain SMTP times out there.
   // The sender must be verified in the Brevo dashboard (Senders & Domains).
   BREVO_API_KEY: optional("BREVO_API_KEY", ""),
+  // Secret du webhook Brevo (rebonds d'emails) : /webhooks/brevo?token=…
+  // Vide → endpoint inerte. Voir src/webhooks/brevo.ts.
+  BREVO_WEBHOOK_TOKEN: optional("BREVO_WEBHOOK_TOKEN", ""),
   EMAIL_FROM: optional("EMAIL_FROM", "Awa - Revive <support@revive.sn>"),
   RECEPTION_EMAIL: optional("RECEPTION_EMAIL", "support@revive.sn"),
 

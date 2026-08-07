@@ -3,6 +3,7 @@ import { registerWhatsAppWebhook } from "./webhooks/whatsapp.js";
 import { registerWaveWebhook } from "./webhooks/wave.js";
 import { registerOrangeMoneyWebhook } from "./webhooks/orangeMoney.js";
 import { registerWixWebhook } from "./webhooks/wix.js";
+import { registerBrevoWebhook } from "./webhooks/brevo.js";
 import { registerAdmin } from "./admin/routes.js";
 import { registerDeliveryPublic } from "./deliveryPublic.js";
 import { MENU_HOST, registerMenuPublic, serveMenuPage } from "./menuPublic.js";
@@ -93,6 +94,7 @@ export function buildServer() {
   registerWaveWebhook(app);
   registerOrangeMoneyWebhook(app);
   registerWixWebhook(app);
+  registerBrevoWebhook(app);
   registerAdmin(app);
   // Public, no-auth "mark ready" magic-link pages for the kitchen (outside /admin).
   registerDeliveryPublic(app);

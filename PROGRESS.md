@@ -25,6 +25,40 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Rebonds email des codes de vérification : webhook Brevo + repli sans-vérif (7 août 2026)
+
+Vente perdue 05–07/08 (+221786603672, kaeva18@gmail.com) : sa boîte Gmail est
+**pleine** (« 452 4.2.2 out of storage space »). Brevo accepte l'envoi (201) et
+n'apprend le rebond que quelques secondes après → Awa renvoyait code sur code
+vers une boîte morte, la cliente répétait « je n'ai pas reçu », personne ne
+voyait pourquoi. Premier code (05/08) pourtant livré mais **ouvert à +43 min**,
+TTL 10 min déjà expiré ; deuxième (07/08) rebondi. (Le tout après un premier
+contact 04/08 tué par l'abort technique corrigé dans `cf53848`.)
+
+Correctif — le serveur apprend la non-livraison et guide vers une issue :
+- **`POST /webhooks/brevo?token=BREVO_WEBHOOK_TOKEN`** (`webhooks/brevo.ts`) :
+  événements de non-livraison uniquement (soft/hard bounce, blocked,
+  invalid_email, error), token en comparaison à temps constant (vide =
+  endpoint 404), idempotence `processed_webhooks`, table `email_bounces`.
+- **Message proactif** (`domain/emailBounce.ts`) : rebond sur l'email d'une
+  demande `AWAITING_CODE` → UN WhatsApp au client (claim atomique
+  `link_requests.bounce_notified_at`), adapté au motif (boîte pleine / adresse
+  invalide / autre), FR/EN + registre vous. Toujours les trois issues dans
+  l'ordre : autre email → réessayer une fois réparé → **continuer sans
+  vérification** (le repli `client_declined_verification` /
+  `client_has_no_email` existait déjà côté outils).
+- **`request_email_verification` consulte `latestBounce()`** (7 jours) avant
+  tout envoi : adresse en rebond connu → statut `email_bounced` (aucun code
+  envoyé) qui briefe le modèle sur les trois issues ; `retry_bounced_email:true`
+  force le renvoi une fois le problème réglé. Jamais de renvoi muet en boucle.
+- Config : `BREVO_WEBHOOK_TOKEN` (Railway) ; webhook créé côté Brevo (API
+  `/v3/webhooks`, type transactional) pointant sur awa.revive.sn.
+- Tests : `emailBounce.test.ts` (parsing des deux graphies Brevo, classement
+  des motifs — dont le payload Gmail réel —, message client).
+- Piège à retenir : un « opened » Brevo peut être le proxy images de Gmail,
+  pas une lecture humaine ; et un soft bounce peut finir livré après retry —
+  le message client dit « pas pu être livré *pour le moment* ».
+
 ## Liste interactive expirée → `<NO_REPLY>` : garde étendue au-delà du TTL (7 août 2026)
 
 Incident prod 07/08 06:35 (Kadidiatou Diallo, +221778417056) : elle répond

@@ -30,6 +30,7 @@ import { planVerifiedMerge } from "../lib/crmAudit.js";
 import * as om from "../lib/orangeMoney.js";
 import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import * as links from "../domain/linkRequests.js";
+import * as emailBounce from "../domain/emailBounce.js";
 import type { LinkRequest } from "../domain/linkRequests.js";
 import * as repo from "../domain/repo.js";
 import type { Client } from "../domain/repo.js";
@@ -851,6 +852,12 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: "boolean",
           description:
             "true when the client says they have no email or cannot access it — hands over to reception",
+        },
+        retry_bounced_email: {
+          type: "boolean",
+          description:
+            "true ONLY to force a resend to an address whose previous code BOUNCED (status email_bounced), " +
+            "after the client says the problem is fixed (freed-up mailbox storage, corrected address)",
         },
       },
       additionalProperties: false,
@@ -4706,6 +4713,36 @@ export async function executeTool(
           error: "invalid_email",
           message: "This doesn't look like a valid email — ask the client to re-send it.",
         });
+      }
+      // Adresse en rebond connu (webhook Brevo) : renvoyer un code vers une
+      // boîte pleine/morte relançait la boucle « je n'ai pas reçu » sans fin
+      // (cas réel kaeva18@, 05-07/08). On bloque le renvoi et on guide vers
+      // un autre email ou le repli sans-vérification ; retry_bounced_email
+      // force l'envoi une fois le problème réglé côté client.
+      if (input.retry_bounced_email !== true) {
+        const bounce = await emailBounce.latestBounce(email).catch(() => null);
+        if (bounce) {
+          const kind = emailBounce.classifyBounce(bounce.event, bounce.reason);
+          const why =
+            kind === "inbox_full"
+              ? "that mailbox is FULL (no storage left) — every new send bounces the same way until the client frees up space"
+              : kind === "invalid_address"
+                ? "the address was rejected as invalid/unknown — most likely a typo"
+                : "the message could not be delivered";
+          return JSON.stringify({
+            status: "email_bounced",
+            bounce_kind: kind,
+            bounced_at: bounce.occurred_at,
+            message:
+              `NO code was sent: the last verification email to ${email} could NOT be delivered — ${why}. ` +
+              "Explain this warmly and offer, in order: (1) a DIFFERENT email address (call this tool again with it); " +
+              "(2) if they fixed the problem (freed storage / corrected address) and want the SAME address retried, " +
+              "call again with retry_bounced_email:true; (3) if neither works, continue WITHOUT email verification: " +
+              "for a plan purchase retry create_plan_payment_link with client_declined_verification:true (payment " +
+              "stays automatic), and for linking an EXISTING account call this tool with client_has_no_email:true " +
+              "(reception takes over). Never silently resend to this same address.",
+          });
+        }
       }
       if (!links.canSendCode(request)) {
         return JSON.stringify({
