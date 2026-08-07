@@ -296,6 +296,14 @@ export interface PendingReview {
  * Conversations à classifier : le dernier tour date de 45 min à 24 h, et il
  * est plus récent que la dernière review du client (une review par point de
  * conversation — si le client re-écrit après, un nouveau point se créera).
+ *
+ * Une conversation DÉJÀ revue ne se rouvre que si le CLIENT a réécrit
+ * (`conversations.role = 'user'`) après la dernière review. Un sortant admin
+ * ou un tour Awa seul ne rouvre plus : sinon le geste même de traiter
+ * l'incident (la réception répond → `admin_outbound_messages`) poussait
+ * `max(activity)` au-delà de la review clôturée et re-classait un transcript
+ * qui contient encore « souci technique » → alerte « Reprendre X » en boucle
+ * après chaque intervention (incident Kadidiatou Diallo, 07/08).
  */
 export async function conversationsToReview(): Promise<PendingReview[]> {
   const res = await pool.query(
@@ -316,6 +324,15 @@ export async function conversationsToReview(): Promise<PendingReview[]> {
               (select max(r.last_message_at) from conversation_reviews r
                 where r.client_id = c.id),
               'epoch'::timestamptz)
+        and (
+              (select max(r.last_message_at) from conversation_reviews r
+                where r.client_id = c.id) is null
+           or exists (
+                select 1 from conversations cv
+                 where cv.client_id = c.id and cv.role = 'user'
+                   and cv.created_at > (
+                         select max(r.last_message_at) from conversation_reviews r
+                          where r.client_id = c.id)))
       order by max(activity.created_at) asc
       limit $3`,
     [String(REVIEW_AFTER_MINUTES), String(REVIEW_MAX_AGE_HOURS), MAX_REVIEWS_PER_SWEEP],
