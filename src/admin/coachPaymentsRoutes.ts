@@ -101,7 +101,7 @@ async function fetchEligibleCourses(
     elapsedMs: discovery.elapsedMs,
   });
   if (coachPaymentServices(services).length === 0) {
-    throw new payments.CoachPaymentError("Aucun service Reformer ou Pilates Mat identifiable dans Wix");
+    throw new payments.CoachPaymentError("Aucun service Reformer, Pilates Mat ou séance privée identifiable dans Wix");
   }
   const queriedIds = new Set(queriedEvents.map((event) => event.id));
   const missingCandidateIds = [...new Set([...discovery.eventIds, ...knownEventIds])]
@@ -142,7 +142,7 @@ async function fetchSharedWixSnapshot(
     elapsedMs: discovery.elapsedMs,
   });
   if (coachPaymentServices(services).length === 0) {
-    throw new payments.CoachPaymentError("Aucun service Reformer ou Pilates Mat identifiable dans Wix");
+    throw new payments.CoachPaymentError("Aucun service Reformer, Pilates Mat ou séance privée identifiable dans Wix");
   }
   const queriedIds = new Set(queriedEvents.map((event) => event.id));
   const missingIds = [...new Set([...discovery.eventIds, ...knownEventIds])]

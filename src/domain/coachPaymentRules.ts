@@ -282,7 +282,9 @@ export function isCoachPaymentServiceName(name: string): boolean {
   const normalized = normalizeSearch(name);
   return normalized.includes("reformer") ||
     normalized.includes("pilates mat") ||
-    normalized.includes("mat pilates");
+    normalized.includes("mat pilates") ||
+    // Séances privées (Wix appointment type) — paid at the same per-class rate.
+    (normalized.includes("seance") && normalized.includes("prive"));
 }
 
 export function coachPaymentServices(services: WixService[]): WixService[] {

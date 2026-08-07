@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computePaymentTotals,
+  isCoachPaymentServiceName,
   monthBounds,
   monthIsClosed,
   selectEligibleCoachPaymentEvents,
@@ -65,6 +66,7 @@ describe("Calendar V3 event eligibility", () => {
     { id: "reformer-1", name: "Pilates Reformer", description: "", priceXof: null, durationMinutes: 50, maxParticipantsPerBooking: 1, pricingPlanIds: [], type: "CLASS" },
     { id: "mat-1", name: "Pilates Mat", description: "", priceXof: null, durationMinutes: 50, maxParticipantsPerBooking: 1, pricingPlanIds: [], type: "CLASS" },
     { id: "yoga-1", name: "Yoga", description: "", priceXof: null, durationMinutes: 60, maxParticipantsPerBooking: 1, pricingPlanIds: [], type: "CLASS" },
+    { id: "privee-1", name: "Séance privée", description: "", priceXof: null, durationMinutes: 50, maxParticipantsPerBooking: 1, pricingPlanIds: [], type: "APPOINTMENT" },
   ];
   const event = (overrides: Partial<WixCalendarEvent> = {}): WixCalendarEvent => ({
     id: "event-1",
@@ -156,5 +158,45 @@ describe("Calendar V3 event eligibility", () => {
       "Pilates Mat",
     ]);
     expect(computePaymentTotals(eligible.length, yass, []).baseTotalXof).toBe(19_000);
+  });
+
+  it("counts a séance privée appointment at the same per-class tariff", () => {
+    const eligible = selectEligibleCoachPaymentEvents({
+      services,
+      coachResourceId: "coach-yass",
+      month: "2026-06",
+      now: new Date("2026-07-01T00:00:00Z"),
+      events: [
+        event(),
+        event({
+          id: "privee-event",
+          type: "APPOINTMENT",
+          serviceId: "privee-1",
+          serviceName: "Séance privée",
+          title: "Séance privée",
+          participantCount: 1,
+          startDate: "2026-06-12T09:00:00",
+          endDate: "2026-06-12T09:50:00",
+        }),
+      ],
+    });
+
+    expect(eligible.map((course) => course.serviceName)).toEqual([
+      "Pilates Reformer",
+      "Séance privée",
+    ]);
+    expect(computePaymentTotals(eligible.length, yass, []).baseTotalXof).toBe(19_000);
+  });
+});
+
+describe("coach payment service name matching", () => {
+  it("recognizes Reformer, Pilates Mat and private sessions", () => {
+    expect(isCoachPaymentServiceName("Pilates Reformer")).toBe(true);
+    expect(isCoachPaymentServiceName("Pilates Mat")).toBe(true);
+    expect(isCoachPaymentServiceName("Séance privée")).toBe(true);
+    expect(isCoachPaymentServiceName("Séances privées")).toBe(true);
+    expect(isCoachPaymentServiceName("SEANCE PRIVEE")).toBe(true);
+    expect(isCoachPaymentServiceName("Yoga")).toBe(false);
+    expect(isCoachPaymentServiceName("Séance découverte")).toBe(false);
   });
 });
