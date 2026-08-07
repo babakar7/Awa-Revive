@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveFreeTextChoice } from "../src/agent/choiceMatcher.js";
+import { isInteractiveListTurn, resolveFreeTextChoice } from "../src/agent/choiceMatcher.js";
 
 const slots = [
   { choice_id: "slot_a", title: "Mer 29 juil · 12:30" },
@@ -21,5 +21,22 @@ describe("free-text choice matcher", () => {
     const sameTime = [...slots, { choice_id: "slot_c", title: "Ven 31 juil · 12:30" }];
     expect(resolveFreeTextChoice("12h30", sameTime)).toBeNull();
     expect(resolveFreeTextChoice("mercredi", slots)).toBeNull();
+  });
+});
+
+describe("isInteractiveListTurn", () => {
+  it("recognizes the replay marker of an interactive send", () => {
+    expect(
+      isInteractiveListTurn("Voici les créneaux 👇\n[message interactif list — options : Dim 9 août · 10:15]"),
+    ).toBe(true);
+    expect(
+      isInteractiveListTurn("Comment veux-tu payer ?\n[message interactif buttons — options : Payer Wave]"),
+    ).toBe(true);
+  });
+
+  it("stays false for plain replies and empty content", () => {
+    expect(isInteractiveListTurn("C'est confirmé ✅ mardi 11 août à 12h30.")).toBe(false);
+    expect(isInteractiveListTurn(null)).toBe(false);
+    expect(isInteractiveListTurn(undefined)).toBe(false);
   });
 });

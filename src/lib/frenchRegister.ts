@@ -20,15 +20,19 @@ export function applyFrenchRegister(text: string, formal: boolean): string {
       ? replacement.charAt(0).toLocaleUpperCase("fr") + replacement.slice(1)
       : replacement;
   return text
-    .replace(/\btu n'auras\b/gi, (m) => cased(m, "vous n'aurez"))
+    .replace(/\btu n[’']auras\b/gi, (m) => cased(m, "vous n’aurez"))
+    .replace(/\btu n[’']as\b/gi, (m) => cased(m, "vous n’avez"))
+    .replace(/\btu n[’']es\b/gi, (m) => cased(m, "vous n’êtes"))
     .replace(/\btu auras\b/gi, (m) => cased(m, "vous aurez"))
     .replace(/\btu peux\b/gi, (m) => cased(m, "vous pouvez"))
     .replace(/\btu dois\b/gi, (m) => cased(m, "vous devez"))
     .replace(/\btu veux\b/gi, (m) => cased(m, "vous voulez"))
     .replace(/\btu as\b/gi, (m) => cased(m, "vous avez"))
-    .replace(/\bton\b/gi, (m) => cased(m, "votre"))
-    .replace(/\bta\b/gi, (m) => cased(m, "votre"))
-    .replace(/\btes\b/gi, (m) => cased(m, "vos"))
+    // Unicode lookarounds, not \b : l'ASCII \b voit une frontière après une
+    // lettre accentuée (« êtes » → « êvos », « piéton » → « piévotre »).
+    .replace(/(?<!\p{L})ton(?!\p{L})/giu, (m) => cased(m, "votre"))
+    .replace(/(?<!\p{L})ta(?!\p{L})/giu, (m) => cased(m, "votre"))
+    .replace(/(?<!\p{L})tes(?!\p{L})/giu, (m) => cased(m, "vos"))
     .replace(/(^|[\s([{"'])(te)(?=$|[\s.,!?;:)\]}"'])/gi, (_, prefix, pronoun) =>
       `${prefix}${cased(pronoun, "vous")}`,
     )

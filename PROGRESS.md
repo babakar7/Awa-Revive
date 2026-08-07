@@ -25,6 +25,31 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Liste interactive expirée → `<NO_REPLY>` : garde étendue au-delà du TTL (7 août 2026)
+
+Incident prod 07/08 06:35 (Kadidiatou Diallo, +221778417056) : elle répond
+« Dimanche » **22 h après** la liste de créneaux Foundation du 06/08. Les lignes
+`presented_choices` avaient expiré (TTL 2 h) → la garde « PENDING INTERACTIVE
+LIST » de `218f14e` (Mareme) ne s'est pas armée, le modèle a reconduit la
+discipline `<NO_REPLY>` et s'est tu deux fois → fallback technique + takeover
+12 h. **Même piège que Mareme, via le trou du TTL.**
+
+Correctif :
+- Nouveau flag `expiredInteractiveList` : quand aucune liste n'est ouverte mais
+  que le DERNIER tour assistant est un envoi interactif (marqueur
+  `[message interactif`, détecté par `isInteractiveListTurn` /
+  `repo.lastAssistantTurnContent`), `dynamicContext()` injecte un bloc
+  « EXPIRED INTERACTIVE LIST » : sentinelle interdit + ids périmés → re-passer
+  par les outils (`check_availability`…) pour re-présenter des options fraîches.
+- Au passage, deux bugs du registre vous (`applyFrenchRegister`) : « Tu n'as
+  rien à faire » devenait « Vous n'as rien à faire » (règle `tu n'as` absente —
+  visible dans les fallbacks reçus par Kadidiatou et Mareme), et les règles
+  `ton/ta/tes` en `\b` ASCII mutilaient les mots à lettre accentuée adjacente
+  (« êtes » → « êvos ») → lookarounds Unicode.
+- Tests : `pendingInteractiveListPrompt.test.ts` (bloc expired),
+  `choiceMatcher.test.ts` (`isInteractiveListTurn`), `frenchRegister.test.ts`
+  (négations conjuguées).
+
 ## Review : trace `outbound_filter` périmée re-flaguait des conversations saines (6 août 2026)
 
 Faux positif « À reprendre » 06/08 16:30 (Bitty, +221776375930) : sa réservation

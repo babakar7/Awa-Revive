@@ -34,3 +34,25 @@ describe("pending interactive list prompt block", () => {
     );
   });
 });
+
+// Prod 07/08 (Kadidiatou Diallo) : réponse « Dimanche » 22 h après la liste de
+// créneaux — les lignes presented_choices avaient expiré (TTL 2 h), la garde
+// « pending » ne s'est pas armée et le modèle a répondu <NO_REPLY> deux fois
+// (fallback technique + takeover 12 h). Le bloc « expired » couvre ce trou :
+// sentinelle interdit ET ids périmés à re-vérifier via les outils.
+describe("expired interactive list prompt block", () => {
+  it("bans <NO_REPLY> and stale ids when the client answers an expired list", () => {
+    const context = dynamicContext({ ...baseArgs, expiredInteractiveList: true });
+    expect(context).toContain("EXPIRED INTERACTIVE LIST");
+    expect(context).toContain("<NO_REPLY> now is FORBIDDEN");
+    expect(context).toContain("FRESH");
+    expect(context).toContain("never treat the old list's entries as still valid");
+  });
+
+  it("is absent by default", () => {
+    expect(dynamicContext({ ...baseArgs })).not.toContain("EXPIRED INTERACTIVE LIST");
+    expect(dynamicContext({ ...baseArgs, expiredInteractiveList: false })).not.toContain(
+      "EXPIRED INTERACTIVE LIST",
+    );
+  });
+});

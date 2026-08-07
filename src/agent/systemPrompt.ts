@@ -349,6 +349,12 @@ export function dynamicContext(args: {
    * must not bleed into this turn (prod 06/08: Mareme).
    */
   pendingInteractiveList?: boolean;
+  /**
+   * Awa's LAST message was an interactive list whose presented_choices rows
+   * have since expired (2h TTL) — the client is replying to a stale list
+   * (prod 07/08: Kadidiatou, « Dimanche » 22h later → <NO_REPLY> twice).
+   */
+  expiredInteractiveList?: boolean;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -420,6 +426,16 @@ export function dynamicContext(args: {
         "as your reply for THIS turn — replying <NO_REPLY> now is FORBIDDEN and would leave the client with no answer. " +
         "Answer their message normally, then (only if a selection is still the natural next step) warmly invite them to " +
         "pick from the list above or restate the options in plain text.",
+    );
+  }
+  if (args.expiredInteractiveList) {
+    lines.push(
+      "EXPIRED INTERACTIVE LIST — CURRENT TURN: your most recent message was an interactive choice list sent a while " +
+        "ago, and its options have since EXPIRED — their ids are stale and none of them can be selected or booked " +
+        "anymore. The client's latest message is their (late) reply to that list. Replying <NO_REPLY> now is FORBIDDEN " +
+        "and would leave the client with no answer. Answer their message normally, and when their request needs " +
+        "options (a slot, a payment method…), re-run the relevant tool (e.g. check_availability) to fetch FRESH " +
+        "choices and present those — never treat the old list's entries as still valid.",
     );
   }
   // RETIRED & INERT (Babakar, 01/08/2026): the Pack Découverte campaign is off —

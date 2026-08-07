@@ -651,6 +651,21 @@ export async function latestPresentedChoices(
   return res.rows;
 }
 
+/**
+ * Content of the client's most recent assistant turn, or null. Lets the
+ * inbound handler see that the last thing Awa sent was an interactive list
+ * even after its presented_choices rows expired (2h TTL).
+ */
+export async function lastAssistantTurnContent(clientId: string): Promise<string | null> {
+  const res = await pool.query(
+    `select content from conversations
+      where client_id=$1 and role='assistant'
+      order by created_at desc limit 1`,
+    [clientId],
+  );
+  return res.rows[0]?.content ?? null;
+}
+
 // ---------- webhook idempotency ----------
 
 /**

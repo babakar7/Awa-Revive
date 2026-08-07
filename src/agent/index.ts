@@ -38,7 +38,7 @@ import {
   toolResourceKey,
   toolResultError,
 } from "./toolCircuitBreaker.js";
-import { resolveFreeTextChoice } from "./choiceMatcher.js";
+import { isInteractiveListTurn, resolveFreeTextChoice } from "./choiceMatcher.js";
 import {
   handleTechnicalFailure,
   technicalClientMessage,
@@ -704,8 +704,16 @@ export async function handleInboundText(args: {
   // the model carried the present_options <NO_REPLY> discipline into this turn
   // and went silent twice, killing a hot lead with a technical handoff). The
   // flag injects an explicit current-turn ban on the sentinel via
-  // dynamicContext(); a matched choice or an expired list needs no guard.
+  // dynamicContext(); a matched choice needs no guard.
   const pendingInteractiveList = !matchedChoice && presentedChoices.length > 0;
+  // Same trap past the 2h presented_choices TTL (prod 07/08: Kadidiatou answered
+  // « Dimanche » 22h after the slot list → <NO_REPLY> twice). When nothing is
+  // open but Awa's LAST message was an interactive list, the client is replying
+  // to an expired list: ban the sentinel and force fresh options (stale ids).
+  const expiredInteractiveList =
+    !pendingInteractiveList &&
+    !matchedChoice &&
+    isInteractiveListTurn(await repo.lastAssistantTurnContent(client.id));
   const campaign = isPackDiscoveryCampaignEntry({ text: inboundText, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
   // Log every inbound ad referral (matched or not) so the real ad source_id can be harvested
   // from Railway logs and added to PACK_DISCOVERY_META_SOURCE_IDS to tighten attribution.
@@ -963,6 +971,7 @@ export async function handleInboundText(args: {
         studioClosures,
         faqEntries,
         pendingInteractiveList,
+        expiredInteractiveList,
       }) + replyRequirementsInstruction(replyRequirements),
     },
   ];

@@ -18,4 +18,11 @@ describe("detectFrenchRegister", () => {
     expect(applyFrenchRegister("Réessaie puis écris-moi : je t'aide.", true))
       .toBe("Réessayez puis écrivez-moi : je vous aide.");
   });
+
+  it("conjugates negated verbs — never « Vous n'as » (fallback technique, prod 07/08)", () => {
+    expect(applyFrenchRegister("Tu n’as rien à faire.", true)).toBe("Vous n’avez rien à faire.");
+    expect(applyFrenchRegister("Tu n'as rien à faire.", true)).toBe("Vous n’avez rien à faire.");
+    expect(applyFrenchRegister("Tu n’es pas inscrite.", true)).toBe("Vous n’êtes pas inscrite.");
+    expect(applyFrenchRegister("Tu n’auras rien à régler.", true)).toBe("Vous n’aurez rien à régler.");
+  });
 });

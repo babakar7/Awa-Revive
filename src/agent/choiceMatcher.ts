@@ -28,6 +28,17 @@ function paymentChoiceId(text: string): string | null {
 }
 
 /**
+ * The replay marker interactive sends append to their assistant turn
+ * ("…\n[message interactif list — options : …]"). Used to detect that the
+ * client is replying to a list whose presented_choices rows already expired
+ * (prod 07/08: Kadidiatou answered « Dimanche » 22h after the slot list — the
+ * open-list guard was blind past the 2h TTL and the model went <NO_REPLY>).
+ */
+export function isInteractiveListTurn(content: string | null | undefined): boolean {
+  return typeof content === "string" && content.includes("[message interactif");
+}
+
+/**
  * Deliberately conservative: exact title, explicit payment rail, or a unique
  * time from the latest list. An ambiguous "mercredi" stays with the model.
  */
