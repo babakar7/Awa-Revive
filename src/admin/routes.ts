@@ -65,7 +65,10 @@ import {
   renderLivraisonsBoard,
   renderLivraisonsBoardFragment,
 } from "./livraisonsPage.js";
-import { renderHistoriqueCommandes } from "./historiqueCommandesPage.js";
+import {
+  renderHistoriqueCommandes,
+  renderHistoriqueFragment,
+} from "./historiqueCommandesPage.js";
 import * as q from "./queries.js";
 import {
   auditActiveSubscribers,
@@ -1126,8 +1129,9 @@ ${
           .send(renderLivraisonsBoardFragment({ open, recent }));
       });
 
-      admin.get("/historique-commandes", async (req, reply) => {
-        const raw = req.query as Record<string, string | undefined>;
+      function parseOrderFilters(
+        raw: Record<string, string | undefined>,
+      ): q.OrderHistoryFilters {
         const period: q.OrderPeriod = ["today", "7", "30", "all"].includes(raw.period ?? "")
           ? (raw.period as q.OrderPeriod)
           : "7";
@@ -1145,21 +1149,42 @@ ${
           ? (raw.status as q.OrderStatusNorm)
           : "all";
         const page = Math.max(1, Number.parseInt(raw.page ?? "1", 10) || 1);
-        const filters: q.OrderHistoryFilters = { period, channel, status, page };
+        return { period, channel, status, page };
+      }
+
+      async function loadOrderHistory(filters: q.OrderHistoryFilters) {
         const [result, stats, byChannel, daily] = await Promise.all([
           q.listOrderHistory(filters),
           q.orderHistoryStats(filters),
           q.orderHistoryByChannel(filters),
           q.orderHistoryDaily(filters),
         ]);
+        return { result, stats, byChannel, daily, filters };
+      }
+
+      admin.get("/historique-commandes", async (req, reply) => {
+        const filters = parseOrderFilters(req.query as Record<string, string | undefined>);
+        const data = await loadOrderHistory(filters);
         reply.type("text/html").send(
           await layout(
             "Historique des commandes",
             "/admin/historique-commandes",
-            renderHistoriqueCommandes({ result, stats, byChannel, daily, filters }),
+            renderHistoriqueCommandes(data),
             { subtitle: "Bar & restaurant", contentWidth: "wide" },
           ),
         );
+      });
+
+      // In-place filter/pagination updates: same data, just the swappable
+      // fragment, so the page never fully reloads. No-JS clients keep the full
+      // GET above (the anchors carry real hrefs).
+      admin.get("/historique-commandes/fragment", async (req, reply) => {
+        const filters = parseOrderFilters(req.query as Record<string, string | undefined>);
+        const data = await loadOrderHistory(filters);
+        reply
+          .header("Cache-Control", "no-store")
+          .type("text/html")
+          .send(renderHistoriqueFragment(data));
       });
 
       admin.get("/livraisons/new", async (req, reply) => {

@@ -178,4 +178,22 @@ describe("order history queries", () => {
     expect(res.body).toContain("Sur place");
     expect(res.body).toContain("le POS reste la seule source comptable");
   });
+
+  it("serves the filter fragment without the page chrome", async () => {
+    const id = await seedCafeOrder("SUR_PLACE");
+    await seedBarTicket(`bar:cafe:${id}`);
+    const res = await app.inject({
+      method: "GET",
+      url: "/admin/historique-commandes/fragment?period=all&channel=LIVRAISON",
+      headers: { authorization: AUTH },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(res.body).toContain('id="oh-fragment"');
+    // fragment only — no full-page header or enhancer script
+    expect(res.body).not.toContain("page-header");
+    expect(res.body).not.toContain("<script>");
+    // channel filter applied → the SUR_PLACE order is not listed
+    expect(res.body).toContain("Aucune commande");
+  });
 });

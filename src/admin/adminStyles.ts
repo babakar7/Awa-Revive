@@ -317,6 +317,8 @@ form.inline{display:inline}
 .trend-bars .trend-bar{width:70%;min-height:2px;border-radius:5px 5px 0 0;background:linear-gradient(180deg,var(--brand),var(--plum-300))}
 .trend-bars .trend-bar.is-zero{background:var(--border);min-height:2px}
 .trend-bars .trend-label{font-size:.66rem;color:var(--ink-500);white-space:nowrap}
+#oh-root{transition:opacity .12s ease}
+#oh-root[aria-busy="true"]{opacity:.5;pointer-events:none}
 
 /* Clés de la Maison — reception memo */
 .key-memo{max-width:980px;margin:0 auto}

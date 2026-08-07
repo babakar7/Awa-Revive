@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   renderHistoriqueCommandes,
+  renderHistoriqueFragment,
   type HistoriqueCommandesData,
 } from "../src/admin/historiqueCommandesPage.js";
 import type {
@@ -84,7 +85,9 @@ describe("renderHistoriqueCommandes", () => {
   });
 
   it("escapes DB-sourced item and client names", () => {
-    const html = renderHistoriqueCommandes(
+    // Assert against the fragment: it has no legitimate <script>, so an
+    // unescaped one could only come from injected data.
+    const html = renderHistoriqueFragment(
       data({
         result: {
           rows: [
@@ -141,5 +144,22 @@ describe("renderHistoriqueCommandes", () => {
       data({ filters: { period: "30", channel: "all", status: "all", page: 1 } }),
     );
     expect(html).toContain('aria-current="page"');
+  });
+
+  it("wraps a swappable fragment and ships the in-place enhancer", () => {
+    const html = renderHistoriqueCommandes(data());
+    expect(html).toContain('id="oh-root"');
+    expect(html).toContain('id="oh-fragment"');
+    // the enhancer fetches the fragment route and updates history
+    expect(html).toContain("'/fragment'");
+    expect(html).toContain("history.pushState");
+  });
+
+  it("fragment carries the filter content but no page chrome or script", () => {
+    const html = renderHistoriqueFragment(data());
+    expect(html).toContain('id="oh-fragment"');
+    expect(html).toContain("Revenu par canal");
+    expect(html).not.toContain('id="oh-root"');
+    expect(html).not.toContain("<script>");
   });
 });

@@ -134,7 +134,7 @@ function orderRow(row: OrderHistoryRow): string {
 </tr>`;
 }
 
-export function renderHistoriqueCommandes(data: HistoriqueCommandesData): string {
+function renderHistoriqueBody(data: HistoriqueCommandesData): string {
   const { result, stats, byChannel, daily, filters } = data;
   const periodOptions = [
     { value: "today", label: "Aujourd’hui" },
@@ -168,7 +168,13 @@ export function renderHistoriqueCommandes(data: HistoriqueCommandesData): string
     ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Quand</th><th>Canal</th><th>Client</th><th>Articles</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${rows}</tbody></table></div>`
     : `<div class="empty"><b>Aucune commande</b><p>Aucune commande ne correspond à ces filtres.</p></div>`;
 
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar &amp; restaurant</span><h2>Historique des commandes</h2><p>Toutes les commandes — sur place, à emporter, retrait, livraison — avec leur chiffre d’affaires.</p></div></header>
+  const qs = query({
+    period: filters.period,
+    channel: filters.channel,
+    status: filters.status,
+    page: filters.page > 1 ? filters.page : undefined,
+  });
+  return `<div id="oh-fragment" data-qs="${esc(qs)}">
 ${filterTabs("Filtrer par période", "period", periodOptions, filters)}
 ${filterTabs("Filtrer par canal", "channel", channelOptions, filters)}
 ${filterTabs("Filtrer par statut", "status", statusOptions, filters)}
@@ -184,5 +190,54 @@ ${trendBars(daily)}
 <div class="section-header"><div><span class="eyebrow">Détail</span><h2>Commandes</h2></div><span class="badge badge--gray">${result.total}</span></div>
 <div class="card">${table}</div>
 ${pagination(result, filters)}
-<p class="muted" style="margin-top:1rem;font-size:.8rem;line-height:1.5">Les montants des commandes en salle (sur place) sont indicatifs — le POS reste la seule source comptable. Le revenu articles exclut les frais de livraison.${stats.firstOrderAt ? ` Historique unifié depuis le ${fmtDate(stats.firstOrderAt)} ; les commandes plus anciennes figurent avec un détail réduit.` : ""}</p>`;
+<p class="muted" style="margin-top:1rem;font-size:.8rem;line-height:1.5">Les montants des commandes en salle (sur place) sont indicatifs — le POS reste la seule source comptable. Le revenu articles exclut les frais de livraison.${stats.firstOrderAt ? ` Historique unifié depuis le ${fmtDate(stats.firstOrderAt)} ; les commandes plus anciennes figurent avec un détail réduit.` : ""}</p>
+</div>`;
+}
+
+const OH_BASE = "/admin/historique-commandes";
+
+/** Just the filter-driven content — served on its own for in-place updates. */
+export function renderHistoriqueFragment(data: HistoriqueCommandesData): string {
+  return renderHistoriqueBody(data);
+}
+
+/** Full page: static header + the swappable fragment + the client enhancer. */
+export function renderHistoriqueCommandes(data: HistoriqueCommandesData): string {
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Bar &amp; restaurant</span><h2>Historique des commandes</h2><p>Toutes les commandes — sur place, à emporter, retrait, livraison — avec leur chiffre d’affaires.</p></div></header>
+<div id="oh-root" aria-busy="false">${renderHistoriqueBody(data)}</div>
+<script>
+(function(){
+  var root=document.getElementById('oh-root');
+  if(!root||!window.history||!window.fetch)return; // no-JS / old browser → plain links still work
+  var base=${JSON.stringify(OH_BASE)};
+  var loading=false;
+  function fragment(){return document.getElementById('oh-fragment');}
+  function load(search,push){
+    if(loading)return;
+    loading=true;root.setAttribute('aria-busy','true');
+    fetch(base+'/fragment'+search,{headers:{Accept:'text/html'},credentials:'same-origin'})
+      .then(function(r){if(!r.ok)throw new Error('bad');return r.text();})
+      .then(function(html){
+        var cur=fragment();
+        if(cur)cur.outerHTML=html;
+        if(push)history.pushState({ohSearch:search},'',base+search);
+      })
+      .catch(function(){window.location.href=base+search;}) // fall back to a real navigation
+      .finally(function(){loading=false;root.setAttribute('aria-busy','false');});
+  }
+  root.addEventListener('click',function(ev){
+    if(ev.defaultPrevented||ev.button!==0||ev.metaKey||ev.ctrlKey||ev.shiftKey||ev.altKey)return;
+    var a=ev.target.closest&&ev.target.closest('a');
+    if(!a)return;
+    var href=a.getAttribute('href')||'';
+    if(href.indexOf(base)!==0)return; // only our filter/pagination links
+    ev.preventDefault();
+    load(href.slice(base.length),true);
+  });
+  window.addEventListener('popstate',function(ev){
+    var search=(ev.state&&ev.state.ohSearch)||window.location.search||'';
+    load(search,false);
+  });
+})();
+</script>`;
 }
