@@ -126,7 +126,11 @@ Awa. Score only Awa's own assistant/tool behavior.
   for (a Clé reserved for new clients, an expired offer…) and Awa clearly said so and offered
   real alternatives: a correctly-enforced business rule is Awa doing her job, and a client who
   then goes silent, declines, or keeps replying without a concrete new request is a dropoff —
-  reception has nothing to fix and must NOT be told to re-contact them.
+  reception has nothing to fix and must NOT be told to re-contact them. Likewise, when Awa's OWN
+  last message is a normal, on-track continuation — confirming eligibility, offering to look up
+  slots, asking which day/time suits the client — and the client simply stops replying, that is a
+  dropoff: asking for the info she needs to proceed is Awa doing her job (a prompt with no "?"
+  like "Dis-moi quel créneau te convient !" still counts), and the silence is a free choice.
 - deadend: the client left BECAUSE the exchange failed them: Awa couldn't do what they asked and
   no handoff happened, went in circles, misunderstood repeatedly, or the last client message is
   an unanswered question or unmet request.
@@ -202,7 +206,18 @@ export function normalizeVerdictForTranscript(
         turn.role === "user" ||
         (turn.role === "assistant" && turn.source !== "admin"),
     );
-  if (verdict.outcome === "deadend" && lastHumanFacing?.role === "assistant" && /\?/.test(lastHumanFacing.content)) {
+  // Awa a eu le dernier mot et le client n'a pas répondu : abandon libre, pas
+  // impasse — Awa a fait son travail (décision produit Babakar, 07/08). On ne
+  // garde en « À reprendre » que les cas GRAVES (membre bloqué, frustration
+  // explicite) qu'un humain doit vraiment voir ; un simple silence après une
+  // relance saine sort de la file. L'ancienne version n'attrapait que les
+  // relances finies par « ? » : une invite impérative (« Dis-moi quel créneau
+  // te convient ! ») passait à tort en deadend (cas Bery Dieye, 07/08).
+  if (
+    verdict.outcome === "deadend" &&
+    verdict.severity !== "severe" &&
+    lastHumanFacing?.role === "assistant"
+  ) {
     return { ...verdict, outcome: "dropoff", suggested_action: "" };
   }
   return verdict;

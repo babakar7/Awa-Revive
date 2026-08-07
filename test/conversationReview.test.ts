@@ -76,6 +76,34 @@ describe("normalizeVerdictForTranscript", () => {
     expect(verdict).toMatchObject({ outcome: "dropoff", suggested_action: "" });
   });
 
+  it("treats silence after an imperative prompt with no '?' as a dropoff (Bery case 07/08)", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const verdict = normalizeVerdictForTranscript(
+      { outcome: "deadend", need_category: "booking", severity: "normal", summary: "x", suggested_action: "relancer" },
+      [
+        turn("user", "Je veux réserver la Clé Invité"),
+        turn("assistant", "Tu es bien éligible 😊 Dis-moi quel jour ou moment te conviendrait le mieux !"),
+      ],
+    );
+    expect(verdict).toMatchObject({ outcome: "dropoff", suggested_action: "" });
+  });
+
+  it("still surfaces a SEVERE deadend even when Awa spoke last (member blocked)", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const original = {
+      outcome: "deadend" as const,
+      need_category: "membership" as const,
+      severity: "severe" as const,
+      summary: "Abonnée bloquée, repartie sans réserver.",
+      suggested_action: "La rappeler pour relier son compte.",
+    };
+    const verdict = normalizeVerdictForTranscript(original, [
+      turn("user", "Je n'arrive pas à utiliser mon abonnement"),
+      turn("assistant", "Désolée, je ne peux pas relier ton compte."),
+    ]);
+    expect(verdict).toEqual(original);
+  });
+
   it("does not blame list_plans when it succeeded before an output-filter rejection", () => {
     const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
     const verdict = normalizeVerdictForTranscript(
