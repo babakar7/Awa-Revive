@@ -152,7 +152,7 @@ alter table clients add column if not exists awa_disengaged_reason text;
 alter table clients add column if not exists awa_disengaged_kind text;
 alter table clients drop constraint if exists clients_awa_disengaged_kind_check;
 alter table clients add constraint clients_awa_disengaged_kind_check
-  check (awa_disengaged_kind is null or awa_disengaged_kind in ('manual','nonserious','no_intent'));
+  check (awa_disengaged_kind is null or awa_disengaged_kind in ('manual','nonserious','no_intent','sexual'));
 
 -- Deterministic guard against rapid conversations made only of greetings,
 -- unclear fragments or unreadable voice notes. The count expires after 24 h;

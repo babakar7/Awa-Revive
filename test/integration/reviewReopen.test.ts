@@ -82,4 +82,34 @@ describe("conversationsToReview — re-open only on a new client inbound", () =>
     const pending = await conversationsToReview();
     expect(pending.map((p) => p.client_id)).toContain(id);
   });
+
+  async function setDisengaged(clientId: string, hoursFromNow: number) {
+    await pool.query(
+      `update clients set awa_disengaged_at = now(), awa_disengaged_kind = 'sexual',
+              awa_disengaged_reason = 'Message à caractère sexuel',
+              awa_disengaged_until = now() + ($2 || ' hours')::interval
+        where id = $1`,
+      [clientId, String(hoursFromNow)],
+    );
+  }
+
+  it("does NOT review a contact Awa has paused (sexual/non-serious) — no alert", async () => {
+    const { id } = await seedClient({ wa_phone: "221770000094", name: "Charles" });
+    await addTurn(id, "user", "est qu'il y aura du sexe", 90);
+    await addTurn(id, "assistant", "Je suis une assistante automatisée de Revive 🙏🏾", 89);
+    await setDisengaged(id, 24); // paused, active
+
+    const pending = await conversationsToReview();
+    expect(pending.map((p) => p.client_id)).not.toContain(id);
+  });
+
+  it("reviews again once the pause has expired", async () => {
+    const { id } = await seedClient({ wa_phone: "221770000095", name: "Charles" });
+    await addTurn(id, "user", "est qu'il y aura du sexe", 90);
+    await addTurn(id, "assistant", "Je suis une assistante automatisée de Revive 🙏🏾", 89);
+    await setDisengaged(id, -1); // pause already lapsed
+
+    const pending = await conversationsToReview();
+    expect(pending.map((p) => p.client_id)).toContain(id);
+  });
 });

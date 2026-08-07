@@ -6,7 +6,7 @@ import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { transition } from "./stateMachine.js";
 import { NO_INTENT_THRESHOLD, NO_INTENT_WINDOW_HOURS } from "./noIntentGuard.js";
 
-export type AwaDisengagedKind = "manual" | "nonserious" | "no_intent";
+export type AwaDisengagedKind = "manual" | "nonserious" | "no_intent" | "sexual";
 
 export interface Client {
   id: string;

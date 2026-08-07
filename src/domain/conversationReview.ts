@@ -317,6 +317,11 @@ export async function conversationsToReview(): Promise<PendingReview[]> {
            from admin_outbound_messages
           where status = 'sent'
        ) activity on activity.client_id = c.id
+      -- Contact mis en pause par Awa (avance sexuelle, contact non sérieux,
+      -- boucle sans intention…) : on ne le classe pas et on n'alerte donc
+      -- personne — « juste mettre Awa en pause et passer à autre chose ». Le
+      -- relais humain (human_takeover) reste, lui, volontaire et non filtré ici.
+      where c.awa_disengaged_until is null or c.awa_disengaged_until <= now()
       group by c.id, c.name, c.wa_phone
      having max(activity.created_at) < now() - ($1 || ' minutes')::interval
         and max(activity.created_at) > now() - ($2 || ' hours')::interval

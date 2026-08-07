@@ -953,17 +953,20 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "disengage_conversation",
     description:
-      "Stop engaging a contact who is clearly NOT here for the studio — sustained sexual/suggestive/romantic " +
-      "advances toward Awa, someone plainly toying with the bot, or a sustained rapid loop of greetings, " +
-      "goodbyes or unclear fragments after Awa already redirected them, with no booking/studio intent. Do NOT use " +
-      "this for a single awkward or ambiguous line, ordinary warmth or a compliment, a complaint, or a real " +
-      "client who flirts but also has a genuine studio need (serve the need, ignore the flirtation). NEVER use " +
-      "it on a client inside a booking/sales exchange: short answers like a day or slot preference ('En " +
-      "matinée', 'En semaine plutôt') are normal funnel replies, not meaningless fragments — the server " +
-      "refuses the call when the client used a booking tool within the last hour. After you " +
-      "call it, send exactly ONE short, polite, firm closing line re-anchoring to the studio, then nothing else: " +
-      "the system automatically stops replying to this contact afterwards (auto-resumes after ~24h; reception " +
-      "can lift it). No refund/booking side effects — it only silences Awa for this contact.",
+      "Stop engaging a contact who is clearly NOT here for the studio. Two categories — pass the right one:\n" +
+      "• category \"sexual\": ANY clearly sexual/pornographic message or solicitation toward Awa (even a SINGLE " +
+      "explicit line like 'est-ce qu'il y aura du sexe', and even mid-booking). This ALWAYS pauses Awa — the " +
+      "booking-in-progress guard does NOT apply.\n" +
+      "• category \"non_serious\" (default): someone plainly toying with the bot, or a sustained rapid loop of " +
+      "greetings, goodbyes or unclear fragments after Awa already redirected them, with no booking/studio intent. " +
+      "Do NOT use non_serious for a single awkward/ambiguous line, ordinary warmth or a compliment, a complaint, " +
+      "or a real client who flirts but also has a genuine studio need (serve the need, ignore the flirtation). For " +
+      "non_serious the server REFUSES the call when the client used a booking tool within the last hour (a day or " +
+      "slot preference like 'En matinée' is a normal funnel reply, not a meaningless fragment).\n" +
+      "After you call it, send exactly ONE short, polite, firm closing line re-anchoring to the studio, then " +
+      "nothing else: the system automatically stops replying to this contact afterwards (auto-resumes after ~24h; " +
+      "reception can lift it). No refund/booking side effects — it only silences Awa for this contact, and never " +
+      "notifies anyone.",
     input_schema: {
       type: "object",
       properties: {
@@ -973,6 +976,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
             "A short factual French sentence for the studio's admin badge only (never sent to the client), " +
             'e.g. "Messages à caractère suggestif, aucune intention de réservation". Keep it neutral and brief; ' +
             "no transcript, no ids.",
+        },
+        category: {
+          type: "string",
+          enum: ["sexual", "non_serious"],
+          description:
+            "\"sexual\" for a clearly sexual message/solicitation (pauses even mid-booking); \"non_serious\" " +
+            "(default) for a time-waster with no studio intent (refused while a booking is in progress).",
         },
       },
       required: ["reason"],
@@ -5285,22 +5295,29 @@ export async function executeTool(
 
     case "disengage_conversation": {
       const reason = String(input.reason ?? "Contact non sérieux").slice(0, 500);
+      const sexual = input.category === "sexual";
       // Le modèle propose, le serveur décide : un client qui vient d'utiliser le
       // parcours réservation/vente est un vrai prospect — de courtes réponses
       // (« En matinée », « En semaine plutôt ») ne sont pas des « fragments sans
       // intention ». Incident prod 05/08 : une prospecte qualifiée en plein
       // choix de créneau a été coupée 24h. Refus serveur, pas de pause.
-      if (await repo.hasRecentBookingActivity(client.id, 60)) {
+      //
+      // EXCEPTION : un message clairement sexuel/à connotation sexuelle prime
+      // TOUJOURS sur ce garde-fou, même en plein parcours de réservation. Incident
+      // prod 07/08 (Charles Gomis) : « Est qu'il y aura du sexe » en pleine vente
+      // → le garde-fou a refusé la mise en pause et forcé Awa à continuer.
+      if (!sexual && (await repo.hasRecentBookingActivity(client.id, 60))) {
         return JSON.stringify({
           error: "client_engaged_in_booking",
           message:
             "Refused: this client used the booking/sales flow within the last hour — they are a real " +
             "prospect, not a non-serious contact. A short reply (a slot or day preference, 'oui', 'non') " +
             "is a normal funnel answer, never a meaningless fragment. Do NOT disengage and do NOT send a " +
-            "closing line: answer their last message helpfully and continue the booking.",
+            "closing line: answer their last message helpfully and continue the booking. (If instead the " +
+            "message was clearly sexual, call this again with category:\"sexual\".)",
         });
       }
-      await repo.setAwaDisengaged(client.id, reason, 24, "nonserious");
+      await repo.setAwaDisengaged(client.id, reason, 24, sexual ? "sexual" : "nonserious");
       return JSON.stringify({
         disengaged: true,
         note:

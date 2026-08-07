@@ -51,4 +51,29 @@ describe("disengage_conversation tool", () => {
     expect(res.disengaged).toBe(true);
     expect(setAwaDisengaged).toHaveBeenCalledWith("client-1", "Avances répétées envers Awa", 24, "nonserious");
   });
+
+  it("exposes an optional sexual/non_serious category", () => {
+    const tool = TOOL_DEFINITIONS.find((t) => t.name === "disengage_conversation");
+    const schema = tool!.input_schema as { properties: Record<string, { enum?: string[] }> };
+    expect(schema.properties.category?.enum).toEqual(["sexual", "non_serious"]);
+  });
+
+  it("pauses on a sexual message EVEN mid-booking, bypassing the guard (prod 07/08 Charles)", async () => {
+    hasRecentBookingActivity.mockResolvedValue(true);
+    const res = JSON.parse(
+      await executeTool(client, "disengage_conversation", {
+        reason: "Message à caractère sexuel en pleine réservation",
+        category: "sexual",
+      }),
+    );
+    expect(res.disengaged).toBe(true);
+    // The booking guard must not even be consulted for a sexual disengage.
+    expect(hasRecentBookingActivity).not.toHaveBeenCalled();
+    expect(setAwaDisengaged).toHaveBeenCalledWith(
+      "client-1",
+      "Message à caractère sexuel en pleine réservation",
+      24,
+      "sexual",
+    );
+  });
 });
