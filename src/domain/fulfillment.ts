@@ -9,7 +9,6 @@ import { invalidateMembershipCache } from "../lib/membershipContext.js";
 import { registerAndEnsureKey } from "./keyProvisioning.js";
 import { configuredMappingForPlan } from "./keyProvisioning.js";
 import { extrasFromJson, formatExtrasMultiline, type ExtraLine } from "../lib/cafeMenu.js";
-import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { sendCommitmentProgress, sendCommitmentComplete } from "../lib/commitmentMessages.js";
 import * as commitments from "./commitments.js";
@@ -356,22 +355,8 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
       requested: progress.requested_count,
       log,
     });
-    // Completion precedence: account linking first if due, else the café offer.
-    const askedLinking = await maybeHandleUnlinkedClient(client, booking, lang, log);
-    if (!askedLinking && extras.length === 0) {
-      await sendCafeMenuOffer({ waPhone: client.wa_phone, clientId: booking.client_id, lang, log });
-    }
+    await maybeHandleUnlinkedClient(client, booking, lang, log);
     return;
-  }
-
-  // Standalone booking (no commitment): book-first, menu-after.
-  if (extras.length === 0) {
-    await sendCafeMenuOffer({
-      waPhone: client.wa_phone,
-      clientId: booking.client_id,
-      lang,
-      log,
-    });
   }
 
   await maybeHandleUnlinkedClient(client, booking, lang, log);

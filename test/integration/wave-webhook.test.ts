@@ -141,19 +141,8 @@ describe("happy path", () => {
     expect(texts[0]).toContain("ta place est confirmée");
     expect(texts[0]).toContain("Pilates Reformer");
 
-    // Book-first / menu-after: right after the confirmation, the bar menu is
-    // offered as a native interactive list of the incontournables (not a text).
-    const cafeOffer = await waitFor(
-      async () => {
-        const i = mock
-          .waCalls()
-          .find((c) => c.body?.to === client.wa_phone && c.body?.type === "interactive");
-        return i ?? null;
-      },
-      "bar menu offer (interactive)",
-    );
-    expect(JSON.stringify(cafeOffer.body)).toContain("Jant Bi"); // a favourite row
-
+    // Plus d'offre bar automatique post-réservation (retirée le 08/08) : la
+    // confirmation ne doit être suivie d'AUCUNE liste interactive serveur.
     // No unique Wix contact matches this phone (contacts mock returns none),
     // so the one-shot unlinked-client flow fires too: another assistant text
     // asking for the account email, and the one-shot flag is set. (Interactive
@@ -167,7 +156,7 @@ describe("happy path", () => {
       `select count(*)::int as n from conversations where client_id = $1 and role = 'assistant'`,
       [client.id],
     );
-    expect(turns.rows[0].n).toBe(3); // confirmation + bar menu offer + email ask
+    expect(turns.rows[0].n).toBe(2); // confirmation + email ask (offre bar retirée 08/08)
     const c = await pool.query(`select email_prompted_at from clients where id = $1`, [client.id]);
     expect(c.rows[0].email_prompted_at).not.toBeNull();
 

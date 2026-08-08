@@ -25,6 +25,18 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Offre bar post-réservation retirée (8 août 2026)
+
+La liste interactive « Envie d'accompagner ta séance ? 🥤 » envoyée d'office
+après chaque confirmation (webhook Wave + book_with_membership) n'apportait
+rien (décision Babakar 08/08). Retirée entièrement : `lib/cafeOffer.ts`
+supprimé, appels retirés de `fulfillment.ts` et `agent/index.ts` (avec le
+tracking `cafeMenuShown`), `repo.claimCafeOffer` supprimé (la colonne
+`clients.cafe_offer_at` reste en base, inoffensive). Le menu du bar reste
+accessible à la demande : bouton « Voir le menu » (cap_menu), texte libre,
+et /commander. `wave-webhook.test.ts` ajusté (plus AUCUNE liste interactive
+serveur après la confirmation).
+
 ## Compte créé SANS vérification après abandon du code (8 août 2026)
 
 Cas Marouche (+221778838837, 08/08) : L'Invitée choisie, créneau choisi

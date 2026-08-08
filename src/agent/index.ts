@@ -7,7 +7,6 @@ import { shouldOfferLinking } from "../lib/linkAsk.js";
 import { sendText, sendTypingIndicator, type WhatsAppReferral } from "../lib/whatsapp.js";
 import { findContactByPhone } from "../lib/wix.js";
 import { getCafeMenu } from "../lib/cafeMenu.js";
-import { sendCafeMenuOffer } from "../lib/cafeOffer.js";
 import { systemPrompt, dynamicContext, businessMapsUrl } from "./systemPrompt.js";
 import {
   lintOutboundReply,
@@ -997,7 +996,6 @@ export async function handleInboundText(args: {
   // model's confirmation — deterministic, never left to the model's judgment
   // (the Wave flow gets the same list from the webhook).
   let membershipBooked = false;
-  let cafeMenuShown = false;
   let circuitTripped = false;
 
   let lastResponse: Anthropic.Message | null = null;
@@ -1087,12 +1085,6 @@ export async function handleInboundText(args: {
           ) {
             interactiveSent = true;
             if (block.name === "get_class_schedule") scheduleReplySent = true;
-            // If the model itself already showed bar items, don't double-send
-            // the menu offer below.
-            const opts = (block.input as any)?.options;
-            if (Array.isArray(opts) && opts.some((o: any) => getCafeMenu().items.has(String(o?.id)))) {
-              cafeMenuShown = true;
-            }
           }
           if (block.name === "book_with_membership" && result.includes('"booked":true')) {
             membershipBooked = true;
@@ -1434,16 +1426,9 @@ export async function handleInboundText(args: {
   // `unlinkedNeverAsked` is still computed above: it only feeds the prompt's
   // UNLINKED-NUMBER context note now, it no longer triggers a send.
 
-  // Book-first, menu-after: the class was just booked on the client's plan —
-  // show the incontournables NOW, right after the confirmation, server-side
-  // (skipped if the model already showed bar items itself this turn).
-  if (membershipBooked && !cafeMenuShown) {
-    await sendCafeMenuOffer({
-      waPhone: args.waPhone,
-      clientId: client.id,
-      lang: client.language ?? lang ?? "fr",
-    });
-  }
+  // Plus d'offre bar automatique post-réservation : la liste « Envie
+  // d'accompagner ta séance ? » n'apportait rien (Babakar 08/08). Le menu
+  // reste accessible à la demande (cap_menu, texte libre, /commander).
 }
 
 /** Image received but the description failed — ask kindly for text. */
