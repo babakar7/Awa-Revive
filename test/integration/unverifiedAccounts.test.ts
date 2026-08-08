@@ -3,6 +3,7 @@ import { migrate, pool } from "../../src/db/index.js";
 import * as links from "../../src/domain/linkRequests.js";
 import {
   AUTO_LINKED_BY,
+  UNVERIFIED_CREATE_AFTER_MINUTES,
   completeStaleCreateAccountRequests,
   type UnverifiedAccountDeps,
 } from "../../src/domain/unverifiedAccounts.js";
@@ -11,7 +12,7 @@ import { seedClient, truncateAll } from "./helpers.js";
 
 /**
  * Repli « compte créé sans vérification » (Babakar 08/08, cas Marouche) : une
- * demande de CRÉATION silencieuse depuis 30 min devient un vrai compte, la
+ * demande de CRÉATION silencieuse depuis 5 min devient un vrai compte, la
  * cliente est prévenue qu'elle peut finir sa réservation, et l'achat de plan
  * suivant ne redemande pas de vérification. La voie LIAISON d'un compte
  * existant, elle, reste escaladée à la réception (anti-usurpation).
@@ -65,7 +66,7 @@ async function seedStaleRequest(args: {
   );
   await pool.query(
     `update link_requests set updated_at = now() - ($2 || ' minutes')::interval where id = $1`,
-    [request.id, String(args.staleMinutes ?? links.STALE_AFTER_MINUTES + 5)],
+    [request.id, String(args.staleMinutes ?? UNVERIFIED_CREATE_AFTER_MINUTES + 1)],
   );
   return { client, request };
 }
@@ -134,7 +135,7 @@ describe("completeStaleCreateAccountRequests", () => {
   });
 
   it("ignore les demandes encore fraîches", async () => {
-    await seedStaleRequest({ phone: "221770000204", staleMinutes: 5 });
+    await seedStaleRequest({ phone: "221770000204", staleMinutes: UNVERIFIED_CREATE_AFTER_MINUTES - 2 });
     const { deps, calls } = makeDeps();
 
     expect(await completeStaleCreateAccountRequests(deps)).toBe(0);

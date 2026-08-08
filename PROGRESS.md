@@ -47,7 +47,9 @@ vérification et prévenir la cliente qu'elle peut réserver sa séance.
 
 Correctif (`domain/unverifiedAccounts.ts`, sweep 60 s AVANT
 `escalateStaleLinkRequests`) : toute demande de CRÉATION (`wix_contact_id`
-null + email + nom) silencieuse depuis `STALE_AFTER_MINUTES` (30 min) →
+null + email + nom) silencieuse depuis `UNVERIFIED_CREATE_AFTER_MINUTES`
+(5 min — 30 min au ship initial, réduit le jour même sur demande de
+Babakar ; l'escalade réception des LIAISONS reste à 30 min) →
 `wix.createContact` direct, demande `LINKED` par `auto-sans-verification`
 (preuve durable : le prochain `create_plan_payment_link` passe sans
 re-vérification ; handoff éventuel auto-fermé), message WhatsApp proactif

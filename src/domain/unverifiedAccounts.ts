@@ -46,6 +46,15 @@ const defaultDeps: UnverifiedAccountDeps = {
 export const AUTO_LINKED_BY = "auto-sans-verification";
 
 /**
+ * Délai de silence avant la création sans vérification. 5 min (Babakar
+ * 08/08) : le code expire de toute façon à 10 min, et une cliente qui tape
+ * son code pendant la création tombe sur « compte déjà prêt » (bénin).
+ * Indépendant du STALE_AFTER_MINUTES (30 min) de l'escalade réception, qui
+ * ne concerne plus que la liaison d'un compte existant.
+ */
+export const UNVERIFIED_CREATE_AFTER_MINUTES = 5;
+
+/**
  * Le message proactif : compte créé, PAS de vérification à finir, et la porte
  * ouverte pour reprendre la réservation en cours (l'agent retrouve tout le
  * contexte dès que la cliente répond).
@@ -82,7 +91,7 @@ interface StaleCreateCandidate {
 /**
  * Sweep (60 s, index.ts — AVANT escalateStaleLinkRequests, qui ne voit donc
  * plus ces lignes) : chaque demande de CRÉATION silencieuse depuis
- * STALE_AFTER_MINUTES est convertie en compte réel. Renvoie le nombre de
+ * UNVERIFIED_CREATE_AFTER_MINUTES est convertie en compte réel. Renvoie le nombre de
  * comptes créés. Ne lève jamais pour une ligne : un échec bascule cette
  * demande-là vers la réception et la boucle continue.
  */
@@ -99,7 +108,7 @@ export async function completeStaleCreateAccountRequests(
         and lr.claimed_email is not null
         and lr.claimed_name is not null
         and lr.updated_at < now() - ($1 || ' minutes')::interval`,
-    [String(links.STALE_AFTER_MINUTES)],
+    [String(UNVERIFIED_CREATE_AFTER_MINUTES)],
   );
   let created = 0;
   for (const row of res.rows as StaleCreateCandidate[]) {
