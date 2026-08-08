@@ -25,6 +25,31 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Compte créé SANS vérification après abandon du code (8 août 2026)
+
+Cas Marouche (+221778838837, 08/08) : L'Invitée choisie, créneau choisi
+(mer 12/08 17:15), email donné, code envoyé… plus rien. L'ancien circuit
+(30 min → NEEDS_RECEPTION + handoff) suspendait la vente à une intervention
+humaine. Demande de Babakar : au bout d'un moment, créer le compte SANS
+vérification et prévenir la cliente qu'elle peut réserver sa séance.
+
+Correctif (`domain/unverifiedAccounts.ts`, sweep 60 s AVANT
+`escalateStaleLinkRequests`) : toute demande de CRÉATION (`wix_contact_id`
+null + email + nom) silencieuse depuis `STALE_AFTER_MINUTES` (30 min) →
+`wix.createContact` direct, demande `LINKED` par `auto-sans-verification`
+(preuve durable : le prochain `create_plan_payment_link` passe sans
+re-vérification ; handoff éventuel auto-fermé), message WhatsApp proactif
+FR/EN registre-aware (« compte créé, rien à finir, réponds ici pour finaliser
+ta réservation »). Même modèle de confiance que `client_declined_verification`
+(la fiche est neuve, elle ne possède rien).
+
+- **La liaison d'un compte EXISTANT n'est JAMAIS auto-liée** (anti-usurpation :
+  sans preuve de la boîte mail, on offrirait l'abonnement d'autrui) — elle
+  reste escaladée à la réception comme avant.
+- Échec Wix → retour au repli réception (fail-safe historique).
+- Tests : `test/integration/unverifiedAccounts.test.ts` (6 cas : nominal,
+  fermeture handoff, anti-usurpation, fraîcheur, échec Wix, idempotence).
+
 ## Handoffs « Compte non relié » : auto-fermeture à la résolution (7 août 2026)
 
 Deux pastilles « intervention humaine » fantômes le 07/08 : **Aida Fall**

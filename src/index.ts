@@ -3,6 +3,7 @@ import { migrate, closeDb } from "./db/index.js";
 import { expireStaleBookings, expireStalePlanOrders, expireStaleCafeOrders } from "./domain/repo.js";
 import { nudgeExpiredLinks, nudgeExpiredPlanOrders } from "./domain/expiryNudge.js";
 import { escalateStaleLinkRequests } from "./domain/linkRequests.js";
+import { completeStaleCreateAccountRequests } from "./domain/unverifiedAccounts.js";
 import { runReviewSweep, maybeSendDailyDigest } from "./domain/conversationReview.js";
 import { maybeSendDailyStory } from "./domain/dailyStory.js";
 import { syncCancellations } from "./domain/cancellationSync.js";
@@ -136,6 +137,12 @@ async function main() {
       // the list API omits metadata.order, so it cannot be joined to pending
       // rows. Once a callback arrives, however, its exact transaction id is now
       // persisted and retried by the dedicated 10-second worker above.
+      // New-account verification the client abandoned (email + name given,
+      // code never typed) → create the account WITHOUT verification and tell
+      // them they can finish their booking (Babakar 08/08). Runs BEFORE the
+      // reception escalation, which then only sees existing-account linkings.
+      const autoCreated = await completeStaleCreateAccountRequests();
+      if (autoCreated > 0) app.log.info({ autoCreated }, "Accounts created without verification");
       // Account-link request the client never completed (no email given, code
       // never typed) → hand it to reception so no plan-holder is lost silently.
       const escalated = await escalateStaleLinkRequests();
