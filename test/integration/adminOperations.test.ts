@@ -71,6 +71,23 @@ describe("shared follow-up and human takeover", () => {
     expect(mock.waTextsTo(client.wa_phone)).toEqual(sent);
   });
 
+  it("never trips the no-intent breaker mid-vente (activité de réservation récente)", async () => {
+    const client = await seedClient({ wa_phone: "221771234571", name: "Maryeme" });
+    // Une vente est en cours : un tool de réservation/vente dans l'heure.
+    await pool.query(
+      `insert into conversations (client_id, role, content) values ($1, 'tool', $2)`,
+      [client.id, 'list_plans({}) -> [{"plan_id":"p1"}]'],
+    );
+
+    for (let i = 0; i < 4; i++) {
+      const guard = await recordNoIntentTurn(client.id);
+      expect(guard.disengaged).toBe(false);
+    }
+    const row = (await pool.query(`select awa_no_intent_streak, awa_disengaged_kind from clients where id=$1`, [client.id])).rows[0];
+    expect(row.awa_no_intent_streak).toBe(0);
+    expect(row.awa_disengaged_kind).toBeNull();
+  });
+
   it("stores a WhatsApp profile name for the admin conversation without replacing an existing name", async () => {
     const unnamed = (await pool.query(
       `insert into clients (wa_phone, name, human_takeover_until)

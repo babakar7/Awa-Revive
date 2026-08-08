@@ -47,8 +47,17 @@ const REVIVE_INTENT_RE =
 const DATE_OR_TIME_RE =
   /\b(?:aujourd hui|demain|today|tomorrow|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|monday|tuesday|wednesday|thursday|friday|saturday|sunday|matin|midi|soir|morning|afternoon|evening|\d{1,2}(?::|h)\d{0,2}|\d{1,2}[/-]\d{1,2})\b/;
 
+/**
+ * Une affirmation nue répond forcément à ce qu'Awa vient de proposer — c'est
+ * de l'ENGAGEMENT, pas du bruit (« Oui ça me va » comptait comme no_intent et
+ * a mis Awa en pause en pleine vente sur-mesure : Maryeme 08/08). Ancrée en
+ * début de message : « ok merci » engage, « merci » seul reste no_intent.
+ */
+const AFFIRMATION_RE =
+  /^(?:oui|ouais|ok(?:ay)?|d accord|dacc?(?:ord)?|ca marche|ca me va|c est bon|c est parfait|parfait|tres bien|super|genial|nickel|impeccable|volontiers|waa?w|yes|yeah|yep|sure|alright|sounds good|perfect|great|deal)\b/;
+
 const PLEASANTRY_RE =
-  /^(?:bonjour|bonsoir|salut|hello|hi|hey|coucou|salam|ca va|comment ca va|what s up|whats up|awesome|merci|merci beaucoup|thank you|thanks|jerejef|avec plaisir|de rien|a bientot|a la prochaine|bonne journee|bonne soiree|bye|goodbye|see you|ok|okay|d accord|moralement)$/;
+  /^(?:bonjour|bonsoir|salut|hello|hi|hey|coucou|salam|ca va|comment ca va|what s up|whats up|awesome|merci|merci beaucoup|thank you|thanks|jerejef|avec plaisir|de rien|a bientot|a la prochaine|bonne journee|bonne soiree|bye|goodbye|see you|moralement)$/;
 
 /**
  * Conservative deterministic classifier. Only clearly low-information turns
@@ -71,6 +80,7 @@ export function classifyConversationSignal(text: string): ConversationSignal {
   if (REVIVE_INTENT_RE.test(normalized) || DATE_OR_TIME_RE.test(normalized)) {
     return "revive_intent";
   }
+  if (AFFIRMATION_RE.test(normalized)) return "revive_intent";
   if (PLEASANTRY_RE.test(normalized)) return "no_intent";
 
   const words = normalized.split(" ").filter(Boolean);

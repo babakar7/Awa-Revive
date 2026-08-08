@@ -169,6 +169,14 @@ export interface NoIntentTurnResult {
  * deploys and concurrent webhook deliveries cannot reset or double-decide it.
  */
 export async function recordNoIntentTurn(clientId: string): Promise<NoIntentTurnResult> {
+  // Garde serveur (Maryeme 08/08) : un fragment poli au milieu d'une VENTE
+  // n'alimente jamais le coupe-circuit. « Merci » (veille) + « Oui ça me va »
+  // + « D'accord merci » ont coupé Awa en pleine vente sur-mesure, ligne de
+  // clôture canned à 800 ms. Même principe que le refus serveur de
+  // disengage_conversation en pleine activité de réservation (Codette 06/08).
+  if (await hasRecentBookingActivity(clientId, 60)) {
+    return { streak: 0, disengaged: false };
+  }
   const res = await pool.query(
     `with current as (
        select id,

@@ -25,6 +25,34 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Coupe-circuit no-intent : plus jamais en pleine vente (8 août 2026)
+
+Incident prod 08/08 17:06 (Maryeme, +221770491668) : en pleine vente
+sur-mesure, « Merci » (la veille 20:50) + « Oui ça me va » + « D'accord
+merci » = 3 tours « sans intention » en 24 h → le coupe-circuit déterministe
+a envoyé la ligne de clôture canned (à 800 ms, sans modèle) et mis Awa en
+pause 24 h — alors que la cliente venait d'ACCEPTER l'offre. (Le
+`awa_disengaged_*` était déjà nul au diagnostic : le « Rendre à Awa » du
+owner à 17:10 l'avait levé avant de reprendre la main — le premier
+diagnostic « simple takeover » était incomplet.) Même famille que Codette
+(06/08), via le coupe-circuit au lieu du tool disengage.
+
+Deux correctifs :
+- **Garde serveur dans `recordNoIntentTurn`** (couvre texte ET note vocale
+  échouée) : `hasRecentBookingActivity(60 min)` ⇒ le tour n'alimente JAMAIS
+  le compteur — un fragment poli au milieu d'une vente n'est pas du bruit.
+  Même principe que le refus de `disengage_conversation` (Codette).
+- **Classifier** (`noIntentGuard.ts`) : les affirmations nues ancrées en début
+  de message (« oui », « ok », « d'accord », « ça me va », « parfait »,
+  « waaw », « yes »…) = `revive_intent` (elles répondent forcément à une
+  proposition d'Awa) ; « ok/okay/d accord » retirés des pleasantries. « Merci »
+  seul, salutations et au-revoir restent no_intent.
+
+Tests : `noIntentGuard.test.ts` (affirmations vs pleasantries),
+`adminOperations.test.ts` (le compteur reste à 0 malgré 4 tours no-intent
+quand une vente est active). Maryeme : rien à réparer en base (takeover
+volontaire du owner en cours jusqu'au 09/08 05:10).
+
 ## Offre bar post-réservation retirée (8 août 2026)
 
 La liste interactive « Envie d'accompagner ta séance ? 🥤 » envoyée d'office

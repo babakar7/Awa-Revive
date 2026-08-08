@@ -42,6 +42,26 @@ describe("no-intent conversation guard", () => {
     expect(classifyConversationSignal(text)).toBe("revive_intent");
   });
 
+  it.each([
+    "Oui ça me va",
+    "D'accord merci",
+    "Ok",
+    "Okay super",
+    "Ça marche !",
+    "Parfait, merci beaucoup",
+    "Waaw",
+    "Yes please",
+  ])("treats the bare affirmation '%s' as engagement, never no-intent (Maryeme 08/08)", (text) => {
+    expect(classifyConversationSignal(text)).toBe("revive_intent");
+  });
+
+  it.each(["Merci", "Bonne journée", "À la prochaine", "🙏"])(
+    "still counts the pure pleasantry '%s' as no-intent",
+    (text) => {
+      expect(classifyConversationSignal(text)).toBe("no_intent");
+    },
+  );
+
   it("does not mute a substantive unknown question on a keyword miss", () => {
     expect(
       classifyConversationSignal("Pourriez-vous m'expliquer comment cela fonctionne exactement ?"),
