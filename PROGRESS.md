@@ -114,6 +114,24 @@ Pas de backfill nécessaire : les deux pastilles ont été fermées à la main
 (« traité », owner) juste avant le déploiement, et la requête de contrôle ne
 trouve plus aucun handoff de liaison orphelin en prod.
 
+## Lead pub Clé Invitée : « ce sujet » enfin expliqué à Awa (9 août 2026)
+
+L'opener pré-rempli de la pub Meta Clé Invitée (« Bonjour ! Puis-je en savoir
+plus à ce sujet ? ») arrivait SANS contexte : les notes campagne historiques
+(PACK DÉCOUVERTE META CAMPAIGN / META NEW LEAD) sont mortes depuis le retrait
+du Pack (flags en dur à false, 01/08), et rien ne les a remplacées pour l'ère
+des Clés — Awa ne voit pas la créa de la pub et l'opener ne nomme rien, donc
+elle répondait « à propos de quoi exactement ? » à un lead chaud.
+
+Correctif : flag `cleInviteeAdLead` (`KEYS_AUTOMATION_ENABLED` + matcher
+campagne existant — opener canonique OU source_id allow-listé) → note dynamique
+« CLÉ INVITÉE META AD » : « ce sujet » = L'Invitée, ne pas demander de
+précision, dérouler comme si la cliente avait NOMMÉ L'Invitée (règles EXPLICIT
+KEY REQUEST : salutation obligatoire, pitch complet depuis list_plans,
+éligibilité normale). Tests dans `discoveryAdFlowPrompt.test.ts`.
+Au passage : le matcher forçait déjà `revive_intent` sur l'opener (jamais
+compté no-intent) et `recordCampaignLead` continue d'attribuer le lead.
+
 ## Massage réservable par Awa : c'était un trou de PROMPT, pas de code (9 août 2026)
 
 Awa a répondu à Memona (La Résidente) qu'elle ne pouvait pas réserver le

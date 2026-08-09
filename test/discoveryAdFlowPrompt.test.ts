@@ -1,6 +1,35 @@
 import { describe, expect, it } from "vitest";
 import { dynamicContext, systemPrompt } from "../src/agent/systemPrompt.js";
 
+describe("Clé Invitée Meta-ad lead context (Clés era)", () => {
+  const baseArgs = {
+    clientName: null,
+    clientLanguage: "fr",
+    activeBooking: null,
+    activePlanOrder: null,
+    activeCafeOrder: null,
+    memberships: [],
+    recentRefunds: [],
+    habit: null,
+    firstContact: true,
+  } as const;
+
+  it("tells Awa what « ce sujet » means when the lead comes from the ad", () => {
+    const ctx = dynamicContext({ ...baseArgs, cleInviteeAdLead: true });
+    expect(ctx).toMatch(/CLÉ INVITÉE META AD/);
+    expect(ctx).toMatch(/« ce sujet » = L'Invitée/);
+    expect(ctx).toMatch(/as if the client had NAMED L'Invitée/);
+    expect(ctx).toMatch(/Do NOT ask what they mean/);
+    // The mandatory greeting survives the shortcut.
+    expect(ctx).toMatch(/mandatory short greeting/);
+  });
+
+  it("stays silent for ordinary conversations", () => {
+    expect(dynamicContext({ ...baseArgs })).not.toMatch(/CLÉ INVITÉE META AD/);
+    expect(dynamicContext({ ...baseArgs, cleInviteeAdLead: false })).not.toMatch(/CLÉ INVITÉE META AD/);
+  });
+});
+
 describe("Pack Découverte ad-lead prompt contract", () => {
   it("contains the documented risk reversal and keeps the included drink outside the paid bar flow", () => {
     const prompt = systemPrompt();

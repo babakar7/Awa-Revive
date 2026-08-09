@@ -877,6 +877,15 @@ export async function handleInboundText(args: {
   const packDiscoveryCampaign = false;
   const packDiscoveryMetaNewLead = false;
 
+  // Clés era: the retired campaign notes above never fire, so a Meta lead who
+  // clicked the Clé Invitée ad and sent its pre-filled opener ("Puis-je en
+  // savoir plus à ce sujet ?") would land with NO subject context — Awa cannot
+  // see the ad creative and the opener names nothing, so she'd ask "à propos
+  // de quoi ?" to a warm lead. The matcher already recognizes the opener (and
+  // the allow-listed referral source_id); this flag just tells the prompt what
+  // "ce sujet" is. Gated on the Clés catalog being live.
+  const cleInviteeAdLead = config.KEYS_AUTOMATION_ENABLED && campaign.matched;
+
   // Unlinked-number signal: a subscriber messaging from a number that isn't on
   // their Wix fiche is invisible to Awa and could be pushed to Wave for a class
   // their abonnement covers. `shouldOfferLinking` is true when the live lookup
@@ -963,6 +972,7 @@ export async function handleInboundText(args: {
         activeCommitment,
         packDiscoveryCampaign,
         packDiscoveryMetaNewLead,
+        cleInviteeAdLead,
         omOutageActive,
         reviewGate,
         reviewLink: config.GOOGLE_REVIEW_URL || undefined,
