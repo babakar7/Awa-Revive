@@ -114,6 +114,33 @@ Pas de backfill nécessaire : les deux pastilles ont été fermées à la main
 (« traité », owner) juste avant le déploiement, et la requête de contrôle ne
 trouve plus aucun handoff de liaison orphelin en prod.
 
+## Massage réservable par Awa : c'était un trou de PROMPT, pas de code (9 août 2026)
+
+Awa a répondu à Memona (La Résidente) qu'elle ne pouvait pas réserver le
+massage au tarif membre et qu'il fallait « l'arranger au studio ». FAUX : le
+tarif membre massage EST déjà implémenté et vif en prod — `domain/massageMemberRate.ts`
+(`resolveMassageUnitPrice`, pur + testé) branché dans `create_payment_link`
+(tools.ts ~2120) ; le massage est un Class Wix (capacité 1, 35 000 F,
+`pricingPlanIds` vide donc jamais « couvert gratuitement »), et
+`create_payment_link` applique 25 000 F pour les détentrices d'une Clé listée
+dans `MASSAGE_MEMBER_PLAN_IDS` (L'Habituée `e94da7f8`, La Résidente `1594e182`,
+sur-mesure `c5e1955f`/`d0fe7f79`). Memona détient La Résidente → 25 000 F auto.
+
+Le seul manque était la GUIDANCE : rien ne disait à Awa que le massage est un
+cours réservable de bout en bout ; elle a donc supposé « perk à arranger au
+studio ». Correctif texte uniquement (aucun changement de code de paiement) :
+- `business-info.md` : note « Réserver un massage » — réservable ici comme un
+  cours, tarif serveur (25 000 membre / 35 000 plein), ne jamais renvoyer au
+  studio, ne pas annoncer un prix de mémoire (le lien porte le bon montant).
+- `systemPrompt.ts` : règle MASSAGE (réserver directement via
+  check_availability → create_payment_link ; jamais « seulement au studio » ;
+  montant décidé par le serveur).
+
+Piège pour la prochaine session : le HUB `…/resabot` a un `config.ts` sale
+(modifs locales non commitées) SANS les vars MASSAGE — grep sur le hub a
+faussement conclu « code absent ». origin/main (donc les worktrees) a bien tout.
+Toujours vérifier dans un worktree frais, pas le hub. cf. [[prod-db-access]].
+
 ## Rebonds email des codes de vérification : webhook Brevo + repli sans-vérif (7 août 2026)
 
 Vente perdue 05–07/08 (+221786603672, kaeva18@gmail.com) : sa boîte Gmail est
