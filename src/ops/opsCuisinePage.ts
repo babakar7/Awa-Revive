@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v15";
+const ASSET_VERSION = "v16";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -280,7 +280,7 @@ export const CUISINE_APP_JS = String.raw`(function(){
   // change, no reception "commande prête" push). Purely client-side — the /ready
   // endpoint is untouched, so the forward-only invariant holds. A page reload or
   // a cancellation drops any pending commit (safer than a false ready).
-  var READY_DELAY_MS=5000;
+  var READY_DELAY_MS=3000;
   var pendingReady={};   // id -> { until:epochMs, timer:id }
   function remainSecs(id){ var p=pendingReady[id]; if(!p) return 0; return Math.max(0,Math.ceil((p.until-Date.now())/1000)); }
   function startPendingReady(id){
