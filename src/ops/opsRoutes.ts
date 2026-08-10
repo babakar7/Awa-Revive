@@ -310,9 +310,14 @@ function pipeOpsEvents(req: FastifyRequest, reply: FastifyReply, channel: string
       }
     }
   });
+  // A real `ping` EVENT (not an SSE comment): comments are invisible to the
+  // EventSource API, so clients could never tell a silently dead socket (half-open
+  // TCP — no onerror, no auto-reconnect) from a quiet board. The apps run a
+  // watchdog on this heartbeat and rebuild the stream when it stops. No id field,
+  // so pings never advance the Last-Event-ID replay cursor.
   const keepAlive = setInterval(() => {
     try {
-      raw.write(": ping\n\n");
+      raw.write("event: ping\ndata: {}\n\n");
     } catch {
       /* ignore */
     }

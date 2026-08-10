@@ -116,6 +116,10 @@ export const config = {
   // Secondes qu'un ticket salle PRÊT peut rester non pris avant d'escalader vers
   // le propriétaire (WhatsApp). L'accueil est prévenu par push/écran d'abord.
   OPS_SERVE_ESCALATE_SECONDS: parseInt(optional("OPS_SERVE_ESCALATE_SECONDS", "90"), 10),
+  // Minutes avant qu'un ticket cuisine TABLE/BAR encore ouvert soit auto-clôturé
+  // (marqué prêt + terminé) : passé ce délai il a en réalité été servi ou oublié —
+  // le tableau ne doit jamais accumuler de cartes rassies. 0 = désactivé.
+  OPS_TICKET_AUTOCLOSE_MINUTES: parseInt(optional("OPS_TICKET_AUTOCLOSE_MINUTES", "120"), 10),
 
   // Wix
   WIX_API_KEY: required("WIX_API_KEY"),

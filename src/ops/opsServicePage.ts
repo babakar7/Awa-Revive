@@ -30,7 +30,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v20";
+const ASSET_VERSION = "v21";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -833,22 +833,36 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   }
   if(histBtn) histBtn.onclick=openRecent;
 
-  // Live updates. Guarded: if EventSource construction ever throws, the board is
-  // already painted + loading (render/refreshState ran first), so no live updates
-  // is a soft degradation, never a blank "Chargement…".
+  // Live updates, with a silent-death watchdog: a half-open socket (network blip,
+  // tab suspension) can kill the stream WITHOUT firing onerror — EventSource never
+  // auto-reconnects and the board freezes while looking healthy. The server emits
+  // a 'ping' event every 25s; if no ping and no real event lands for 60s, rebuild
+  // the stream (?since=cursor replays everything missed). On tab wake, check
+  // immediately (iOS suspends timers while hidden). Guarded: if EventSource
+  // construction ever throws, the board is already painted + loading
+  // (render/refreshState ran first), so no live updates is a soft degradation,
+  // never a blank "Chargement…".
   function bump(e){ if(e.lastEventId)cursor=+e.lastEventId; }
   function flashSpot(spotId){ var c=board.querySelector('[data-spot="'+spotId+'"]'); if(c)c.classList.add('flash'); }
-  try{
-  var es=new EventSource(BASE+'/events?since='+cursor);
-  es.onopen=function(){setOnline(true);};
-  es.onerror=function(){setOnline(false);};
-  es.addEventListener('session_new',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); flashSpot(s.spot_id); });
-  es.addEventListener('session_update',function(e){ var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); });
-  es.addEventListener('session_closed',function(e){ var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
-  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var isNew=!tickets.has(t.id); tickets.set(t.id,t); render(); if(isNew){ beep(); speak(newSpeech(t)); } });
-  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ readyAlert(t); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
-  es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); render(); });
-  }catch(e){}
+  var es=null, lastBeat=Date.now();
+  function beat(){ lastBeat=Date.now(); }
+  function connect(){
+    if(es){ try{es.close();}catch(e){} }
+    es=new EventSource(BASE+'/events?since='+cursor);
+    es.onopen=function(){beat(); setOnline(true);};
+    es.onerror=function(){setOnline(false);};
+    es.addEventListener('ping',beat);
+    es.addEventListener('session_new',function(e){ beat(); var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); flashSpot(s.spot_id); });
+    es.addEventListener('session_update',function(e){ beat(); var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); });
+    es.addEventListener('session_closed',function(e){ beat(); var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
+    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var isNew=!tickets.has(t.id); tickets.set(t.id,t); render(); if(isNew){ beep(); speak(newSpeech(t)); } });
+    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ readyAlert(t); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
+    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); render(); });
+  }
+  try{ connect(); }catch(e){}
+  function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); try{ connect(); }catch(e){} } }
+  setInterval(function(){ reconnectIfStale(60000); },15000);
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') reconnectIfStale(30000); });
 
   // Keep the reception screen awake while the board is open. Wake Lock drops when
   // the page hides, so re-acquire on visibility return; a no-op where unsupported.

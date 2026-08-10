@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v16";
+const ASSET_VERSION = "v17";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -475,12 +475,29 @@ export const CUISINE_APP_JS = String.raw`(function(){
 
   render(); ackAll();
 
-  var es=new EventSource(BASE+'/events?since='+cursor);
-  es.onopen=function(){setOnline(true);};
-  es.onerror=function(){setOnline(false);};
-  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); speak(newSpeech(t),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
-  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(urgentSpeech(t),true); } });
-  es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); var prev=model.get(d.id); clearPendingReady(d.id); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); if(d.status==='CANCELLED'){ beep(); speak(cancelSpeech(prev||{heading:''}),true); } });
+  // ---- live stream with a silent-death watchdog ----
+  // A half-open socket (network blip, tab suspension) can kill the stream WITHOUT
+  // firing onerror: EventSource never auto-reconnects and the board freezes while
+  // looking healthy (the kitchen iPad served a 2-day-old snapshot, 10/08). The
+  // server emits a 'ping' event every 25s; if no ping and no real event lands for
+  // 60s, tear the stream down and rebuild it — ?since=cursor replays everything
+  // missed. On tab wake, check immediately (iOS suspends timers while hidden).
+  var es=null, lastBeat=Date.now();
+  function beat(){ lastBeat=Date.now(); }
+  function connect(){
+    if(es){ try{es.close();}catch(e){} }
+    es=new EventSource(BASE+'/events?since='+cursor);
+    es.onopen=function(){beat(); setOnline(true);};
+    es.onerror=function(){setOnline(false);};
+    es.addEventListener('ping',beat);
+    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); speak(newSpeech(t),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
+    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(urgentSpeech(t),true); } });
+    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); var prev=model.get(d.id); clearPendingReady(d.id); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); if(d.status==='CANCELLED'){ beep(); speak(cancelSpeech(prev||{heading:''}),true); } });
+  }
+  connect();
+  function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); connect(); } }
+  setInterval(function(){ reconnectIfStale(60000); },15000);
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') reconnectIfStale(30000); });
 
   // Keep the kitchen screen awake while the board is open (kiosk). The Wake Lock
   // is dropped when the page is hidden, so re-acquire it whenever it returns to

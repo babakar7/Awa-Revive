@@ -22,7 +22,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v3";
+const ASSET_VERSION = "v4";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -320,13 +320,27 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
 
   render(); refreshState();
 
-  var es=new EventSource(BASE+'/events?since='+cursor);
-  es.onopen=function(){setOnline(true);};
-  es.onerror=function(){setOnline(false);};
+  // Live stream with a silent-death watchdog: a half-open socket fires no onerror,
+  // so EventSource never reconnects and the board freezes while looking healthy.
+  // The server pings every 25s; 60s without a ping/event → rebuild the stream
+  // (?since=cursor replays what was missed). On tab wake, check immediately.
   function bump(e){ if(e.lastEventId)cursor=+e.lastEventId; }
-  es.addEventListener('ticket_new',function(e){ var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
-  es.addEventListener('ticket_update',function(e){ var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
-  es.addEventListener('ticket_removed',function(e){ var d=JSON.parse(e.data); model.delete(d.id); bump(e); render(); });
+  var es=null, lastBeat=Date.now();
+  function beat(){ lastBeat=Date.now(); }
+  function connect(){
+    if(es){ try{es.close();}catch(e){} }
+    es=new EventSource(BASE+'/events?since='+cursor);
+    es.onopen=function(){beat(); setOnline(true);};
+    es.onerror=function(){setOnline(false);};
+    es.addEventListener('ping',beat);
+    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
+    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
+    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); model.delete(d.id); bump(e); render(); });
+  }
+  connect();
+  function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); connect(); } }
+  setInterval(function(){ reconnectIfStale(60000); },15000);
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') reconnectIfStale(30000); });
 
   // ---- Take an order (the owner can also compose a salle order) ----
   // Lean variant of the salle composer: pick an espace, add items (required

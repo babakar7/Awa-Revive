@@ -12,6 +12,8 @@ import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { sweepStaffNotifications } from "./domain/notificationSweep.js";
 import { sweepDeliveries } from "./domain/deliveryNotify.js";
 import { sweepServeEscalations } from "./domain/opsEscalation.js";
+import { autoCloseStaleTickets } from "./domain/kitchenTicketRepo.js";
+import { closeEmptyOpenSessions } from "./domain/serviceSessionRepo.js";
 import { expireStaleDeliveryPaymentAttempts } from "./domain/deliveryRepo.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
 import {
@@ -175,6 +177,21 @@ async function main() {
       if (escalated > 0) app.log.info({ escalated }, "Room serve escalations sent to owner");
     } catch (err) {
       app.log.error({ err }, "Serve-escalation sweep failed");
+    }
+    // Kitchen board self-cleaning: an open TABLE/BAR ticket older than
+    // OPS_TICKET_AUTOCLOSE_MINUTES has in reality long been handled — mark it
+    // ready + completed so the iPad never accumulates stale cards, then free any
+    // session left empty (a forgotten table once sat on the board for two days).
+    try {
+      if (config.OPS_TICKET_AUTOCLOSE_MINUTES > 0) {
+        const closed = await autoCloseStaleTickets(config.OPS_TICKET_AUTOCLOSE_MINUTES);
+        if (closed.length > 0) {
+          await closeEmptyOpenSessions().catch(() => {});
+          app.log.info({ closed: closed.length }, "Stale kitchen tickets auto-closed");
+        }
+      }
+    } catch (err) {
+      app.log.error({ err }, "Ticket auto-close sweep failed");
     }
   }, 60 * 1000);
   sweeper.unref();

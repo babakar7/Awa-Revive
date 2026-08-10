@@ -349,6 +349,33 @@ export async function cancelTableTicket(id: string, reason: string | null): Prom
 }
 
 /**
+ * Self-cleaning board: a TABLE/BAR ticket still open hours after creation was in
+ * reality long handled — served, forgotten, or the client left — and nobody ever
+ * tapped « Servie »/« Terminée » (an 08/08 session sat on the kitchen iPad for two
+ * days). Mark it ready (if it never was) and COMPLETED so it leaves both boards;
+ * the empty-session sweep can then free its table. DELIVERY tickets are excluded
+ * on purpose: their lifecycle is driven by the delivery order, and a stale
+ * in-kitchen delivery is an incident to surface, never to hide. Emits
+ * ticket_removed per closed row.
+ */
+export async function autoCloseStaleTickets(maxAgeMinutes: number): Promise<KitchenTicket[]> {
+  const res = await pool.query(
+    `update kitchen_tickets
+        set status = 'COMPLETED', completed_at = now(),
+            ready_at = coalesce(ready_at, now()),
+            serve_by = coalesce(serve_by, 'auto'),
+            updated_at = now()
+      where source in ('TABLE','BAR') and status in ('NEW','PREPARING','READY')
+        and created_at < now() - make_interval(mins => $1)
+      returning *`,
+    [Math.max(1, Math.floor(maxAgeMinutes))],
+  );
+  const rows = res.rows as KitchenTicket[];
+  for (const row of rows) await emitRemoved(row);
+  return rows;
+}
+
+/**
  * Atomically claim TABLE tickets that have been READY but UN-TAKEN (no serve_by)
  * for longer than the threshold, for owner escalation. The `serve_escalated_at IS
  * NULL` guard means each ticket escalates exactly once even if the sweep overlaps.
