@@ -30,7 +30,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v21";
+const ASSET_VERSION = "v22";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -328,9 +328,17 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   if(window.speechSynthesis){ loadVoices(); try{ speechSynthesis.onvoiceschanged=loadVoices; }catch(e){} }
   function frVoice(){ for(var i=0;i<voices.length;i++){ if(((voices[i].lang||'').toLowerCase()).indexOf('fr')===0) return voices[i]; } return null; }
   var actx=null;
+  // iOS requires ONE speak() inside a real user gesture per page load before any
+  // programmatic announcement is allowed — resume() alone does NOT count. Without
+  // this, a freshly reloaded board stays mute until someone toggles 🔇→🔊. The
+  // first tap anywhere speaks an empty utterance: inaudible, but it activates
+  // the engine for the SSE-driven alerts.
+  var primed=false;
+  function primeSpeech(){ if(primed||muted||!window.speechSynthesis) return;
+    try{ speechSynthesis.speak(new SpeechSynthesisUtterance('')); primed=true; }catch(e){} }
   function unlock(){ if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(actx&&actx.state==='suspended'){ actx.resume(); }
-    // Warm speech on the gesture: resume any paused queue + ensure voices are loaded.
-    if(window.speechSynthesis){ try{ speechSynthesis.resume(); loadVoices(); }catch(e){} } }
+    // Warm speech on the gesture: prime once, resume any paused queue, load voices.
+    if(window.speechSynthesis){ try{ primeSpeech(); speechSynthesis.resume(); loadVoices(); }catch(e){} } }
   document.addEventListener('touchstart',unlock);
   document.addEventListener('click',unlock);
   // Toggling the sound ON speaks a confirmation — a direct user gesture is the most

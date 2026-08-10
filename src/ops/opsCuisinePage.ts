@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v17";
+const ASSET_VERSION = "v18";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -217,9 +217,17 @@ export const CUISINE_APP_JS = String.raw`(function(){
   if(window.speechSynthesis){ loadVoices(); try{ speechSynthesis.onvoiceschanged=loadVoices; }catch(e){} }
   function frVoice(){ for(var i=0;i<voices.length;i++){ if(((voices[i].lang||'').toLowerCase()).indexOf('fr')===0) return voices[i]; } return null; }
   var actx=null;
+  // iOS requires ONE speak() inside a real user gesture per page load before any
+  // programmatic announcement is allowed — resume() alone does NOT count. Without
+  // this, a freshly reloaded board stays mute until someone happens to toggle
+  // 🔇→🔊 (whose 'Son activé' primes it). So the first tap anywhere speaks an
+  // empty utterance: inaudible, but it activates the engine for the SSE alerts.
+  var primed=false;
+  function primeSpeech(){ if(primed||muted||!window.speechSynthesis) return;
+    try{ speechSynthesis.speak(new SpeechSynthesisUtterance('')); primed=true; }catch(e){} }
   function unlock(){ if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(actx&&actx.state==='suspended'){ actx.resume(); }
-    // Warm speech on the gesture: resume any paused queue + ensure voices are loaded.
-    if(window.speechSynthesis){ try{ speechSynthesis.resume(); loadVoices(); }catch(e){} } }
+    // Warm speech on the gesture: prime once, resume any paused queue, load voices.
+    if(window.speechSynthesis){ try{ primeSpeech(); speechSynthesis.resume(); loadVoices(); }catch(e){} } }
   document.addEventListener('touchstart',unlock,{once:false});
   document.addEventListener('click',unlock,{once:false});
   // Toggling the sound ON speaks a confirmation — a direct user gesture is the most
