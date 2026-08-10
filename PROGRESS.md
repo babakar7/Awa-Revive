@@ -5297,3 +5297,15 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   `SUR_MESURE_PLAN_IDS` le plan reste « dark » (vendu comme plan normal, zéro
   automation Clé), et sans `AWA_SELLABLE_PLAN_IDS` Awa refuse le lien de
   paiement.
+
+## 2026-08-10 — Story Instagram : partage du PNG original en HD
+
+- Le PNG source reste net en 1080×1920 ; la forte perte de qualité observée
+  venait de l'aperçu compressé du header image du template WhatsApp, qui ne
+  doit pas servir de fichier final pour Instagram.
+- `/admin/story` expose maintenant « Partager en HD » sur les téléphones qui
+  acceptent le partage natif de fichiers, avec repli « Télécharger en HD ».
+  Les deux chemins utilisent le PNG original, jamais une capture WhatsApp.
+- La route PNG porte `Cache-Control: no-store` afin qu'un mobile ne réutilise
+  pas l'image d'une journée précédente. WhatsApp reste le canal fiable de
+  notification hors fenêtre 24 h, pas le transport HD de l'asset final.

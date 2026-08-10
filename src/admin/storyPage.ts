@@ -50,11 +50,15 @@ export function registerStoryRoutes(admin: FastifyInstance): void {
   </div>
   <div style="flex:1 1 260px;min-width:240px">
     <p style="margin:.2rem 0 1rem">Statut : ${statusHtml}</p>
-    <p class="muted" style="margin:.2rem 0 1.2rem">Destinataire : ${phone}</p>
+    <p class="muted" style="margin:.2rem 0 .55rem">Destinataire : ${phone}</p>
+    <p class="muted" style="margin:.2rem 0 1.2rem">Pour Instagram, utilisez le fichier HD ci-dessous (1080×1920). L'aperçu d'un modèle WhatsApp est compressé et n'est pas le fichier final.</p>
     <form method="post" action="/admin/story/send" onsubmit="return confirm('Envoyer la story de demain sur WhatsApp maintenant ?')">
       <button class="act" type="submit"${config.STORY_PHONE ? "" : " disabled"}>Renvoyer maintenant</button>
-      <a class="act act--ghost" href="/admin/story/png" style="margin-left:.5rem">Télécharger le PNG</a>
     </form>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem">
+      <button class="act" type="button" data-story-share data-url="/admin/story/png?inline=1" data-filename="story-${dateISO}.png" hidden>Partager en HD</button>
+      <a class="act act--ghost" href="/admin/story/png">Télécharger en HD</a>
+    </div>
   </div>
 </div>`;
 
@@ -69,6 +73,7 @@ export function registerStoryRoutes(admin: FastifyInstance): void {
     const png = renderStoryImage(data);
     const inline = (req.query as { inline?: string })?.inline === "1";
     reply.type("image/png");
+    reply.header("cache-control", "no-store");
     if (!inline) {
       const { dateISO } = tomorrowWindow(new Date());
       reply.header("content-disposition", `attachment; filename="story-${dateISO}.png"`);

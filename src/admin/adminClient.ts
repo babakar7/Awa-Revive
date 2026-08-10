@@ -186,6 +186,28 @@ export const ADMIN_CLIENT_JS = `
   });
   document.addEventListener('click',function(event){if(searchForm&&!searchForm.contains(event.target))closeGlobalSearch()});
 
+  document.querySelectorAll('[data-story-share]').forEach(function(button){
+    if(!navigator.share||!navigator.canShare||typeof File!=='function')return;
+    var probe=new File([''],'story.png',{type:'image/png'});
+    if(!navigator.canShare({files:[probe]}))return;
+    button.hidden=false;
+    button.addEventListener('click',function(){
+      var url=button.getAttribute('data-url')||'/admin/story/png?inline=1';
+      var filename=button.getAttribute('data-filename')||'story.png';
+      var original=button.textContent;
+      button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='Préparation…';
+      fetch(url,{headers:{Accept:'image/png'},credentials:'same-origin',cache:'no-store'})
+        .then(function(response){if(!response.ok)throw new Error('story_download_failed');return response.blob()})
+        .then(function(blob){
+          var file=new File([blob],filename,{type:'image/png'});
+          if(!navigator.canShare({files:[file]}))throw new Error('story_share_unavailable');
+          return navigator.share({files:[file],title:'Story Instagram Revive'});
+        })
+        .catch(function(error){if(!error||error.name!=='AbortError')location.href='/admin/story/png'})
+        .finally(function(){button.disabled=false;button.removeAttribute('aria-busy');button.textContent=original});
+    });
+  });
+
   document.addEventListener('keydown',function(e){
     if(e.key==='Escape'&&body.classList.contains('mobile-nav-open')){e.preventDefault();setMobile(false);return;}
     if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'&&search){e.preventDefault();search.focus();search.select();openGlobalSearch();scheduleGlobalSearch(false);return;}

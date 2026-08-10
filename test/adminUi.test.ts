@@ -20,6 +20,12 @@ describe("admin design system shell", () => {
     expect(() => new Function(ADMIN_CLIENT_JS)).not.toThrow();
   });
 
+  it("shares the original Instagram Story PNG when the device supports file sharing", () => {
+    expect(ADMIN_CLIENT_JS).toContain("[data-story-share]");
+    expect(ADMIN_CLIENT_JS).toContain("navigator.canShare({files:[file]})");
+    expect(ADMIN_CLIENT_JS).toContain("cache:'no-store'");
+  });
+
   it("renders task-oriented navigation and accessible mobile controls", async () => {
     const html = await layout("Réservations", "/admin/bookings", "<p>contenu</p>", {
       badges,
