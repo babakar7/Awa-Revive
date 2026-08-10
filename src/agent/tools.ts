@@ -923,9 +923,9 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "medical questions, factures needing special legal mentions or covering payments send_invoice " +
       "doesn't list, anything off-script. Records the handoff, notifies reception with a one-tap link to " +
       "message the client, and the client is simply told reception will reach out to them — they send nothing. " +
-      "SPECIAL CASE: a client insisting on cancelling less than 16h before the class (an exceptional " +
-      "cancellation) — pass exceptional_cancellation:true; that routes to the gérant instead of reception " +
-      "and the client is told to CALL the gérant directly.",
+      "SPECIAL CASE: a client EXPLICITLY insisting on cancelling OR rescheduling less than 16h before the " +
+      "class (an exceptional request) — pass exceptional_cancellation:true; that routes to the gérant instead " +
+      "of reception and the client is told to CALL the gérant directly. Never offer this route yourself.",
     input_schema: {
       type: "object",
       properties: {
@@ -940,10 +940,11 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         exceptional_cancellation: {
           type: "boolean",
           description:
-            "Set true ONLY when the client insists on cancelling a booking less than 16h before the class " +
-            "(annulation exceptionnelle). Routes the alert to the gérant (not reception); the result tells you " +
-            "to have the client CALL the gérant at the returned gerant_phone. Never set it for reschedules, " +
-            "different-class changes, or alleged Revive faults — those stay with reception.",
+            "Set true ONLY when the client EXPLICITLY insists on cancelling or rescheduling a booking less " +
+            "than 16h before the class (demande exceptionnelle) — never because you offered it. Routes the " +
+            "alert to the gérant (not reception); the result tells you to have the client CALL the gérant at " +
+            "the returned gerant_phone. Never set it for different-class changes or alleged Revive faults — " +
+            "those stay with reception.",
         },
       },
       required: ["reason"],
@@ -4294,7 +4295,7 @@ export async function executeTool(
           return JSON.stringify({
             error: "too_late_16h_policy",
             hours_before_class: Math.max(0, Math.round(hoursUntil(source.startDate) * 10) / 10),
-            message: "Rescheduling refused: less than 16 hours before the current class, the session is due. If they insist on an exceptional situation, call handoff_to_human.",
+            message: "Rescheduling refused: less than 16 hours before the current class, the session is due. Do NOT offer any exceptional option yourself — state the rule and the transfer-to-someone-else option. ONLY if the client explicitly insists on an exceptional report, call handoff_to_human with exceptional_cancellation:true — the client will then be told to call the gérant directly. Never say you are transmitting the request.",
           });
         }
         if (!source.serviceId || source.serviceId !== cached.service_id) {
@@ -4341,7 +4342,7 @@ export async function executeTool(
         return JSON.stringify({
           error: "too_late_16h_policy",
           hours_before_class: Math.max(0, Math.round(hoursUntil(booking.slot_start) * 10) / 10),
-          message: "Rescheduling refused: less than 16 hours before the current class, the session is due. If they insist on an exceptional situation, call handoff_to_human.",
+          message: "Rescheduling refused: less than 16 hours before the current class, the session is due. Do NOT offer any exceptional option yourself — state the rule and the transfer-to-someone-else option. ONLY if the client explicitly insists on an exceptional report, call handoff_to_human with exceptional_cancellation:true — the client will then be told to call the gérant directly. Never say you are transmitting the request.",
         });
       }
       if (booking.service_id !== cached.service_id) {
@@ -4425,9 +4426,10 @@ export async function executeTool(
             hours_before_class: Math.max(0, Math.round(hoursLeftStudio * 10) / 10),
             message:
               "Cancellation refused: less than 16 hours before the class, the session is due (studio policy). " +
-              "Politely explain the 16h rule. If they still insist on an EXCEPTIONAL cancellation, call " +
+              "Politely explain the 16h rule and the transfer option; do NOT offer any exceptional option " +
+              "yourself. ONLY if the client explicitly insists on an EXCEPTIONAL cancellation, call " +
               "handoff_to_human with exceptional_cancellation:true — the client will then be told to call the " +
-              "gérant directly. Do NOT suggest examples of valid excuses.",
+              "gérant directly (never say you are transmitting the request). Do NOT suggest examples of valid excuses.",
           });
         }
         return JSON.stringify({
@@ -4472,9 +4474,10 @@ export async function executeTool(
           hours_before_class: Math.max(0, Math.round(hoursLeft * 10) / 10),
           message:
             "Cancellation refused: less than 16 hours before the class, the session is due (studio policy). " +
-            "Politely explain the 16h rule. If they still insist on an EXCEPTIONAL cancellation, call " +
+            "Politely explain the 16h rule and the transfer option; do NOT offer any exceptional option " +
+            "yourself. ONLY if the client explicitly insists on an EXCEPTIONAL cancellation, call " +
             "handoff_to_human with exceptional_cancellation:true — the client will then be told to call the " +
-            "gérant directly. Do NOT suggest examples of valid excuses.",
+            "gérant directly (never say you are transmitting the request). Do NOT suggest examples of valid excuses.",
         });
       }
 
@@ -5251,13 +5254,13 @@ export async function executeTool(
       const reason = String(input.reason ?? "unspecified").slice(0, 500);
       await repo.recordHandoff(client.id, reason);
 
-      // Exceptional <16h cancellation: the client phones the gérant directly, so
-      // reception is intentionally left out. We still record the handoff (trace)
-      // and alert the gérant so they expect the call.
+      // Exceptional <16h request (cancellation OR reschedule): the client phones
+      // the gérant directly, so reception is intentionally left out. We still
+      // record the handoff (trace) and alert the gérant so they expect the call.
       if (input.exceptional_cancellation === true) {
         notifyOwner(
-          `📞 Annulation exceptionnelle <16h — le client va vous appeler`,
-          `Une cliente/un client demande une annulation exceptionnelle à moins de 16h et va vous appeler :\n` +
+          `📞 Demande exceptionnelle <16h — le client va vous appeler`,
+          `Une cliente/un client demande un report ou une annulation exceptionnelle à moins de 16h et va vous appeler :\n` +
             `  Client : ${client.name ?? "?"} (+${client.wa_phone.replace(/^\+/, "")})\n` +
             `  Motif : ${reason}\n\n` +
             `Extrait de la conversation dans le registre handoffs (npm run summary).`,
@@ -5266,10 +5269,11 @@ export async function executeTool(
           owner_notified: true,
           gerant_phone: config.OWNER_PHONE,
           note:
-            "Exceptional cancellation recorded and the gérant alerted. Tell the client, in their language, to " +
-            "CALL the gérant directly at gerant_phone for their annulation exceptionnelle — it is handled by " +
-            "phone with the gérant, not here. Promise no outcome (no refund, no guarantee it is accepted) and " +
-            "do NOT suggest examples of valid excuses. Do not tell them reception will reach out.",
+            "Exceptional request recorded and the gérant alerted. Tell the client, in their language, to " +
+            "CALL the gérant directly at gerant_phone for their demande exceptionnelle — it is handled by " +
+            "phone with the gérant, not here; never say you transmitted the request yourself. Promise no " +
+            "outcome (no refund, no guarantee it is accepted) and do NOT suggest examples of valid excuses. " +
+            "Do not tell them reception will reach out.",
         });
       }
 

@@ -25,6 +25,28 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## <16h : l'exception ne se propose JAMAIS, et c'est le client qui appelle (10 août 2026)
+
+Incident Arame Seye (malade, cours à 12h30) : Awa a refusé le report (règle
+16h, correct) mais a spontanément proposé « un report exceptionnel » et offert
+de « transmettre la demande au gérant qui traite par téléphone ». Double faute
+signalée par Babakar : (1) l'exception ne doit JAMAIS être évoquée par Awa —
+uniquement si le client la demande explicitement ; (2) il n'existe pas de
+« transmission au gérant » — le client appelle lui-même le gérant. Cause : le
+flux `exceptional_cancellation` (→ appel du gérant) ne couvrait que
+l'ANNULATION <16h ; le refus de REPORT <16h renvoyait encore l'ancien message
+« call handoff_to_human » sans cadre, et rien n'interdisait l'offre spontanée.
+Correctif (business-info.md, systemPrompt.ts, tools.ts) :
+- Interdiction explicite partout de mentionner report/annulation exceptionnel
+  ou l'escalade gérant sans demande explicite du client — même en cas de
+  maladie : règle + option transfert, rien de plus.
+- `exceptional_cancellation:true` couvre désormais aussi le REPORT <16h ; les
+  messages de refus 16h (reschedule + cancel) pointent vers ce flux.
+- Formulation « je transmets la demande » bannie : Awa donne le numéro du
+  gérant et dit au client de l'appeler (le gérant est prévenu par l'alerte).
+- Tests cancellationPolicy mis à jour : le report <16h exceptionnel route vers
+  le gérant (ancienne assertion inverse supprimée), offre spontanée verrouillée.
+
 ## Voix cuisine muette après rechargement : amorçage au premier tap (10 août 2026)
 
 Suite du durcissement voix du 05/08 — il restait UN trou : iOS n'autorise le
