@@ -15,14 +15,16 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  * The owner supervision PWA (owner.revive.sn) — an overview of all live activity
  * for the manager: today's KPIs, device status, and every in-progress ticket
  * (cuisine + salle + livraison), urgents first. Same house style as the cuisine
- * kiosque (inline strings, DOM via textContent, shared Revive theme). Mostly a
- * watch-only board, with ONE action: the owner can also take a salle order
- * (＋ Commande) through the same server-decided path as the accueil. Subscribes to
- * the cuisine channel (which already carries every ticket) and polls /stats.
+ * kiosque (inline strings, DOM via textContent, shared Revive theme). Full
+ * control: the owner can take a salle order (＋ Commande) AND drive any ticket
+ * through the same transitions as the cuisine iPad (commencer/prête/terminée)
+ * and the salle phones (servie/urgent/annuler) — all via /ops/owner endpoints,
+ * server-decided as everywhere. Subscribes to the cuisine channel (which
+ * already carries every ticket) and polls /stats.
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v4";
+const ASSET_VERSION = "v5";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -93,6 +95,27 @@ border-radius:var(--radius-sm);padding:.4rem .55rem}
 padding:.22rem .6rem;border-radius:999px;background:var(--plum-50);color:var(--plum-700)}
 .pill.preparing{background:var(--warn-bg);color:var(--warn)}
 .pill.ready{background:var(--ok-bg);color:var(--ok)}
+/* Ticket actions — same verbs as the cuisine iPad (Commencer/Prête/Terminée) and
+   the salle phones (Servie/urgent/annuler); the supervisor can do it all. */
+.actions{display:flex;gap:.5rem;margin-top:.25rem}
+button.act{flex:1;padding:.8rem;font-size:1rem;font-weight:800;border:none;border-radius:var(--radius);color:#fff;box-shadow:var(--shadow-1)}
+button.act.prep{background:var(--plum-600)}
+button.act.ready{background:var(--ok-strong)}
+button.act.serve{background:var(--info)}
+button.act.undo{background:var(--warn)}
+button.act.urg{background:none;border:1px solid var(--border-strong);color:var(--ink-700);flex:0 0 auto;padding:.8rem .7rem;box-shadow:none}
+button.act.urg.on{border-color:var(--danger);color:var(--danger);background:var(--danger-bg)}
+button.act.cancelx{background:none;border:1px solid var(--danger-border);color:var(--danger);flex:0 0 auto;min-width:2.75rem;padding:.8rem .85rem;box-shadow:none}
+/* "Prête" pending its local undo grace (same 3s pattern as the cuisine board). */
+.card.pending{border-color:var(--warn);border-left-color:var(--warn);box-shadow:0 0 0 3px var(--warn-bg)}
+/* Confirm dialog (verb-labeled buttons — native OK/Annuler is ambiguous when the
+   question IS « Annuler ? »). Same pattern as the salle PWA. */
+.ov.center{align-items:center;padding:1rem}
+.cfm{background:var(--surface);border-radius:var(--radius-xl);box-shadow:var(--shadow-2);padding:1.2rem;max-width:22rem;width:100%}
+.cfm p{font-size:1.05rem;font-weight:600;margin:.1rem 0 1rem;color:var(--ink-900)}
+.cfm .cfmacts{display:flex;flex-direction:column;gap:.55rem}
+.cfm button{padding:.85rem;border-radius:var(--radius);border:1px solid var(--border-strong);background:#fff;color:var(--ink-700);font-weight:700;font-size:.95rem}
+.cfm button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
 #clock{font-variant-numeric:tabular-nums;font-weight:600;font-size:.95rem;color:var(--ink-500)}
 .empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:16vh;font-family:var(--serif);font-size:1.3rem;font-style:italic}
 /* "＋ Commande" — the owner can also take an order. */
@@ -231,8 +254,52 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     if(s<60) return 'il y a '+s+' s'; if(s<3600) return 'il y a '+Math.floor(s/60)+' min';
     if(s<86400) return 'il y a '+Math.floor(s/3600)+' h'; return 'il y a '+Math.floor(s/86400)+' j'; }
 
+  // ---- "Prête" with a local undo grace (same 3s pattern as the cuisine iPad) ----
+  // The POST fires only after the countdown; undoing in time reaches no server
+  // (no status change, no false reception push). A reload or a removal drops it.
+  var READY_DELAY_MS=3000;
+  var pendingReady={};   // id -> { until:epochMs, timer:id }
+  function remainSecs(id){ var p=pendingReady[id]; if(!p) return 0; return Math.max(0,Math.ceil((p.until-Date.now())/1000)); }
+  function startPendingReady(id){
+    if(pendingReady[id]) return;
+    pendingReady[id]={ until:Date.now()+READY_DELAY_MS, timer:setTimeout(function(){ commitReady(id); },READY_DELAY_MS) };
+    render();
+  }
+  function cancelPendingReady(id){
+    var p=pendingReady[id]; if(!p) return;
+    clearTimeout(p.timer); delete pendingReady[id]; render();
+  }
+  function commitReady(id){
+    var p=pendingReady[id]; if(!p) return;
+    clearTimeout(p.timer); delete pendingReady[id];
+    postJSON('/tickets/'+id+'/ready',{})
+      .then(function(r){ if(!r.ok) render(); }).catch(function(){ render(); });
+  }
+  function clearPendingReady(id){ var p=pendingReady[id]; if(p){ clearTimeout(p.timer); delete pendingReady[id]; } }
+
+  // Verb-labeled confirm (native OK/Annuler is ambiguous when the question IS
+  // « Annuler ? »). Escape routes (backdrop tap, initial focus) mean « garder ».
+  function askConfirm(question,yesLabel,noLabel,onYes){
+    var ov=el('div','ov center'); var box=el('div','cfm');
+    box.setAttribute('role','alertdialog'); box.setAttribute('aria-modal','true'); box.setAttribute('aria-label',question);
+    box.appendChild(el('p',null,question));
+    var acts=el('div','cfmacts');
+    var yes=el('button','danger',yesLabel);
+    var no=el('button',null,noLabel);
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); }
+    yes.onclick=function(){ close(); onYes(); };
+    no.onclick=close;
+    ov.onclick=function(e){ if(e.target===ov) close(); };
+    acts.appendChild(yes); acts.appendChild(no); box.appendChild(acts); ov.appendChild(box);
+    document.body.appendChild(ov); try{ no.focus(); }catch(e){}
+  }
+
+  function act(btn,path,body){ btn.disabled=true;
+    postJSON(path,body||{}).then(function(r){ if(!r.ok) btn.disabled=false; }).catch(function(){ btn.disabled=false; }); }
+
   function card(t){
-    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
+    var isPending=!!pendingReady[t.id];
+    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(isPending?' pending':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
     c.dataset.id=t.id;
     var top=el('div','top');
     if(t.urgent) top.appendChild(el('span','badge urgent','⚡ URGENT'));
@@ -257,6 +324,32 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     if(t.note) c.appendChild(el('div','note','📝 '+t.note));
     var stTxt=t.status==='READY'?'Prête':t.status==='PREPARING'?'En préparation':'Nouveau';
     c.appendChild(el('span','pill '+t.status.toLowerCase(), stTxt));
+    // Full control: cuisine verbs (Commencer/Prête/Terminée) + salle verbs
+    // (Servie/urgent/annuler). DELIVERY departures stay on /admin/livraisons.
+    var acts=el('div','actions');
+    if(t.status==='READY'){
+      if(t.source==='TABLE'){ var sv=el('button','act serve','🙋 Servie'); sv.onclick=function(){act(sv,'/tickets/'+t.id+'/served');}; acts.appendChild(sv); }
+      else if(t.source==='BAR'){ var dn=el('button','act ready','Terminée'); dn.onclick=function(){act(dn,'/tickets/'+t.id+'/complete');}; acts.appendChild(dn); }
+    } else if(isPending){
+      // Mis-tap window: the "Prête" POST hasn't fired yet — one tap undoes it.
+      var un=el('button','act undo'); un.dataset.pending=t.id;
+      un.textContent='↩ Annuler ('+remainSecs(t.id)+')';
+      un.onclick=function(){ cancelPendingReady(t.id); };
+      acts.appendChild(un);
+    } else {
+      if(t.status==='NEW'){ var p=el('button','act prep','Commencer'); p.onclick=function(){act(p,'/tickets/'+t.id+'/preparing');}; acts.appendChild(p); }
+      var r=el('button','act ready','Prête'); r.onclick=function(){ startPendingReady(t.id); }; acts.appendChild(r);
+      if(t.source==='TABLE'){
+        var ug=el('button','act urg'+(t.urgent?' on':''), t.urgent?'⚡ ✓':'⚡');
+        ug.title=t.urgent?'Retirer l’urgence':'Marquer urgent'; ug.setAttribute('aria-pressed',t.urgent?'true':'false');
+        ug.onclick=function(){act(ug,'/tickets/'+t.id+'/urgent',{urgent:!t.urgent});};
+        acts.appendChild(ug);
+        var cx=el('button','act cancelx','✕'); cx.title='Annuler cette commande'; cx.setAttribute('aria-label','Annuler cette commande');
+        cx.onclick=function(){ askConfirm('Annuler cette commande ?','Oui, annuler la commande','Non, garder la commande',function(){ act(cx,'/tickets/'+t.id+'/cancel',{reason:'annulée (supervision)'}); }); };
+        acts.appendChild(cx);
+      }
+    }
+    if(acts.childNodes.length) c.appendChild(acts);
     return c;
   }
 
@@ -290,7 +383,10 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   function tickClock(){ if(!clockEl)return; var d=new Date();
     clockEl.textContent=(d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); }
   setInterval(function(){ tickClock(); document.querySelectorAll('[data-age]').forEach(function(a){
-    a.textContent=fmtElapsed(a.dataset.age); a.className=ageClass(a.dataset.age); }); },1000);
+    a.textContent=fmtElapsed(a.dataset.age); a.className=ageClass(a.dataset.age); });
+    // Count the "Prête" undo window down in place (the timeout does the commit).
+    document.querySelectorAll('[data-pending]').forEach(function(u){
+      u.textContent='↩ Annuler ('+remainSecs(u.dataset.pending)+')'; }); },1000);
   tickClock();
 
   // Anti false "offline": the SSE stream blips + auto-reconnects (~3s); only warn
@@ -334,8 +430,8 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     es.onerror=function(){setOnline(false);};
     es.addEventListener('ping',beat);
     es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
-    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
-    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); model.delete(d.id); bump(e); render(); });
+    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); bump(e); render(); });
+    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); clearPendingReady(d.id); model.delete(d.id); bump(e); render(); });
   }
   connect();
   function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); connect(); } }

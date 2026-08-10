@@ -22,13 +22,20 @@ describe("owner supervision PWA assets", () => {
     expect(() => new Function(OWNER_APP_JS)).not.toThrow();
   });
 
-  it("never MUTATES an existing ticket (watch-only over the live board)", () => {
-    // The owner may take a NEW order, but must never drive a ticket's state.
-    expect(OWNER_APP_JS).not.toContain("/preparing");
-    expect(OWNER_APP_JS).not.toContain("/ready");
-    expect(OWNER_APP_JS).not.toContain("/urgent");
-    expect(OWNER_APP_JS).not.toContain("/served");
-    expect(OWNER_APP_JS).not.toContain("/cancel");
+  it("has FULL ticket control: cuisine + salle verbs on its own /ops/owner endpoints", () => {
+    // The owner drives every transition the cuisine iPad and the salle phones
+    // can: commencer / prête / terminée (BAR) / servie (TABLE) / urgent / annuler.
+    for (const action of ["/preparing", "/ready", "/complete", "/served", "/urgent", "/cancel"]) {
+      expect(OWNER_APP_JS).toContain(`+'${action}'`);
+    }
+    // All mutations go through postJSON(BASE+…) — never a cross-role endpoint.
+    expect(OWNER_APP_JS).not.toContain("/ops/cuisine/");
+    expect(OWNER_APP_JS).not.toContain("/ops/service/");
+    // "Prête" keeps the local undo grace (mis-tap never reaches the server) and
+    // cancelling asks a verb-labelled confirmation first.
+    expect(OWNER_APP_JS).toContain("READY_DELAY_MS=3000");
+    expect(OWNER_APP_JS).toContain("cancelPendingReady");
+    expect(OWNER_APP_JS).toContain("askConfirm('Annuler cette commande ?'");
   });
 
   it("can take a salle order: spot picker + menu composer posting to /spots/:id/orders", () => {

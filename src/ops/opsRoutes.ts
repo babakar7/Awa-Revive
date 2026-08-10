@@ -530,18 +530,6 @@ function registerServiceRoutes(app: FastifyInstance): void {
     return reply.code(code).type("application/json").send(body);
   });
 
-  // A table auto-clears once its LAST open ticket leaves (served or cancelled) —
-  // no manual "Libérer". Closing an already-empty session frees the spot back to
-  // "tap to order". Best-effort: a close hiccup never fails the serve/cancel.
-  // Returns whether the session survived (still open) so the caller can refresh
-  // its subtotal only when it's still on the board.
-  const autoCloseIfEmpty = async (sessionId: string | null, by: string | null): Promise<void> => {
-    if (!sessionId) return;
-    const remaining = await ticketsForSession(sessionId);
-    if (remaining.length === 0) await closeSession(sessionId, by);
-    else await publishOpenSessionUpdate(sessionId).catch(() => {});
-  };
-
   app.post(`${SERVICE_BASE}/tickets/:id/take`, async (req, reply) => {
     const device = await requireAccueil(req, reply);
     if (!device) return reply;
@@ -631,11 +619,24 @@ function registerServiceRoutes(app: FastifyInstance): void {
   });
 }
 
+// A table auto-clears once its LAST open ticket leaves (served or cancelled) —
+// no manual "Libérer". Closing an already-empty session frees the spot back to
+// "tap to order". Best-effort: a close hiccup never fails the serve/cancel.
+// Shared by the accueil and owner boards (same served/cancel semantics).
+async function autoCloseIfEmpty(sessionId: string | null, by: string | null): Promise<void> {
+  if (!sessionId) return;
+  const remaining = await ticketsForSession(sessionId);
+  if (remaining.length === 0) await closeSession(sessionId, by);
+  else await publishOpenSessionUpdate(sessionId).catch(() => {});
+}
+
 // ═══ Owner supervision PWA (/ops/owner, role "owner") ═══
 // A manager overview: today's KPIs, device status, and every live ticket (both
-// sources), urgents first. Read-only EXCEPT it can also take a salle order (same
-// server-decided createSpotOrder path as the accueil). Subscribes to the cuisine
-// channel (which already carries all tickets) and exposes /stats for the aggregates.
+// sources), urgents first — with FULL control: take a salle order (same
+// server-decided createSpotOrder path as the accueil) and drive any ticket
+// through the cuisine + salle transitions (see the owner ticket routes below).
+// Subscribes to the cuisine channel (which already carries all tickets) and
+// exposes /stats for the aggregates.
 const OWNER_BASE = "/ops/owner";
 
 async function ownerBootData(): Promise<unknown> {
@@ -744,5 +745,79 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     if (!device) return reply.code(401).type("application/json").send({ ok: false, message: "unpaired" });
     const { code, body } = await createSpotOrder(device.label, (req.params as any).id, (req.body as any) ?? {});
     return reply.code(code).type("application/json").send(body);
+  });
+
+  // ── Full supervision control ──
+  // The owner can drive a ticket through the SAME transitions as the cuisine iPad
+  // (commencer / prête / terminée) and the accueil phones (servie / annuler /
+  // urgent). Same repo functions, same atomic WHERE guards — a stale tap from any
+  // board resolves to a single winner; only the device role differs.
+  const requireOwner = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<OpsDevice | null> => {
+    const device = await deviceFromReq(req, "owner");
+    if (!device) {
+      reply.code(401).type("application/json").send({ error: "unpaired" });
+      return null;
+    }
+    return device;
+  };
+
+  app.post(`${OWNER_BASE}/tickets/:id/preparing`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const t = await advanceTicketByCuisine((req.params as any).id, "PREPARING", device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${OWNER_BASE}/tickets/:id/ready`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const t = await advanceTicketByCuisine((req.params as any).id, "READY", device.label);
+    // Same side effect as the cuisine route: a room order going ready → push the
+    // reception phones' lock screens so it gets picked up.
+    if (t && t.source === "TABLE") {
+      const view = kitchenTicketView(t);
+      void pushToRole("accueil", {
+        title: "🔔 Commande prête",
+        body: `${view.heading} · ${ticketItemsSummary(view)}`,
+        url: "/ops/service/",
+        tag: `ready-${t.id}`,
+      }).catch(() => {});
+    }
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${OWNER_BASE}/tickets/:id/complete`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const t = await completeBarTicket((req.params as any).id, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${OWNER_BASE}/tickets/:id/served`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const t = await serveTableTicket((req.params as any).id, device.label);
+    if (t) await autoCloseIfEmpty(t.session_id, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${OWNER_BASE}/tickets/:id/cancel`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const reason = typeof (req.body as any)?.reason === "string" ? (req.body as any).reason.slice(0, 200) : null;
+    const t = await cancelTableTicket((req.params as any).id, reason);
+    if (t) await autoCloseIfEmpty(t.session_id, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${OWNER_BASE}/tickets/:id/urgent`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const urgent = (req.body as any)?.urgent === true;
+    const t = await setTicketUrgent((req.params as any).id, urgent, device.label);
+    return reply.type("application/json").send({ ok: !!t });
   });
 }
