@@ -25,6 +25,36 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Boards ops gelés en silence : watchdog SSE + auto-clôture 2 h (10 août 2026)
+
+Incident prod 10/08 : l'iPad cuisine affichait un instantané VIEUX DE DEUX
+JOURS — les commandes du matin (cappuccino, poke, iced latte de la Terrasse)
+invisibles, et un matcha déjà servi le 08/08 impossible à faire partir. Cause :
+un socket à moitié mort (blip réseau / onglet suspendu) tue le flux SSE **sans
+déclencher `onerror`** → EventSource ne se reconnecte jamais, aucun bandeau
+« hors ligne », le board a l'air sain. La DB, elle, était juste.
+
+- **Ping serveur visible** : le keepalive SSE devient un vrai évènement `ping`
+  (un commentaire `: ping` est invisible pour l'API EventSource). Sans `id`,
+  donc le curseur de replay n'avance pas ([src/ops/opsRoutes.ts](src/ops/opsRoutes.ts)).
+- **Watchdog dans les 3 PWA** (cuisine / service / owner) : 60 s sans ping ni
+  évènement → on détruit et reconstruit le flux (`?since=cursor` rejoue tout le
+  manqué) ; au réveil de l'onglet, vérification immédiate. Piège d'implémentation :
+  les commentaires du JS client vivent dans des template literals — un backtick
+  dans un commentaire (« \`ping\` ») TERMINE la chaîne (tsc l'attrape, mais loin).
+- **Auto-clôture** : sweep 60 s — un ticket TABLE/BAR encore ouvert après
+  `OPS_TICKET_AUTOCLOSE_MINUTES` (défaut 120) est marqué prêt + terminé
+  (`serve_by='auto'`) et sa session vidée est libérée. En réalité il a été servi
+  ou oublié (une session Canapé du 08/08 est restée 2 jours au board parce que
+  personne n'a tapé « Servie »). Les tickets DELIVERY sont exclus : leur cycle de
+  vie appartient à la commande de livraison, un retard est un incident à montrer.
+- Aussi : fenêtre d'annulation « Prête » raccourcie 5 s → 3 s (demande cuisine).
+
+Diagnostic pour la prochaine fois : si « le board ne montre pas X », comparer
+avec `kitchen_tickets` en DB (voir mémoire prod-db-access) — si la DB est bonne,
+c'est un client gelé ; recharger la PWA suffit, et depuis ce patch elle se
+répare seule en ≤ 60 s.
+
 ## Coupe-circuit no-intent : plus jamais en pleine vente (8 août 2026)
 
 Incident prod 08/08 17:06 (Maryeme, +221770491668) : en pleine vente
