@@ -7,9 +7,8 @@
  *   npm run refund:done -- --list        # show pending refunds
  */
 import "dotenv/config";
-import pg from "pg";
-
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+import { pool } from "../src/db/index.js";
+import { markBookingRefunded } from "../src/domain/repo.js";
 
 const arg = process.argv[2];
 if (!arg) {
@@ -31,16 +30,11 @@ if (arg === "--list") {
     );
   }
 } else {
-  const res = await pool.query(
-    `update pending_bookings set status = 'REFUNDED', updated_at = now()
-      where id = $1 and status = 'REFUND_NEEDED' returning id, amount_xof, service_name`,
-    [arg],
-  );
-  if (res.rowCount === 0) {
+  const b = await markBookingRefunded(arg, pool);
+  if (!b) {
     console.error(`No REFUND_NEEDED booking with id ${arg} (already refunded, or wrong id?)`);
     process.exit(1);
   }
-  const b = res.rows[0];
   console.log(`✅ Marked REFUNDED: ${b.id} (${b.amount_xof} XOF — ${b.service_name})`);
 }
 

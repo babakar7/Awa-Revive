@@ -194,6 +194,9 @@ import {
 import { renderAttendanceLeaderboard } from "./attendanceLeaderboardPage.js";
 import * as keyRepo from "../domain/keyRepo.js";
 import { extendKeySevenDays } from "../domain/keyExtension.js";
+import * as paymentsLedger from "../domain/paymentsLedger.js";
+import { csvCell, renderPaymentsPage } from "./paiementsPage.js";
+import { wixPaymentSyncState } from "../domain/wixPaymentSync.js";
 
 export { escapeHtml } from "./helpers.js";
 
@@ -570,6 +573,124 @@ export function registerAdmin(app: FastifyInstance): void {
         const period = raw === "today" ? 1 : raw === "30" ? 30 : 7;
         const report = await q.adminReport(period);
         reply.type("text/html").send(await layout("Rapport", "/admin/rapport", renderAdminReport(report, req.adminRole === "owner"), { subtitle: `${period} jours`, contentWidth: "wide" }));
+      });
+
+      // ---------- Rapprochement des paiements ----------
+      admin.get("/paiements", async (req, reply) => {
+        const query = req.query as Record<string, string | undefined>;
+        const startDate = config.PAYMENTS_LEDGER_START_DATE;
+        const today = new Date().toISOString().slice(0, 10);
+        const monthStart = `${today.slice(0, 7)}-01`;
+        const previousStartDate = new Date(`${monthStart}T00:00:00Z`);
+        previousStartDate.setUTCMonth(previousStartDate.getUTCMonth() - 1);
+        const defaultFrom = previousStartDate.toISOString().slice(0, 10);
+        const validDate = (raw: string | undefined, fallback: string) =>
+          /^\d{4}-\d{2}-\d{2}$/.test(raw ?? "") ? String(raw) : fallback;
+        const fromText = validDate(query.from, defaultFrom) < startDate
+          ? startDate
+          : validDate(query.from, defaultFrom);
+        const toText = validDate(query.to, today);
+        const from = new Date(`${fromText}T00:00:00Z`);
+        const to = new Date(`${toText}T00:00:00Z`);
+        to.setUTCDate(to.getUTCDate() + 1);
+        if (!(from < to)) {
+          return reply.redirect(`/admin/paiements?err=${encodeURIComponent("Période invalide.")}`, 303);
+        }
+        const filters = {
+          from, to,
+          method: String(query.method ?? "").trim() || undefined,
+          source: String(query.source ?? "").trim() || undefined,
+          type: String(query.type ?? "").trim() || undefined,
+        };
+        const currentFrom = new Date(`${monthStart}T00:00:00Z`);
+        const nextMonth = new Date(currentFrom); nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+        const previousFrom = new Date(currentFrom); previousFrom.setUTCMonth(previousFrom.getUTCMonth() - 1);
+        const [rows, daily, currentMonth, previousMonth, untagged, excludedCounts, refundNeeded, sync] = await Promise.all([
+          paymentsLedger.movements(filters),
+          paymentsLedger.dailyMethodTotals(filters),
+          paymentsLedger.periodMethodTotals({ from: currentFrom, to: nextMonth }),
+          paymentsLedger.periodMethodTotals({ from: previousFrom, to: currentFrom }),
+          paymentsLedger.untaggedWixOffline(),
+          paymentsLedger.excludedWixCounts(from, to),
+          pool.query(`select b.id,b.service_name,b.amount_xof,c.name client_name
+                        from pending_bookings b join clients c on c.id=b.client_id
+                       where b.status='REFUND_NEEDED' and not c.is_test order by b.updated_at`),
+          wixPaymentSyncState(),
+        ]);
+        const body = renderPaymentsPage({
+          from: fromText, to: toText, startDate, rows, daily, currentMonth, previousMonth,
+          untagged, excludedCounts, refundNeeded: refundNeeded.rows,
+          owner: req.adminRole === "owner", method: filters.method,
+          source: filters.source, type: filters.type, notice: query.done, error: query.err,
+          sync,
+        });
+        reply.type("text/html").send(await layout("Paiements", "/admin/paiements", body, {
+          subtitle: "Rapprochement comptable", contentWidth: "full",
+        }));
+      });
+
+      admin.post("/paiements/tag", async (req, reply) => {
+        const body = (req.body ?? {}) as Record<string, string>;
+        try {
+          await paymentsLedger.appendTagEvent({
+            targetId: String(body.target_id ?? ""), method: String(body.method ?? ""),
+            note: body.note, taggedBy: req.adminUser ?? "?",
+          });
+          return reply.redirect(`/admin/paiements?done=${encodeURIComponent("Méthode enregistrée.")}`, 303);
+        } catch (error) {
+          return reply.redirect(`/admin/paiements?err=${encodeURIComponent(error instanceof Error ? error.message : "Tag impossible.")}`, 303);
+        }
+      });
+
+      admin.post("/paiements/manuel", async (req, reply) => {
+        if (req.adminRole !== "owner") {
+          return reply.code(403).type("text/plain").send("Accès propriétaire requis.");
+        }
+        const body = (req.body ?? {}) as Record<string, string>;
+        try {
+          const rawDate = String(body.occurred_at ?? "");
+          const occurredAt = new Date(`${rawDate}:00Z`);
+          if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(rawDate) || Number.isNaN(occurredAt.getTime())) {
+            throw new Error("Date invalide.");
+          }
+          const created = await paymentsLedger.addManualMovement({
+            movementType: body.movement_type === "refund" ? "refund" : "payment",
+            occurredAt, amountXof: Number(body.amount_xof),
+            method: body.method as paymentsLedger.LedgerPaymentMethod,
+            label: body.label, providerReference: body.provider_reference,
+            sourceKind: body.source_kind, sourceId: body.source_id,
+            clientName: body.client_name, clientPhone: body.client_phone,
+            note: body.note, createdBy: req.adminUser ?? "?",
+            reversesMovementId: body.reverses_movement_id || undefined,
+            idempotencyKey: body.idempotency_key,
+          });
+          return reply.redirect(`/admin/paiements?done=${encodeURIComponent(created ? "Mouvement enregistré." : "Mouvement déjà enregistré.")}`, 303);
+        } catch (error: any) {
+          const message = error?.code === "23505"
+            ? "Cette référence fournisseur existe déjà."
+            : error instanceof Error ? error.message : "Mouvement impossible.";
+          return reply.redirect(`/admin/paiements?err=${encodeURIComponent(message)}`, 303);
+        }
+      });
+
+      admin.get("/paiements/export.csv", async (req, reply) => {
+        const query = req.query as Record<string, string | undefined>;
+        const startDate = config.PAYMENTS_LEDGER_START_DATE;
+        const today = new Date().toISOString().slice(0, 10);
+        const fromText = /^\d{4}-\d{2}-\d{2}$/.test(query.from ?? "") && String(query.from) >= startDate ? String(query.from) : startDate;
+        const toText = /^\d{4}-\d{2}-\d{2}$/.test(query.to ?? "") ? String(query.to) : today;
+        const from = new Date(`${fromText}T00:00:00Z`);
+        const to = new Date(`${toText}T00:00:00Z`); to.setUTCDate(to.getUTCDate() + 1);
+        const rows = await paymentsLedger.movements({
+          from, to, method: query.method || undefined, source: query.source || undefined,
+          type: query.type || undefined,
+        }, 1_000_000);
+        const header = ["date","origine","type","source","client","telephone","libelle","methode","montant_xof","date_estimee","exclusion"];
+        const lines = rows.map((r) => [r.occurredAt.toISOString(),r.origin,r.movementType,r.sourceKind,
+          r.clientName,r.clientPhone,r.label,r.method ?? "a_qualifier",r.amountXof,r.dateEstimated ? "oui" : "non",r.excludedReason]
+          .map(csvCell).join(";"));
+        reply.header("Content-Disposition", `attachment; filename="paiements-${fromText}-${toText}.csv"`)
+          .type("text/csv; charset=utf-8").send(`\uFEFF${header.map(csvCell).join(";")}\r\n${lines.join("\r\n")}`);
       });
 
       admin.get("/conversion", async (req, reply) => {
@@ -3381,7 +3502,8 @@ ${photoSection}
       // ---------- Actions de pointage (aucune action monétaire) ----------
       admin.post("/bookings/:id/refund-done", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const updated = await transition(pool, id, "REFUNDED");
+        const body = (req.body ?? {}) as Record<string, string>;
+        const updated = await repo.markBookingRefunded(id);
         if (updated) {
           req.log.info(
             { bookingId: id, by: req.adminUser },
@@ -3393,7 +3515,7 @@ ${photoSection}
             "Refund-done rejected (booking not in REFUND_NEEDED)",
           );
         }
-        reply.redirect("/admin", 303);
+        reply.redirect(body.return_to === "/admin/paiements" ? "/admin/paiements" : "/admin", 303);
       });
 
       admin.post("/plan-orders/:id/activated", async (req, reply) => {

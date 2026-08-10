@@ -77,6 +77,7 @@ const NAV: NavSection[] = [
     title: "Studio",
     links: [
       { href: "/admin/bookings", label: "Réservations", icon: "booking" },
+      { href: "/admin/paiements", label: "Paiements", icon: "wallet" },
       { href: "/admin/paiements-om", label: "Paiements OM", icon: "wallet" },
       { href: "/admin/abonnements", label: "Abonnements", icon: "key" },
       { href: "/admin/staff", label: "Équipe", icon: "team" },

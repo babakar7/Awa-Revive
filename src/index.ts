@@ -36,6 +36,7 @@ import { sweepKeyNudges } from "./domain/keyNudge.js";
 import { syncAttendanceLeaderboard } from "./domain/attendanceLeaderboard.js";
 import { syncAdInsights } from "./domain/adInsightsSync.js";
 import { sweepOmVerifications } from "./domain/orangeMoneyVerification.js";
+import { syncWixPayments } from "./domain/wixPaymentSync.js";
 
 async function main() {
   assertConfig();
@@ -100,6 +101,9 @@ async function main() {
   );
   void syncAdInsights().catch((err) =>
     app.log.warn({ err }, "Initial Meta Ads sync failed"),
+  );
+  void syncWixPayments(app.log).catch((err) =>
+    app.log.warn({ err }, "Initial Wix payment sync failed"),
   );
 
   // Periodic TTL sweep: AWAITING_PAYMENT past link_expires_at → EXPIRED.
@@ -249,6 +253,12 @@ async function main() {
       if (synced.ran) app.log.info({ adInsightRecords: synced.recordCount }, "Meta Ads insights synced");
     } catch (err) {
       app.log.warn({ err }, "Meta Ads insights sync failed");
+    }
+    try {
+      const synced = await syncWixPayments(app.log);
+      if (synced.ran) app.log.info({ paymentRecords: synced.recordCount }, "Wix payments synced");
+    } catch (err) {
+      app.log.warn({ err }, "Wix payment sync failed");
     }
     try {
       // Story Instagram du soir : image des cours de demain envoyée au gérant

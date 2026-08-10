@@ -1,5 +1,12 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Ledger des paiements par méthode (10 août 2026)
+
+- Nouvelle page équipe `/admin/paiements` : mouvements signés, totaux SQL brut/remboursements/net, détail filtrable, qualification des paiements Wix hors ligne et export CSV sécurisé.
+- Les remboursements booking passent par une transition atomique partagée entre la route admin et le script. Les mouvements manuels sont owner-only, append-only et idempotents.
+- Le sync Wix importe les transactions par identifiant, déduplique les ordres Awa et n’avance son watermark qu’après un scan complet réussi.
+- Décision comptable : les anciennes commandes Wix en `XAF` sont incluses à parité nominale 1:1 comme XOF, tout en conservant leur devise brute pour audit. Toute autre devise reste exclue.
+
 > Journal d'avancement destiné à un agent (ou humain) qui reprend le projet.
 > Dernière mise à jour : **4 août 2026** — le garde de couverture ne peut PLUS
 > jeter une réponse livrable (réparation + ajout déterministe, seul le lint

@@ -54,6 +54,9 @@ export interface PendingBooking {
   wix_booking_id: string | null;
   payer_phone: string | null;
   payment_method: string;
+  paid_at: Date | null;
+  refunded_at: Date | null;
+  refund_amount_xof: number | null;
   forfeited_at: Date | null;
   benefit_transaction_id: string | null;
   extras_json: unknown;
@@ -761,6 +764,26 @@ export async function setAwaitingPayment(
 
 export async function findBookingById(id: string): Promise<PendingBooking | null> {
   const res = await pool.query(`select * from pending_bookings where id = $1`, [id]);
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Record a refund at the moment it is confirmed in the provider portal.
+ * The conditional update is both the state transition and the idempotency
+ * guard used by the admin route and the maintenance script.
+ */
+export async function markBookingRefunded(
+  id: string,
+  db: pg.Pool | pg.PoolClient = pool,
+): Promise<PendingBooking | null> {
+  const res = await db.query(
+    `update pending_bookings
+        set status='REFUNDED', refunded_at=now(),
+            refund_amount_xof=amount_xof, updated_at=now()
+      where id=$1 and status='REFUND_NEEDED'
+      returning *`,
+    [id],
+  );
   return res.rows[0] ?? null;
 }
 
@@ -1923,7 +1946,9 @@ export async function setCafeOrderAwaitingPayment(
 }
 
 export async function markCafeOrderPaid(id: string): Promise<CafeOrder | null> {
-  return transitionCafeOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED", "DRAFT"]);
+  return transitionCafeOrder(id, "PAID", ["AWAITING_PAYMENT", "EXPIRED", "DRAFT"], {
+    paid_at: new Date(),
+  });
 }
 
 export async function claimCafeOrderForFulfillment(id: string): Promise<CafeOrder | null> {

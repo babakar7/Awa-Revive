@@ -43,6 +43,16 @@ alter table pending_bookings
 alter table pending_bookings
   add column if not exists payment_method text not null default 'wave';
 
+-- Accounting timestamps are intentionally separate from updated_at: the
+-- latter changes during fulfillment and is only an explicitly-labelled
+-- fallback for old rows. paid_at is written only by a verified payment path.
+alter table pending_bookings add column if not exists paid_at timestamptz;
+alter table pending_bookings add column if not exists refunded_at timestamptz;
+alter table pending_bookings add column if not exists refund_amount_xof integer;
+alter table pending_bookings drop constraint if exists pending_bookings_refund_amount_check;
+alter table pending_bookings add constraint pending_bookings_refund_amount_check
+  check (refund_amount_xof is null or refund_amount_xof > 0);
+
 -- A Wix booking can be observed again after a webhook/tool retry. Keeping its
 -- external id unique makes local persistence idempotent while still allowing
 -- any number of not-yet-created bookings (NULL values).
@@ -446,6 +456,7 @@ alter table pending_plan_orders
   add column if not exists payment_method text not null default 'wave';
 alter table pending_cafe_orders
   add column if not exists payment_method text not null default 'wave';
+alter table pending_cafe_orders add column if not exists paid_at timestamptz;
 
 -- Plan/cafe fulfillment lease (same idea as pending_bookings.fulfilling_at):
 -- a crash between markPaid and activation/notify left rows in PAID forever
@@ -1931,6 +1942,108 @@ create table if not exists wix_attendance_sync_state (
 insert into wix_attendance_sync_state (singleton)
   values (true)
   on conflict (singleton) do nothing;
+
+-- Unified accounting ledger. Awa rows remain projections of their source
+-- tables; only Wix transactions and genuinely manual movements are persisted.
+create table if not exists manual_payment_movements (
+  id uuid primary key default gen_random_uuid(),
+  movement_type text not null check (movement_type in ('payment','refund')),
+  occurred_at timestamptz not null,
+  amount_xof integer not null,
+  method text not null check (method in ('wave','orange_money','maxit','cash','card','other')),
+  label text not null,
+  provider_reference text,
+  source_kind text,
+  source_id text,
+  client_name text,
+  client_phone text,
+  note text not null,
+  reverses_movement_id uuid references manual_payment_movements(id),
+  created_by text not null,
+  idempotency_key uuid not null unique,
+  created_at timestamptz not null default now(),
+  check ((movement_type='payment' and amount_xof > 0) or
+         (movement_type='refund' and amount_xof < 0))
+);
+create unique index if not exists idx_manual_payment_provider_ref
+  on manual_payment_movements (method, provider_reference)
+  where provider_reference is not null;
+create index if not exists idx_manual_payment_occurred
+  on manual_payment_movements (occurred_at desc);
+
+create table if not exists wix_payment_movements (
+  id uuid primary key default gen_random_uuid(),
+  wix_order_id text not null,
+  source text not null check (source in ('ecom','plan')),
+  movement_type text not null check (movement_type in ('payment','refund')),
+  wix_entry_id text not null,
+  provider_status text not null,
+  occurred_at timestamptz not null,
+  amount_xof integer not null,
+  currency text not null,
+  buyer_name text,
+  buyer_phone text,
+  label text not null,
+  provider_method text,
+  raw_method text,
+  offline boolean not null default false,
+  raw jsonb not null,
+  synced_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  invalidated_at timestamptz,
+  unique (wix_order_id, movement_type, wix_entry_id),
+  check ((movement_type='payment' and amount_xof >= 0) or
+         (movement_type='refund' and amount_xof <= 0))
+);
+create index if not exists idx_wix_payment_occurred
+  on wix_payment_movements (occurred_at desc, wix_order_id);
+
+create table if not exists wix_payment_sync_diagnostics (
+  fingerprint text primary key,
+  kind text not null,
+  wix_order_id text,
+  payload jsonb not null,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  occurrences integer not null default 1
+);
+
+create table if not exists payment_method_tag_events (
+  id bigserial primary key,
+  target_kind text not null check (target_kind='wix'),
+  target_id uuid not null references wix_payment_movements(id),
+  method text not null check (method in ('wave','orange_money','maxit','cash','card','other','exclu')),
+  note text,
+  tagged_by text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_payment_method_tag_current
+  on payment_method_tag_events (target_kind, target_id, created_at desc, id desc);
+
+create table if not exists wix_payment_sync_state (
+  singleton boolean primary key default true check (singleton),
+  last_started_at timestamptz,
+  last_succeeded_at timestamptz,
+  last_updated_date_seen timestamptz,
+  last_full_reconciled_at timestamptz,
+  last_error text,
+  record_count integer not null default 0
+);
+insert into wix_payment_sync_state (singleton) values (true)
+  on conflict (singleton) do nothing;
+
+-- Only an actual funnel payment confirmation is authoritative enough to
+-- backfill paid_at. updated_at stays null here and is labelled estimated at
+-- read time instead of being smuggled into this column.
+update pending_bookings b
+   set paid_at = (
+     select min(e.occurred_at) from booking_funnel_events e
+      where e.booking_id=b.id and e.stage='payment_confirmed' and not e.is_excluded
+   )
+ where b.paid_at is null and exists (
+   select 1 from booking_funnel_events e
+    where e.booking_id=b.id and e.stage='payment_confirmed' and not e.is_excluded
+ );
 
 -- Fermetures studio (jours fériés, Maggal, travaux…). Éditables via /admin/closures
 -- sans redéploiement (précédent cafe_menu_items). Wix garde les créneaux ces

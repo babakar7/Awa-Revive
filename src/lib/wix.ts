@@ -2491,6 +2491,54 @@ export async function createBookingOrder(args: {
   return String(orderId);
 }
 
+export interface WixEcomOrderPage {
+  orders: any[];
+  nextCursor: string | null;
+}
+
+/** Cursor-paged eCom discovery for the accounting projection. */
+export async function searchEcomOrdersByUpdatedDate(args: {
+  updatedAfter: Date;
+  cursor?: string;
+}): Promise<WixEcomOrderPage> {
+  await paceWixEcomCall();
+  const data = await wixPost("/ecom/v1/orders/search", {
+    search: {
+      filter: { updatedDate: { $gte: args.updatedAfter.toISOString() } },
+      sort: [{ fieldName: "updatedDate", order: "ASC" }],
+      cursorPaging: { limit: 100, ...(args.cursor ? { cursor: args.cursor } : {}) },
+    },
+  });
+  const next = data?.pagingMetadata?.cursors?.next ?? data?.metadata?.cursors?.next;
+  return {
+    orders: Array.isArray(data?.orders) ? data.orders : [],
+    nextCursor: typeof next === "string" && next ? next : null,
+  };
+}
+
+/** Raw transaction entries; callers persist the payload for later re-derivation. */
+export async function getOrderTransactions(orderId: string): Promise<{
+  payments: any[];
+  refunds: any[];
+}> {
+  await paceWixEcomCall();
+  const data = await wixGet(`/ecom/v1/payments/orders/${encodeURIComponent(orderId)}`);
+  return {
+    payments: Array.isArray(data?.orderTransactions?.payments)
+      ? data.orderTransactions.payments
+      : [],
+    refunds: Array.isArray(data?.orderTransactions?.refunds)
+      ? data.orderTransactions.refunds
+      : [],
+  };
+}
+
+/** Read-only helper used by the live payment probe. */
+export async function getPricingPlanOrdersProbePage(offset = 0): Promise<any> {
+  await paceWixEcomCall();
+  return wixGet(`/pricing-plans/v2/orders?limit=50&offset=${Math.max(0, offset)}`);
+}
+
 /** True when this imported order already has a successful payment record. */
 export async function hasApprovedOrderPayment(
   orderId: string,

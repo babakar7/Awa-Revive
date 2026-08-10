@@ -80,6 +80,7 @@ export async function processPayment(
 
   const paid = await transition(pool, booking.id, "PAID", {
     payer_phone: opts.payerPhone ?? null,
+    paid_at: new Date(),
   });
   if (!paid) {
     log.info(

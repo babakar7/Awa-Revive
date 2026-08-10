@@ -13,7 +13,13 @@ export function paymentMethodLabel(raw: unknown): string {
     case "membership":
       return "Abonnement";
     case "cash":
-      return "Espèces à la livraison";
+      return "Espèces";
+    case "card":
+      return "Carte";
+    case "other":
+      return "Autre";
+    case "exclu":
+      return "Exclu";
     default:
       return method || "—";
   }

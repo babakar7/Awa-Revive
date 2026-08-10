@@ -124,6 +124,8 @@ export const config = {
   // Wix
   WIX_API_KEY: required("WIX_API_KEY"),
   WIX_SITE_ID: required("WIX_SITE_ID"),
+  // Earliest date covered by the accounting ledger and Wix backfill.
+  PAYMENTS_LEDGER_START_DATE: optional("PAYMENTS_LEDGER_START_DATE", "2026-07-01"),
 
   // Wave
   WAVE_API_KEY: required("WAVE_API_KEY"),
