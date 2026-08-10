@@ -25,6 +25,19 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Supervision (owner) : contrôle TOTAL des tickets (10 août 2026)
+
+Demande Babakar : le board /ops/owner doit pouvoir faire tout ce que /cuisine
+et /ops/service font. Fini le watch-only : chaque carte porte désormais les
+verbes cuisine (Commencer / Prête — avec la même grâce d'annulation locale 3 s
+et le même push accueil quand une commande salle passe prête / Terminée pour le
+BAR) et les verbes salle (Servie qui libère la table vidée, bascule ⚡ urgent,
+Annuler derrière une confirmation à verbes). Endpoints propres au rôle owner
+(`/ops/owner/tickets/:id/…`) qui appellent les MÊMES fonctions repo aux gardes
+atomiques — un tap périmé depuis n'importe quel board se résout à un seul
+gagnant. `autoCloseIfEmpty` hissé au niveau module (partagé accueil/owner). Le
+test « watch-only » d'opsOwnerAssets affirme maintenant le contrôle total.
+
 ## Boards ops gelés en silence : watchdog SSE + auto-clôture 2 h (10 août 2026)
 
 Incident prod 10/08 : l'iPad cuisine affichait un instantané VIEUX DE DEUX
