@@ -25,6 +25,19 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Voix cuisine muette après rechargement : amorçage au premier tap (10 août 2026)
+
+Suite du durcissement voix du 05/08 — il restait UN trou : iOS n'autorise le
+`speechSynthesis.speak()` programmatique qu'après UN `speak()` déclenché dans
+un vrai geste utilisateur, **une fois par chargement de page** (`resume()` ne
+compte pas). Un board fraîchement rechargé restait donc muet jusqu'à ce que
+quelqu'un bascule 🔇→🔊 (dont le « Son activé » amorçait le moteur) — exactement
+ce qui a frappé l'iPad cuisine après le rechargement forcé du matin (watchdog
+SSE). Correctif (cuisine **v18**, service **v22**) : le premier tap n'importe où
+prononce une phrase vide — inaudible, mais elle active le moteur pour les
+annonces SSE. Diagnostic terrain : « la voix ne dit plus les commandes » juste
+après un rechargement = ce trou ; désormais un seul tap sur l'écran suffit.
+
 ## Supervision (owner) : contrôle TOTAL des tickets (10 août 2026)
 
 Demande Babakar : le board /ops/owner doit pouvoir faire tout ce que /cuisine
