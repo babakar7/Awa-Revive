@@ -3,6 +3,7 @@ import {
   buildHistoryMessages,
   classifyReplyOutcome,
   modelSilenceFallbackMessage,
+  resolveSilenceRecovery,
   stripNoReplySentinel,
 } from "../src/agent/index.js";
 import { NO_REPLY_SENTINEL } from "../src/agent/tools.js";
@@ -41,9 +42,29 @@ describe("classifyReplyOutcome", () => {
     expect(classifyReplyOutcome("Avec plaisir 😊", false)).toBe("deliver");
   });
 
-  it("uses a calm acknowledgement when recovery itself returns NO_REPLY", () => {
-    expect(modelSilenceFallbackMessage()).not.toMatch(/souci technique/i);
-    expect(modelSilenceFallbackMessage()).toContain("Je suis là");
+  it("settles Camou's repeated NO_REPLY with client-safe text, not another recovery", () => {
+    const resolution = resolveSilenceRecovery(NO_REPLY_SENTINEL, "fr");
+
+    expect(resolution).toEqual({
+      replyText: modelSilenceFallbackMessage("fr"),
+      usedFallback: true,
+    });
+    expect(classifyReplyOutcome(resolution.replyText, false)).toBe("deliver");
+    expect(resolution.replyText).not.toMatch(/probl[eè]me technique|souci technique/i);
+    expect(resolution.replyText).not.toContain(NO_REPLY_SENTINEL);
+  });
+
+  it("preserves a real retry answer and localizes the deterministic fallback", () => {
+    expect(resolveSilenceRecovery("Avec plaisir 😊", "fr")).toEqual({
+      replyText: "Avec plaisir 😊",
+      usedFallback: false,
+    });
+    expect(resolveSilenceRecovery(`${NO_REPLY_SENTINEL}\nThanks!`, "en")).toEqual({
+      replyText: "Thanks!",
+      usedFallback: false,
+    });
+    expect(modelSilenceFallbackMessage("en")).toMatch(/^No problem/);
+    expect(modelSilenceFallbackMessage("wo")).toMatch(/^Baax na/);
   });
 });
 

@@ -32,6 +32,20 @@
 > `business-info.md`, `cafe-menu.md` (menu du bar),
 > `PLAN-PACK-DECOUVERTE-ACTIVATION.md`.
 
+## Silence répété après une liste interactive : repli déterministe (10 août 2026)
+
+- Incident Camou, 22:13 : après une liste de créneaux Reformer correctement
+  livrée, « Ok mercie » a produit `<NO_REPLY>` lors de la génération normale
+  puis encore lors de la relance sans outils. L'ancien garde a donc créé à tort
+  un relais technique, envoyé le message de panne et suspendu Awa 12 h. Aucun
+  paiement ni réservation n'était engagé.
+- Une deuxième réponse vide/sentinelle réussie côté API n'est désormais plus
+  assimilée à une panne : `resolveSilenceRecovery` envoie une courte réponse
+  déterministe localisée FR/EN/WO. Aucune tâche, alerte ou pause technique n'est
+  créée. Une exception réelle de la relance conserve le relais technique.
+- La régression teste le chemin de résolution réellement appelé par la boucle,
+  le retrait de la sentinelle et la conservation d'une vraie réponse de relance.
+
 ## <16h : l'exception ne se propose JAMAIS, et c'est le client qui appelle (10 août 2026)
 
 Incident Arame Seye (malade, cours à 12h30) : Awa a refusé le report (règle

@@ -147,7 +147,9 @@ const HISTORY_CONTEXT_GAP_HOURS = 24;
 // turn, the model can occasionally carry the old "reply <NO_REPLY>" instruction
 // forward even though no interactive message was sent in the CURRENT turn
 // (prod 22/07: Modou answered "Ok merci" after an Aquabike slot list). This
-// suffix is used for one no-tools recovery call before declaring a real outage.
+// suffix is used for one no-tools recovery call. If the model still returns
+// silence, the server sends a small deterministic acknowledgement: a valid API
+// response containing only the stale sentinel is a model lapse, not an outage.
 const UNEXPECTED_SILENCE_RECOVERY_INSTRUCTION =
   "Current-turn delivery guard: no interactive WhatsApp message was sent during this turn. " +
   "Respond now to the latest user with one natural, concise message. Do not output <NO_REPLY>. " +
@@ -205,11 +207,39 @@ export function technicalFallbackMessage(
 }
 
 /** A stale <NO_REPLY> is a model lapse, not a client-visible technical outage. */
-export function modelSilenceFallbackMessage(formal = false): string {
+export function modelSilenceFallbackMessage(
+  language: string | null | undefined = "fr",
+  formal = false,
+): string {
+  if (language === "en") return "No problem 😊 I’m here if you need anything.";
+  if (language === "wo") return "Baax na 😊 maa ngi fii soo amee soxla.";
   return applyFrenchRegister(
-    "Pas de souci 😊 Je suis là. Dis-moi simplement ce que tu veux vérifier et je t'aide.",
+    "Pas de souci 😊 Je suis là si tu as besoin.",
     formal,
   );
+}
+
+export interface SilenceRecoveryResolution {
+  replyText: string;
+  usedFallback: boolean;
+}
+
+/**
+ * Settle the no-tools recovery response. This helper is deliberately used by
+ * the live control flow so the regression test proves that a second sentinel
+ * becomes client-safe text instead of an `agent_empty_reply` handoff.
+ */
+export function resolveSilenceRecovery(
+  recoveredText: string | null,
+  language: string | null | undefined,
+  formal = false,
+): SilenceRecoveryResolution {
+  const cleaned = stripNoReplySentinel(recoveredText);
+  if (cleaned) return { replyText: cleaned, usedFallback: false };
+  return {
+    replyText: modelSilenceFallbackMessage(language, formal),
+    usedFallback: true,
+  };
 }
 
 /**
@@ -1205,6 +1235,8 @@ export async function handleInboundText(args: {
   // delivered in THIS turn is not a real outage. Retry once without tools and
   // with an explicit current-turn guard. This is intentionally before the
   // technical fallback: a normal "Ok merci" must never be sent to reception.
+  // If the retry is silent too, settle it with deterministic copy rather than
+  // turning two successful-but-empty model responses into an outage.
   let replyOutcome = classifyReplyOutcome(replyText, interactiveSent);
   if (!terminalHandled && replyOutcome === "recover" && loopError == null && lastResponse) {
     const silenceKind = replyText?.trim() === NO_REPLY_SENTINEL ? NO_REPLY_SENTINEL : "empty reply";
@@ -1226,12 +1258,17 @@ export async function handleInboundText(args: {
           }),
         () => void sendTypingIndicator(args.waMessageId),
       );
-      replyText = extractText(recovered);
-      replyOutcome = classifyReplyOutcome(replyText, false);
-      if (replyOutcome === "recover") {
-        const repeated = replyText?.trim() === NO_REPLY_SENTINEL ? NO_REPLY_SENTINEL : "empty reply";
-        loopError = new Error(
-          `model returned ${repeated} twice (stop_reason: ${recovered.stop_reason ?? "unknown"})`,
+      const resolution = resolveSilenceRecovery(
+        extractText(recovered),
+        client.language ?? lang,
+        client.fr_register === "vous",
+      );
+      replyText = resolution.replyText;
+      replyOutcome = "deliver";
+      if (resolution.usedFallback) {
+        console.warn(
+          `Model returned silence twice (stop_reason: ${recovered.stop_reason ?? "unknown"}) — ` +
+            "using deterministic acknowledgement",
         );
       }
     } catch (err) {
