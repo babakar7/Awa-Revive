@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
+import { dakarDay } from "../domain/paymentsLedger.js";
 import type { LedgerMovement, MethodTotal } from "../domain/paymentsLedger.js";
 import type { WixPaymentSyncState } from "../domain/wixPaymentSync.js";
 import { escapeHtml as esc, fmtDate, fmtFcfa } from "./helpers.js";
@@ -34,15 +35,21 @@ function totalCards(title: string, rows: MethodTotal[]): string {
     <div class="cluster">${rows.map((r) => `<span class="badge badge--gray">${esc(paymentMethodLabel(r.method))} ${fmtFcfa(r.netXof)}</span>`).join("")}</div></article>`;
 }
 
-function dailyTable(rows: MethodTotal[]): string {
+function dayHref(day: string, d: PaymentsPageData): string {
+  const q = new URLSearchParams({ from: day, to: day, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) });
+  return `/admin/paiements?${q.toString()}#pay-mouvements`;
+}
+
+function dailyTable(rows: MethodTotal[], d: PaymentsPageData): string {
   const days = [...new Set(rows.map((r) => r.day).filter(Boolean))] as string[];
   const methods = [...new Set(rows.map((r) => r.method))];
   if (!days.length) return `<p class="muted">Aucun mouvement sur cette période.</p>`;
-  return `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Jour</th>${methods.map((m) => `<th>${esc(paymentMethodLabel(m === "untagged" ? "À qualifier" : m))}</th>`).join("")}<th>Total net</th></tr></thead><tbody>
+  return `<p class="muted">Cliquez sur une date pour voir chaque transaction du jour (client, montant, méthode).</p>
+    <div class="table-wrap"><table class="responsive-table"><thead><tr><th>Jour</th>${methods.map((m) => `<th>${esc(paymentMethodLabel(m === "untagged" ? "À qualifier" : m))}</th>`).join("")}<th>Total net</th></tr></thead><tbody>
     ${days.map((day) => {
       const entries = methods.map((method) => rows.find((r) => r.day === day && r.method === method));
       const net = entries.reduce((n, r) => n + (r?.netXof ?? 0), 0);
-      return `<tr><td data-label="Jour"><b>${esc(day)}</b></td>${entries.map((r, i) => `<td data-label="${esc(methods[i])}">${r ? `<b>${fmtFcfa(r.netXof)}</b><div class="muted">Brut ${fmtFcfa(r.grossXof)} · remb. ${fmtFcfa(r.refundsXof)}</div>` : "—"}</td>`).join("")}<td data-label="Total"><b>${fmtFcfa(net)}</b></td></tr>`;
+      return `<tr><td data-label="Jour"><a href="${esc(dayHref(day, d))}"><b>${esc(day)}</b></a></td>${entries.map((r, i) => `<td data-label="${esc(methods[i])}">${r ? `<b>${fmtFcfa(r.netXof)}</b><div class="muted">Brut ${fmtFcfa(r.grossXof)} · remb. ${fmtFcfa(r.refundsXof)}</div>` : "—"}</td>`).join("")}<td data-label="Total"><b>${fmtFcfa(net)}</b></td></tr>`;
     }).join("")}</tbody></table></div>`;
 }
 
@@ -68,15 +75,32 @@ function qualifier(rows: LedgerMovement[]): string {
     ${capped}</section>`;
 }
 
+function movementRow(r: LedgerMovement, owner: boolean): string {
+  const flags = [r.origin, r.movementType, r.dateEstimated ? "date estimée" : "", r.excludedReason ?? ""].filter(Boolean);
+  const amount = r.amountXof < 0 ? `−${fmtFcfa(Math.abs(r.amountXof))}` : fmtFcfa(r.amountXof);
+  const retag = r.origin === "wix" && r.targetId ? `<details><summary>Requalifier</summary><form method="post" action="/admin/paiements/tag"><input type="hidden" name="target_id" value="${esc(r.targetId)}"><select name="method">${[...METHODS,"exclu"].map((m) => `<option value="${m}">${esc(paymentMethodLabel(m))}</option>`).join("")}</select><input name="note" required placeholder="Motif du changement"><button class="act act--sm" type="submit">Valider</button></form></details>` : "";
+  const reverse = owner && r.origin === "manual" ? `<details><summary>Contre-passer</summary><form method="post" action="/admin/paiements/manuel"><input type="hidden" name="idempotency_key" value="${crypto.randomUUID()}"><input type="hidden" name="movement_type" value="${r.movementType === "payment" ? "refund" : "payment"}"><input type="hidden" name="occurred_at" value="${new Date().toISOString().slice(0,16)}"><input type="hidden" name="amount_xof" value="${Math.abs(r.amountXof)}"><input type="hidden" name="method" value="${esc(r.method)}"><input type="hidden" name="label" value="${esc(`Contre-passation — ${r.label}`)}"><input type="hidden" name="reverses_movement_id" value="${esc(r.sourceId)}"><input name="note" required placeholder="Motif de la correction"><button class="act act--sm" type="submit">Créer le mouvement inverse</button></form></details>` : "";
+  return `<tr><td data-label="Date">${fmtDate(r.occurredAt)}</td><td data-label="Mouvement"><b>${esc(r.label)}</b><div class="muted">${flags.map(esc).join(" · ")}</div>${reverse}</td><td data-label="Client">${esc(r.clientName ?? "—")}<div class="muted">${esc(r.clientPhone ?? "")}</div></td><td data-label="Méthode">${esc(r.method ? paymentMethodLabel(r.method) : "À qualifier")}${retag}</td><td data-label="Montant"><b>${amount}</b></td></tr>`;
+}
+
+// Rows arrive sorted by occurred_at desc, so a day changes only at a boundary.
+// We prepend a header row per Dakar day with its transaction count and net total
+// (excluded Wix lines don't count toward net, matching Totaux journaliers).
 function movementRows(rows: LedgerMovement[], owner: boolean): string {
   if (!rows.length) return `<p class="muted">Aucun mouvement trouvé.</p>`;
-  return `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Date</th><th>Mouvement</th><th>Client</th><th>Méthode</th><th>Montant</th></tr></thead><tbody>${rows.map((r) => {
-    const flags = [r.origin, r.movementType, r.dateEstimated ? "date estimée" : "", r.excludedReason ?? ""].filter(Boolean);
-    const amount = r.amountXof < 0 ? `−${fmtFcfa(Math.abs(r.amountXof))}` : fmtFcfa(r.amountXof);
-    const retag = r.origin === "wix" && r.targetId ? `<details><summary>Requalifier</summary><form method="post" action="/admin/paiements/tag"><input type="hidden" name="target_id" value="${esc(r.targetId)}"><select name="method">${[...METHODS,"exclu"].map((m) => `<option value="${m}">${esc(paymentMethodLabel(m))}</option>`).join("")}</select><input name="note" required placeholder="Motif du changement"><button class="act act--sm" type="submit">Valider</button></form></details>` : "";
-    const reverse = owner && r.origin === "manual" ? `<details><summary>Contre-passer</summary><form method="post" action="/admin/paiements/manuel"><input type="hidden" name="idempotency_key" value="${crypto.randomUUID()}"><input type="hidden" name="movement_type" value="${r.movementType === "payment" ? "refund" : "payment"}"><input type="hidden" name="occurred_at" value="${new Date().toISOString().slice(0,16)}"><input type="hidden" name="amount_xof" value="${Math.abs(r.amountXof)}"><input type="hidden" name="method" value="${esc(r.method)}"><input type="hidden" name="label" value="${esc(`Contre-passation — ${r.label}`)}"><input type="hidden" name="reverses_movement_id" value="${esc(r.sourceId)}"><input name="note" required placeholder="Motif de la correction"><button class="act act--sm" type="submit">Créer le mouvement inverse</button></form></details>` : "";
-    return `<tr><td data-label="Date">${fmtDate(r.occurredAt)}</td><td data-label="Mouvement"><b>${esc(r.label)}</b><div class="muted">${flags.map(esc).join(" · ")}</div>${reverse}</td><td data-label="Client">${esc(r.clientName ?? "—")}<div class="muted">${esc(r.clientPhone ?? "")}</div></td><td data-label="Méthode">${esc(r.method ? paymentMethodLabel(r.method) : "À qualifier")}${retag}</td><td data-label="Montant"><b>${amount}</b></td></tr>`;
-  }).join("")}</tbody></table></div>`;
+  const groups: Array<{ day: string; rows: LedgerMovement[] }> = [];
+  for (const r of rows) {
+    const day = dakarDay(r.occurredAt);
+    const last = groups[groups.length - 1];
+    if (last && last.day === day) last.rows.push(r);
+    else groups.push({ day, rows: [r] });
+  }
+  const body = groups.map(({ day, rows: dayRows }) => {
+    const net = dayRows.reduce((n, r) => n + (r.excludedReason ? 0 : r.amountXof), 0);
+    const header = `<tr class="day-head"><td colspan="5" data-label=""><b>${esc(day)}</b> · ${dayRows.length} transaction${dayRows.length > 1 ? "s" : ""} · net ${fmtFcfa(net)}</td></tr>`;
+    return header + dayRows.map((r) => movementRow(r, owner)).join("");
+  }).join("");
+  return `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Date</th><th>Mouvement</th><th>Client</th><th>Méthode</th><th>Montant</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function manualForm(): string {
@@ -128,7 +152,7 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
     <label>Source<select name="source"><option value="">Toutes</option>${["booking","plan","cafe","delivery","manual","wix_ecom","wix_plan"].map((s) => `<option value="${s}"${d.source===s?" selected":""}>${esc(s)}</option>`).join("")}</select></label>
     <label>Type<select name="type"><option value="">Tous</option><option value="payment"${d.type==="payment"?" selected":""}>Encaissements</option><option value="refund"${d.type==="refund"?" selected":""}>Remboursements</option></select></label>
     <button class="act" type="submit">Afficher</button><a class="act act--ghost" href="/admin/paiements/export.csv?${esc(filterQuery)}">Exporter CSV</a></form></section>
-  <section class="card anchor-target" id="pay-journaliers"><h2>Totaux journaliers</h2>${dailyTable(d.daily)}</section>
+  <section class="card anchor-target" id="pay-journaliers"><h2>Totaux journaliers</h2>${dailyTable(d.daily, d)}</section>
   ${d.refundNeeded.length ? `<section class="card anchor-target" id="pay-remboursements"><h2>Remboursements bookings à pointer</h2>${d.refundNeeded.map((b) => `<form class="row between" method="post" action="/admin/bookings/${esc(b.id)}/refund-done"><input type="hidden" name="return_to" value="/admin/paiements"><span><b>${esc(b.service_name)}</b> · ${esc(b.client_name ?? "Client")} · ${fmtFcfa(b.amount_xof)}</span><button class="act act--sm" type="submit">Remboursement effectué</button></form>`).join("")}</section>` : ""}
   <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2><p class="muted">300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
   ${d.owner ? manualForm() : ""}`;

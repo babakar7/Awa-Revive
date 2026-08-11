@@ -67,4 +67,38 @@ describe("payments ledger pure rules", () => {
     });
     expect(html).toContain("Afficher les 2 suivants");
   });
+
+  it("groups movements by Dakar day and links each daily total to its day", () => {
+    const mv = (day: string, hh: string, name: string, amountXof: number, method: "wave" | "cash", excludedReason: string | null = null) => ({
+      origin: "awa" as const, movementType: (amountXof < 0 ? "refund" : "payment") as "payment" | "refund",
+      sourceKind: "booking", sourceId: `${day}-${hh}-${name}`, providerTxId: null,
+      clientName: name, clientPhone: null, label: "Cours", amountXof, method, methodOrigin: "local" as const,
+      occurredAt: new Date(`${day}T${hh}:00:00Z`), dateEstimated: false, targetId: null, excludedReason,
+    });
+    // newest first, mirroring the `occurred_at desc` query order
+    const rows = [
+      mv("2026-08-11", "14", "Awa", 24000, "wave"),
+      mv("2026-08-11", "10", "Remb", -24000, "wave"),
+      mv("2026-08-10", "16", "Moussa", 30000, "cash"),
+      mv("2026-08-10", "11", "Exclu", 99999, "cash", "tag_exclu"),
+    ];
+    const daily = [{ day: "2026-08-11", method: "wave", grossXof: 24000, refundsXof: 24000, netXof: 0, movementCount: 2 }];
+    const html = renderPaymentsPage({
+      from: "2026-08-10", to: "2026-08-11", startDate: "2026-07-01",
+      rows, daily, currentMonth: [], previousMonth: [], untagged: [], excludedCounts: {}, refundNeeded: [], owner: false,
+      sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
+        lastFullReconciledAt: null, lastError: null, recordCount: 0 },
+    });
+    // one day-header band per Dakar day, newest first, header above its rows
+    const movements = html.slice(html.indexOf('id="pay-mouvements"'));
+    expect(movements).toContain('class="day-head"');
+    expect(movements.indexOf("2026-08-11")).toBeLessThan(movements.indexOf("2026-08-10"));
+    expect(movements.indexOf("day-head")).toBeLessThan(movements.indexOf("Awa"));
+    // per-day net honours the refund (24000 − 24000 = 0) and excludes tag_exclu (30000, not 129999)
+    expect(movements).toMatch(/2026-08-11<\/b>[^<]*· 2 transactions · net 0/);
+    expect(movements).toMatch(/2026-08-10<\/b>[^<]*· 2 transactions · net 30/);
+    expect(movements).not.toContain("129 999");
+    // daily total drills into that single day's itemised list
+    expect(html).toContain("from=2026-08-11&amp;to=2026-08-11#pay-mouvements");
+  });
 });

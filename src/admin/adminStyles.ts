@@ -408,6 +408,10 @@ form.inline{display:inline}
 .qualify-row:last-child{border-bottom:0}
 .qualify-act{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
 .qualify-act input{max-width:220px;margin:0}
+/* day-grouping band in the movements table: one header row per Dakar day so the
+   team can retrace every transaction of a given day (client, amount, method) */
+.day-head td{background:var(--cream-100);border-top:2px solid var(--border);font-size:.86rem;color:var(--ink-700);padding:.5rem .7rem!important}
+.day-head b{color:var(--ink-900)}
 /* selected tab: filled brand pill so the active category is unmistakable
    (the shared .jump-nav a.active tint is too subtle for a one-at-a-time view) */
 .menu-jumpnav a.menu-tab.active{background:var(--brand);color:#fff!important;font-weight:700;box-shadow:var(--shadow-1)}
