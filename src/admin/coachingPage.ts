@@ -82,8 +82,12 @@ const PAGE_CSS = `
 .coach-dot{display:inline-flex;width:1.15rem;height:1.15rem;border-radius:50%;background:#1f2b45;color:#fff;font-size:.62rem;font-weight:600;align-items:center;justify-content:center;margin-right:.3rem;flex:0 0 auto}
 .add-slot{margin-top:auto;width:100%;border:1px dashed #ccc;background:none;border-radius:8px;padding:.3rem;color:#8a7f92;cursor:pointer;font-size:.8rem}
 .add-slot:hover{border-color:#7c547d;color:#7c547d}
-.coaching-totals{display:flex;gap:.9rem;flex-wrap:wrap;font-size:.9rem;align-items:baseline}
+.coaching-totals{display:flex;gap:.5rem;flex-wrap:wrap;font-size:.9rem;align-items:baseline}
+.coaching-totals .ct-coach{cursor:pointer;padding:.12rem .45rem;border-radius:7px;border:1px solid transparent;user-select:none}
 .coaching-totals .ct-coach b{color:#211921}
+.coaching-totals .ct-coach:hover{background:#f0eaf1}
+.coaching-totals .ct-coach.is-active{background:#7c547d;border-color:#7c547d;color:#fff}
+.coaching-totals .ct-coach.is-active b{color:#fff}
 .coaching-totals .ct-total{margin-left:auto;color:#8a7f92;font-size:.82rem}
 .slot-preset{margin:.1rem}
 #conflictwarn{color:#c2404f;font-size:.82rem;margin:.3rem 0 0}
@@ -198,6 +202,8 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
   var DAYS = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
   var nextK = ST.slots.reduce(function(m,s){ return Math.max(m, s.k+1); }, 0);
   var dirty = false, editK = null, editWd = 0, lastFocus = null;
+  var filterCoach = null;      // lowercase coach key, or null = show everyone
+  var filterCoachName = "";    // display name of the filtered coach
 
   function pad(n){ return (n<10?"0":"")+n; }
   function fmt(x){ return Math.floor(x/60)+"h"+pad(x%60); }
@@ -218,7 +224,7 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
     for(var wd=0; wd<7; wd++){
       (function(wd){
         var col = document.createElement("div"); col.className="board-col"; col.setAttribute("data-wd",wd);
-        var mine = ST.slots.filter(function(s){ return s.wd===wd; }).sort(function(a,b){ return a.s-b.s; });
+        var mine = ST.slots.filter(function(s){ return s.wd===wd && (!filterCoach || String(s.co).trim().toLowerCase()===filterCoach); }).sort(function(a,b){ return a.s-b.s; });
         var head = document.createElement("div"); head.className="board-col-head";
         head.innerHTML = "<span>"+DAYS[wd].slice(0,3)+"</span><span class='col-count'>"+mine.length+" cours</span>";
         col.appendChild(head);
@@ -254,13 +260,28 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
 
   function renderTotals(counts){
     var by = {};
-    ST.slots.forEach(function(s){ var key=String(s.co).trim().toLowerCase(); if(!by[key]) by[key]={name:String(s.co).trim(), n:0}; by[key].n++; });
+    ST.slots.forEach(function(s){ var key=String(s.co).trim().toLowerCase(); if(!by[key]) by[key]={name:String(s.co).trim(), key:key, n:0}; by[key].n++; });
     var arr = Object.keys(by).map(function(k){ return by[k]; }).sort(function(a,b){ return b.n-a.n; });
-    var html = arr.length
-      ? arr.map(function(c){ return "<span class='ct-coach'>"+esc(c.name)+" <b>"+c.n+"</b></span>"; }).join("")
-      : "<span class='muted'>Aucun cours pour l'instant.</span>";
-    html += "<span class='ct-total'>Total : "+ST.slots.length+" cours/sem.</span>";
-    document.getElementById("coachtotals").innerHTML = html;
+    // A filtered coach with zero classes left would vanish from the banner; keep
+    // it pinned so you can always click it again to clear the filter.
+    if(filterCoach && !by[filterCoach]) arr.push({ name: filterCoachName, key: filterCoach, n: 0 });
+    var el = document.getElementById("coachtotals"); el.innerHTML="";
+    if(!arr.length){ el.innerHTML = "<span class='muted'>Aucun cours pour l'instant.</span>"; }
+    arr.forEach(function(c){
+      var span = document.createElement("span");
+      span.className = "ct-coach" + (filterCoach===c.key ? " is-active" : "");
+      span.innerHTML = esc(c.name)+" <b>"+c.n+"</b>";
+      span.title = filterCoach===c.key ? "Revoir tous les coachs" : ("Voir uniquement le planning de "+c.name);
+      span.addEventListener("click", function(){
+        if(filterCoach===c.key){ filterCoach=null; filterCoachName=""; }
+        else { filterCoach=c.key; filterCoachName=c.name; }
+        render();
+      });
+      el.appendChild(span);
+    });
+    var tot = document.createElement("span"); tot.className="ct-total";
+    tot.textContent = filterCoach ? ("Planning de "+filterCoachName+" — cliquez son nom pour tout revoir") : ("Total : "+ST.slots.length+" cours/sem.");
+    el.appendChild(tot);
     var nbConflict = 0; for(var k in counts){ if(counts[k]>1) nbConflict++; }
     var warn = document.getElementById("conflictwarn");
     if(nbConflict>0){ warn.style.display="block"; warn.textContent = "⚠️ "+nbConflict+" conflit(s) : un même coach a deux cours en même temps. À corriger avant d'enregistrer."; }
@@ -277,7 +298,7 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
     var last = ST.slots[ST.slots.length-1];
     document.getElementById("sl_start").value = toTime(slot ? slot.s : (last ? last.s : 555));
     document.getElementById("sl_class").value = slot ? slot.cl : (last ? last.cl : "");
-    document.getElementById("sl_coach").value = slot ? slot.co : (last ? last.co : "");
+    document.getElementById("sl_coach").value = slot ? slot.co : (filterCoach ? filterCoachName : (last ? last.co : ""));
     document.getElementById("sl_dur").value = slot ? slot.d : ST.defaultDur;
     document.getElementById("sl_delete").style.display = slot ? "" : "none";
     document.getElementById("slededitor").style.display = "flex";
