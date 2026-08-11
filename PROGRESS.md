@@ -300,9 +300,24 @@ ta réservation »). Même modèle de confiance que `client_declined_verificatio
 - **La liaison d'un compte EXISTANT n'est JAMAIS auto-liée** (anti-usurpation :
   sans preuve de la boîte mail, on offrirait l'abonnement d'autrui) — elle
   reste escaladée à la réception comme avant.
-- Échec Wix → retour au repli réception (fail-safe historique).
+- Échec Wix → **la demande est écartée en silence** (`DISMISSED`), AUCUNE
+  intervention réception (cf. addendum 11/08 ci-dessous).
 - Tests : `test/integration/unverifiedAccounts.test.ts` (6 cas : nominal,
-  fermeture handoff, anti-usurpation, fraîcheur, échec Wix, idempotence).
+  fermeture handoff, anti-usurpation, fraîcheur, échec Wix silencieux, idempotence).
+
+### Addendum 11/08 — échec de création : plus d'intervention humaine
+
+Cas Pape Alassane (+221763941300, 11/08) : nouveau prospect, email donné, code
+jamais recopié, a choisi de payer par Wave (`client_declined_verification`) puis
+n'a pas payé. Le sweep a tenté `createContact` → **échec Wix** → l'ancien
+fail-safe créait un handoff « Compte non relié » que la réception devait traiter
+pour un prospect qui n'a jamais payé (pur bruit). Décision Babakar : **ne plus
+créer d'intervention humaine pour ce type de cas**. Désormais l'échec fait
+`links.dismiss` (→ `DISMISSED`, hors périmètre du sweep création ET de
+l'escalade 30 min ; tout handoff « Compte non relié » ouvert est auto-fermé),
+sans notif ni entrée /admin/crm. S'il revient et paie, le flux d'activation payé
+recrée/rattrape la fiche. La voie LIAISON d'un compte existant reste escaladée
+(anti-usurpation inchangé). Commit `0c53002`.
 
 ## Handoffs « Compte non relié » : auto-fermeture à la résolution (7 août 2026)
 
