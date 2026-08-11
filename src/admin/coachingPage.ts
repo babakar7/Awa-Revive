@@ -79,7 +79,8 @@ const PAGE_CSS = `
 .slot--intense{border-color:#f2cfd4;border-left-color:#c2404f}
 .slot--other{border-color:#ddd6e2;border-left-color:#8a7f92}
 .slot--conflict{outline:2px solid #c2404f;outline-offset:1px}
-.coach-dot{display:inline-flex;width:1.15rem;height:1.15rem;border-radius:50%;background:#1f2b45;color:#fff;font-size:.62rem;font-weight:600;align-items:center;justify-content:center;margin-right:.3rem;flex:0 0 auto}
+.coach-dot{display:inline-flex;width:1.15rem;height:1.15rem;border-radius:50%;background:#1f2b45;color:#fff;font-size:.62rem;font-weight:700;align-items:center;justify-content:center;margin-right:.3rem;flex:0 0 auto}
+.ct-dot{display:inline-block;width:.62rem;height:.62rem;border-radius:50%;margin-right:.35rem;background:#1f2b45;vertical-align:baseline}
 .add-slot{margin-top:auto;width:100%;border:1px dashed #ccc;background:none;border-radius:8px;padding:.3rem;color:#8a7f92;cursor:pointer;font-size:.8rem}
 .add-slot:hover{border-color:#7c547d;color:#7c547d}
 .coaching-totals{display:flex;gap:.5rem;flex-wrap:wrap;font-size:.9rem;align-items:baseline}
@@ -213,6 +214,10 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
   function norm(s){ return String(s).normalize("NFD").replace(/[\\u0300-\\u036f]/g,"").toLowerCase(); }
   function levelOf(name){ var n=norm(name); if(n.indexOf("foundation")>=0) return "foundation"; if(n.indexOf("sculpt")>=0) return "sculpt"; if(n.indexOf("intense")>=0) return "intense"; return "other"; }
   function initial(name){ var t=String(name).trim(); return t ? t[0].toUpperCase() : "?"; }
+  // Deterministic coach colour (dark enough for white text on the dot). Same
+  // coach → same colour everywhere; stable across reloads.
+  var COACH_COLORS = ["#2b6fb0","#3f8f5a","#c2404f","#b5701f","#7c547d","#0f8a8a","#8a5a2b","#55408f","#b03a86","#4a6b1f"];
+  function coachColor(name){ var n=norm(name), h=0; for(var i=0;i<n.length;i++){ h=(h*31 + n.charCodeAt(i))>>>0; } return n ? COACH_COLORS[h % COACH_COLORS.length] : "#1f2b45"; }
   function conflictKey(s){ return s.wd+":"+s.s+":"+String(s.co).trim().toLowerCase(); }
   function markDirty(){ if(!dirty){ dirty=true; document.getElementById("savebar").style.display="flex"; } }
 
@@ -234,7 +239,7 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
           card.setAttribute("draggable","true"); card.setAttribute("data-k",s.k); card.setAttribute("tabindex","0");
           card.innerHTML = "<div class='slot-time'>"+fmt(s.s)+"</div>"+
             "<div class='slot-class'>"+esc(s.cl)+"</div>"+
-            "<div class='slot-coach'><span class='coach-dot'>"+esc(initial(s.co))+"</span>"+esc(s.co)+"</div>";
+            "<div class='slot-coach'><span class='coach-dot' style='background:"+coachColor(s.co)+"'>"+esc(initial(s.co))+"</span>"+esc(s.co)+"</div>";
           card.addEventListener("click", function(){ slOpen(wd, s.k); });
           card.addEventListener("keydown", function(ev){ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); slOpen(wd, s.k); } });
           card.addEventListener("dragstart", function(ev){ ev.dataTransfer.setData("text/plain", String(s.k)); });
@@ -270,7 +275,7 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
     arr.forEach(function(c){
       var span = document.createElement("span");
       span.className = "ct-coach" + (filterCoach===c.key ? " is-active" : "");
-      span.innerHTML = esc(c.name)+" <b>"+c.n+"</b>";
+      span.innerHTML = "<span class='ct-dot' style='background:"+coachColor(c.name)+"'></span>"+esc(c.name)+" <b>"+c.n+"</b>";
       span.title = filterCoach===c.key ? "Revoir tous les coachs" : ("Voir uniquement le planning de "+c.name);
       span.addEventListener("click", function(){
         if(filterCoach===c.key){ filterCoach=null; filterCoachName=""; }
