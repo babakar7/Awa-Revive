@@ -45,5 +45,26 @@ describe("payments ledger pure rules", () => {
     expect(html).toContain("À qualifier");
     expect(html).toContain("Ajouter un mouvement manuel");
     expect(html).not.toContain("<Cliente>");
+    expect(html).toContain('href="#pay-mouvements"');
+    expect(html).toContain('id="pay-qualifier"');
+  });
+
+  it("folds untagged movements past the visible cap into a <details>", () => {
+    const make = (i: number) => ({
+      origin: "wix" as const, movementType: "payment" as const, sourceKind: "wix_ecom",
+      sourceId: `order-${i}`, providerTxId: `tx-${i}`, clientName: `Client ${i}`, clientPhone: null,
+      label: "Cours", amountXof: 24000, method: null, methodOrigin: "provider" as const,
+      occurredAt: new Date("2026-08-10T12:00:00Z"), dateEstimated: false,
+      targetId: `1111111${i.toString().padStart(2, "0")}-1111-1111-1111-111111111111`, excludedReason: null,
+    });
+    const untagged = Array.from({ length: 12 }, (_, i) => make(i));
+    const html = renderPaymentsPage({
+      from: "2026-08-01", to: "2026-08-10", startDate: "2026-07-01",
+      rows: untagged, daily: [], currentMonth: [], previousMonth: [],
+      untagged, excludedCounts: {}, refundNeeded: [], owner: false,
+      sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
+        lastFullReconciledAt: null, lastError: null, recordCount: 0 },
+    });
+    expect(html).toContain("Afficher les 2 suivants");
   });
 });

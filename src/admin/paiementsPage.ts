@@ -46,15 +46,26 @@ function dailyTable(rows: MethodTotal[]): string {
     }).join("")}</tbody></table></div>`;
 }
 
+function qualifyRow(r: LedgerMovement): string {
+  return `<form method="post" action="/admin/paiements/tag" class="qualify-row">
+      <input type="hidden" name="target_id" value="${esc(r.targetId)}">
+      <div><b>${esc(r.label)}</b><div class="muted">${fmtDate(r.occurredAt)} · ${esc(r.clientName ?? r.clientPhone ?? "Client Wix")} · ${fmtFcfa(r.amountXof)}</div></div>
+      <div class="qualify-act"><input name="note" placeholder="Note (Autre / Exclu / re-tag)">
+      <div class="cluster">${[...METHODS, "exclu"].map((m) => `<button class="act act--sm${m === "exclu" ? " act--ghost" : ""}" name="method" value="${m}" type="submit">${esc(paymentMethodLabel(m))}</button>`).join("")}</div></div>
+    </form>`;
+}
+
+const QUALIFY_VISIBLE = 10;
+
 function qualifier(rows: LedgerMovement[]): string {
   if (!rows.length) return "";
-  return `<section class="card"><div class="section-header"><div><span class="eyebrow">À qualifier</span><h2>${rows.length} paiement${rows.length > 1 ? "s" : ""} « en personne »</h2></div></div>
-    ${rows.map((r) => `<form method="post" action="/admin/paiements/tag" class="card" style="margin:.75rem 0">
-      <input type="hidden" name="target_id" value="${esc(r.targetId)}">
-      <div class="row between"><div><b>${esc(r.label)}</b><div class="muted">${fmtDate(r.occurredAt)} · ${esc(r.clientName ?? r.clientPhone ?? "Client Wix")} · ${fmtFcfa(r.amountXof)}</div></div></div>
-      <label>Note <input name="note" placeholder="Obligatoire pour Autre / Exclu / re-tag"></label>
-      <div class="cluster">${[...METHODS, "exclu"].map((m) => `<button class="act act--sm${m === "exclu" ? " act--ghost" : ""}" name="method" value="${m}" type="submit">${esc(paymentMethodLabel(m))}</button>`).join("")}</div>
-    </form>`).join("")}</section>`;
+  const visible = rows.slice(0, QUALIFY_VISIBLE);
+  const rest = rows.slice(QUALIFY_VISIBLE);
+  const capped = rows.length >= 50 ? `<p class="muted">50 mouvements maximum affichés ici ; les autres apparaissent une fois ceux-ci qualifiés.</p>` : "";
+  return `<section class="card anchor-target" id="pay-qualifier"><div class="section-header"><div><span class="eyebrow">À qualifier</span><h2>${rows.length} paiement${rows.length > 1 ? "s" : ""} « en personne »</h2></div></div>
+    ${visible.map(qualifyRow).join("")}
+    ${rest.length ? `<details><summary class="act act--ghost act--sm" style="margin-top:.6rem">Afficher les ${rest.length} suivant${rest.length > 1 ? "s" : ""}</summary>${rest.map(qualifyRow).join("")}</details>` : ""}
+    ${capped}</section>`;
 }
 
 function movementRows(rows: LedgerMovement[], owner: boolean): string {
@@ -69,7 +80,7 @@ function movementRows(rows: LedgerMovement[], owner: boolean): string {
 }
 
 function manualForm(): string {
-  return `<section class="card"><span class="eyebrow">Propriétaire</span><h2>Ajouter un mouvement manuel</h2>
+  return `<details class="card anchor-target" id="pay-manuel"><summary><span class="eyebrow">Propriétaire</span> <b>Ajouter un mouvement manuel</b></summary>
     <p class="muted">Pour un lien ad hoc, un virement ou un remboursement sans flux natif. Une correction se fait avec un mouvement inverse.</p>
     <form method="post" action="/admin/paiements/manuel">
       <input type="hidden" name="idempotency_key" value="${crypto.randomUUID()}">
@@ -85,28 +96,42 @@ function manualForm(): string {
       <label>Téléphone<input name="client_phone" maxlength="50"></label></div>
       <label>Note d’audit<textarea name="note" required maxlength="1000"></textarea></label>
       <button class="act" type="submit">Enregistrer le mouvement</button>
-    </form></section>`;
+    </form></details>`;
+}
+
+function jumpNav(d: PaymentsPageData): string {
+  const untaggedBadge = d.untagged.length >= 50 ? "50+" : String(d.untagged.length);
+  const links = [
+    d.untagged.length ? `<a href="#pay-qualifier">À qualifier <span class="badge badge--gray">${untaggedBadge}</span></a>` : "",
+    `<a href="#pay-totaux">Totaux</a>`,
+    `<a href="#pay-filtres">Filtrer</a>`,
+    `<a href="#pay-journaliers">Journaliers</a>`,
+    d.refundNeeded.length ? `<a href="#pay-remboursements">Remboursements <span class="badge badge--gray">${d.refundNeeded.length}</span></a>` : "",
+    `<a href="#pay-mouvements">Mouvements</a>`,
+    d.owner ? `<a href="#pay-manuel">Mouvement manuel</a>` : "",
+  ].filter(Boolean);
+  return `<nav class="jump-nav jump-nav--sticky" aria-label="Sections">${links.join("")}</nav>`;
 }
 
 export function renderPaymentsPage(d: PaymentsPageData): string {
   const alerts = Object.entries(d.excludedCounts).filter(([, n]) => n > 0);
   const filterQuery = new URLSearchParams({ from: d.from, to: d.to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) }).toString();
   return `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}
-  <div class="card"><b>Périmètre comptable depuis le ${esc(d.startDate)}</b><p class="muted">Les lignes antérieures ne sont pas couvertes. Les dates historiques estimées sont signalées. Les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF, avec la devise d’origine conservée pour audit.</p></div>
-  <div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p></div>
+  ${jumpNav(d)}
+  <div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p><p class="muted">Périmètre comptable depuis le ${esc(d.startDate)} : les lignes antérieures ne sont pas couvertes, les dates historiques estimées sont signalées, et les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF (devise d’origine conservée pour audit).</p></div>
   ${alerts.length ? `<div class="card warn"><b>Lignes Wix écartées des totaux</b><p>${alerts.map(([k,n]) => `${esc(k)} : ${n}`).join(" · ")}</p></div>` : ""}
   ${qualifier(d.untagged)}
-  <section class="grid-2">${totalCards("Mois en cours", d.currentMonth)}${totalCards("Mois précédent", d.previousMonth)}</section>
-  <section class="card"><h2>Filtrer</h2><form method="get" action="/admin/paiements" class="form-grid">
+  <section class="grid-2 anchor-target" id="pay-totaux">${totalCards("Mois en cours", d.currentMonth)}${totalCards("Mois précédent", d.previousMonth)}</section>
+  <section class="card anchor-target" id="pay-filtres"><h2>Filtrer</h2><form method="get" action="/admin/paiements" class="form-grid">
     <label>Du<input type="date" name="from" value="${esc(d.from)}" min="${esc(d.startDate)}"></label><label>Au<input type="date" name="to" value="${esc(d.to)}"></label>
     <label>Méthode<select name="method"><option value="">Toutes</option><option value="untagged">À qualifier</option>${METHODS.map((m) => `<option value="${m}"${d.method===m?" selected":""}>${esc(paymentMethodLabel(m))}</option>`).join("")}</select></label>
     <label>Source<select name="source"><option value="">Toutes</option>${["booking","plan","cafe","delivery","manual","wix_ecom","wix_plan"].map((s) => `<option value="${s}"${d.source===s?" selected":""}>${esc(s)}</option>`).join("")}</select></label>
     <label>Type<select name="type"><option value="">Tous</option><option value="payment"${d.type==="payment"?" selected":""}>Encaissements</option><option value="refund"${d.type==="refund"?" selected":""}>Remboursements</option></select></label>
     <button class="act" type="submit">Afficher</button><a class="act act--ghost" href="/admin/paiements/export.csv?${esc(filterQuery)}">Exporter CSV</a></form></section>
-  <section class="card"><h2>Totaux journaliers</h2>${dailyTable(d.daily)}</section>
-  ${d.owner ? manualForm() : ""}
-  ${d.refundNeeded.length ? `<section class="card"><h2>Remboursements bookings à pointer</h2>${d.refundNeeded.map((b) => `<form class="row between" method="post" action="/admin/bookings/${esc(b.id)}/refund-done"><input type="hidden" name="return_to" value="/admin/paiements"><span><b>${esc(b.service_name)}</b> · ${esc(b.client_name ?? "Client")} · ${fmtFcfa(b.amount_xof)}</span><button class="act act--sm" type="submit">Remboursement effectué</button></form>`).join("")}</section>` : ""}
-  <section class="card"><h2>Mouvements</h2><p class="muted">300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>`;
+  <section class="card anchor-target" id="pay-journaliers"><h2>Totaux journaliers</h2>${dailyTable(d.daily)}</section>
+  ${d.refundNeeded.length ? `<section class="card anchor-target" id="pay-remboursements"><h2>Remboursements bookings à pointer</h2>${d.refundNeeded.map((b) => `<form class="row between" method="post" action="/admin/bookings/${esc(b.id)}/refund-done"><input type="hidden" name="return_to" value="/admin/paiements"><span><b>${esc(b.service_name)}</b> · ${esc(b.client_name ?? "Client")} · ${fmtFcfa(b.amount_xof)}</span><button class="act act--sm" type="submit">Remboursement effectué</button></form>`).join("")}</section>` : ""}
+  <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2><p class="muted">300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
+  ${d.owner ? manualForm() : ""}`;
 }
 
 export function csvCell(value: unknown): string {
