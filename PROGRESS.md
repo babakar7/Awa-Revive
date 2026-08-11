@@ -24,9 +24,13 @@ du parent payeur** — règle 0c ajoutée au prompt (si le parent répond avec l
 prénom de l'enfant, Awa redemande le nom du parent). Fiche Wix + clients.name
 corrigés à la main (« Mariata Kane »).
 
-- `om_outage_mode` reste ON : choix Babakar (réconciliations OM manuelles),
-  même si des callbacks OM sont reçus/traités quotidiennement depuis le 04/08
-  (`processed_webhooks`, clés `om:MP…`).
+- `om_outage_mode` **désactivé le 11/08 à 22:35 (OK Babakar)** : les callbacks
+  OM sont reçus/traités automatiquement chaque jour depuis le 04/08
+  (`processed_webhooks`, clés `om:MP…`). Preuve de bout en bout (Awa Ba,
+  Max It 12 000 F, 11/08) : lien 12:54:22 → callback 12:55:41 → résa Wix
+  12:55:43 → confirmation cliente 12:55:46, entièrement automatique — la
+  réconciliation manuelle cliquée à 12:55:53 arrivait après coup. La
+  réconciliation manuelle /admin/paiements-om reste dispo pour les retardataires.
 - Reste à faire : recontacter Mariata (handoff technique OPEN) — lui renvoyer
   un lien OM maintenant que le fix est déployé ; le créneau « mer 12/08
   17:15 » n'avait plus qu'1 place à 21:46.
