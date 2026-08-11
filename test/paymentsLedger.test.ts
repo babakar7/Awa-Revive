@@ -36,7 +36,7 @@ describe("payments ledger pure rules", () => {
       targetId: "11111111-1111-1111-1111-111111111111", excludedReason: null,
     };
     const html = renderPaymentsPage({
-      from: "2026-08-01", to: "2026-08-10", startDate: "2026-07-01",
+      from: "2026-08-01", to: "2026-08-10", today: "2026-08-10", startDate: "2026-07-01",
       rows: [movement], daily: [], currentMonth: [], previousMonth: [],
       untagged: [movement], excludedCounts: {}, refundNeeded: [], owner: true,
       sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
@@ -59,7 +59,7 @@ describe("payments ledger pure rules", () => {
     });
     const untagged = Array.from({ length: 12 }, (_, i) => make(i));
     const html = renderPaymentsPage({
-      from: "2026-08-01", to: "2026-08-10", startDate: "2026-07-01",
+      from: "2026-08-01", to: "2026-08-10", today: "2026-08-10", startDate: "2026-07-01",
       rows: untagged, daily: [], currentMonth: [], previousMonth: [],
       untagged, excludedCounts: {}, refundNeeded: [], owner: false,
       sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
@@ -84,7 +84,7 @@ describe("payments ledger pure rules", () => {
     ];
     const daily = [{ day: "2026-08-11", method: "wave", grossXof: 24000, refundsXof: 24000, netXof: 0, movementCount: 2 }];
     const html = renderPaymentsPage({
-      from: "2026-08-10", to: "2026-08-11", startDate: "2026-07-01",
+      from: "2026-08-10", to: "2026-08-11", today: "2026-08-11", startDate: "2026-07-01",
       rows, daily, currentMonth: [], previousMonth: [], untagged: [], excludedCounts: {}, refundNeeded: [], owner: false,
       sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
         lastFullReconciledAt: null, lastError: null, recordCount: 0 },
@@ -100,5 +100,26 @@ describe("payments ledger pure rules", () => {
     expect(movements).not.toContain("129 999");
     // daily total drills into that single day's itemised list
     expect(html).toContain("from=2026-08-11&amp;to=2026-08-11#pay-mouvements");
+  });
+
+  it("scopes movements to the day with Today/Yesterday/7-day chips", () => {
+    const base = {
+      rows: [], daily: [], currentMonth: [], previousMonth: [], untagged: [], excludedCounts: {},
+      refundNeeded: [], owner: false, startDate: "2026-07-01",
+      sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
+        lastFullReconciledAt: null, lastError: null, recordCount: 0 },
+    } as const;
+    // default view = current day only, and the "Aujourd'hui" chip is active
+    const todayView = renderPaymentsPage({ ...base, from: "2026-08-11", to: "2026-08-11", today: "2026-08-11" });
+    expect(todayView).toContain("Aujourd’hui");
+    expect(todayView).toContain("Transactions du 2026-08-11 ·");
+    expect(todayView).toMatch(/<a class="active" href="[^"]*from=2026-08-11&amp;to=2026-08-11[^"]*">Aujourd’hui<\/a>/);
+    // yesterday and last-7-days chips point at the right ranges
+    expect(todayView).toContain("from=2026-08-10&amp;to=2026-08-10"); // Hier
+    expect(todayView).toContain("from=2026-08-05&amp;to=2026-08-11"); // 7 derniers jours
+    // when viewing last 7 days that chip is the active one, not "Aujourd'hui"
+    const weekView = renderPaymentsPage({ ...base, from: "2026-08-05", to: "2026-08-11", today: "2026-08-11" });
+    expect(weekView).toMatch(/<a class="active" href="[^"]*from=2026-08-05&amp;to=2026-08-11[^"]*">7 derniers jours<\/a>/);
+    expect(weekView).toMatch(/<a class="" href="[^"]*">Aujourd’hui<\/a>/);
   });
 });

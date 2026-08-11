@@ -8,6 +8,7 @@ import { escapeHtml as esc, fmtDate, fmtFcfa } from "./helpers.js";
 export interface PaymentsPageData {
   from: string;
   to: string;
+  today: string;
   startDate: string;
   rows: LedgerMovement[];
   daily: MethodTotal[];
@@ -35,9 +36,48 @@ function totalCards(title: string, rows: MethodTotal[]): string {
     <div class="cluster">${rows.map((r) => `<span class="badge badge--gray">${esc(paymentMethodLabel(r.method))} ${fmtFcfa(r.netXof)}</span>`).join("")}</div></article>`;
 }
 
-function dayHref(day: string, d: PaymentsPageData): string {
-  const q = new URLSearchParams({ from: day, to: day, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) });
+function rangeHref(from: string, to: string, d: PaymentsPageData): string {
+  const q = new URLSearchParams({ from, to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) });
   return `/admin/paiements?${q.toString()}#pay-mouvements`;
+}
+
+function dayHref(day: string, d: PaymentsPageData): string {
+  return rangeHref(day, day, d);
+}
+
+// deterministic day shift on a "YYYY-MM-DD" string (Dakar == UTC year-round)
+function shiftDay(day: string, delta: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+// Quick range chips + a date picker for the movements list. Presets preserve the
+// active method/source/type filters; the picker (in the Filtrer card) goes further back.
+function rangeBar(d: PaymentsPageData): string {
+  const yesterday = shiftDay(d.today, -1);
+  const weekAgo = shiftDay(d.today, -6);
+  const presets: Array<{ label: string; from: string; to: string }> = [
+    { label: "Aujourd’hui", from: d.today, to: d.today },
+    { label: "Hier", from: yesterday, to: yesterday },
+    { label: "7 derniers jours", from: weekAgo, to: d.today },
+  ];
+  const chips = presets.map((p) => {
+    const active = d.from === p.from && d.to === p.to ? " active" : "";
+    return `<a class="${active.trim()}" href="${esc(rangeHref(p.from, p.to, d))}">${esc(p.label)}</a>`;
+  }).join("");
+  const hidden = [
+    d.method ? `<input type="hidden" name="method" value="${esc(d.method)}">` : "",
+    d.source ? `<input type="hidden" name="source" value="${esc(d.source)}">` : "",
+    d.type ? `<input type="hidden" name="type" value="${esc(d.type)}">` : "",
+  ].join("");
+  return `<div class="range-bar">
+    <nav class="filters" aria-label="Période">${chips}</nav>
+    <form method="get" action="/admin/paiements" class="range-picker">${hidden}
+      <label>Du <input type="date" name="from" value="${esc(d.from)}" min="${esc(d.startDate)}" max="${esc(d.today)}"></label>
+      <label>Au <input type="date" name="to" value="${esc(d.to)}" max="${esc(d.today)}"></label>
+      <button class="act act--sm" type="submit">Voir</button>
+    </form></div>`;
 }
 
 function dailyTable(rows: MethodTotal[], d: PaymentsPageData): string {
@@ -142,7 +182,7 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
   const filterQuery = new URLSearchParams({ from: d.from, to: d.to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) }).toString();
   return `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}
   ${jumpNav(d)}
-  <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2><p class="muted">300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
+  <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2>${rangeBar(d)}<p class="muted">${d.from === d.to ? `Transactions du ${esc(d.from)}` : `Transactions du ${esc(d.from)} au ${esc(d.to)}`} · 300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
   <div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p><p class="muted">Périmètre comptable depuis le ${esc(d.startDate)} : les lignes antérieures ne sont pas couvertes, les dates historiques estimées sont signalées, et les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF (devise d’origine conservée pour audit).</p></div>
   ${alerts.length ? `<div class="card warn"><b>Lignes Wix écartées des totaux</b><p>${alerts.map(([k,n]) => `${esc(k)} : ${n}`).join(" · ")}</p></div>` : ""}
   ${qualifier(d.untagged)}

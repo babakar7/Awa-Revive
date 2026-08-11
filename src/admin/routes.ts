@@ -585,9 +585,8 @@ export function registerAdmin(app: FastifyInstance): void {
         const startDate = config.PAYMENTS_LEDGER_START_DATE;
         const today = new Date().toISOString().slice(0, 10);
         const monthStart = `${today.slice(0, 7)}-01`;
-        const previousStartDate = new Date(`${monthStart}T00:00:00Z`);
-        previousStartDate.setUTCMonth(previousStartDate.getUTCMonth() - 1);
-        const defaultFrom = previousStartDate.toISOString().slice(0, 10);
+        // Default view = current day only; quick chips / date picker widen it.
+        const defaultFrom = today;
         const validDate = (raw: string | undefined, fallback: string) =>
           /^\d{4}-\d{2}-\d{2}$/.test(raw ?? "") ? String(raw) : fallback;
         const fromText = validDate(query.from, defaultFrom) < startDate
@@ -622,7 +621,7 @@ export function registerAdmin(app: FastifyInstance): void {
           wixPaymentSyncState(),
         ]);
         const body = renderPaymentsPage({
-          from: fromText, to: toText, startDate, rows, daily, currentMonth, previousMonth,
+          from: fromText, to: toText, today, startDate, rows, daily, currentMonth, previousMonth,
           untagged, excludedCounts, refundNeeded: refundNeeded.rows,
           owner: req.adminRole === "owner", method: filters.method,
           source: filters.source, type: filters.type, notice: query.done, error: query.err,

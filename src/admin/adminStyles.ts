@@ -412,6 +412,13 @@ form.inline{display:inline}
    team can retrace every transaction of a given day (client, amount, method) */
 .day-head td{background:var(--cream-100);border-top:2px solid var(--border);font-size:.86rem;color:var(--ink-700);padding:.5rem .7rem!important}
 .day-head b{color:var(--ink-900)}
+/* movements range scoper: quick day chips (Aujourd'hui / Hier / 7 jours) + a
+   date picker to go further back; defaults to the current day */
+.range-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1rem;margin:0 0 1rem}
+.range-bar .filters{margin:0}
+.range-picker{display:flex;align-items:flex-end;flex-wrap:wrap;gap:.5rem}
+.range-picker label{display:flex;flex-direction:column;font-size:.78rem;font-weight:700;color:var(--ink-500);gap:.2rem}
+.range-picker input{margin:0}
 /* selected tab: filled brand pill so the active category is unmistakable
    (the shared .jump-nav a.active tint is too subtle for a one-at-a-time view) */
 .menu-jumpnav a.menu-tab.active{background:var(--brand);color:#fff!important;font-weight:700;box-shadow:var(--shadow-1)}
