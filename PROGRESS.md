@@ -1,5 +1,36 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## OM : limite 30 caractères sur le nom du QR + résa enfant au nom du parent (11 août 2026)
+
+Vente perdue en direct (Mariata, 21:48) : carnet Natation 70 000 F, email
+vérifié, compte créé, « Oui » pour Orange Money → `create_plan_payment_link`
+en `tool_failed` + handoff technique. Cause trouvée par bissection contre
+l'API réelle : **le champ `name` de la création QR Sonatel est limité à
+30 CARACTÈRES** (non documenté ; 31+ → 500 enveloppant un 400 interne de
+`api-qrcode-write-partner-service` ; la limite est bien en caractères, pas en
+octets — 30 chars/32 octets passe). Notre code tronquait à 80. « Carnet de 10
+Bébé nageur et Natation » = 37 chars → échec systématique ; tous les plans
+vendus jusque-là faisaient ≤30, d'où l'invisibilité du bug.
+
+Correctif (`lib/orangeMoney.ts`, commit `9295b4a`) : `omQrName()` tronque à
+30 caractères (trim, jamais vide) — le nom n'est qu'un libellé d'affichage
+dans l'app OM/Max It. Validé contre l'API réelle (70 000 F, nom tronqué →
+qrId OK). Tests purs dans `test/orangeMoney.test.ts`.
+
+Dans la même conversation, 2e bug : le compte Revive a été créé au nom de
+l'enfant de 4 ans (« Boubacar Kane ») au lieu de la maman. Décision Babakar :
+**pour un enfant, compte/vérification/paiement/résa portent TOUJOURS le nom
+du parent payeur** — règle 0c ajoutée au prompt (si le parent répond avec le
+prénom de l'enfant, Awa redemande le nom du parent). Fiche Wix + clients.name
+corrigés à la main (« Mariata Kane »).
+
+- `om_outage_mode` reste ON : choix Babakar (réconciliations OM manuelles),
+  même si des callbacks OM sont reçus/traités quotidiennement depuis le 04/08
+  (`processed_webhooks`, clés `om:MP…`).
+- Reste à faire : recontacter Mariata (handoff technique OPEN) — lui renvoyer
+  un lien OM maintenant que le fix est déployé ; le créneau « mer 12/08
+  17:15 » n'avait plus qu'1 place à 21:46.
+
 ## Voix cuisine : note générale lue + survie à l'idle iOS (11 août 2026)
 
 - **Incidents prod (11/08)** : (1) l'annonce vocale ne lisait jamais la **note
