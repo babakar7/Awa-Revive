@@ -56,6 +56,7 @@ export type OpsEventKind =
   | "ticket_new"
   | "ticket_update"
   | "ticket_removed"
+  | "ticket_ack"
   | "session_new"
   | "session_update"
   | "session_closed"
@@ -80,6 +81,9 @@ export interface KitchenTicketView {
   created_at: Date | string;
   /** When the kitchen marked it READY — freezes the prep timer on the card. */
   ready_at: Date | string | null;
+  /** When the cuisine iPad first rendered this ticket. NULL = never displayed →
+   *  the reception board shows "Cuisine non confirmée" past the grace window. */
+  ipad_ack_at?: Date | string | null;
   /** Accueil server who took a READY ticket to serve it ("Je prends"). TABLE only. */
   serve_by?: string | null;
   /** Source session id (TABLE tickets) — lets the accueil board group by session. */

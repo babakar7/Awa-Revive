@@ -73,6 +73,7 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
     subheading: t.subheading,
     created_at: t.created_at,
     ready_at: t.ready_at,
+    ipad_ack_at: t.ipad_ack_at,
     serve_by: t.serve_by,
     session_id: t.session_id,
     takeaway: t.takeaway,
@@ -470,23 +471,43 @@ export async function completeBarTicket(
  */
 export async function ackTicketDisplayed(id: string): Promise<boolean> {
   if (!UUID_RE.test(String(id))) return false;
+  // One atomic statement. The guarded UPDATE (`ipad_ack_at is null`) decides the
+  // FIRST ack: its RETURNING yields a row only then, so a repeated ack touches
+  // nothing. The `notified` CTE still runs to completion — Postgres executes
+  // every data-modifying WITH statement exactly once regardless of whether the
+  // final query reads it — preserving the delivery 'pending' → 'sent' honesty the
+  // WhatsApp fallback depends on. The final SELECT surfaces the first-ack row +
+  // the ack timestamp for the realtime `ticket_ack`.
   const res = await pool.query(
     `with acked as (
        update kitchen_tickets set ipad_ack_at = now(), updated_at = now()
         where id = $1 and ipad_ack_at is null
-        returning delivery_order_id
+        returning id, ipad_ack_at, delivery_order_id
+     ),
+     notified as (
+       update delivery_orders d
+          set kitchen_notify_status = 'sent',
+              kitchen_notified_at = coalesce(kitchen_notified_at, now()),
+              updated_at = now()
+        where d.id in (select delivery_order_id from acked where delivery_order_id is not null)
+          and d.kitchen_notify_status = 'pending'
+        returning d.id
      )
-     update delivery_orders d
-        set kitchen_notify_status = 'sent',
-            kitchen_notified_at = coalesce(kitchen_notified_at, now()),
-            updated_at = now()
-      where d.id in (select delivery_order_id from acked where delivery_order_id is not null)
-        and d.kitchen_notify_status = 'pending'`,
+     select id, ipad_ack_at from acked`,
     [id],
   );
-  // rowCount here is the delivery_orders update; the ack itself may still have
-  // happened for a ticket whose order was already 'sent'. Re-check cheaply.
-  return (res.rowCount ?? 0) > 0 || (await wasAcked(id));
+  const row = res.rows[0] as { id: string; ipad_ack_at: Date } | undefined;
+  if (row) {
+    // First ack ONLY: tell both boards the tablet actually rendered this ticket,
+    // exactly once. The reception board flips "Envoi à Cuisine…" → "Reçue par
+    // Cuisine ✓" on this; a repeated ack updated no row so it never re-emits.
+    const payload = { id: row.id, ipad_ack_at: row.ipad_ack_at };
+    await recordOpsEvent(CUISINE_CHANNEL, "ticket_ack", payload);
+    await recordOpsEvent(ACCUEIL_CHANNEL, "ticket_ack", payload);
+    return true;
+  }
+  // Not the first ack: already-acked ticket (idempotent true) or unknown id (false).
+  return await wasAcked(id);
 }
 
 async function wasAcked(id: string): Promise<boolean> {

@@ -24,7 +24,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v5";
+const ASSET_VERSION = "v6";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -106,6 +106,9 @@ button.act.undo{background:var(--warn)}
 button.act.urg{background:none;border:1px solid var(--border-strong);color:var(--ink-700);flex:0 0 auto;padding:.8rem .7rem;box-shadow:none}
 button.act.urg.on{border-color:var(--danger);color:var(--danger);background:var(--danger-bg)}
 button.act.cancelx{background:none;border:1px solid var(--danger-border);color:var(--danger);flex:0 0 auto;min-width:2.75rem;padding:.8rem .85rem;box-shadow:none}
+/* Fleet anomaly: a still-NEW ticket the cuisine tablet never acknowledged. */
+.card.unconfirmed{border-left-color:var(--danger)}
+.cuis.warn{font-size:.8rem;font-weight:700;color:var(--danger)}
 /* "Prête" pending its local undo grace (same 3s pattern as the cuisine board). */
 .card.pending{border-color:var(--warn);border-left-color:var(--warn);box-shadow:0 0 0 3px var(--warn-bg)}
 /* Confirm dialog (verb-labeled buttons — native OK/Annuler is ambiguous when the
@@ -181,7 +184,9 @@ background:#fff;color:var(--ink-900);font-size:1.35rem;font-weight:700;line-heig
 .close-x{position:absolute;top:.55rem;right:.6rem;background:none;border:none;color:var(--ink-500);font-size:1.7rem;line-height:1;z-index:4;min-width:2.75rem;min-height:2.75rem}
 .msg{color:var(--danger);font-size:.9rem;margin:.4rem 0}`;
 
-export function ownerBoardPage(bootJson: string): string {
+export function ownerBoardPage(): string {
+  // No inline boot: script-src 'self' blocks it. The client fetches /state before
+  // opening SSE, so the board is DB-authoritative from the first paint.
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Supervision")}<title>Supervision Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
@@ -191,7 +196,6 @@ export function ownerBoardPage(bootJson: string): string {
 <section id="devs" class="dev-bar"></section>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <noscript>Activez JavaScript pour la supervision.</noscript>
-<script>window.__BOOT__=${bootJson}</script>
 <script src="${BASE}/app.js?b=${ASSET_VERSION}"></script>
 </body></html>`;
 }
@@ -229,13 +233,13 @@ self.addEventListener('fetch',e=>{
 // ── Client app (SSE cuisine channel + /stats poll; can also take an order) ───
 export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
-  var boot=window.__BOOT__||{cursor:0,tickets:[],stats:{},devices:[],spots:[],menu:[],top:[]};
-  var cursor=boot.cursor||0;
-  var SPOTS=(boot.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
-  var MENU=boot.menu||[];
-  var TOP=boot.top||[];
+  var cursor=0;             // event cursor; seeded from /state before SSE opens
+  var booted=false;         // flips true after the first successful /state load
+  var connected=false;      // SSE opened once, after the first /state
+  var SPOTS=[];
+  var MENU=[];
+  var TOP=[];
   var model=new Map();
-  (boot.tickets||[]).forEach(function(t){model.set(t.id,t);});
   var board=document.getElementById('board');
   var countEl=document.getElementById('count');
   var dot=document.getElementById('dot');
@@ -297,9 +301,13 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   function act(btn,path,body){ btn.disabled=true;
     postJSON(path,body||{}).then(function(r){ if(!r.ok) btn.disabled=false; }).catch(function(){ btn.disabled=false; }); }
 
+  // A still-NEW ticket the cuisine tablet never acknowledged past a short grace =
+  // the reception→cuisine anomaly, mirrored on the supervisor's board.
+  function unconfirmed(t){ return t.status==='NEW' && !t.ipad_ack_at && elapsedMins(t.created_at)>=0.17; }
+
   function card(t){
     var isPending=!!pendingReady[t.id];
-    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(isPending?' pending':'')+(t.is_test?' test':'')+(t.urgent?' urgent':''));
+    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(isPending?' pending':'')+(t.is_test?' test':'')+(t.urgent?' urgent':'')+(unconfirmed(t)?' unconfirmed':''));
     c.dataset.id=t.id;
     var top=el('div','top');
     if(t.urgent) top.appendChild(el('span','badge urgent','⚡ URGENT'));
@@ -322,6 +330,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       li.appendChild(document.createTextNode(l.name+(l.choice?' ('+l.choice+')':''))); ul.appendChild(li); });
     c.appendChild(ul);
     if(t.note) c.appendChild(el('div','note','📝 '+t.note));
+    if(unconfirmed(t)) c.appendChild(el('div','cuis warn','⚠︎ Cuisine non confirmée — vérifiez la tablette'));
     var stTxt=t.status==='READY'?'Prête':t.status==='PREPARING'?'En préparation':'Nouveau';
     c.appendChild(el('span','pill '+t.status.toLowerCase(), stTxt));
     // Full control: cuisine verbs (Commencer/Prête/Terminée) + salle verbs
@@ -359,7 +368,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       return u || (new Date(x.created_at)-new Date(y.created_at));
     });
     board.textContent='';
-    if(!list.length){ board.appendChild(el('p','empty','Aucune commande en cours')); }
+    if(!list.length){ board.appendChild(el('p','empty', booted?'Aucune commande en cours':'Chargement…')); }
     else list.forEach(function(t){ board.appendChild(card(t)); });
     countEl.textContent=list.length? list.length+(list.length>1?' commandes':' commande') : '';
   }
@@ -378,7 +387,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       chip.appendChild(document.createTextNode(d.label+' · '+ago(d.last_seen_at))); devEl.appendChild(chip);
     });
   }
-  renderStats(boot.stats); renderDevices(boot.devices);
+  renderStats({}); renderDevices([]);   // filled by the first /state
 
   function tickClock(){ if(!clockEl)return; var d=new Date();
     clockEl.textContent=(d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); }
@@ -397,14 +406,27 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     else if(!downTimer){ downTimer=setTimeout(function(){ downTimer=null; dot.classList.remove('on'); offline.classList.add('show'); },5000); }
   }
 
+  // Authoritative /state: loaded BEFORE the SSE stream opens (the inline boot is
+  // CSP-blocked), then re-fetched every 60s / on wake / after an SSE recovery. A
+  // snapshot whose cursor trails what live events already advanced us past is
+  // ignored; otherwise the model is replaced and the stream is opened once, at the
+  // right cursor (never replaying from 0).
   function refreshState(){
-    fetch(BASE+'/state',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
-      if(!d)return; model=new Map(); (d.tickets||[]).forEach(function(t){model.set(t.id,t);});
+    fetch(BASE+'/state',{headers:{'X-Requested-With':'fetch'}}).then(function(r){
+      if(r.status===401){ location.reload(); return null; }
+      return r.ok?r.json():null;
+    }).then(function(d){
+      if(!d)return;
+      if(connected && (d.cursor||0)<cursor) return;   // stale snapshot racing live events — ignore
+      cursor=d.cursor||0;
+      model=new Map(); (d.tickets||[]).forEach(function(t){model.set(t.id,t);});
       // Self-heal the composer inputs on a stale cached page.
       if(d.spots) SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
       if(d.menu&&d.menu.length) MENU=d.menu;
       if(d.top) TOP=d.top;
-      if(d.stats)renderStats(d.stats); if(d.devices)renderDevices(d.devices); render();
+      if(d.stats)renderStats(d.stats); if(d.devices)renderDevices(d.devices);
+      booted=true; render();
+      if(!connected){ connected=true; connect(); }
     }).catch(function(){});
   }
   function pollStats(){
@@ -413,6 +435,10 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     }).catch(function(){});
   }
   setInterval(pollStats,60000);
+  setInterval(refreshState,60000);   // authoritative reconciliation every minute
+  // Surface the "Cuisine non confirmée" anomaly promptly (its trigger is elapsed
+  // time, not an event): re-render every 10s while any NEW ticket is unacked.
+  setInterval(function(){ var pend=false; model.forEach(function(t){ if(t.status==='NEW' && !t.ipad_ack_at) pend=true; }); if(pend) render(); },10000);
 
   render(); refreshState();
 
@@ -421,22 +447,25 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   // The server pings every 25s; 60s without a ping/event → rebuild the stream
   // (?since=cursor replays what was missed). On tab wake, check immediately.
   function bump(e){ if(e.lastEventId)cursor=+e.lastEventId; }
-  var es=null, lastBeat=Date.now();
+  var es=null, lastBeat=Date.now(), firstOpen=true;
   function beat(){ lastBeat=Date.now(); }
   function connect(){
     if(es){ try{es.close();}catch(e){} }
     es=new EventSource(BASE+'/events?since='+cursor);
-    es.onopen=function(){beat(); setOnline(true);};
+    es.onopen=function(){ beat(); setOnline(true);
+      // A reconnect may have missed events beyond the SSE replay window — reconcile.
+      if(firstOpen){ firstOpen=false; } else { refreshState(); } };
     es.onerror=function(){setOnline(false);};
     es.addEventListener('ping',beat);
     es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
     es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); bump(e); render(); });
     es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); clearPendingReady(d.id); model.delete(d.id); bump(e); render(); });
+    // Cuisine acked a ticket → clear the anomaly on this board.
+    es.addEventListener('ticket_ack',function(e){ beat(); var a=JSON.parse(e.data); bump(e); var t=model.get(a.id); if(t){ t.ipad_ack_at=a.ipad_ack_at; render(); } });
   }
-  connect();
   function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); connect(); } }
   setInterval(function(){ reconnectIfStale(60000); },15000);
-  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') reconnectIfStale(30000); });
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'){ reconnectIfStale(30000); refreshState(); } });
 
   // ---- Take an order (the owner can also compose a salle order) ----
   // Lean variant of the salle composer: pick an espace, add items (required

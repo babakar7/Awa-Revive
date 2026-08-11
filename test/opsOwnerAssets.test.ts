@@ -47,7 +47,7 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).toContain("obligatoire");
     expect(OWNER_APP_JS).toContain("e.note=d.note");
     // The header entry point.
-    expect(ownerBoardPage("{}")).toContain('id="take"');
+    expect(ownerBoardPage()).toContain('id="take"');
   });
 
   it("the owner composer has the SAME findability as the salle (search + chips + Populaires)", () => {
@@ -70,14 +70,19 @@ describe("owner supervision PWA assets", () => {
   });
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
-    const version = ownerBoardPage("{}").match(/app\.js\?b=(v\d+)/)?.[1];
+    const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
     expect(version).toBeTruthy();
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 
   it("pages honour prefers-reduced-motion and only ever talk same-origin", () => {
-    expect(ownerBoardPage("{}")).toContain("prefers-reduced-motion");
+    expect(ownerBoardPage()).toContain("prefers-reduced-motion");
     expect(ownerPairingPage()).toContain("prefers-reduced-motion");
     expect(OWNER_APP_JS).not.toMatch(/https?:\/\//);
+  });
+
+  it("the board has no inline boot (CSP script-src 'self' would block it)", () => {
+    expect(ownerBoardPage()).not.toContain("window.__BOOT__");
+    expect(ownerBoardPage()).not.toContain("<script>");
   });
 });

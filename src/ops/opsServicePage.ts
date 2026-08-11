@@ -30,7 +30,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v22";
+const ASSET_VERSION = "v23";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -97,6 +97,11 @@ border-radius:999px;padding:.15rem .5rem;margin-top:.3rem;letter-spacing:.02em}
 button.act.urg{flex:1;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border)}
 button.act.urg.on{background:var(--danger);color:#fff;border-color:var(--danger)}
 .tk .taken{font-size:.8rem;color:var(--info);margin-top:.25rem}
+/* Cuisine-confirmation line: sent → received (auto, on the tablet's ACK) → warn. */
+.tk .cuis{font-size:.8rem;font-weight:700;margin-top:.3rem}
+.tk .cuis.send{color:var(--ink-500)}
+.tk .cuis.ok{color:var(--ok-strong)}
+.tk .cuis.warn{color:var(--danger)}
 .tacts{display:flex;gap:.45rem;margin-top:.5rem}
 button.act{flex:1;min-height:2.75rem;padding:.75rem;font-size:.98rem;font-weight:800;border:none;border-radius:var(--radius);color:#fff}
 button.take{background:var(--info)}
@@ -220,14 +225,15 @@ font-weight:800;font-size:1.02rem;box-shadow:var(--shadow-1)}
 .close-x{position:absolute;top:.55rem;right:.6rem;background:none;border:none;color:var(--ink-500);font-size:1.7rem;line-height:1;z-index:4;min-width:2.75rem;min-height:2.75rem}
 .msg{color:var(--danger);font-size:.9rem;margin:.4rem 0}`;
 
-export function serviceBoardPage(bootJson: string): string {
+export function serviceBoardPage(): string {
+  // No inline boot: script-src 'self' blocks it. The client fetches /state before
+  // opening SSE, so the board is DB-authoritative from the first paint.
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Salle")}<title>Salle Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="hist" aria-label="Tables récentes">🕐</button><button id="snd" class="sndbtn" aria-label="Activer/couper le son">🔊</button><button id="bell" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><span class="count" id="count"></span></header>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
-<script>window.__BOOT__=${bootJson}</script>
 <script src="${BASE}/app.js?b=${ASSET_VERSION}"></script>
 </body></html>`;
 }
@@ -285,20 +291,23 @@ self.addEventListener('notificationclick',e=>{
 // ── Client app ───────────────────────────────────────────────────────────────
 export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
-  var boot=window.__BOOT__||{cursor:0,spots:[],sessions:[],tickets:[],menu:[],top:[]};
-  var cursor=boot.cursor||0;
-  var SPOTS=(boot.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
-  var MENU=boot.menu||[];
-  var TOP=boot.top||[];
+  var cursor=0;                    // event cursor; seeded from /state before SSE opens
+  var connected=false;             // SSE opened once, after the first /state
+  var SPOTS=[];
+  var MENU=[];
+  var TOP=[];
   var loaded=false, loadTries=0;   // load-state guard (see refreshState/retryLoad)
-  var sessions=new Map(); (boot.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
-  var tickets=new Map(); (boot.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
+  var sessions=new Map();
+  var tickets=new Map();
+  // Per-device cuisine-confirmation tracking for orders THIS phone just sent:
+  // sentAt[id] while awaiting the tablet's ACK, overdue[id] once 10s lapsed with none.
+  var sentAt={}, overdue={};
   var board=document.getElementById('board');
   var countEl=document.getElementById('count');
   var dot=document.getElementById('dot');
   var offline=document.getElementById('offline');
   var bell=document.getElementById('bell');
-  var VAPID=boot.vapidKey||'';
+  var VAPID='';
 
   // Paint + load the board FIRST, before any optional audio/push/composer setup —
   // so a throw in any of that can never leave the board stuck on "Chargement…"
@@ -390,6 +399,14 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     if(t.note) d.appendChild(el('div','tnote','📝 '+t.note));
     if(t.takeaway) d.appendChild(el('div','away','📦 À emporter'));
     if(t.urgent) d.appendChild(el('div','urg','⚡ Urgent'));
+    // Cuisine confirmation for orders THIS phone sent: "Envoi…" → auto "Reçue ✓" on
+    // the tablet's ACK → "non confirmée" only if the authoritative state still has
+    // no ack after 10s. Never shown once READY (the order clearly reached the kitchen).
+    if(t.status!=='READY'){
+      if(t.ipad_ack_at){ d.appendChild(el('div','cuis ok','✓ Reçue par Cuisine')); }
+      else if(overdue[t.id]){ d.appendChild(el('div','cuis warn','⚠︎ Cuisine non confirmée — vérifiez la tablette')); }
+      else if(sentAt[t.id]!=null){ d.appendChild(el('div','cuis send','Envoi à Cuisine…')); }
+    }
     if(t.status==='READY'){
       var acts=el('div','tacts');
       // ONE tap: the server takes the ready order to the client. It both claims and
@@ -644,7 +661,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       go.disabled=true; msg.style.display='none';
       var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway}; if(fn&&fn.value) body.first_name=fn.value;
       post('/spots/'+sp.id+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.ok){ closeSheet(); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
+        if(j&&j.ok){ if(j.id) trackSend(j.id); closeSheet(); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
       }).catch(function(){ go.disabled=false; msg.textContent='Erreur réseau.'; msg.style.display='block'; });
     };
     foot.appendChild(go); sh.appendChild(foot);
@@ -664,27 +681,56 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     else if(!downTimer){ downTimer=setTimeout(function(){ downTimer=null; dot.classList.remove('on'); offline.classList.add('show'); },5000); }
   }
 
-  // Re-fetch the authoritative board state on load (the inline boot is blocked by
-  // our strict CSP, so /state is the REAL first paint). This must never leave the
-  // board stuck on "Chargement…": a transient failure retries a few times, then
-  // falls back to an actionable reload button (loaded=true) instead of hanging —
-  // the "sometimes stuck until I reopen the app" bug.
-  function refreshState(){
+  // Re-fetch the authoritative board state (the inline boot is CSP-blocked, so
+  // /state is the REAL first paint) AND resync every 60s / on wake / after an SSE
+  // recovery. This must never leave the board stuck on "Chargement…": a transient
+  // failure retries a few times, then falls back to an actionable reload button
+  // (loaded=true). The SSE stream is opened ONCE, here, only after the first
+  // /state — seeded at the right cursor so it never replays from 0. A snapshot
+  // whose cursor trails what live events already advanced us past is ignored (a
+  // slow /state racing live events must not revert newer state). The done callback
+  // lets the 10s cuisine-confirmation check re-read the authoritative ack first.
+  function refreshState(done){
     loadTries++;
-    fetch(BASE+'/state',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
-      if(!d){ retryLoad(); return; }
+    fetch(BASE+'/state',{headers:{'X-Requested-With':'fetch'}}).then(function(r){
+      if(r.status===401){ location.reload(); return null; }
+      return r.ok?r.json():null;
+    }).then(function(d){
+      if(!d){ retryLoad(); if(done)done(); return; }
+      if(connected && (d.cursor||0)<cursor){ if(done)done(); return; }  // stale snapshot — ignore
+      cursor=d.cursor||0;
       SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
       if(d.menu&&d.menu.length) MENU=d.menu;
       if(d.top) TOP=d.top;
       if(d.vapidKey){ VAPID=d.vapidKey; }
       sessions=new Map(); (d.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
       tickets=new Map(); (d.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
+      // Drop confirmation tracking for orders no longer on the board.
+      Object.keys(sentAt).forEach(function(id){ if(!tickets.has(id)) delete sentAt[id]; });
+      Object.keys(overdue).forEach(function(id){ if(!tickets.has(id)) delete overdue[id]; });
       loaded=true; render(); initPush();
-    }).catch(function(){ retryLoad(); });
+      if(!connected){ connected=true; connect(); }   // open the live stream, seeded at cursor
+      if(done)done();
+    }).catch(function(){ retryLoad(); if(done)done(); });
   }
-  // Retry a failed first load a few times (~2s apart), then stop hanging: mark
-  // loaded so render() swaps "Chargement…" for a one-tap "↻ Recharger".
+  // Retry a failed FIRST load a few times (~2s apart), then stop hanging: mark
+  // loaded so render() swaps "Chargement…" for a one-tap "↻ Recharger". After the
+  // first success (loaded), a failed periodic resync just no-ops until the next tick.
   function retryLoad(){ if(loaded) return; if(loadTries<5){ setTimeout(refreshState,2000); } else { loaded=true; render(); } }
+
+  // Track a just-sent order until the cuisine tablet ACKs it. "Envoi à Cuisine…"
+  // shows immediately; the tablet's ticket_ack flips it to "Reçue ✓". After 10s
+  // with no ack, re-read the AUTHORITATIVE /state before warning (the ack may have
+  // landed between our SSE and the POST response) — only a state that still lacks
+  // the ack shows "Cuisine non confirmée". We never resend: the order is saved.
+  function trackSend(id){
+    sentAt[id]=Date.now(); delete overdue[id]; render();
+    setTimeout(function(){
+      var t=tickets.get(id);
+      if(!t || t.ipad_ack_at) return;               // already confirmed (or gone)
+      refreshState(function(){ var t2=tickets.get(id); if(t2 && !t2.ipad_ack_at){ overdue[id]=true; render(); } });
+    },10000);
+  }
 
   // ---- Web Push (lock-screen "commande prête") ----
   // The bell is ALWAYS visible and dims (.off) until THIS phone is subscribed, so
@@ -852,12 +898,15 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   // never a blank "Chargement…".
   function bump(e){ if(e.lastEventId)cursor=+e.lastEventId; }
   function flashSpot(spotId){ var c=board.querySelector('[data-spot="'+spotId+'"]'); if(c)c.classList.add('flash'); }
-  var es=null, lastBeat=Date.now();
+  var es=null, lastBeat=Date.now(), firstOpen=true;
   function beat(){ lastBeat=Date.now(); }
   function connect(){
     if(es){ try{es.close();}catch(e){} }
     es=new EventSource(BASE+'/events?since='+cursor);
-    es.onopen=function(){beat(); setOnline(true);};
+    es.onopen=function(){ beat(); setOnline(true);
+      // A reconnect may have missed events beyond the SSE replay window — reconcile
+      // against /state. Skip the very first open (we just loaded /state).
+      if(firstOpen){ firstOpen=false; } else { refreshState(); } };
     es.onerror=function(){setOnline(false);};
     es.addEventListener('ping',beat);
     es.addEventListener('session_new',function(e){ beat(); var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); flashSpot(s.spot_id); });
@@ -865,12 +914,14 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     es.addEventListener('session_closed',function(e){ beat(); var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
     es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var isNew=!tickets.has(t.id); tickets.set(t.id,t); render(); if(isNew){ beep(); speak(newSpeech(t)); } });
     es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ readyAlert(t); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
-    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); render(); });
+    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); delete sentAt[d.id]; delete overdue[d.id]; render(); });
+    // The cuisine tablet rendered this ticket: flip our "Envoi…" to "Reçue ✓".
+    es.addEventListener('ticket_ack',function(e){ beat(); var a=JSON.parse(e.data); bump(e); var t=tickets.get(a.id); delete overdue[a.id]; if(t){ t.ipad_ack_at=a.ipad_ack_at; render(); } });
   }
-  try{ connect(); }catch(e){}
   function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); try{ connect(); }catch(e){} } }
   setInterval(function(){ reconnectIfStale(60000); },15000);
-  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') reconnectIfStale(30000); });
+  setInterval(function(){ if(loaded) refreshState(); },60000);   // authoritative resync
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'){ reconnectIfStale(30000); if(loaded) refreshState(); } });
 
   // Keep the reception screen awake while the board is open. Wake Lock drops when
   // the page hides, so re-acquire on visibility return; a no-op where unsupported.

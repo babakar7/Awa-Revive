@@ -513,13 +513,21 @@ describe("service PWA over HTTP", () => {
     await app.inject({ method: "POST", url: `/ops/service/tickets/${id}/served`, headers: { cookie } });
   }
 
-  it("serves the manifest scoped to /ops/service/ and boots with spots", async () => {
+  it("serves the manifest scoped to /ops/service/ and boots spots from /state", async () => {
     const m = await app.inject({ method: "GET", url: "/ops/service/manifest.webmanifest" });
     expect(JSON.parse(m.body).scope).toBe("/ops/service/");
     const cookie = await pairAccueil();
+    // The paired home is the kiosque shell (boots from /state) — no CSP-blocked inline boot.
     const home = await app.inject({ method: "GET", url: "/ops/service/", headers: { cookie } });
-    expect(home.body).toContain("window.__BOOT__");
-    expect(home.body).toContain("Canapé");
+    expect(home.body).toContain("/ops/service/app.js");
+    expect(home.body).not.toContain("window.__BOOT__");
+    // The spots (Canapé…) now come from the authoritative /state, no-store.
+    const state = await app.inject({ method: "GET", url: "/ops/service/state", headers: { cookie } });
+    expect(state.statusCode).toBe(200);
+    expect(state.headers["cache-control"]).toContain("no-store");
+    const body = JSON.parse(state.body);
+    expect(typeof body.cursor).toBe("number");
+    expect(JSON.stringify(body.spots)).toContain("Canapé");
   });
 
   it("redirects the service host root into the PWA scope", async () => {

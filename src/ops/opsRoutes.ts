@@ -130,10 +130,19 @@ async function serveCuisineHome(req: FastifyRequest, reply: FastifyReply): Promi
   }
   reply.type("text/html");
   if (!device) return reply.send(cuisinePairingPage());
-  const tickets = await listOpenKitchenTickets();
-  const cursor = await latestOpsEventId(CUISINE_CHANNEL);
-  const boot = JSON.stringify({ cursor, tickets: tickets.map(kitchenTicketView) });
-  return reply.send(cuisineKitchenPage(boot));
+  return reply.send(cuisineKitchenPage());
+}
+
+/** Everything the cuisine board needs to render, authoritatively: the open
+ *  kitchen tickets and the current event cursor. The client fetches this on load
+ *  (the inline boot is CSP-blocked, so /state is the REAL first paint) and on
+ *  every resync — the cursor is read so any later change replays over SSE. */
+async function cuisineBootData(): Promise<{ cursor: number; tickets: unknown[] }> {
+  const [tickets, cursor] = await Promise.all([
+    listOpenKitchenTickets(),
+    latestOpsEventId(CUISINE_CHANNEL),
+  ]);
+  return { cursor, tickets: tickets.map(kitchenTicketView) };
 }
 
 /** Host-aware redirect for cuisine.revive.sn "/" → the PWA scope. */
@@ -253,6 +262,15 @@ export function registerOps(app: FastifyInstance): void {
     return reply.type("application/json").send({ tickets: await listRecentClosedTickets(30) });
   });
 
+  // Authoritative board state (JSON) — the client loads this before opening the
+  // SSE stream, and re-fetches it on resync, so a CSP-blocked/stale page self-heals.
+  app.get(`${BASE}/state`, async (req, reply) => {
+    const device = await deviceFromReq(req, "cuisine");
+    if (!device) return reply.code(401).type("application/json").send({ error: "unpaired" });
+    reply.header("Cache-Control", "no-store");
+    return reply.type("application/json").send(await cuisineBootData());
+  });
+
   // ── SSE stream (cuisine channel) ──
   app.get(`${BASE}/events`, async (req, reply) => {
     const device = await deviceFromReq(req, "cuisine");
@@ -289,27 +307,65 @@ function pipeOpsEvents(req: FastifyRequest, reply: FastifyReply, channel: string
   });
   raw.write("retry: 3000\n\n");
 
+  // Every event leaves through here, in strictly increasing id order. `lastSentId`
+  // is the dedup/ordering guard: a lower-or-equal id is dropped, so an old
+  // `ticket_new` buffered during replay can never be written after the
+  // `ticket_removed` (higher id) that retired it — the exact "finished order
+  // reappears" regression. Pings carry no id and are written raw (below).
+  let lastSentId = sinceId;
   const write = (e: OpsEvent) => {
+    if (e.id <= lastSentId) return;
+    lastSentId = e.id;
     raw.write(`id: ${e.id}\nevent: ${e.kind}\ndata: ${JSON.stringify(e.payload)}\n\n`);
   };
 
-  void opsEventsSince(channel, sinceId)
-    .then((events) => {
-      for (const e of events) write(e);
-    })
-    .catch(() => {
-      /* a replay hiccup shouldn't kill the live stream */
-    });
-
+  // Live events that arrive WHILE we page through the durable replay are held
+  // here, then flushed (sorted, deduped) once replay is done — never interleaved
+  // out of order with it. After that, `replaying` is false and events write live.
+  let replaying = true;
+  const buffer: OpsEvent[] = [];
   const unsubscribe = onOpsEvent((e) => {
-    if (e.channel === channel) {
-      try {
-        write(e);
-      } catch {
-        /* a broken pipe is cleaned up by the close handler below */
-      }
+    if (e.channel !== channel) return;
+    if (replaying) {
+      buffer.push(e);
+      return;
+    }
+    try {
+      write(e);
+    } catch {
+      /* a broken pipe is cleaned up by the close handler below */
     }
   });
+
+  // Drain the durable log in pages of 200 (the single-page cap was the catch-up
+  // bug: a device more than 200 events behind — e.g. booting at cursor 0 — only
+  // ever saw the OLDEST 200 and never reached the present). Page until a short
+  // page proves the tail is reached, then flush the live buffer and go direct.
+  void (async () => {
+    try {
+      for (;;) {
+        const page = await opsEventsSince(channel, lastSentId, 200);
+        for (const e of page) write(e);
+        if (page.length < 200) break;
+      }
+      buffer.sort((a, b) => a.id - b.id);
+      for (const e of buffer) write(e); // write() dedups anything replay already sent
+    } catch {
+      // A replay hiccup must not kill the live stream: flush what we buffered and
+      // let the client's /state resync repair any gap.
+      buffer.sort((a, b) => a.id - b.id);
+      for (const e of buffer) {
+        try {
+          write(e);
+        } catch {
+          /* broken pipe — cleaned up below */
+        }
+      }
+    } finally {
+      buffer.length = 0;
+      replaying = false;
+    }
+  })();
   // A real `ping` EVENT (not an SSE comment): comments are invisible to the
   // EventSource API, so clients could never tell a silently dead socket (half-open
   // TCP — no onerror, no auto-reconnect) from a quiet board. The apps run a
@@ -390,7 +446,7 @@ async function serveServiceHome(req: FastifyRequest, reply: FastifyReply): Promi
   }
   reply.type("text/html");
   if (!device) return reply.send(servicePairingPage());
-  return reply.send(serviceBoardPage(JSON.stringify(await serviceBootData())));
+  return reply.send(serviceBoardPage());
 }
 
 /** Host-aware redirect for service.revive.sn "/" → the PWA scope. */
@@ -658,7 +714,7 @@ async function serveOwnerHome(req: FastifyRequest, reply: FastifyReply): Promise
   const device = await deviceFromReq(req, "owner");
   reply.type("text/html");
   if (!device) return reply.send(ownerPairingPage());
-  return reply.send(ownerBoardPage(JSON.stringify(await ownerBootData())));
+  return reply.send(ownerBoardPage());
 }
 
 /** Host-aware redirect for owner.revive.sn "/" → the PWA scope. */
@@ -720,6 +776,7 @@ function registerOwnerRoutes(app: FastifyInstance): void {
   app.get(`${OWNER_BASE}/state`, async (req, reply) => {
     const device = await deviceFromReq(req, "owner");
     if (!device) return reply.code(401).type("application/json").send({ error: "unpaired" });
+    reply.header("Cache-Control", "no-store");
     return reply.type("application/json").send(await ownerBootData());
   });
 

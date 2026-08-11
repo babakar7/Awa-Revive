@@ -28,7 +28,7 @@ import {
   completeBarTicket,
 } from "../../src/domain/kitchenTicketRepo.js";
 import { findDeliveryOrder } from "../../src/domain/deliveryRepo.js";
-import { opsEventsSince, latestOpsEventId } from "../../src/domain/opsEvents.js";
+import { opsEventsSince, latestOpsEventId, recordOpsEvent } from "../../src/domain/opsEvents.js";
 import {
   createPairingDevice,
   redeemPairing,
@@ -195,6 +195,35 @@ describe("iPad ack + WhatsApp fallback", () => {
     const { ticket } = await createDeliveryTicket(order, 3600); // 1h grace
     expect(await claimTicketFallback(ticket.id)).toBeNull();
   });
+
+  it("the first ack emits ONE ticket_ack per channel; a repeat ack emits none", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+    const before = await latestOpsEventId("cuisine");
+    const beforeAcc = await latestOpsEventId("accueil");
+
+    expect(await ackTicketDisplayed(ticket.id)).toBe(true);
+    const cuisineAcks = (await opsEventsSince("cuisine", before)).filter((e) => e.kind === "ticket_ack");
+    const accueilAcks = (await opsEventsSince("accueil", beforeAcc)).filter((e) => e.kind === "ticket_ack");
+    expect(cuisineAcks).toHaveLength(1);
+    expect(accueilAcks).toHaveLength(1);
+    expect((cuisineAcks[0].payload as any).id).toBe(ticket.id);
+    expect((cuisineAcks[0].payload as any).ipad_ack_at).toBeTruthy();
+
+    // A repeated ack is idempotent (still true) but must NOT emit a second event.
+    const mid = await latestOpsEventId("cuisine");
+    expect(await ackTicketDisplayed(ticket.id)).toBe(true);
+    expect((await opsEventsSince("cuisine", mid)).filter((e) => e.kind === "ticket_ack")).toHaveLength(0);
+  });
+
+  it("kitchenTicketView carries ipad_ack_at (the reception board's confirmation truth)", async () => {
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+    expect(kitchenTicketView(ticket).ipad_ack_at).toBeNull();
+    await ackTicketDisplayed(ticket.id);
+    const acked = (await listOpenKitchenTickets()).find((t) => t.id === ticket.id)!;
+    expect(kitchenTicketView(acked).ipad_ack_at).toBeTruthy();
+  });
 });
 
 describe("reconcile (delivery → ticket projection)", () => {
@@ -273,6 +302,26 @@ describe("source-driven terminal helpers", () => {
 
     const events = await opsEventsSince("cuisine", cursor);
     expect(events.filter((e) => e.kind === "ticket_removed")).toHaveLength(2);
+  });
+});
+
+describe("SSE replay pagination (the catch-up the reconnect relies on)", () => {
+  it("draining opsEventsSince in pages of 200 returns every event, in strict id order", async () => {
+    // More than one page: a device booting far behind (e.g. cursor 0 after the
+    // CSP-blocked boot) must reach the present, not stall on the oldest 200.
+    const N = 450;
+    for (let i = 0; i < N; i++) await recordOpsEvent("replaychan", "ping", { n: i });
+
+    const seen: number[] = [];
+    let since = 0;
+    for (;;) {
+      const page = await opsEventsSince("replaychan", since, 200);
+      for (const e of page) seen.push(e.id);
+      if (page.length < 200) break;
+      since = seen[seen.length - 1];
+    }
+    expect(seen).toHaveLength(N);
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]);
   });
 });
 
@@ -390,7 +439,10 @@ describe("cuisine PWA over HTTP", () => {
       config.OPS_DEV_AUTOPAIR = true;
       const on = await app.inject({ method: "GET", url: "/ops/cuisine/" });
       expect(on.statusCode).toBe(200);
-      expect(on.body).toContain("window.__BOOT__");
+      // Kiosque (not the pairing screen): the client boots from /state — no inline
+      // boot (CSP-blocked), just the app.js that fetches it.
+      expect(on.body).toContain("/ops/cuisine/app.js");
+      expect(on.body).not.toContain("window.__BOOT__");
       const cookie = String(on.headers["set-cookie"]);
       expect(cookie).toContain("ops_device=");
       // The auto-provisioned session actually works on a protected endpoint.
@@ -421,7 +473,10 @@ describe("cuisine PWA over HTTP", () => {
 
     const home = await app.inject({ method: "GET", url: "/ops/cuisine/", headers: { cookie } });
     expect(home.statusCode).toBe(200);
-    expect(home.body).toContain("window.__BOOT__");
+    // The paired device gets the kiosque (which boots from /state), not the pairing
+    // screen and no CSP-blocked inline boot.
+    expect(home.body).toContain("/ops/cuisine/app.js");
+    expect(home.body).not.toContain("window.__BOOT__");
 
     // A ticket action is accepted with the device cookie, rejected without it.
     const order = await makeImmediateOrder();
@@ -431,5 +486,33 @@ describe("cuisine PWA over HTTP", () => {
     expect(JSON.parse(ok.body).ok).toBe(true);
     const denied = await app.inject({ method: "POST", url: `/ops/cuisine/tickets/${ticket.id}/preparing` });
     expect(denied.statusCode).toBe(401);
+  });
+
+  it("/ops/cuisine/state is device-authed, no-store, and returns the open tickets + cursor", async () => {
+    const code = newPairCode();
+    await createPairingDevice("iPad Cuisine", "cuisine", hashOpsToken(code), new Date(Date.now() + 60_000));
+    const pair = await app.inject({
+      method: "POST",
+      url: "/ops/cuisine/pair",
+      payload: `code=${code}`,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    const cookie = String(pair.headers["set-cookie"]).split(";")[0];
+
+    // Unauthed → 401 (never leak board state to an unpaired device).
+    const noauth = await app.inject({ method: "GET", url: "/ops/cuisine/state" });
+    expect(noauth.statusCode).toBe(401);
+
+    // A ticket created BEFORE the board opens must appear on the first /state — the
+    // exact "order already open when Cuisine loads" case.
+    const order = await makeImmediateOrder();
+    const { ticket } = await createDeliveryTicket(order, 15);
+    const res = await app.inject({ method: "GET", url: "/ops/cuisine/state", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    const body = JSON.parse(res.body);
+    expect(typeof body.cursor).toBe("number");
+    expect(body.cursor).toBe(await latestOpsEventId("cuisine"));
+    expect(body.tickets.map((t: any) => t.id)).toContain(ticket.id);
   });
 });

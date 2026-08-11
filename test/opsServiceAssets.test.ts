@@ -21,7 +21,7 @@ describe("service PWA assets", () => {
   });
 
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
-    const version = serviceBoardPage("{}").match(/app\.js\?b=(v\d+)/)?.[1];
+    const version = serviceBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
     expect(version).toBeTruthy();
     expect(SERVICE_SW).toContain(`service-${version}`);
   });
@@ -31,8 +31,13 @@ describe("service PWA assets", () => {
   });
 
   it("pages honour prefers-reduced-motion", () => {
-    expect(serviceBoardPage("{}")).toContain("prefers-reduced-motion");
+    expect(serviceBoardPage()).toContain("prefers-reduced-motion");
     expect(servicePairingPage()).toContain("prefers-reduced-motion");
+  });
+
+  it("the board has no inline boot (CSP script-src 'self' would block it)", () => {
+    expect(serviceBoardPage()).not.toContain("window.__BOOT__");
+    expect(serviceBoardPage()).not.toContain("<script>");
   });
 
   it("composer sheet has dialog semantics and guards an unfinished order", () => {
@@ -108,7 +113,7 @@ describe("service PWA assets", () => {
 
   it("the 🔔 alerts panel is always shown and walks install → enable → test", () => {
     // Bell is no longer auto-hidden; it dims until subscribed.
-    expect(serviceBoardPage("{}")).not.toContain('id="bell" hidden');
+    expect(serviceBoardPage()).not.toContain('id="bell" hidden');
     expect(SERVICE_APP_JS).toContain("paintBell");
     expect(SERVICE_APP_JS).toContain("isStandalone");
     expect(SERVICE_APP_JS).toContain("Sur l’écran d’accueil");

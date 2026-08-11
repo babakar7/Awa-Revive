@@ -29,7 +29,7 @@ describe("cuisine PWA assets", () => {
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
     // A mismatch (app.js?b=v3 but cache 'cuisine-v2') would serve stale JS from an
     // un-purged cache — assert the exact same token appears in both.
-    const version = cuisineKitchenPage("{}").match(/app\.js\?b=(v\d+)/)?.[1];
+    const version = cuisineKitchenPage().match(/app\.js\?b=(v\d+)/)?.[1];
     expect(version).toBeTruthy();
     expect(CUISINE_SW).toContain(`cuisine-${version}`);
   });
@@ -39,8 +39,13 @@ describe("cuisine PWA assets", () => {
   });
 
   it("pages honour prefers-reduced-motion", () => {
-    expect(cuisineKitchenPage("{}")).toContain("prefers-reduced-motion");
+    expect(cuisineKitchenPage()).toContain("prefers-reduced-motion");
     expect(cuisinePairingPage()).toContain("prefers-reduced-motion");
+  });
+
+  it("the kiosque has no inline boot (CSP script-src 'self' would block it)", () => {
+    expect(cuisineKitchenPage()).not.toContain("window.__BOOT__");
+    expect(cuisineKitchenPage()).not.toContain("<script>");
   });
 
   it("shows an à-emporter badge on takeaway tickets", () => {

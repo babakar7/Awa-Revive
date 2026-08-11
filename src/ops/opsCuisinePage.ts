@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v18";
+const ASSET_VERSION = "v19";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -136,7 +136,9 @@ max-height:88vh;max-height:88dvh;overflow:hidden;margin-top:3vh;border-radius:va
 .hrow .hitems{font-size:.92rem;color:var(--ink-700)}
 .hempty{text-align:center;color:var(--ink-500);font-style:italic;font-family:var(--serif);padding:2rem 0}`;
 
-export function cuisineKitchenPage(bootJson: string): string {
+export function cuisineKitchenPage(): string {
+  // No inline boot: script-src 'self' blocks it (that's what left the board empty
+  // and replaying ancient tickets). The client fetches /state before opening SSE.
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Cuisine")}<title>Cuisine Revive</title>
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Cuisine</h1><span id="clock"></span><span class="spacer"></span>
@@ -145,7 +147,6 @@ export function cuisineKitchenPage(bootJson: string): string {
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
 <div id="offline">Hors ligne — reconnexion…</div>
 <noscript>Activez JavaScript pour afficher les tickets cuisine.</noscript>
-<script>window.__BOOT__=${bootJson}</script>
 <script src="${BASE}/app.js?b=${ASSET_VERSION}"></script>
 </body></html>`;
 }
@@ -191,10 +192,9 @@ self.addEventListener('fetch',e=>{
 // ── Client app (SSE-driven board; DOM built with textContent) ────────────────
 export const CUISINE_APP_JS = String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
-  var boot=window.__BOOT__||{cursor:0,tickets:[]};
-  var cursor=boot.cursor||0;
+  var cursor=0;             // event cursor; seeded from /state before SSE opens
+  var booted=false;         // flips true after the first successful /state load
   var model=new Map();
-  (boot.tickets||[]).forEach(function(t){model.set(t.id,t);});
   var board=document.getElementById('board');
   var countEl=document.getElementById('count');
   var dot=document.getElementById('dot');
@@ -407,7 +407,9 @@ export const CUISINE_APP_JS = String.raw`(function(){
       groups.forEach(function(g){ bn.appendChild(el('span','bchip',g.qty+'× '+lineLabel(g.sample))); });
       board.appendChild(bn);
     }
-    if(!list.length){ board.appendChild(el('p','empty','Aucun ticket en cours ✅')); }
+    // Before the first /state resolves, keep the honest "Chargement…" — an empty
+    // model pre-boot must never read as "no orders" (that was the blank-board bug).
+    if(!list.length){ board.appendChild(el('p','empty', booted?'Aucun ticket en cours ✅':'Chargement…')); }
     else list.forEach(function(t){ board.appendChild(card(t)); });
     countEl.textContent=list.length? list.length+(list.length>1?' tickets':' ticket') : '';
   }
@@ -481,7 +483,47 @@ export const CUISINE_APP_JS = String.raw`(function(){
   },1000);
   tickClock();
 
-  render(); ackAll();
+  // ---- authoritative /state boot + resync ----
+  // The board is DB-authoritative: it loads /state BEFORE opening SSE (the inline
+  // boot is CSP-blocked), and re-fetches it every 60s, on tab wake, and after an
+  // SSE recovery. A snapshot whose cursor is behind what live events already
+  // advanced us past is ignored; otherwise the model is replaced silently — EXCEPT
+  // a ticket the SSE never delivered (surfaced only by resync) is announced like a
+  // fresh order, so a repaired screen also gets the cook's attention.
+  var loadTries=0;
+  function applyState(d,announce){
+    var next=new Map();
+    (d.tickets||[]).forEach(function(t){ next.set(t.id,t); });
+    // Undo timers survive a resync for tickets still open; drop them once a ticket
+    // has left the board (served/cancelled elsewhere).
+    Object.keys(pendingReady).forEach(function(id){ if(!next.has(id)) clearPendingReady(id); });
+    var fresh=[];
+    if(announce){ next.forEach(function(t,id){ if(!model.has(id)) fresh.push(t); }); }
+    model=next; booted=true; render();
+    fresh.forEach(function(t){ beep(); speak(newSpeech(t),false); ack(t.id);
+      var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); });
+  }
+  function fetchState(){ return fetch(BASE+'/state',{headers:{'X-Requested-With':'fetch'}})
+    .then(function(r){ if(r.status===401){ location.reload(); return null; } return r.ok?r.json():null; }); }
+  function loadState(){
+    loadTries++;
+    fetchState().then(function(d){
+      if(!d){ if(loadTries<8) setTimeout(loadState,2000); else { booted=true; render(); } return; }
+      cursor=d.cursor||0;
+      applyState(d,false);   // first paint is silent
+      ackAll();              // every open ticket is now displayed → stops any fallback
+      connect();             // open the live stream only now, at the right cursor
+    }).catch(function(){ if(loadTries<8) setTimeout(loadState,2000); else { booted=true; render(); } });
+  }
+  function resync(){
+    if(!booted) return;      // never race the first load
+    fetchState().then(function(d){
+      if(!d) return;
+      if((d.cursor||0)<cursor) return;   // stale snapshot racing live events — ignore
+      cursor=d.cursor||0;
+      applyState(d,true);                // announce anything the SSE dropped
+    }).catch(function(){});
+  }
 
   // ---- live stream with a silent-death watchdog ----
   // A half-open socket (network blip, tab suspension) can kill the stream WITHOUT
@@ -490,22 +532,31 @@ export const CUISINE_APP_JS = String.raw`(function(){
   // server emits a 'ping' event every 25s; if no ping and no real event lands for
   // 60s, tear the stream down and rebuild it — ?since=cursor replays everything
   // missed. On tab wake, check immediately (iOS suspends timers while hidden).
-  var es=null, lastBeat=Date.now();
+  var es=null, lastBeat=Date.now(), firstOpen=true;
   function beat(){ lastBeat=Date.now(); }
   function connect(){
     if(es){ try{es.close();}catch(e){} }
     es=new EventSource(BASE+'/events?since='+cursor);
-    es.onopen=function(){beat(); setOnline(true);};
+    es.onopen=function(){ beat(); setOnline(true);
+      // A reconnect (not the first open) may have missed events beyond the SSE
+      // replay window — reconcile against /state to be sure.
+      if(firstOpen){ firstOpen=false; } else { resync(); } };
     es.onerror=function(){setOnline(false);};
     es.addEventListener('ping',beat);
     es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); speak(newSpeech(t),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
     es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(urgentSpeech(t),true); } });
     es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); var prev=model.get(d.id); clearPendingReady(d.id); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); if(d.status==='CANCELLED'){ beep(); speak(cancelSpeech(prev||{heading:''}),true); } });
+    // The tablet's own ACK, echoed back: keep the model's ipad_ack_at fresh (the
+    // reception board reads it) — no card change, no sound.
+    es.addEventListener('ticket_ack',function(e){ beat(); var a=JSON.parse(e.data); var t=model.get(a.id); if(t){ t.ipad_ack_at=a.ipad_ack_at; } if(e.lastEventId)cursor=+e.lastEventId; });
   }
-  connect();
+
+  render();      // paints "Chargement…" (booted=false) until /state resolves
+  loadState();
   function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); connect(); } }
   setInterval(function(){ reconnectIfStale(60000); },15000);
-  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') reconnectIfStale(30000); });
+  setInterval(resync,60000);   // authoritative reconciliation every minute
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'){ reconnectIfStale(30000); resync(); } });
 
   // Keep the kitchen screen awake while the board is open (kiosk). The Wake Lock
   // is dropped when the page is hidden, so re-acquire it whenever it returns to
