@@ -142,8 +142,14 @@ describe("completeStaleCreateAccountRequests", () => {
     expect(calls.contacts).toHaveLength(0);
   });
 
-  it("échec Wix → retour au repli réception, sans message client", async () => {
-    const { request } = await seedStaleRequest({ phone: "221770000205" });
+  it("échec Wix → demande écartée en silence, sans intervention ni message client", async () => {
+    const { client, request } = await seedStaleRequest({ phone: "221770000205" });
+    // Un handoff « Compte non relié » déjà ouvert doit être refermé, pas laissé
+    // en attente : le client a abandonné sans payer (Babakar 11/08).
+    await recordHandoff(
+      client.id,
+      "Compte non relié — liaison/création à finaliser (client silencieux — vérification email jamais terminée)",
+    );
     const { deps, calls } = makeDeps({
       createContact: async () => {
         throw new Error("wix down");
@@ -154,9 +160,17 @@ describe("completeStaleCreateAccountRequests", () => {
 
     expect(created).toBe(0);
     expect(calls.sends).toHaveLength(0);
-    const { rows } = await pool.query(`select status, detail from link_requests where id = $1`, [request.id]);
-    expect(rows[0].status).toBe("NEEDS_RECEPTION");
-    expect(rows[0].detail).toContain("création sans vérification en échec");
+    const { rows } = await pool.query(`select status from link_requests where id = $1`, [request.id]);
+    // DISMISSED : hors périmètre du sweep création ET de l'escalade réception.
+    expect(rows[0].status).toBe("DISMISSED");
+    const handoffs = await pool.query(
+      `select status from handoffs where client_id = $1`,
+      [client.id],
+    );
+    expect(handoffs.rows[0].status).toBe("DONE");
+    // La demande n'apparaît jamais dans la file « Liaisons en attente ».
+    const queue = await links.receptionQueue();
+    expect(queue.some((entry) => entry.id === request.id)).toBe(false);
   });
 
   it("le compte est créé une seule fois même si la passe se répète", async () => {

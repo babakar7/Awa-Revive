@@ -28,8 +28,12 @@ import { backfillBookingContacts } from "./bookingContactBackfill.js";
  * Aval : `markLinked` (LINKED + linked_contact_id, par « auto-sans-verification »)
  * rend la preuve visible de `recentlyResolved`/`latestProvenLinkRequest` — le
  * prochain `create_plan_payment_link` passe sans redemander de vérification —
- * et ferme le handoff « Compte non relié » éventuel. Échec Wix → retour à
- * l'escalade réception (comportement historique, fail-safe).
+ * et ferme le handoff « Compte non relié » éventuel. Échec Wix → la demande
+ * est ÉCARTÉE en silence (DISMISSED), AUCUNE intervention humaine : une
+ * cliente qui a abandonné sans payer et dont la création Wix échoue (souvent
+ * un contact déjà existant sur cet email/téléphone, ou un aléa Wix) ne donne
+ * rien à faire à la réception (décision Babakar 11/08, Pape Alassane). Si elle
+ * revient et paie, le flux d'activation payé recrée/rattrape la fiche.
  */
 
 /** Injectable pour les tests d'intégration (pas de vrai Wix/WhatsApp). */
@@ -134,17 +138,15 @@ export async function completeStaleCreateAccountRequests(
       });
     } catch (err) {
       console.error(`Unverified account creation failed for request ${row.id}:`, err);
-      // Fail-safe : retour au comportement historique — la réception reprend.
-      await links.markNeedsReception(
-        row.id,
-        "création sans vérification en échec (Wix) — liaison manuelle requise",
-      );
-      await links.notifyLinkNeedsReception(
-        { id: row.id, client_id: row.client_id, reception_notified_at: row.reception_notified_at },
-        { name: row.name, wa_phone: row.wa_phone },
-        "création sans vérification en échec (Wix)",
-        row.claimed_email,
-      );
+      // Le client a abandonné sans payer : une création Wix ratée (souvent un
+      // contact déjà existant sur cet email/téléphone, ou un aléa Wix) ne
+      // justifie AUCUNE intervention humaine — la réception n'a rien à faire
+      // pour un prospect qui n'a pas payé (Babakar 11/08, Pape Alassane). On
+      // écarte la demande en silence (DISMISSED) : elle sort du périmètre du
+      // sweep création ET de l'escalade réception 30 min, et tout handoff
+      // « Compte non relié » déjà ouvert est refermé (autoClose). S'il revient
+      // et paie, le flux d'activation payé recrée/rattrape la fiche.
+      await links.dismiss(row.id, "system-auto");
       continue;
     }
 
