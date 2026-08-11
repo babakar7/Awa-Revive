@@ -126,12 +126,12 @@ function manualForm(): string {
 function jumpNav(d: PaymentsPageData): string {
   const untaggedBadge = d.untagged.length >= 50 ? "50+" : String(d.untagged.length);
   const links = [
+    `<a href="#pay-mouvements">Mouvements</a>`,
     d.untagged.length ? `<a href="#pay-qualifier">À qualifier <span class="badge badge--gray">${untaggedBadge}</span></a>` : "",
     `<a href="#pay-totaux">Totaux</a>`,
     `<a href="#pay-filtres">Filtrer</a>`,
     `<a href="#pay-journaliers">Journaliers</a>`,
     d.refundNeeded.length ? `<a href="#pay-remboursements">Remboursements <span class="badge badge--gray">${d.refundNeeded.length}</span></a>` : "",
-    `<a href="#pay-mouvements">Mouvements</a>`,
     d.owner ? `<a href="#pay-manuel">Mouvement manuel</a>` : "",
   ].filter(Boolean);
   return `<nav class="jump-nav jump-nav--sticky" aria-label="Sections">${links.join("")}</nav>`;
@@ -142,6 +142,7 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
   const filterQuery = new URLSearchParams({ from: d.from, to: d.to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) }).toString();
   return `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}
   ${jumpNav(d)}
+  <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2><p class="muted">300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
   <div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p><p class="muted">Périmètre comptable depuis le ${esc(d.startDate)} : les lignes antérieures ne sont pas couvertes, les dates historiques estimées sont signalées, et les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF (devise d’origine conservée pour audit).</p></div>
   ${alerts.length ? `<div class="card warn"><b>Lignes Wix écartées des totaux</b><p>${alerts.map(([k,n]) => `${esc(k)} : ${n}`).join(" · ")}</p></div>` : ""}
   ${qualifier(d.untagged)}
@@ -154,7 +155,6 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
     <button class="act" type="submit">Afficher</button><a class="act act--ghost" href="/admin/paiements/export.csv?${esc(filterQuery)}">Exporter CSV</a></form></section>
   <section class="card anchor-target" id="pay-journaliers"><h2>Totaux journaliers</h2>${dailyTable(d.daily, d)}</section>
   ${d.refundNeeded.length ? `<section class="card anchor-target" id="pay-remboursements"><h2>Remboursements bookings à pointer</h2>${d.refundNeeded.map((b) => `<form class="row between" method="post" action="/admin/bookings/${esc(b.id)}/refund-done"><input type="hidden" name="return_to" value="/admin/paiements"><span><b>${esc(b.service_name)}</b> · ${esc(b.client_name ?? "Client")} · ${fmtFcfa(b.amount_xof)}</span><button class="act act--sm" type="submit">Remboursement effectué</button></form>`).join("")}</section>` : ""}
-  <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2><p class="muted">300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
   ${d.owner ? manualForm() : ""}`;
 }
 
