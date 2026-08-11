@@ -24,7 +24,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v6";
+const ASSET_VERSION = "v7";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -258,10 +258,10 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     if(s<60) return 'il y a '+s+' s'; if(s<3600) return 'il y a '+Math.floor(s/60)+' min';
     if(s<86400) return 'il y a '+Math.floor(s/3600)+' h'; return 'il y a '+Math.floor(s/86400)+' j'; }
 
-  // ---- "Prête" with a local undo grace (same 3s pattern as the cuisine iPad) ----
+  // ---- "Prête" with a local undo grace (same 2s pattern as the cuisine iPad) ----
   // The POST fires only after the countdown; undoing in time reaches no server
   // (no status change, no false reception push). A reload or a removal drops it.
-  var READY_DELAY_MS=3000;
+  var READY_DELAY_MS=2000;
   var pendingReady={};   // id -> { until:epochMs, timer:id }
   function remainSecs(id){ var p=pendingReady[id]; if(!p) return 0; return Math.max(0,Math.ceil((p.until-Date.now())/1000)); }
   function startPendingReady(id){

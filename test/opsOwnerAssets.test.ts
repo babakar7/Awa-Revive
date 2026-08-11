@@ -33,7 +33,7 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).not.toContain("/ops/service/");
     // "Prête" keeps the local undo grace (mis-tap never reaches the server) and
     // cancelling asks a verb-labelled confirmation first.
-    expect(OWNER_APP_JS).toContain("READY_DELAY_MS=3000");
+    expect(OWNER_APP_JS).toContain("READY_DELAY_MS=2000");
     expect(OWNER_APP_JS).toContain("cancelPendingReady");
     expect(OWNER_APP_JS).toContain("askConfirm('Annuler cette commande ?'");
   });
