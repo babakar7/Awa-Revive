@@ -30,7 +30,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v23";
+const ASSET_VERSION = "v24";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -176,6 +176,11 @@ padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom));animation:s
 background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:.95rem}
 .modeseg .mode.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 .modeseg .mode.away.sel{background:var(--info);border-color:var(--info);color:#fff}
+/* Test-order toggle: quiet when off, loud (danger) when on so it's never sent by accident. */
+.testrow{display:flex;align-items:center;gap:.6rem;margin:0 0 .7rem;padding:.6rem .7rem;border-radius:var(--radius);
+border:1px dashed var(--border-strong);background:var(--surface-raised);color:var(--ink-500);font-size:.9rem;font-weight:600}
+.testrow.on{border-style:solid;border-color:var(--danger);background:var(--danger-bg);color:var(--danger)}
+.testrow .testcb{width:1.3rem;height:1.3rem;flex:0 0 auto;accent-color:var(--danger)}
 .sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:var(--radius);border:1px solid var(--border);
 background:#fff;color:var(--ink-900);font-size:1rem;font-family:inherit}
 .sheet textarea{min-height:3rem;margin-top:.6rem}
@@ -520,7 +525,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     if(!session){ fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; fn.style.marginBottom='.6rem'; sh.appendChild(fn); }
 
     var draft={};       // id -> {qty, choice, note}
-    var state={cat:'__ALL__', q:'', cartOnly:false, takeaway:false};
+    var state={cat:'__ALL__', q:'', cartOnly:false, takeaway:false, test:false};
     var totalEl, cartChip, listEl;
 
     // Packaging mode for THIS order (default sur place). A mixed table = two sends
@@ -532,6 +537,16 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     mHere.onclick=function(){ state.takeaway=false; mHere.classList.add('sel'); mAway.classList.remove('sel'); mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false'); };
     mAway.onclick=function(){ state.takeaway=true; mAway.classList.add('sel'); mHere.classList.remove('sel'); mAway.setAttribute('aria-pressed','true'); mHere.setAttribute('aria-pressed','false'); };
     modeseg.appendChild(mHere); modeseg.appendChild(mAway); sh.appendChild(modeseg);
+
+    // Discreet "test order" toggle (off by default, reset every time the composer
+    // opens). A test order still reaches the kitchen — red-badged "Test" there — so
+    // the flow can be exercised for real, but it is excluded from every stat. The
+    // loud styling when ON makes an accidental toggle obvious before sending.
+    var testRow=el('label','testrow'); testRow.setAttribute('role','switch'); testRow.setAttribute('aria-checked','false');
+    var testCb=document.createElement('input'); testCb.type='checkbox'; testCb.className='testcb';
+    testCb.onchange=function(){ state.test=testCb.checked; testRow.classList.toggle('on',testCb.checked); testRow.setAttribute('aria-checked',testCb.checked?'true':'false'); };
+    testRow.appendChild(testCb); testRow.appendChild(el('span',null,'🧪 Commande test — exclue des statistiques'));
+    sh.appendChild(testRow);
 
     function cartCount(){ var n=0; Object.keys(draft).forEach(function(id){ if(draft[id].qty>0) n+=draft[id].qty; }); return n; }
     function recompute(){
@@ -659,7 +674,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
       if(!items.length){ msg.textContent='Ajoutez au moins un article.'; msg.style.display='block'; return; }
       go.disabled=true; msg.style.display='none';
-      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway}; if(fn&&fn.value) body.first_name=fn.value;
+      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,test:state.test}; if(fn&&fn.value) body.first_name=fn.value;
       post('/spots/'+sp.id+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
         if(j&&j.ok){ if(j.id) trackSend(j.id); closeSheet(); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
       }).catch(function(){ go.disabled=false; msg.textContent='Erreur réseau.'; msg.style.display='block'; });

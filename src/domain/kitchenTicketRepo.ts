@@ -759,6 +759,8 @@ export interface TicketStatsToday {
   avgPrepSecs: number | null;
 }
 export async function ticketStatsToday(): Promise<TicketStatsToday> {
+  // Test tickets (is_test) are excluded from every aggregate: a create→instant-ready
+  // test order would otherwise wreck the day's average prep time and inflate counts.
   const res = await pool.query(
     `select
        count(*) filter (where created_at::date = current_date)                          as total_today,
@@ -766,7 +768,8 @@ export async function ticketStatsToday(): Promise<TicketStatsToday> {
        count(*) filter (where status in ('NEW','PREPARING','READY'))                     as in_progress,
        avg(extract(epoch from (ready_at - created_at)))
          filter (where ready_at is not null and created_at::date = current_date)         as avg_prep_secs
-     from kitchen_tickets`,
+     from kitchen_tickets
+     where not is_test`,
   );
   const r = res.rows[0] ?? {};
   return {

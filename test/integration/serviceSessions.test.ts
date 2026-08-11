@@ -27,6 +27,7 @@ import {
   setTicketUrgent,
   kitchenTicketView,
   ticketStatsToday,
+  getKitchenTicket,
   ticketsForSession,
   listOpenKitchenTickets,
   listRecentClosedTickets,
@@ -219,6 +220,22 @@ describe("createTableTicket", () => {
     expect(stats.urgentToday).toBeGreaterThanOrEqual(1);
     expect(stats.inProgress).toBeGreaterThanOrEqual(1);
     expect(stats.avgPrepSecs).not.toBeNull();
+  });
+
+  it("ticketStatsToday excludes test tickets from every aggregate", async () => {
+    const s = await seat(canapeSpot);
+    const before = await ticketStatsToday();
+    // A create→instant-ready test order: it would wreck avg prep and inflate counts
+    // if it counted. Mark it urgent + in-progress too, to prove ALL filters exclude it.
+    const { ticket } = await createTableTicket({
+      sessionId: s.id, heading: s.short_code, subheading: "test", lines: LINES,
+      amountXof: 6000, note: null, clientRequestId: reqId(), isTest: true,
+    });
+    await setTicketUrgent(ticket.id, true, "Fatou");
+    const after = await ticketStatsToday();
+    expect(after.totalToday).toBe(before.totalToday);
+    expect(after.urgentToday).toBe(before.urgentToday);
+    expect(after.inProgress).toBe(before.inProgress);
   });
 });
 
@@ -528,6 +545,21 @@ describe("service PWA over HTTP", () => {
     const body = JSON.parse(state.body);
     expect(typeof body.cursor).toBe("number");
     expect(JSON.stringify(body.spots)).toContain("Canapé");
+  });
+
+  it("the composer's test flag creates an is_test ticket (real orders stay is_test=false)", async () => {
+    const cookie = await pairAccueil();
+    const real = await app.inject({
+      method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-real-1" },
+    });
+    expect((await getKitchenTicket(JSON.parse(real.body).id))?.is_test).toBe(false);
+
+    const test = await app.inject({
+      method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-test-1", test: true },
+    });
+    expect((await getKitchenTicket(JSON.parse(test.body).id))?.is_test).toBe(true);
   });
 
   it("redirects the service host root into the PWA scope", async () => {

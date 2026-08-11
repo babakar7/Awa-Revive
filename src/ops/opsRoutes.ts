@@ -485,6 +485,10 @@ async function createSpotOrder(
   // Packaging mode is a server-side boolean — the client sends a flag, never trust
   // anything else. Default (and any non-true value) = sur place.
   const takeaway = b.takeaway === true;
+  // Test order: staff toggled "Test" in the composer. It still reaches the kitchen
+  // (already red-badged "Test") so the flow can be exercised end-to-end, but is
+  // excluded from every report (ticketStatsToday). Any non-true value = real order.
+  const isTest = b.test === true;
   const { ticket } = await createTableTicket({
     sessionId: session.id,
     heading: session.short_code,
@@ -493,7 +497,7 @@ async function createSpotOrder(
     amountXof: result.totalXof,
     note,
     clientRequestId,
-    isTest: false,
+    isTest,
     takeaway,
   });
   // Refresh the spot's live subtotal on the reception boards (aggregate isn't
