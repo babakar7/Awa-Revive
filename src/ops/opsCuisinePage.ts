@@ -234,21 +234,48 @@ export const CUISINE_APP_JS = String.raw`(function(){
   // reliable way to prove TTS works (and it primes it for the SSE-driven alerts).
   if(sndBtn) sndBtn.onclick=function(){ muted=!muted; try{ localStorage.setItem('cuisine.sound',muted?'off':'on'); }catch(e){} paintSnd();
     if(muted){ try{ speechSynthesis.cancel(); }catch(e){} } else { unlock(); speak('Son activé',false); } };
-  function beep(){ if(muted||!actx) return; try{ var o=actx.createOscillator(),g=actx.createGain();
+  function beep(){ if(muted||!actx) return; try{
+    if(actx.state==='suspended') actx.resume();      // iOS suspends the context after idle
+    var o=actx.createOscillator(),g=actx.createGain();
     o.type='sine'; o.frequency.value=880; g.gain.value=.001; o.connect(g); g.connect(actx.destination);
     var t=actx.currentTime; g.gain.exponentialRampToValueAtTime(.25,t+.02); g.gain.exponentialRampToValueAtTime(.001,t+.5);
     o.start(t); o.stop(t+.5);}catch(e){} }
-  function speak(text,urgent){ if(muted||!text||!window.speechSynthesis) return; try{
+  // "talking" = one of OUR utterances is genuinely mid-play (onstart fired, no
+  // onend yet). The watchdog below must not cancel a queue that is actually
+  // playing — this flag is the ground truth the speechSynthesis getters aren't.
+  var talking=false;
+  function speak(text,urgent){ if(muted||!text||!window.speechSynthesis) return; speakTry(text,urgent,2); }
+  function speakTry(text,urgent,retries){ try{
     speechSynthesis.resume();                        // Chrome pauses the queue at times
     if(urgent) speechSynthesis.cancel();             // an urgence jumps the queue
     var u=new SpeechSynthesisUtterance(text); u.lang='fr-FR'; var v=frVoice(); if(v) u.voice=v;
     if(urgent){ u.rate=1.05; u.pitch=1.1; }
-    speechSynthesis.speak(u); }catch(e){} }
+    var started=false;
+    u.onstart=function(){ started=true; talking=true; };
+    u.onend=function(){ talking=false; };
+    u.onerror=function(){ talking=false; };
+    speechSynthesis.speak(u);
+    // Watchdog: after a few idle minutes iOS wedges the TTS engine — speak()
+    // queues the utterance but it never starts, and resume() no longer helps
+    // (prod, 11/08: mute board minutes after a working announcement). cancel()
+    // is what un-wedges the engine; then re-issue the same announcement.
+    setTimeout(function(){ if(!started&&!talking&&retries>0){
+      try{ speechSynthesis.cancel(); }catch(e){}
+      speakTry(text,urgent,retries-1); } },1500);
+  }catch(e){} }
   // WebKit quirk on long-running kiosks: after hours of idle the TTS engine
   // silently pauses and every later utterance queues without ever playing — the
   // board "goes mute" until a reload. A resume() heartbeat (harmless when idle)
   // plus a kick when the tab returns to the foreground keeps it speaking.
   if(window.speechSynthesis){ setInterval(function(){ try{ speechSynthesis.resume(); }catch(e){} },4000); }
+  // iOS also tears down an audio session that stays quiet for a few minutes —
+  // the next beep then plays into a dead session, i.e. silence. An inaudible
+  // 30ms tick every 20s keeps the session warm for the whole shift.
+  setInterval(function(){ if(muted||!actx) return; try{
+    if(actx.state==='suspended') actx.resume();
+    var o=actx.createOscillator(),g=actx.createGain(); g.gain.value=.0001;
+    o.connect(g); g.connect(actx.destination);
+    o.start(); o.stop(actx.currentTime+.03); }catch(e){} },20000);
   document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'&&window.speechSynthesis){ try{ speechSynthesis.resume(); loadVoices(); }catch(e){} } });
   // ---- one place to format an order line (choice + note) ----
   // Reused by the normal card, the compact READY card, the batching banner AND
