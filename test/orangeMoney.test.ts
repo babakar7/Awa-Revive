@@ -1,6 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { pickDeepLink, transactionMatchesPending } from "../src/lib/orangeMoney.js";
+import {
+  OM_QR_NAME_MAX_CHARS,
+  omQrName,
+  pickDeepLink,
+  transactionMatchesPending,
+} from "../src/lib/orangeMoney.js";
 import { resolvePaymentMethod } from "../src/agent/tools.js";
+
+describe("omQrName", () => {
+  it("keeps short names as-is (trimmed)", () => {
+    expect(omQrName("L'Invitée — Clé 3 séances")).toBe("L'Invitée — Clé 3 séances");
+    expect(omQrName("  Awa test  ")).toBe("Awa test");
+  });
+
+  it("caps at 30 CHARACTERS — Sonatel 500s above (incident carnet 11/08)", () => {
+    const carnet = "Carnet de 10 Bébé nageur et Natation ";
+    const out = omQrName(carnet);
+    expect(Array.from(out).length).toBeLessThanOrEqual(OM_QR_NAME_MAX_CHARS);
+    expect(out).toBe("Carnet de 10 Bébé nageur et Na");
+  });
+
+  it("counts characters, not UTF-8 bytes (accents pass at 30 chars/32 bytes)", () => {
+    const name = "X".repeat(28) + "éé"; // 30 chars, 32 bytes — accepted by OM (probe 11/08)
+    expect(omQrName(name)).toBe(name);
+  });
+
+  it("never sends an empty name", () => {
+    expect(omQrName("   ")).toBe("Revive");
+    expect(omQrName("")).toBe("Revive");
+  });
+});
 
 describe("pickDeepLink", () => {
   const links = {

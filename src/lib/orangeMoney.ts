@@ -133,6 +133,20 @@ export function pickDeepLink(
 }
 
 /**
+ * Sonatel's QR API rejects names longer than 30 CHARACTERS (undocumented —
+ * the edge answers 500 wrapping an internal 400 from
+ * api-qrcode-write-partner-service; probed 11/08: 30 chars pass — even at 32
+ * UTF-8 bytes — 31 fail). Real incident: « Carnet de 10 Bébé nageur et
+ * Natation » (37 chars) killed a 70 000 F sale at the final payment step.
+ * The name is only a display label in the OM/Max It app: truncate, never fail.
+ */
+export const OM_QR_NAME_MAX_CHARS = 30;
+
+export function omQrName(name: string): string {
+  return Array.from(name.trim()).slice(0, OM_QR_NAME_MAX_CHARS).join("").trim() || "Revive";
+}
+
+/**
  * Create a merchant QR session. `clientReference` is our pending row id
  * (booking / plan / cafe) — echoed as metadata.order on the webhook.
  */
@@ -161,7 +175,7 @@ export async function createQrPayment(args: {
     callbackCancelUrl: args.cancelUrl,
     code: merchantCode,
     metadata: { order: args.clientReference, channel: "awa" },
-    name: args.name.slice(0, 80) || "Revive",
+    name: omQrName(args.name),
     validity: validitySeconds,
   };
   const tQr0 = Date.now();
