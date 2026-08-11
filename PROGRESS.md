@@ -1,5 +1,40 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Garde horaire de créneau : plus jamais un lien de paiement sur le mauvais horaire (11 août 2026)
+
+- **Incident (11/08, +221778299595)** : la cliente accepte « Sculpt samedi 11h15 » ;
+  le modèle appelle `create_payment_link` avec le `choice_id` du créneau **10h15**
+  (premier de la liste d'availability) tout en écrivant « 11h15 » à côté du lien.
+  `slot_cache` ne peut PAS attraper ça : 10h15 avait bien été proposé, ce n'était
+  juste pas le créneau accepté. La cliente a payé 12 000 F pour le mauvais horaire,
+  puis Awa a soutenu qu'elle se trompait (« c'était le seul créneau disponible » —
+  faux). Babakar a dû replacer la résa à la main.
+- **Garde serveur (lint sécurité, bloquant)** : nouveau `SlotTimeGuard` dans
+  [src/agent/outboundLint.ts](src/agent/outboundLint.ts). Dès qu'un outil qui
+  verrouille un créneau réussit dans le tour (`create_payment_link`,
+  `book_with_membership`, `add_spots_to_booking`, `book_key_*`,
+  `reschedule_booking`), toute heure (`11h15`, `11:15`, `1:15 pm`…) ou date
+  (`15 août`, `August 15`) écrite dans la réponse sortante doit correspondre aux
+  champs `*_dakar` calculés par le serveur — sinon blocage `slot_time_mismatch`
+  + retry correctif qui énonce le VRAI créneau (le client voit donc l'horaire
+  réel AVANT de payer). `get_my_bookings`/`cancel_booking`/`join_waitlist`
+  cautionnent leurs horaires sans activer la garde ; `check_availability` ne
+  cautionne RIEN (c'est précisément « aussi disponible » qui a créé le bug).
+  Exclusions anti-faux-positifs : durées/montants (« 20 minutes », « 12 000 F »),
+  fenêtre d'annulation (« 16h avant »).
+- **Écho déterministe** : si la réponse d'un tour verrouillant UN seul créneau ne
+  mentionne aucune heure, le serveur ajoute `📅 <slot_start_dakar>` — l'horaire
+  réellement réservé est toujours visible avant que l'argent parte.
+- **Prompt** : description d'`event_id` (vérifier que le choice_id correspond à
+  l'horaire ACCEPTÉ, jamais deviner), note du résultat `create_payment_link`
+  (relayer `slot_start_dakar` verbatim ; si ce n'est pas le créneau accepté, ne
+  PAS envoyer le lien), et règle système : un client qui conteste l'horaire d'une
+  résa confirmée → `get_my_bookings` + excuse + `reschedule_booking`/handoff,
+  jamais « tu te trompes », jamais de justification inventée.
+- Tests : `test/outboundLint.test.ts` (35 tests, dont le replay exact de
+  l'incident). Piège connu : la garde ne couvre pas une heure affirmée de mémoire
+  dans un tour SANS outil verrouillant (c'est la règle prompt qui couvre ça).
+
 ## Ledger des paiements par méthode (10 août 2026)
 
 - Nouvelle page équipe `/admin/paiements` : mouvements signés, totaux SQL brut/remboursements/net, détail filtrable, qualification des paiements Wix hors ligne et export CSV sécurisé.

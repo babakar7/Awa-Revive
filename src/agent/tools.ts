@@ -319,7 +319,10 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: "string",
           description:
             "The chosen slot's choice_id from check_availability (a short slot_… value). Copy it exactly as " +
-            "returned — that short id is the only slot identifier you are given.",
+            "returned — that short id is the only slot identifier you are given. BEFORE calling, re-read the " +
+            "availability result and verify this choice_id belongs to the EXACT date+time the client accepted " +
+            "(prod 11/08: the first slot's id was passed for a client who accepted 11:15 — they paid for 10:15). " +
+            "If unsure which slot they accepted, ask; never guess.",
         },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
         client_name: {
@@ -539,7 +542,10 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
           type: "string",
           description:
             "The chosen slot's choice_id from check_availability (a short slot_… value). Copy it exactly as " +
-            "returned — that short id is the only slot identifier you are given.",
+            "returned — that short id is the only slot identifier you are given. BEFORE calling, re-read the " +
+            "availability result and verify this choice_id belongs to the EXACT date+time the client accepted " +
+            "(prod 11/08: the first slot's id was passed for a client who accepted 11:15 — they paid for 10:15). " +
+            "If unsure which slot they accepted, ask; never guess.",
         },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
         client_name: { type: "string", description: "Client's first name" },
@@ -2218,7 +2224,10 @@ export async function executeTool(
           (massageMemberRateApplied
             ? `This client's active abonnement grants the subscriber rate — the amount above is the reduced member price. You may tell them it's their tarif abonné. `
             : ``) +
-          `Your reply must contain ONLY the class, amount, expiry, and payment link. ` +
+          `Your reply must contain ONLY the class, amount, expiry, and payment link, and must state the slot ` +
+          `date/time EXACTLY as slot_start_dakar above — the server blocks any other time. If slot_start_dakar ` +
+          `is NOT the slot the client accepted, you linked the wrong slot: do NOT relay this link; apologize and ` +
+          `re-run check_availability instead. ` +
           `Do not add the bar, another class, an upsell, or any unrelated suggestion while payment is unresolved. ` +
           `The client chose ${appLabel}; confirmation arrives automatically after verified payment.` +
           (await omOutageNoteFor(session.method)),

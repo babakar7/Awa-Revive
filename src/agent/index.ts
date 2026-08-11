@@ -12,6 +12,9 @@ import {
   lintOutboundReply,
   correctiveLintInstruction,
   canToolResultApprovePaymentUrl,
+  createSlotTimeGuard,
+  absorbSlotTimeFacts,
+  extractTimeTokens,
   extractUrls,
   isPaymentUrl,
   normalizeUrl,
@@ -1031,6 +1034,10 @@ export async function handleInboundText(args: {
     const link = (d as { payment_link?: string | null }).payment_link;
     if (link) approvedPaymentUrls.add(normalizeUrl(link));
   }
+  // Slot-time guard (prod 11/08 wrong-time payment link): server-vouched Dakar
+  // slot facts of this turn; once a slot-locking tool succeeds, the reply may
+  // not state any other class time/date (enforced by the safety lint below).
+  const slotTimeGuard = createSlotTimeGuard();
   // Book-first, menu-after (abonnement flow): a successful book_with_membership
   // this turn means the SERVER sends the incontournables list right after the
   // model's confirmation — deterministic, never left to the model's judgment
@@ -1159,6 +1166,7 @@ export async function handleInboundText(args: {
             /* non-JSON result — nothing to allow */
           }
         }
+        if (!isError) absorbSlotTimeFacts(slotTimeGuard, block.name, result);
         results.push({
           type: "tool_result",
           tool_use_id: block.id,
@@ -1331,7 +1339,7 @@ export async function handleInboundText(args: {
           retried &&
           repairedRetry.segments.every((segment) => segment.length <= 4096) &&
           missingReplyRequirements(repairedRetry.text, replyRequirements).length === 0 &&
-          lintOutboundReply(repairedRetry.text, approvedPaymentUrls).ok
+          lintOutboundReply(repairedRetry.text, approvedPaymentUrls, slotTimeGuard).ok
         ) {
           introRepair = repairedRetry;
           replyText = repairedRetry.text;
@@ -1350,7 +1358,7 @@ export async function handleInboundText(args: {
   // to server-approved links; if it still fails, drop to the technical fallback
   // (which also alerts reception) rather than ever send a fabricated link.
   if (replyText) {
-    const lint = lintOutboundReply(replyText, approvedPaymentUrls);
+    const lint = lintOutboundReply(replyText, approvedPaymentUrls, slotTimeGuard);
     if (!lint.ok) {
       console.warn(`Outbound reply blocked (${lint.reason}: ${lint.detail ?? ""}) — corrective retry`);
       try {
@@ -1362,7 +1370,7 @@ export async function handleInboundText(args: {
               output_config: { effort: "low" },
               system: [
                 ...system,
-                { type: "text", text: correctiveLintInstruction(approvedPaymentUrls) },
+                { type: "text", text: correctiveLintInstruction(approvedPaymentUrls, slotTimeGuard) },
               ],
               messages,
             }),
@@ -1377,7 +1385,7 @@ export async function handleInboundText(args: {
         if (
           retried &&
           repairedRetry.segments.every((segment) => segment.length <= 4096) &&
-          lintOutboundReply(repairedRetry.text, approvedPaymentUrls).ok
+          lintOutboundReply(repairedRetry.text, approvedPaymentUrls, slotTimeGuard).ok
         ) {
           // Safety is the only gate here — any coverage gap left in the
           // rewrite is completed or logged by the append stage below.
@@ -1392,6 +1400,30 @@ export async function handleInboundText(args: {
         console.error("Corrective lint retry failed:", err);
         replyText = null;
         loopError = loopError ?? new Error("outbound_lint_retry_error");
+      }
+    }
+  }
+
+  // Slot-time echo (prod 11/08): a payment-link/booking reply that states NO
+  // time at all would leave the client to trust their memory of the promised
+  // slot — append the server-known one so the real booked time is always
+  // visible before any money moves. Only when the turn locked exactly one
+  // slot (a reschedule has old+new; ambiguity must not be guessed).
+  if (replyText && slotTimeGuard.active) {
+    const uniqueFacts = Array.from(new Set(slotTimeGuard.facts));
+    if (uniqueFacts.length === 1 && extractTimeTokens(replyText).length === 0) {
+      const echoLine = `📅 ${uniqueFacts[0]}`;
+      replyText = `${replyText.trim()}\n\n${echoLine}`;
+      if (introRepair) {
+        if (introRepair.segments.length === 1 && replyText.length <= 4096) {
+          introRepair = { ...introRepair, text: replyText, segments: [replyText] };
+        } else {
+          introRepair = {
+            ...introRepair,
+            text: replyText,
+            segments: [...introRepair.segments, echoLine],
+          };
+        }
       }
     }
   }
