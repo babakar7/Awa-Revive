@@ -1,5 +1,27 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Voix cuisine : note générale lue + survie à l'idle iOS (11 août 2026)
+
+- **Incidents prod (11/08)** : (1) l'annonce vocale ne lisait jamais la **note
+  générale** du ticket (champ texte libre) — seulement le titre et les articles ;
+  (2) après **quelques minutes sans commande**, l'iPad redevenait muet sur la
+  commande suivante, alors qu'une annonce venait de marcher (« iced matcha »
+  muet, re-test immédiat OK).
+- **Fix 1** ([src/ops/opsCuisinePage.ts](src/ops/opsCuisinePage.ts),
+  `newSpeech`) : la voix termine par « … Note, [texte] » quand `t.note` existe.
+- **Fix 2 — piège iOS** : le heartbeat `resume()` (4 s) ne suffit PAS. Après
+  quelques minutes de silence, iOS (a) **suspend l'AudioContext** → bip muet, et
+  (b) **wedge le moteur TTS** → l'utterance est mise en file mais ne démarre
+  jamais ; seul un `cancel()` le débloque. Trois défenses : `beep()` fait
+  `actx.resume()` si suspendu ; `speak()` a un **watchdog** (si `onstart` n'a pas
+  tiré après 1,5 s et qu'aucune de NOS utterances ne joue — flag `talking`, pas
+  les getters speechSynthesis qui mentent — → `cancel()` + retry ×2) ; un **tick
+  inaudible** (gain 0.0001, 30 ms) toutes les 20 s garde la session audio
+  vivante toute la journée.
+- **Piège d'édition** : le script de la page vit dans un template literal — un
+  backtick dans un commentaire JS casse la compilation (TS1005 à des lignes
+  éloignées).
+
 ## Navigation admin regroupée + sections repliables (11 août 2026)
 
 - **Besoin** : la barre latérale gauche avait grossi (~29 items, 6 sections
