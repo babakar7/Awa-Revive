@@ -166,6 +166,7 @@ import * as staffPlan from "../domain/staffPlanningRepo.js";
 import { buildEmployeeScheduleMessage, validateGridPayload } from "../domain/staffPlanningRules.js";
 import { renderStaffPlanning, renderStaffPrint, staffBanner } from "./staffPage.js";
 import { registerCoachPaymentRoutes } from "./coachPaymentsRoutes.js";
+import { registerCoachingRoutes } from "./coachingRoutes.js";
 import { registerStoryRoutes } from "./storyPage.js";
 import { ADMIN_AUTH_CSS } from "./adminStyles.js";
 import { renderFollowUpPage } from "./followUpPage.js";
@@ -358,6 +359,9 @@ export function registerAdmin(app: FastifyInstance): void {
       // Owner-only financial section. The main login session already carries
       // the role, so there is no second password or section-specific cookie.
       registerCoachPaymentRoutes(admin);
+
+      // Bac à sable planning des cours (team-accessible, rien vers Wix).
+      registerCoachingRoutes(admin);
 
       // Story Instagram : aperçu + renvoi manuel de la story des cours de demain.
       registerStoryRoutes(admin);

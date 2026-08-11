@@ -1,5 +1,36 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Planning des cours (bac à sable) : page admin `/admin/coaching` (11 août 2026)
+
+- **Besoin** : composer visuellement des scénarios de planning coaching (nouveaux
+  créneaux tôt/soir, nouvelles coachs Serena/Maty) sans toucher Wix. Board hebdo,
+  une carte par cours (heure + coach + type), compteurs de charge par coach en
+  live (garde-fou des minimums contractuels), drag & drop entre jours.
+- **C'est un bac à sable : rien n'est jamais poussé vers Wix.** La saisie réelle
+  reste manuelle dans Wix Bookings. Périmètre volontairement limité aux cours
+  **Reformer et Mat** (filtre `isReformerOrMat`). Accessible à toute l'équipe
+  admin (pas de garde owner), comme le planning staff.
+- **Modèle** : cloné sur le planning staff (scénarios brouillon/publié, un seul
+  publié via UPDATE CASE atomique ; grille sérialisée client-side, `savebar`,
+  `beforeunload`). Fichiers : [src/domain/classPlanningRules.ts](src/domain/classPlanningRules.ts)
+  (pur), [src/domain/classPlanningRepo.ts](src/domain/classPlanningRepo.ts),
+  [src/admin/coachingPage.ts](src/admin/coachingPage.ts) (board vanilla),
+  [src/admin/coachingRoutes.ts](src/admin/coachingRoutes.ts). Tables
+  `class_plan_schedules` / `class_plan_slots` (coach/cours en **texte libre** —
+  les coachs ne sont pas tous dans Wix ; ids Wix optionnels, renseignés à l'import).
+- **Décisions clés** (revue) : (1) `replaceSlots` en **transaction** (page ouverte
+  à toute l'équipe → un save échoué/concurrent ne doit pas laisser la grille vide) ;
+  (2) l'**import Wix passe par la MÊME validation** (`validateClassGridPayload`)
+  que la saisie manuelle — jamais de contournement ; import = Reformer/Mat
+  **CONFIRMED** uniquement, éligible si `serviceId` ∈ services Reformer OU le nom
+  matche ; coach = ressource dont l'`id` est un staff Wix connu (le `type` des
+  ressources Calendar V3 est un UUID, pas « staff »), repli `resources[0]` ;
+  (3) semaine importée = **lundi suivant → lundi d'après exclu** ; (4) état injecté
+  en **littéral JS** (échappement `<`, U+2028/U+2029) au lieu du double-encodage
+  fragile du staff, car coach/cours sont du texte libre ; (5) suggestions Wix
+  **dégradées par source** (profils DB alimentent toujours les coachs même si Wix
+  est down). Tests : `test/classPlanningRules.test.ts` + `test/integration/classPlanning.test.ts`.
+
 ## Garde horaire de créneau : plus jamais un lien de paiement sur le mauvais horaire (11 août 2026)
 
 - **Incident (11/08, +221778299595)** : la cliente accepte « Sculpt samedi 11h15 » ;

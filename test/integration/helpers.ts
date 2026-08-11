@@ -752,7 +752,7 @@ export async function truncateAll(): Promise<void> {
               admin_outbound_messages, admin_audit_log, conversation_reviews,
               agent_tool_failures, presented_choices, campaign_leads, outbound_nudges,
               processed_webhooks, orange_money_verifications, handoffs, slot_cache, delivery_orders,
-              staff_contacts, staff_schedules, notification_log, invoices,
+              staff_contacts, staff_schedules, class_plan_schedules, notification_log, invoices,
               coach_payment_profiles, coach_payment_statements, coach_payment_send_log,
               multi_session_commitments, multi_session_commitment_items,
               app_state, ad_insights_daily cascade`,

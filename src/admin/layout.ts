@@ -81,6 +81,7 @@ const NAV: NavSection[] = [
       { href: "/admin/paiements-om", label: "Paiements OM", icon: "wallet" },
       { href: "/admin/abonnements", label: "Abonnements", icon: "key" },
       { href: "/admin/staff", label: "Équipe", icon: "team" },
+      { href: "/admin/coaching", label: "Planning cours", icon: "booking" },
       { href: "/admin/fermetures", label: "Fermetures", icon: "home" },
       { href: "/admin/faq", label: "FAQ Awa", icon: "chat" },
       { href: "/admin/paiements-coachs", label: "Paiements coachs", icon: "wallet" },

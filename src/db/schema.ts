@@ -1261,6 +1261,37 @@ create table if not exists staff_shifts (
 );
 create index if not exists idx_staff_shifts_schedule on staff_shifts (schedule_id);
 
+-- ═══ Planning hebdo des cours (bac à sable — jamais poussé vers Wix) ═══
+-- Un scénario = une ligne class_plan_schedules ; UN SEUL 'published' à la fois
+-- (même invariant app que staff_schedules : UPDATE CASE unique, pas d'index
+-- partiel). weekday : 0=lundi … 6=dimanche, comme staff_shifts.
+-- Coach et cours en TEXTE libre : les coachs ne sont pas forcément dans Wix
+-- (nouvelles recrues) et c'est un bac à sable — rien n'est écrit dans Wix. Les
+-- ids Wix (coach_wix_id, class_wix_id) sont un bonus informatif renseigné à
+-- l'import du calendrier réel. Unicité (weekday, start_min, coach) appliquée
+-- côté app (le texte libre rendrait une contrainte DB fragile).
+create table if not exists class_plan_schedules (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  status text not null default 'draft' check (status in ('draft','published')),
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists class_plan_slots (
+  id uuid primary key default gen_random_uuid(),
+  schedule_id uuid not null references class_plan_schedules(id) on delete cascade,
+  weekday smallint not null check (weekday between 0 and 6),
+  start_min smallint not null check (start_min between 0 and 1439),
+  duration_min smallint not null default 50 check (duration_min between 15 and 240),
+  coach_name text not null,
+  class_name text not null,
+  coach_wix_id text,
+  class_wix_id text
+);
+create index if not exists idx_class_plan_slots_schedule on class_plan_slots (schedule_id);
+
 -- ═══ États mensuels de paiement des coachs Reformer ═══
 -- Les profils portent le tarif courant. Chaque état en prend une copie
 -- complète : une modification ultérieure du profil ou de Wix ne change jamais
