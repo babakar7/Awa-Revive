@@ -12,7 +12,7 @@ export const ADMIN_CLIENT_JS = `
   var lastFocus=null;
 
   function desktop(){return window.matchMedia('(min-width:901px)').matches;}
-  function focusables(){return sidebar?Array.from(sidebar.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')):[];}
+  function focusables(){return sidebar?Array.from(sidebar.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter(function(el){return el.offsetParent!==null||el===document.activeElement;}):[];}
   function setMobile(open){
     if(!menu||!sidebar)return;
     body.classList.toggle('mobile-nav-open',open);
@@ -45,6 +45,19 @@ export const ADMIN_CLIENT_JS = `
   if(menu)menu.addEventListener('click',function(){setMobile(!body.classList.contains('mobile-nav-open'));});
   if(scrim)scrim.addEventListener('click',function(){setMobile(false);});
   if(sidebar)sidebar.querySelectorAll('a[href]').forEach(function(a){a.addEventListener('click',function(){if(!desktop())setMobile(false);});});
+  if(sidebar)sidebar.addEventListener('click',function(e){
+    var btn=e.target&&e.target.closest?e.target.closest('.nav-group-toggle'):null;
+    if(!btn)return;
+    var group=btn.closest('.nav-group');if(!group)return;
+    var collapsed=!group.classList.contains('is-collapsed');
+    group.classList.toggle('is-collapsed',collapsed);
+    btn.setAttribute('aria-expanded',collapsed?'false':'true');
+    try{
+      var store=JSON.parse(localStorage.getItem('awa-admin-nav-sections')||'{}')||{};
+      store[group.getAttribute('data-sec')]=collapsed;
+      localStorage.setItem('awa-admin-nav-sections',JSON.stringify(store));
+    }catch(err){}
+  });
   window.addEventListener('resize',syncNav);syncNav();
 
   document.querySelectorAll('[data-studio-activity]').forEach(function(activity){
@@ -244,4 +257,26 @@ export const ADMIN_CLIENT_JS = `
   });
   if(dialog)dialog.addEventListener('close',function(){pendingForm=null;});
 })();
+`;
+
+/**
+ * Runs pre-paint (injected right after the sidebar) so collapsible sections
+ * appear in their persisted state with no flash. Adds `js-nav` so CSS only
+ * hides collapsed groups when JavaScript is available (no-JS = all visible).
+ * Never writes storage — the section containing the active page is force-open
+ * without clobbering the user's stored preference.
+ */
+export const NAV_STATE_JS = `
+(function(){try{
+  document.body.classList.add('js-nav');
+  var store={};try{store=JSON.parse(localStorage.getItem('awa-admin-nav-sections')||'{}')||{}}catch(e){}
+  document.querySelectorAll('#admin-sidebar .nav-group[data-sec]:not(.nav-group--pinned)').forEach(function(group){
+    var pref=store[group.getAttribute('data-sec')];
+    var collapsed=typeof pref==='boolean'?pref:group.hasAttribute('data-default-collapsed');
+    if(group.hasAttribute('data-has-active'))collapsed=false;
+    group.classList.toggle('is-collapsed',collapsed);
+    var btn=group.querySelector('.nav-group-toggle');
+    if(btn)btn.setAttribute('aria-expanded',collapsed?'false':'true');
+  });
+}catch(e){}})();
 `;

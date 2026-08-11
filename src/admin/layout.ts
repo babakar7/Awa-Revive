@@ -1,4 +1,4 @@
-import { ADMIN_CLIENT_JS } from "./adminClient.js";
+import { ADMIN_CLIENT_JS, NAV_STATE_JS } from "./adminClient.js";
 import { ADMIN_CSS } from "./adminStyles.js";
 import { badgeLabel, escapeHtml } from "./helpers.js";
 import { loadNavBadges, type NavBadges } from "./navBadges.js";
@@ -39,6 +39,7 @@ type IconName =
   | "logout"
   | "panel"
   | "hamburger"
+  | "chevron"
   | "empty";
 
 type NavLink = {
@@ -49,46 +50,64 @@ type NavLink = {
 };
 
 type NavSection = {
+  /** Stable slug: persistence key + data-sec attribute. */
+  id: string;
   title: string;
+  /** No header, never collapsible (always-visible daily pages). */
+  pinned?: boolean;
   muted?: boolean;
+  defaultCollapsed?: boolean;
   links: NavLink[];
 };
 
 const NAV: NavSection[] = [
   {
-    title: "Aperçu",
+    id: "pinned",
+    title: "",
+    pinned: true,
     links: [
       { href: "/admin", label: "À faire", icon: "home", badgeKey: "total" },
-      { href: "/admin/rapport", label: "Rapport", icon: "wallet" },
-      { href: "/admin/conversion", label: "Conversion", icon: "funnel" },
+      { href: "/admin/conversations", label: "Conversations", icon: "chat" },
     ],
   },
   {
+    id: "clients",
     title: "Clients",
     links: [
-      { href: "/admin/conversations", label: "Conversations", icon: "chat" },
-      { href: "/admin/classement", label: "Classement clients", icon: "booking" },
       { href: "/admin/suivi", label: "Suivi clients", icon: "handoff", badgeKey: "followUps" },
       { href: "/admin/relances", label: "Relances leads", icon: "funnel", badgeKey: "leadNudges" },
       { href: "/admin/crm", label: "CRM", icon: "crm", badgeKey: "crmLinks" },
+      { href: "/admin/classement", label: "Classement clients", icon: "booking" },
     ],
   },
   {
-    title: "Studio",
+    id: "finance",
+    title: "Finance",
     links: [
-      { href: "/admin/bookings", label: "Réservations", icon: "booking" },
+      { href: "/admin/rapport", label: "Rapport", icon: "wallet" },
       { href: "/admin/paiements", label: "Paiements", icon: "wallet" },
       { href: "/admin/paiements-om", label: "Paiements OM", icon: "wallet" },
+      { href: "/admin/conversion", label: "Conversion", icon: "funnel" },
+      { href: "/admin/paiements-coachs", label: "Paiements coachs", icon: "wallet" },
+    ],
+  },
+  {
+    id: "studio",
+    title: "Studio",
+    defaultCollapsed: true,
+    links: [
+      { href: "/admin/bookings", label: "Réservations", icon: "booking" },
       { href: "/admin/abonnements", label: "Abonnements", icon: "key" },
       { href: "/admin/staff", label: "Équipe", icon: "team" },
       { href: "/admin/coaching", label: "Planning cours", icon: "booking" },
       { href: "/admin/fermetures", label: "Fermetures", icon: "home" },
       { href: "/admin/faq", label: "FAQ Awa", icon: "chat" },
-      { href: "/admin/paiements-coachs", label: "Paiements coachs", icon: "wallet" },
     ],
   },
   {
+    id: "documents",
     title: "Documents",
+    defaultCollapsed: true,
     links: [
       { href: "/admin/factures", label: "Factures", icon: "invoice" },
       { href: "/admin/devis", label: "Devis", icon: "quote" },
@@ -96,7 +115,9 @@ const NAV: NavSection[] = [
     ],
   },
   {
+    id: "bar",
     title: "Bar",
+    defaultCollapsed: true,
     links: [
       { href: "/admin/orders", label: "Commandes payées", icon: "orders" },
       { href: "/admin/livraisons", label: "Livraisons", icon: "delivery", badgeKey: "livraisons" },
@@ -105,8 +126,10 @@ const NAV: NavSection[] = [
     ],
   },
   {
+    id: "config",
     title: "Configuration",
     muted: true,
+    defaultCollapsed: true,
     links: [
       { href: "/admin/notifications", label: "Notifications", icon: "bell" },
       { href: "/admin/appareils", label: "Appareils", icon: "tests" },
@@ -141,6 +164,7 @@ const ICON_PATHS: Record<IconName, string> = {
   logout: '<path d="M8 4H4v12h4M12 7l3 3-3 3M7 10h8"/>',
   panel: '<rect x="3" y="4" width="14" height="12" rx="2"/><path d="M8 4v12m3-9 3 3-3 3"/>',
   hamburger: '<path d="M3 5.5h14M3 10h14M3 14.5h14"/>',
+  chevron: '<path d="m6 8 4 4 4-4"/>',
   empty: '<path d="M4 6h12v10H4zM7 6V4h6v2"/><path d="M7 11h6"/>',
 };
 
@@ -156,9 +180,11 @@ function isActive(href: string, active: string): boolean {
 
 function navHtml(active: string, badges: NavBadges): string {
   return NAV.map((section) => {
+    let agg = 0;
     const links = section.links
       .map((l) => {
         const n = l.badgeKey ? badges[l.badgeKey] : 0;
+        if (typeof n === "number" && n > 0) agg += n;
         const b =
           typeof n === "number" && n > 0
             ? `<span class="nav-badge" aria-label="${n} en attente">${escapeHtml(badgeLabel(n))}</span>`
@@ -167,7 +193,27 @@ function navHtml(active: string, badges: NavBadges): string {
         return `<a href="${l.href}" class="nav-link${current ? " active" : ""}"${current ? ' aria-current="page"' : ""} title="${escapeHtml(l.label)}"><span class="nav-icon">${uiIcon(l.icon)}</span><span class="nav-label">${escapeHtml(l.label)}</span>${b}</a>`;
       })
       .join("");
-    return `<div class="nav-section${section.muted ? " muted-sec" : ""}">${escapeHtml(section.title)}</div>${links}`;
+
+    if (section.pinned) {
+      return `<div class="nav-group nav-group--pinned" data-sec="${section.id}"><div class="nav-group-links">${links}</div></div>`;
+    }
+
+    const controls = `nav-sec-${section.id}`;
+    const hasActive = section.links.some((l) => isActive(l.href, active));
+    const aggBadge =
+      agg > 0
+        ? `<span class="nav-badge nav-group-badge" aria-label="${agg} en attente">${escapeHtml(badgeLabel(agg))}</span>`
+        : "";
+    const secAttrs = `data-sec="${section.id}"${section.defaultCollapsed ? " data-default-collapsed" : ""}${hasActive ? " data-has-active" : ""}`;
+    return (
+      `<section class="nav-group${section.muted ? " muted-sec" : ""}" ${secAttrs}>` +
+      `<button type="button" class="nav-group-toggle" aria-expanded="true" aria-controls="${controls}">` +
+      `<span class="nav-section">${escapeHtml(section.title)}</span>${aggBadge}` +
+      `<span class="nav-chevron" aria-hidden="true">${uiIcon("chevron")}</span>` +
+      `</button>` +
+      `<div class="nav-group-links" id="${controls}">${links}</div>` +
+      `</section>`
+    );
   }).join("");
 }
 
@@ -215,6 +261,7 @@ ${refresh}
     </form>
   </div>
 </aside>
+<script>${NAV_STATE_JS}</script>
 <button class="nav-scrim" id="nav-scrim" type="button" tabindex="-1" aria-label="Fermer le menu"></button>
 <div class="main-wrap">
   <header class="topbar">

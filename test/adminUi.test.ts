@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ADMIN_CLIENT_JS } from "../src/admin/adminClient.js";
+import { ADMIN_CLIENT_JS, NAV_STATE_JS } from "../src/admin/adminClient.js";
 import { renderInbox } from "../src/admin/inboxPage.js";
 import { layout } from "../src/admin/layout.js";
 import type { NavBadges } from "../src/admin/navBadges.js";
@@ -52,13 +52,37 @@ describe("admin design system shell", () => {
     expect(html).toContain("Suivi du studio");
     expect(html).toContain(ADMIN_CLIENT_JS);
 
-    const overview = html.indexOf("Aperçu");
-    const clients = html.indexOf("Clients");
-    const studio = html.indexOf("Studio");
-    const documents = html.indexOf("Documents");
-    expect(overview).toBeLessThan(clients);
-    expect(clients).toBeLessThan(studio);
-    expect(studio).toBeLessThan(documents);
+    const order = ["pinned", "clients", "finance", "studio", "documents", "bar", "config"].map(
+      (id) => html.indexOf(`data-sec="${id}"`),
+    );
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it("pins the daily pages above the first collapsible group", async () => {
+    const html = await layout("À faire", "/admin", "<p>contenu</p>", { badges });
+    const firstToggle = html.indexOf('class="nav-group-toggle"');
+    expect(html.indexOf('href="/admin/conversations"')).toBeLessThan(firstToggle);
+    expect(html.indexOf('data-sec="pinned"')).toBeLessThan(firstToggle);
+  });
+
+  it("makes occasional sections collapsible with persisted, no-flash state", async () => {
+    const html = await layout("Réservations", "/admin/bookings", "<p>contenu</p>", { badges });
+    // Occasional sections start collapsed by default; daily ones do not.
+    for (const id of ["studio", "documents", "bar", "config"]) {
+      expect(html).toContain(`data-sec="${id}" data-default-collapsed`);
+    }
+    expect(html).not.toContain('data-sec="clients" data-default-collapsed');
+    expect(html).not.toContain('data-sec="finance" data-default-collapsed');
+    // The section holding the active page is always force-expanded.
+    expect(html).toMatch(/data-sec="studio"[^>]*data-has-active/);
+    expect(html).toContain('aria-controls="nav-sec-studio"');
+    // Collapsed sections keep an aggregate badge so counts never vanish.
+    // Clients aggregates followUps (7) + leadNudges (0) + crmLinks (5) = 12.
+    expect(html).toContain('class="nav-badge nav-group-badge" aria-label="12 en attente"');
+    // Pre-paint state script is present and syntactically valid.
+    expect(html).toContain(NAV_STATE_JS);
+    expect(() => new Function(NAV_STATE_JS)).not.toThrow();
   });
 
   it("escapes titles, subtitles and breadcrumb labels", async () => {

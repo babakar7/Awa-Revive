@@ -1,5 +1,30 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Navigation admin regroupée + sections repliables (11 août 2026)
+
+- **Besoin** : la barre latérale gauche avait grossi (~29 items, 6 sections
+  toujours dépliées), difficile à scanner. Objectif : retrouver vite une page.
+- **Fait** ([src/admin/layout.ts](src/admin/layout.ts)) : les 2 pages du
+  quotidien (**À faire**, **Conversations**) sont **épinglées** en haut, sans
+  en-tête, toujours visibles. Les autres sont regroupées : **Clients** (Suivi,
+  Relances, CRM, Classement), **Finance** (Rapport, Paiements, Paiements OM,
+  Conversion, Paiements coachs — les pages « argent » enfin colocalisées),
+  **Studio**, **Documents**, **Bar**, **Configuration**.
+- **Repliables** : chaque en-tête de section est un bouton chevron. Studio /
+  Documents / Bar / Configuration sont **repliées par défaut** ; Clients et
+  Finance dépliées. État mémorisé par navigateur dans
+  `localStorage['awa-admin-nav-sections']` (map `{sectionId: replié}`).
+- **Sans piège** : la section qui contient la page active est **toujours
+  dépliée** (`data-has-active`) sans écraser la préférence stockée. Un badge
+  **agrégé** sur l'en-tête d'une section repliée évite que les compteurs
+  disparaissent (ex. Livraisons). Rendu serveur toujours déplié + script
+  pré-peinture (`NAV_STATE_JS`) qui applique l'état avant le premier paint →
+  pas de flash ; **sans JS, tout reste visible**. Le mode icônes
+  (`body.nav-collapsed`) ignore le repli et montre toutes les icônes.
+- Fichiers : `layout.ts` (données NAV + `navHtml`), `adminClient.ts`
+  (`NAV_STATE_JS` + délégation du toggle + fix piège-focus mobile),
+  `adminStyles.ts` (styles groupe/chevron/badge), `test/adminUi.test.ts`.
+
 ## Planning des cours (bac à sable) : page admin `/admin/coaching` (11 août 2026)
 
 - **Besoin** : composer visuellement des scénarios de planning coaching (nouveaux
