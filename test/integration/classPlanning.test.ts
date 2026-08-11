@@ -107,6 +107,43 @@ describe("class planning CRUD + grid", () => {
   });
 });
 
+describe("autosave (ajax) + print", () => {
+  it("ajax save returns a JSON verdict and persists; rejects conflicts as JSON without wiping", async () => {
+    const s = await plan.createSchedule("Auto", "test");
+    const good = JSON.stringify({ slots: [{ weekday: 0, start_min: 435, duration_min: 50, coach_name: "Yass", class_name: "Pilates Reformer (Sculpt)" }] });
+    const okRes = await post(`/admin/coaching/${s.id}/grid`, { ajax: "1", grid: good });
+    expect(okRes.statusCode).toBe(200);
+    expect(JSON.parse(okRes.body)).toMatchObject({ ok: true, count: 1 });
+    expect(await count(`select count(*) from class_plan_slots where schedule_id=$1`, [s.id])).toBe(1);
+
+    const conflict = JSON.stringify({ slots: [
+      { weekday: 0, start_min: 435, duration_min: 50, coach_name: "Yass", class_name: "A" },
+      { weekday: 0, start_min: 435, duration_min: 50, coach_name: "Yass", class_name: "B" },
+    ] });
+    const badRes = await post(`/admin/coaching/${s.id}/grid`, { ajax: "1", grid: conflict });
+    expect(badRes.statusCode).toBe(200);
+    expect(JSON.parse(badRes.body).ok).toBe(false);
+    expect(await count(`select count(*) from class_plan_slots where schedule_id=$1`, [s.id])).toBe(1);
+  });
+
+  it("print page renders global and per-coach, phone-readable", async () => {
+    const s = await plan.createSchedule("Imprim", "test");
+    await plan.replaceSlots(s.id, [
+      { weekday: 0, start_min: 435, duration_min: 50, coach_name: "Leslie", class_name: "Pilates Reformer (Sculpt)", coach_wix_id: null, class_wix_id: null },
+      { weekday: 0, start_min: 1035, duration_min: 50, coach_name: "Yass", class_name: "Pilates Reformer (Foundation)", coach_wix_id: null, class_wix_id: null },
+    ]);
+    const global = await get(`/admin/coaching/${s.id}/print`);
+    expect(global.statusCode).toBe(200);
+    expect(global.body).toContain("Planning global");
+    expect(global.body).toContain("Lundi");
+    expect(global.body).toContain("viewport");
+
+    const perCoach = await get(`/admin/coaching/${s.id}/print?coach=${encodeURIComponent("Yass")}`);
+    expect(perCoach.statusCode).toBe(200);
+    expect(perCoach.body).toContain("Planning de Yass");
+  });
+});
+
 describe("Wix import", () => {
   function rawEvent(over: Record<string, any> = {}): any {
     return {

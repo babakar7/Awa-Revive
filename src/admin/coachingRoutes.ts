@@ -9,7 +9,7 @@ import {
 } from "../domain/classPlanningRules.js";
 import { listProfiles } from "../domain/coachPaymentRepo.js";
 import { listServices, listStaffResources, queryCalendarEventsV3 } from "../lib/wix.js";
-import { coachingBanner, renderCoachingPlanning } from "./coachingPage.js";
+import { coachingBanner, renderCoachingPlanning, renderCoachingPrint } from "./coachingPage.js";
 import { layout } from "./layout.js";
 
 /**
@@ -119,13 +119,36 @@ export function registerCoachingRoutes(admin: FastifyInstance): void {
 
   admin.post("/coaching/:id/grid", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const body = req.body as any;
+    // Autosave sends ajax=1 and wants a light JSON verdict (no full-page reload);
+    // the manual button (no-JS fallback) keeps the classic POST-redirect-GET.
+    const ajax = String(body?.ajax ?? "") === "1";
     const schedule = await plan.getSchedule(id);
-    if (!schedule) return reply.redirect("/admin/coaching?err=scénario introuvable", 303);
-    const parsed = validateClassGridPayload(String((req.body as any)?.grid ?? ""));
-    if ("error" in parsed) return reply.redirect(`/admin/coaching?s=${id}&err=${encodeURIComponent(parsed.error)}`, 303);
+    if (!schedule) {
+      return ajax
+        ? reply.send({ ok: false, error: "scénario introuvable" })
+        : reply.redirect("/admin/coaching?err=scénario introuvable", 303);
+    }
+    const parsed = validateClassGridPayload(String(body?.grid ?? ""));
+    if ("error" in parsed) {
+      return ajax
+        ? reply.send({ ok: false, error: parsed.error })
+        : reply.redirect(`/admin/coaching?s=${id}&err=${encodeURIComponent(parsed.error)}`, 303);
+    }
     await plan.replaceSlots(id, parsed.slots);
     req.log.info({ schedule: id, slots: parsed.slots.length, by: req.adminUser }, "Class grid saved");
-    return reply.redirect(`/admin/coaching?s=${id}&done=saved`, 303);
+    return ajax
+      ? reply.send({ ok: true, count: parsed.slots.length })
+      : reply.redirect(`/admin/coaching?s=${id}&done=saved`, 303);
+  });
+
+  admin.get("/coaching/:id/print", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const schedule = await plan.getSchedule(id);
+    if (!schedule) return reply.code(404).type("text/plain").send("Scénario introuvable");
+    const slots = await plan.getSlots(id);
+    const coach = String((req.query as any)?.coach ?? "").trim() || null;
+    reply.type("text/html").send(renderCoachingPrint(schedule, slots, coach));
   });
 
   admin.post("/coaching/import-wix", async (req, reply) => {

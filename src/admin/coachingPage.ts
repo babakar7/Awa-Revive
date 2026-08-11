@@ -2,8 +2,25 @@ import {
   TIME_PRESETS_MIN,
   DEFAULT_DURATION_MIN,
   fmtSlotTime,
+  levelFromClassName,
 } from "../domain/classPlanningRules.js";
 import type { ClassPlanSchedule, ClassPlanSlot } from "../domain/classPlanningRepo.js";
+
+const WEEKDAYS_FULL = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
+const PRINT_COACH_COLORS = ["#2b6fb0", "#3f8f5a", "#c2404f", "#b5701f", "#7c547d", "#0f8a8a", "#8a5a2b", "#55408f", "#b03a86", "#4a6b1f"];
+const LEVEL_COLORS: Record<string, string> = { foundation: "#3f8f5a", sculpt: "#d98a2b", intense: "#c2404f", other: "#8a7f92" };
+
+function normName(s: string): string {
+  return String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+/** Distinct coaches sorted by rank (same colour assignment as the board). */
+function coachColorMap(slots: ClassPlanSlot[]): Map<string, string> {
+  const keys = [...new Set(slots.map((s) => normName(s.coach_name)).filter(Boolean))].sort();
+  const map = new Map<string, string>();
+  keys.forEach((k, i) => map.set(k, PRINT_COACH_COLORS[i % PRINT_COACH_COLORS.length]));
+  return map;
+}
 
 /**
  * Body HTML for /admin/coaching — server-rendered chrome + a self-contained
@@ -92,6 +109,9 @@ const PAGE_CSS = `
 .coaching-totals .ct-total{margin-left:auto;color:#8a7f92;font-size:.82rem}
 .slot-preset{margin:.1rem}
 #conflictwarn{color:#c2404f;font-size:.82rem;margin:.3rem 0 0}
+.savebar.save--saved{background:#e7f4ec;border-color:#bfe0cb;color:#1f6b3a;font-weight:600}
+.savebar.save--error{background:#fbe6e8;border-color:#f0c0c6;color:#a11c2c}
+.savebar #savestatus{font-weight:600}
 `;
 
 export function renderCoachingPlanning(data: CoachingPlanningData): string {
@@ -158,13 +178,14 @@ ${header}
   ${isDraft ? inlineForm(`/admin/coaching/${current.id}/publish`, "Publier", "", `Publier « ${current.name} » ? Il deviendra le scénario de référence.`) : ""}
   ${isDraft ? inlineForm(`/admin/coaching/${current.id}/delete`, "Supprimer", "", `Supprimer « ${current.name} » ?`, "act act--sm act--danger") : ""}
   <a class="act act--sm act--ghost" href="/admin/coaching?new=1">Nouveau</a>
+  <a class="act act--sm act--ghost" href="/admin/coaching/${esc(current.id)}/print" target="_blank">Télécharger / Imprimer</a>
   ${inlineForm("/admin/coaching/import-wix", "Importer depuis Wix", "", "Créer un brouillon depuis la semaine réelle Wix (cours Reformer et Mat) ?", "act act--sm act--ghost")}
 </div>
 ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coaching" style="display:flex;gap:.5rem;flex-wrap:wrap"><input name="name" required placeholder="Nom du scénario" style="flex:1;min-width:220px"><button class="act" type="submit">Créer</button></form></div>` : ""}
 
 <div id="savebar" class="savebar">
-  <span>Modifications non enregistrées</span>
-  <button class="act" onclick="coachingSave()">Enregistrer</button>
+  <span id="savestatus">Enregistrement automatique activé</span>
+  <button class="act act--sm act--ghost" onclick="coachingSave()">Enregistrer maintenant</button>
 </div>
 
 <div class="section-header"><div><span class="eyebrow">Charge par coach</span><h2>${esc(current.name)} ${scheduleBadge(current)}</h2></div></div>
@@ -176,7 +197,6 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
   <div id="board" class="board"></div>
 </div>
 
-<form method="post" action="/admin/coaching/${esc(current.id)}/grid" id="gridform" style="display:none"><input type="hidden" name="grid" id="gridinput"></form>
 
 <datalist id="coachlist">${coachOptions}</datalist>
 <datalist id="classlist">${classOptions}</datalist>
@@ -214,14 +234,50 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
   function norm(s){ return String(s).normalize("NFD").replace(/[\\u0300-\\u036f]/g,"").toLowerCase(); }
   function levelOf(name){ var n=norm(name); if(n.indexOf("foundation")>=0) return "foundation"; if(n.indexOf("sculpt")>=0) return "sculpt"; if(n.indexOf("intense")>=0) return "intense"; return "other"; }
   function initial(name){ var t=String(name).trim(); return t ? t[0].toUpperCase() : "?"; }
-  // Deterministic coach colour (dark enough for white text on the dot). Same
-  // coach → same colour everywhere; stable across reloads.
+  // Distinct colour per coach (dark enough for white text on the dot). Assigned
+  // by rank over the coaches present, so no two ever share a colour (until the
+  // palette runs out); rebuilt each render, same for the card and the legend.
   var COACH_COLORS = ["#2b6fb0","#3f8f5a","#c2404f","#b5701f","#7c547d","#0f8a8a","#8a5a2b","#55408f","#b03a86","#4a6b1f"];
-  function coachColor(name){ var n=norm(name), h=0; for(var i=0;i<n.length;i++){ h=(h*31 + n.charCodeAt(i))>>>0; } return n ? COACH_COLORS[h % COACH_COLORS.length] : "#1f2b45"; }
+  var colorMap = {};
+  function buildColorMap(){
+    var keys = {};
+    ST.slots.forEach(function(s){ var k=norm(s.co); if(k) keys[k]=1; });
+    if(filterCoach) keys[filterCoach]=1; // keep a pinned 0-course coach coloured
+    colorMap = {};
+    Object.keys(keys).sort().forEach(function(k,i){ colorMap[k]=COACH_COLORS[i % COACH_COLORS.length]; });
+  }
+  function coachColor(name){ return colorMap[norm(name)] || "#1f2b45"; }
   function conflictKey(s){ return s.wd+":"+s.s+":"+String(s.co).trim().toLowerCase(); }
-  function markDirty(){ if(!dirty){ dirty=true; document.getElementById("savebar").style.display="flex"; } }
+  var saveTimer=null, saving=false, pendingAgain=false, savedHideTimer=null;
+  function setSave(state, msg){
+    var bar=document.getElementById("savebar"), st=document.getElementById("savestatus");
+    if(savedHideTimer){ clearTimeout(savedHideTimer); savedHideTimer=null; }
+    bar.style.display="flex"; bar.className="savebar save--"+state;
+    if(state==="pending") st.textContent="Modification en attente…";
+    else if(state==="saving") st.textContent="Enregistrement…";
+    else if(state==="saved"){ st.textContent="✓ Enregistré"; savedHideTimer=setTimeout(function(){ if(!dirty) bar.style.display="none"; }, 1600); }
+    else if(state==="error") st.textContent="⚠️ Non enregistré : "+(msg||"échec")+" — corrigez pour réessayer";
+  }
+  function scheduleAutosave(){ if(saveTimer) clearTimeout(saveTimer); setSave("pending"); saveTimer=setTimeout(function(){ doAutosave(); }, 900); }
+  function doAutosave(){
+    if(saveTimer){ clearTimeout(saveTimer); saveTimer=null; }
+    if(saving){ pendingAgain=true; return; }
+    saving=true; setSave("saving");
+    var slots = ST.slots.map(function(s){ return { weekday:s.wd, start_min:s.s, duration_min:s.d, coach_name:s.co, class_name:s.cl, coach_wix_id:s.coId, class_wix_id:s.clId }; });
+    var body = "ajax=1&grid="+encodeURIComponent(JSON.stringify({ slots: slots }));
+    fetch("/admin/coaching/"+ST.scheduleId+"/grid", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body:body, credentials:"same-origin" })
+      .then(function(r){ return r.json().catch(function(){ return { ok:false, error:"réponse invalide" }; }); })
+      .then(function(j){ saving=false;
+        if(j && j.ok){ dirty=false; setSave("saved"); }
+        else { setSave("error", j && j.error); }
+        if(pendingAgain){ pendingAgain=false; scheduleAutosave(); }
+      })
+      .catch(function(){ saving=false; setSave("error","réseau"); if(pendingAgain){ pendingAgain=false; scheduleAutosave(); } });
+  }
+  function markDirty(){ dirty=true; scheduleAutosave(); }
 
   function render(){
+    buildColorMap();
     var board = document.getElementById("board"); board.innerHTML="";
     // conflict counts
     var counts = {};
@@ -329,16 +385,102 @@ ${data.showNewForm ? `<div class="card"><form method="post" action="/admin/coach
     markDirty(); render(); slClose();
   };
 
-  window.coachingSave = function(){
-    var slots = ST.slots.map(function(s){ return { weekday:s.wd, start_min:s.s, duration_min:s.d, coach_name:s.co, class_name:s.cl, coach_wix_id:s.coId, class_wix_id:s.clId }; });
-    document.getElementById("gridinput").value = JSON.stringify({ slots: slots });
-    dirty = false;
-    document.getElementById("gridform").submit();
-  };
+  window.coachingSave = function(){ doAutosave(); };
 
   window.addEventListener("beforeunload", function(ev){ if(dirty){ ev.preventDefault(); ev.returnValue=""; } });
   document.addEventListener("keydown", function(ev){ if(ev.key==="Escape" && editK!==null){ ev.preventDefault(); slClose(); } });
   render();
 })();
 </script>`;
+}
+
+// ---------- print / download (mobile-friendly, per-day lists) ----------
+
+function coachDot(color: string): string {
+  return `<span class="cdot" style="background:${color}"></span>`;
+}
+
+/** Ordered list of a day's courses (time — class · coach), sorted by time. */
+function dayList(daySlots: ClassPlanSlot[], colors: Map<string, string>, withCoach: boolean): string {
+  return daySlots
+    .slice()
+    .sort((a, b) => a.start_min - b.start_min)
+    .map((s) => {
+      const lvl = levelFromClassName(s.class_name);
+      const coach = withCoach ? ` ${coachDot(colors.get(normName(s.coach_name)) ?? "#1f2b45")}<span class="co">${esc(s.coach_name)}</span>` : "";
+      return `<li><span class="t">${esc(fmtSlotTime(s.start_min))}</span><span class="cl" style="border-color:${LEVEL_COLORS[lvl]}">${esc(s.class_name)}</span>${coach}</li>`;
+    })
+    .join("");
+}
+
+/**
+ * Standalone, phone-readable schedule page (print / save as PDF). Shows the whole
+ * week as per-day lists (global) or, when a coach is given, only that coach's
+ * courses. A print button triggers the browser's "Save as PDF".
+ */
+export function renderCoachingPrint(
+  current: ClassPlanSchedule,
+  slots: ClassPlanSlot[],
+  coachFilter: string | null,
+): string {
+  const colors = coachColorMap(slots);
+  const coaches = [...new Set(slots.map((s) => s.coach_name.trim()).filter(Boolean))].sort(
+    (a, b) => slots.filter((s) => s.coach_name.trim() === b).length - slots.filter((s) => s.coach_name.trim() === a).length,
+  );
+  const filterKey = coachFilter ? normName(coachFilter) : null;
+  const shown = filterKey ? slots.filter((s) => normName(s.coach_name) === filterKey) : slots;
+  const filterName = filterKey ? coaches.find((c) => normName(c) === filterKey) ?? coachFilter : null;
+
+  const chip = (href: string, label: string, active: boolean, color?: string) =>
+    `<a class="chip${active ? " chip--on" : ""}" href="${esc(href)}">${color ? coachDot(color) : ""}${esc(label)}</a>`;
+  const nav = `<div class="nav no-print">
+    ${chip(`/admin/coaching/${current.id}/print`, "Vue globale", !filterKey)}
+    ${coaches.map((c) => chip(`/admin/coaching/${current.id}/print?coach=${encodeURIComponent(c)}`, `${c} (${slots.filter((s) => s.coach_name.trim() === c).length})`, filterKey === normName(c), colors.get(normName(c)))).join("")}
+  </div>`;
+
+  // Global view = per-day lists with coach; single-coach view = that coach's days.
+  const daySections = WEEKDAYS_FULL.map((label, wd) => {
+    const ds = shown.filter((s) => s.weekday === wd);
+    if (ds.length === 0) return "";
+    return `<section class="day"><h2>${label} <span class="n">${ds.length}</span></h2><ul>${dayList(ds, colors, true)}</ul></section>`;
+  }).join("");
+
+  const heading = filterName ? `Planning de ${esc(filterName)}` : "Planning global";
+  const subtitle = filterName
+    ? `${shown.length} cours/semaine`
+    : `${slots.length} cours/semaine · ${coaches.length} coach${coaches.length > 1 ? "s" : ""}`;
+
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>${esc(heading)} — ${esc(current.name)}</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#211921;background:#f6f3f7;margin:0;padding:1rem;max-width:640px;margin:0 auto}
+  h1{font-size:1.25rem;margin:.2rem 0 0}
+  .sub{color:#6c5a6d;font-size:.85rem;margin:.1rem 0 .8rem}
+  .nav{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem}
+  .chip{display:inline-flex;align-items:center;text-decoration:none;font-size:.82rem;color:#3a2f3b;background:#fff;border:1px solid #e0d8e4;border-radius:20px;padding:.28rem .7rem}
+  .chip--on{background:#211921;color:#fff;border-color:#211921}
+  .cdot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;margin-right:.35rem;flex:0 0 auto}
+  .btn{display:inline-block;background:#7c547d;color:#fff;border:none;border-radius:9px;padding:.6rem 1.1rem;font-size:.95rem;cursor:pointer;text-decoration:none}
+  .day{background:#fff;border:1px solid #eee;border-radius:12px;padding:.6rem .8rem;margin-bottom:.7rem}
+  .day h2{font-size:1rem;margin:.1rem 0 .5rem;display:flex;align-items:center;gap:.5rem}
+  .day h2 .n{font-size:.72rem;font-weight:600;color:#8a7f92;background:#f0eaf1;border-radius:10px;padding:.05rem .5rem}
+  ul{list-style:none;margin:0;padding:0}
+  li{display:flex;align-items:center;gap:.5rem;padding:.35rem 0;border-top:1px solid #f2eef4;font-size:.9rem}
+  li:first-child{border-top:none}
+  .t{font-weight:700;min-width:3.1rem}
+  .cl{border-left:3px solid #8a7f92;padding-left:.5rem;flex:1}
+  .co{color:#3a2f3b}
+  .empty{color:#8a7f92;padding:1rem;text-align:center;background:#fff;border-radius:12px}
+  @media print{ body{background:#fff;padding:0;max-width:none} .no-print{display:none} .day{break-inside:avoid;border-color:#ddd} }
+</style></head><body>
+<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;margin-bottom:.6rem">
+  <a class="btn" href="#" onclick="window.print();return false">⤓ Enregistrer en PDF / Imprimer</a>
+</div>
+<h1>${esc(heading)}</h1>
+<p class="sub">${esc(current.name)}${current.status === "published" ? " · référence" : " · brouillon"} — ${esc(subtitle)}</p>
+${nav}
+${daySections || `<div class="empty">Aucun cours à afficher.</div>`}
+</body></html>`;
 }
