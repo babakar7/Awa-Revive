@@ -130,7 +130,11 @@ Awa. Score only Awa's own assistant/tool behavior.
   last message is a normal, on-track continuation — confirming eligibility, offering to look up
   slots, asking which day/time suits the client — and the client simply stops replying, that is a
   dropoff: asking for the info she needs to proceed is Awa doing her job (a prompt with no "?"
-  like "Dis-moi quel créneau te convient !" still counts), and the silence is a free choice.
+  like "Dis-moi quel créneau te convient !" still counts), and the silence is a free choice. A
+  reaction or sticker after Awa's prompt is not a new request and does not require a human
+  follow-up. If Awa successfully called disengage_conversation because the client became sexual,
+  abusive, spammy or persistently off-topic, the business conversation is deliberately closed:
+  classify it as dropoff, never as deadend or technical_failure.
 - deadend: the client left BECAUSE the exchange failed them: Awa couldn't do what they asked and
   no handoff happened, went in circles, misunderstood repeatedly, or the last client message is
   an unanswered question or unmet request.
@@ -177,9 +181,39 @@ export function normalizeVerdictForTranscript(
     );
   });
   const anyToolError = toolTraces.some((trace) => trace.error);
+  const lastDisengagementIdx = turns.reduce((last, turn, i) => {
+    if (turn.role !== "tool") return last;
+    const trace = parseToolTrace(turn.content);
+    return trace?.name === "disengage_conversation" &&
+      !trace.error &&
+      /"disengaged"\s*:\s*true/.test(trace.raw)
+      ? i
+      : last;
+  }, -1);
+  const deliberateDisengagement =
+    lastDisengagementIdx >= 0 &&
+    !turns
+      .slice(lastDisengagementIdx + 1)
+      .some(
+        (turn) =>
+          turn.role === "user" && !isLightweightClientReaction(turn.content),
+      );
   const claimsToolFailure = /(?:outil|list[_ ]plans?|plans?).{0,70}(?:echec|echou|erreur|panne|crash|fail|souci technique)|(?:echec|echou|erreur|panne|crash|fail).{0,70}(?:outil|list[_ ]plans?|plans?)/i.test(
     normalizedReviewText(verdict.summary),
   );
+
+  // Awa a fermé volontairement un échange non sérieux / sexuel : personne à
+  // rappeler. Les stickers envoyés ensuite ne rouvrent pas le besoin. En
+  // revanche, un vrai nouveau message client après le désengagement reprend
+  // normalement le cycle de review.
+  if (deliberateDisengagement) {
+    return {
+      ...verdict,
+      outcome: "dropoff",
+      severity: "normal",
+      suggested_action: "",
+    };
+  }
 
   if (outputFilterRejected) {
     return {
@@ -199,13 +233,24 @@ export function normalizeVerdictForTranscript(
     };
   }
 
-  const lastHumanFacing = [...turns]
-    .reverse()
-    .find(
-      (turn) =>
-        turn.role === "user" ||
-        (turn.role === "assistant" && turn.source !== "admin"),
-    );
+  const humanFacing = turns.filter(
+    (turn) =>
+      turn.role === "user" ||
+      (turn.role === "assistant" && turn.source !== "admin"),
+  );
+  const lastHumanFacing = humanFacing.at(-1);
+  // Une réaction WhatsApp, un sticker ou un emoji seul ne porte aucune
+  // nouvelle demande. On remonte au dernier vrai tour pour savoir qui devait
+  // encore répondre (cas Assane / mba826094, 11/08).
+  const effectiveLastHumanFacing =
+    lastHumanFacing?.role === "user" && isLightweightClientReaction(lastHumanFacing.content)
+      ? [...humanFacing]
+          .reverse()
+          .find(
+            (turn) =>
+              !(turn.role === "user" && isLightweightClientReaction(turn.content)),
+          )
+      : lastHumanFacing;
   // Awa a eu le dernier mot et le client n'a pas répondu : abandon libre, pas
   // impasse — Awa a fait son travail (décision produit Babakar, 07/08). On ne
   // garde en « À reprendre » que les cas GRAVES (membre bloqué, frustration
@@ -216,7 +261,7 @@ export function normalizeVerdictForTranscript(
   if (
     verdict.outcome === "deadend" &&
     verdict.severity !== "severe" &&
-    lastHumanFacing?.role === "assistant"
+    effectiveLastHumanFacing?.role === "assistant"
   ) {
     return { ...verdict, outcome: "dropoff", suggested_action: "" };
   }
@@ -231,6 +276,16 @@ interface ToolTraceStatus {
 
 function normalizedReviewText(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function isLightweightClientReaction(content: string): boolean {
+  const text = content.trim();
+  if (!text) return true;
+  const normalized = normalizedReviewText(text);
+  if (/^\[(?:reaction|sticker recu)\b[\s\S]*\]$/.test(normalized)) return true;
+  // Emoji/symbol/punctuation only. Letters and digits remain, so a real short
+  // answer such as "oui" or "samedi" is never discarded.
+  return text.replace(/[\s\p{P}\p{S}\u200D\uFE0F]/gu, "") === "";
 }
 
 function parseToolTrace(content: string): ToolTraceStatus | null {

@@ -88,6 +88,89 @@ describe("normalizeVerdictForTranscript", () => {
     expect(verdict).toMatchObject({ outcome: "dropoff", suggested_action: "" });
   });
 
+  it("ignores a WhatsApp reaction after Awa's qualification question (Assane case 11/08)", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const verdict = normalizeVerdictForTranscript(
+      {
+        outcome: "deadend",
+        need_category: "membership",
+        severity: "normal",
+        summary: "La cliente a seulement réagi avec un émoji.",
+        suggested_action: "La recontacter.",
+      },
+      [
+        turn("user", "Je suis intéressée par la Clé 3 séances"),
+        turn("assistant", "As-tu déjà pratiqué le Pilates Reformer chez Revive ?"),
+        turn("user", "[réaction 😢]"),
+      ],
+    );
+    expect(verdict).toMatchObject({ outcome: "dropoff", suggested_action: "" });
+  });
+
+  it("never creates a follow-up after a successful sexual-content disengagement (mba826094)", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const verdict = normalizeVerdictForTranscript(
+      {
+        outcome: "deadend",
+        need_category: "booking",
+        severity: "severe",
+        summary: "La réservation n'a pas été finalisée.",
+        suggested_action: "Recontacter le client.",
+      },
+      [
+        turn("assistant", "Quel jour te conviendrait pour ta première séance ?"),
+        turn("user", "[sticker reçu : contenu à caractère intime/sexuel]"),
+        turn(
+          "tool",
+          'disengage_conversation({"category":"sexual"}) -> {"disengaged":true,"note":"stop"}',
+        ),
+        turn("assistant", "Je reste uniquement sur le studio et les réservations. Belle journée."),
+        turn("user", "[sticker reçu : Main rose faisant le signe cœur]"),
+      ],
+    );
+    expect(verdict).toMatchObject({
+      outcome: "dropoff",
+      severity: "normal",
+      suggested_action: "",
+    });
+  });
+
+  it("reviews a real new request normally after an older disengagement", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const original = {
+      outcome: "deadend" as const,
+      need_category: "booking" as const,
+      severity: "normal" as const,
+      summary: "Le nouveau message est resté sans réponse.",
+      suggested_action: "Répondre au client.",
+    };
+    const verdict = normalizeVerdictForTranscript(original, [
+      turn(
+        "tool",
+        'disengage_conversation({"category":"sexual"}) -> {"disengaged":true}',
+      ),
+      turn("assistant", "Je reste uniquement sur les réservations."),
+      turn("user", "Bonjour, est-ce qu'il reste une place samedi ?"),
+    ]);
+    expect(verdict).toEqual(original);
+  });
+
+  it("keeps a real unanswered client question actionable", () => {
+    const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
+    const original = {
+      outcome: "deadend" as const,
+      need_category: "booking" as const,
+      severity: "normal" as const,
+      summary: "La cliente a demandé une place samedi sans recevoir de réponse.",
+      suggested_action: "Répondre à sa demande de créneau.",
+    };
+    const verdict = normalizeVerdictForTranscript(original, [
+      turn("assistant", "Voici le tarif de la séance."),
+      turn("user", "Est-ce qu'il reste une place samedi ?"),
+    ]);
+    expect(verdict).toEqual(original);
+  });
+
   it("still surfaces a SEVERE deadend even when Awa spoke last (member blocked)", () => {
     const turn = (role: string, content: string) => ({ role, content, created_at: new Date() });
     const original = {
