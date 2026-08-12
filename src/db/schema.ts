@@ -1219,10 +1219,20 @@ create table if not exists cafe_menu_item_photos (
   mime_type text not null check (mime_type = 'image/webp'),
   width integer not null check (width > 0),
   height integer not null check (height > 0),
+  source_bytes bytea,
+  source_width integer check (source_width > 0),
+  source_height integer check (source_height > 0),
+  focal_x double precision not null default 0.5 check (focal_x between 0 and 1),
+  focal_y double precision not null default 0.5 check (focal_y between 0 and 1),
   version text not null unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table cafe_menu_item_photos add column if not exists source_bytes bytea;
+alter table cafe_menu_item_photos add column if not exists source_width integer;
+alter table cafe_menu_item_photos add column if not exists source_height integer;
+alter table cafe_menu_item_photos add column if not exists focal_x double precision not null default 0.5;
+alter table cafe_menu_item_photos add column if not exists focal_y double precision not null default 0.5;
 
 -- Liste CANONIQUE des catégories du bar (avant : catégorie = simple texte libre
 -- sur chaque article → typos « SMOOTHIES »/« Smoothies »). La fiche article

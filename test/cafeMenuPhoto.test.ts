@@ -24,6 +24,10 @@ describe("menu photo normalization", () => {
       mimeType: MENU_PHOTO_MIME,
       width: MENU_PHOTO_WIDTH,
       height: MENU_PHOTO_HEIGHT,
+      sourceWidth: 900,
+      sourceHeight: 600,
+      focalX: 0.5,
+      focalY: 0.5,
     });
     const metadata = await sharp(result.bytes).metadata();
     expect(metadata).toMatchObject({ format: "webp", width: 900, height: 600 });
@@ -40,6 +44,31 @@ describe("menu photo normalization", () => {
     const right = pixel(800, 300);
     expect(left[2]).toBeGreaterThan(left[0]);
     expect(right[0]).toBeGreaterThan(right[2]);
+  });
+
+  it("moves a portrait crop from the top to the bottom using manual focal coordinates", async () => {
+    const source = await sharp({
+      create: { width: 600, height: 1200, channels: 3, background: "#ff0000" },
+    })
+      .composite([
+        {
+          input: Buffer.from('<svg width="600" height="600"><rect width="600" height="600" fill="#0000ff"/></svg>'),
+          top: 600,
+          left: 0,
+        },
+      ])
+      .png()
+      .toBuffer();
+    const top = await normalizeMenuPhoto(source, "image/png", 0.5, 0);
+    const bottom = await normalizeMenuPhoto(source, "image/png", 0.5, 1);
+    if ("error" in top || "error" in bottom) throw new Error("normalization failed");
+
+    const topPixel = await sharp(top.bytes).extract({ left: 450, top: 300, width: 1, height: 1 }).raw().toBuffer();
+    const bottomPixel = await sharp(bottom.bytes).extract({ left: 450, top: 300, width: 1, height: 1 }).raw().toBuffer();
+    expect(topPixel[0]).toBeGreaterThan(topPixel[2]);
+    expect(bottomPixel[2]).toBeGreaterThan(bottomPixel[0]);
+    expect(top.sourceHeight).toBe(1200);
+    expect(bottom.focalY).toBe(1);
   });
 
   it("rejects unsupported and malformed uploads with French messages", async () => {

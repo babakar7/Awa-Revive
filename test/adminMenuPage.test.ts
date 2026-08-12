@@ -116,16 +116,45 @@ describe("menu admin rendering", () => {
     const html = renderMenuItemForm({
       item: item({ photo_version: "photo-v1" }),
       categories: ["SMOOTHIES"],
+      photoState: {
+        version: "photo-v1",
+        focalX: 0.25,
+        focalY: 0.75,
+        repositionable: true,
+      },
       banner: "",
     });
     expect(html).toContain('enctype="multipart/form-data"');
     expect(html).toContain('action="/admin/menu/items/SMOOTHIE_MANGUE/photo"');
     expect(html).toContain('name="photo"');
     expect(html).toContain('accept="image/jpeg,image/png,image/webp"');
-    expect(html).toContain('src="/menu/photos/SMOOTHIE_MANGUE/photo-v1"');
-    expect(html).toContain('alt="Smoothie Mangue"');
+    expect(html).toContain('src="/admin/menu/items/SMOOTHIE_MANGUE/photo/source/photo-v1"');
+    expect(html).toContain("Faites glisser l’image");
+    expect(html).toContain('action="/admin/menu/items/SMOOTHIE_MANGUE/photo/position"');
+    expect(html).toContain('name="focal_x" value="0.25"');
+    expect(html).toContain('name="focal_y" value="0.75"');
+    expect(html).toContain("setPointerCapture");
+    expect(html).toContain("objectPosition");
+    expect(html).toContain("URL.createObjectURL");
+    expect(html).toContain("Recentrer");
     expect(html).toContain('action="/admin/menu/items/SMOOTHIE_MANGUE/photo/remove"');
     expect(html).toContain("10 Mo maximum");
+  });
+
+  it("asks legacy-photo owners to re-upload once before dragging", () => {
+    const html = renderMenuItemForm({
+      item: item({ photo_version: "legacy-v1" }),
+      categories: ["SMOOTHIES"],
+      photoState: {
+        version: "legacy-v1",
+        focalX: 0.5,
+        focalY: 0.5,
+        repositionable: false,
+      },
+      banner: "",
+    });
+    expect(html).toContain("Remplacez-la une fois avec le fichier original");
+    expect(html).not.toContain('/photo/position"');
   });
 
   it("does not mix photo fields into the create or URL-encoded article form", () => {

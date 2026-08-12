@@ -3,10 +3,10 @@ import {
   MAX_MENU_OPTION_GROUPS,
   MAX_MENU_OPTION_RESPONSES,
   type CategoryView,
+  type MenuItemPhotoEditorState,
   type MenuItemView,
 } from "../domain/cafeMenuRepo.js";
 import { parseOptionGroups, type MenuOptionGroup } from "../lib/cafeMenu.js";
-import { menuPhotoUrl } from "../lib/cafeMenuPhoto.js";
 
 /** Server-rendered menu catalogue and internal recipe editor. */
 
@@ -29,6 +29,7 @@ const BANNERS: Record<string, string> = {
   retired: "Article retiré du menu.",
   restored: "Article remis au menu.",
   photo_uploaded: "Photo de l’article mise à jour.",
+  photo_positioned: "Cadrage de la photo mis à jour.",
   photo_removed: "Photo de l’article supprimée.",
   cat_created: "Catégorie ajoutée.",
   cat_renamed: "Catégorie renommée — les articles ont suivi.",
@@ -372,12 +373,85 @@ const MENU_OPTION_EDITOR_SCRIPT = `<script>
 })();
 </script>`;
 
+function photoEditorHtml(
+  item: MenuItemView,
+  photoState: MenuItemPhotoEditorState | null,
+): string {
+  const hasPhoto = Boolean(item.photo_version && photoState);
+  const repositionable = Boolean(photoState?.repositionable);
+  const focalX = photoState?.focalX ?? 0.5;
+  const focalY = photoState?.focalY ?? 0.5;
+  const sourceUrl = hasPhoto
+    ? `/admin/menu/items/${query(item.id)}/photo/source/${query(photoState!.version)}`
+    : "";
+  const legacyNote = hasPhoto && !repositionable
+    ? `<p class="warn" style="padding:.7rem .85rem;border-radius:10px">Cette photo a été ajoutée avant l’outil de cadrage. Remplacez-la une fois avec le fichier original pour pouvoir la déplacer.</p>`
+    : "";
+  const positionForm = hasPhoto && repositionable
+    ? `<form method="post" action="/admin/menu/items/${query(item.id)}/photo/position" data-photo-position-form>
+      <input type="hidden" name="version" value="${esc(photoState!.version)}">
+      <input type="hidden" name="focal_x" value="${esc(focalX)}" data-position-focal-x>
+      <input type="hidden" name="focal_y" value="${esc(focalY)}" data-position-focal-y>
+      <div class="actionbar"><button class="act" type="submit">Enregistrer le cadrage</button><button class="act act--ghost" type="button" data-photo-reset>Recentrer</button></div>
+    </form>`
+    : "";
+
+  return `<section class="card form-card menu-photo-editor" data-photo-editor data-focal-x="${esc(focalX)}" data-focal-y="${esc(focalY)}" data-repositionable="${repositionable}">
+    <style>
+      .photo-crop{position:relative;width:min(100%,28rem);aspect-ratio:3/2;overflow:hidden;border-radius:12px;background:var(--brand-soft);touch-action:none;cursor:grab;margin:0 0 .65rem;box-shadow:inset 0 0 0 1px var(--border)}
+      .photo-crop.dragging{cursor:grabbing}.photo-crop[hidden]{display:none}
+      .photo-crop img{position:absolute;inset:0;width:100%;height:100%;display:block;object-fit:cover;user-select:none;pointer-events:none}
+      .photo-crop::after{content:"";position:absolute;left:50%;top:50%;width:28px;height:28px;transform:translate(-50%,-50%);border:2px solid rgba(255,255,255,.92);border-radius:50%;box-shadow:0 1px 5px rgba(33,25,33,.55);pointer-events:none}
+      .photo-crop-help{margin:.15rem 0 1rem}.menu-photo-editor input[type=file]{margin-top:.35rem}
+    </style>
+    <div class="section-header menu-editor-heading"><div><span class="eyebrow">Photo</span><h2>Visuel de l’article</h2><p class="muted">Faites glisser l’image pour placer le plat dans le cercle central.</p></div></div>
+    <div class="photo-crop" data-photo-crop${hasPhoto ? "" : " hidden"}><img${hasPhoto ? ` src="${esc(sourceUrl)}"` : ""} alt="Aperçu du cadrage de ${esc(item.name)}" draggable="false" data-photo-crop-image></div>
+    <p class="field-help photo-crop-help" data-photo-crop-help${hasPhoto ? "" : " hidden"}>L’aperçu correspond exactement au cadrage 3:2 du menu public.</p>
+    ${legacyNote}
+    ${positionForm}
+    <form method="post" enctype="multipart/form-data" action="/admin/menu/items/${query(item.id)}/photo" data-photo-upload-form>
+      <input type="hidden" name="focal_x" value="0.5" data-upload-focal-x>
+      <input type="hidden" name="focal_y" value="0.5" data-upload-focal-y>
+      <label>${hasPhoto ? "Remplacer la photo" : "Ajouter une photo"}<span class="field-help">JPEG, PNG ou WebP · 10 Mo maximum. Choisissez le fichier, puis faites-le glisser dans l’aperçu avant d’enregistrer.</span><input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required data-photo-file></label>
+      <div class="actionbar"><button class="act" type="submit">${hasPhoto ? "Enregistrer la nouvelle photo" : "Ajouter la photo"}</button></div>
+    </form>
+    ${hasPhoto ? `<form method="post" action="/admin/menu/items/${query(item.id)}/photo/remove" data-confirm="Supprimer la photo de « ${esc(item.name)} » ?"><button class="act act--danger" type="submit">Supprimer la photo</button></form>` : ""}
+  </section>
+  <script>(function(){
+    var editor=document.querySelector('[data-photo-editor]');if(!editor)return;
+    var frame=editor.querySelector('[data-photo-crop]');var image=editor.querySelector('[data-photo-crop-image]');
+    var help=editor.querySelector('[data-photo-crop-help]');var file=editor.querySelector('[data-photo-file]');
+    var uploadX=editor.querySelector('[data-upload-focal-x]');var uploadY=editor.querySelector('[data-upload-focal-y]');
+    var positionX=editor.querySelector('[data-position-focal-x]');var positionY=editor.querySelector('[data-position-focal-y]');
+    var reset=editor.querySelector('[data-photo-reset]');var mode=${hasPhoto ? "'position'" : "'upload'"};
+    var x=parseFloat(editor.dataset.focalX)||.5;var y=parseFloat(editor.dataset.focalY)||.5;var objectUrl=null;
+    function clamp(n){return Math.max(0,Math.min(1,n))}
+    function apply(){image.style.objectPosition=(x*100)+'% '+(y*100)+'%';
+      if(mode==='upload'){uploadX.value=String(x);uploadY.value=String(y)}
+      else if(positionX&&positionY){positionX.value=String(x);positionY.value=String(y)}}
+    file.addEventListener('change',function(){var picked=file.files&&file.files[0];if(!picked)return;
+      if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=URL.createObjectURL(picked);image.src=objectUrl;
+      mode='upload';x=.5;y=.5;frame.hidden=false;help.hidden=false;apply();});
+    var startClientX=0,startClientY=0,startX=0,startY=0;
+    frame.addEventListener('pointerdown',function(event){
+      if(mode==='position'&&editor.dataset.repositionable!=='true')return;
+      startClientX=event.clientX;startClientY=event.clientY;startX=x;startY=y;
+      frame.setPointerCapture(event.pointerId);frame.classList.add('dragging');event.preventDefault();});
+    frame.addEventListener('pointermove',function(event){if(!frame.hasPointerCapture(event.pointerId))return;
+      var rect=frame.getBoundingClientRect();x=clamp(startX-(event.clientX-startClientX)/rect.width);y=clamp(startY-(event.clientY-startClientY)/rect.height);apply();});
+    function end(event){if(frame.hasPointerCapture(event.pointerId))frame.releasePointerCapture(event.pointerId);frame.classList.remove('dragging')}
+    frame.addEventListener('pointerup',end);frame.addEventListener('pointercancel',end);
+    if(reset)reset.addEventListener('click',function(){x=.5;y=.5;apply()});apply();
+  })();</script>`;
+}
+
 export function renderMenuItemForm(opts: {
   item: MenuItemView | null;
   categories: string[];
+  photoState?: MenuItemPhotoEditorState | null;
   banner: string;
 }): string {
-  const { item, categories, banner } = opts;
+  const { item, categories, photoState = null, banner } = opts;
   const creating = item === null;
   const action = creating ? "/admin/menu/items" : `/admin/menu/items/${query(item.id)}/update`;
   const name = esc(item?.name);
@@ -395,17 +469,7 @@ export function renderMenuItemForm(opts: {
     : [{ label: "", choices: [] }];
   const favourite = item?.favourite ? " checked" : "";
   const noRecipeNeeded = item?.no_recipe_needed ? " checked" : "";
-  const photoEditor = item
-    ? `<section class="card form-card menu-photo-editor">
-    <div class="section-header menu-editor-heading"><div><span class="eyebrow">Photo</span><h2>Visuel de l’article</h2><p class="muted">Affiché en grand sur le menu public et en miniature dans la commande en ligne.</p></div></div>
-    ${item.photo_version ? `<img src="${esc(menuPhotoUrl(item.id, item.photo_version))}" alt="${esc(item.name)}" width="900" height="600" loading="lazy" decoding="async" style="display:block;width:min(100%,28rem);height:auto;aspect-ratio:3/2;object-fit:cover;border-radius:12px;margin-bottom:1rem">` : `<p class="muted">Aucune photo pour cet article.</p>`}
-    <form method="post" enctype="multipart/form-data" action="/admin/menu/items/${query(item.id)}/photo">
-      <label>Ajouter ou remplacer la photo<span class="field-help">JPEG, PNG ou WebP · 10 Mo maximum. L’image sera recadrée au centre au format 3:2.</span><input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required></label>
-      <div class="actionbar"><button class="act" type="submit">${item.photo_version ? "Remplacer la photo" : "Ajouter la photo"}</button></div>
-    </form>
-    ${item.photo_version ? `<form method="post" action="/admin/menu/items/${query(item.id)}/photo/remove" data-confirm="Supprimer la photo de « ${esc(item.name)} » ?"><button class="act act--danger" type="submit">Supprimer la photo</button></form>` : ""}
-  </section>`
-    : "";
+  const photoEditor = item ? photoEditorHtml(item, photoState) : "";
 
   return `${banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Menu du bar</span><h2>${creating ? "Nouvel article" : esc(item.name)}</h2><p>${creating ? "Créez l’article vendu et sa fiche de préparation interne." : "Mettez à jour les informations commerciales et la recette utilisée par l’équipe."}</p></div><div class="page-header-actions">${recipeState(item)}${item ? (item.enabled ? `<span class="badge badge--green">Actif</span>` : `<span class="badge badge--gray">Retiré</span>`) : ""}</div></header>

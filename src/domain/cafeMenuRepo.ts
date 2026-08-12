@@ -409,6 +409,23 @@ export interface MenuItemPhoto {
   version: string;
 }
 
+export interface MenuItemPhotoEditorState {
+  version: string;
+  focalX: number;
+  focalY: number;
+  repositionable: boolean;
+}
+
+export interface MenuItemPhotoSource {
+  source_bytes: Buffer;
+  source_width: number;
+  source_height: number;
+  version: string;
+  focal_x: number;
+  focal_y: number;
+  repositionable: boolean;
+}
+
 /** Fetch bytes only for the dedicated versioned image response. */
 export async function getMenuItemPhoto(
   itemId: string,
@@ -422,28 +439,112 @@ export async function getMenuItemPhoto(
   return (res.rows[0] as MenuItemPhoto) ?? null;
 }
 
+/** Metadata-only state for the admin editor; source bytes stay out of item queries. */
+export async function getMenuItemPhotoEditorState(
+  itemId: string,
+): Promise<MenuItemPhotoEditorState | null> {
+  const res = await pool.query(
+    `select version, focal_x, focal_y, source_bytes is not null as repositionable
+       from cafe_menu_item_photos where item_id = $1`,
+    [itemId],
+  );
+  const row = res.rows[0];
+  return row
+    ? {
+        version: String(row.version),
+        focalX: Number(row.focal_x),
+        focalY: Number(row.focal_y),
+        repositionable: Boolean(row.repositionable),
+      }
+    : null;
+}
+
+/** Full-frame source only for the authenticated crop editor/reprocessor. */
+export async function getMenuItemPhotoSource(
+  itemId: string,
+  version: string,
+): Promise<MenuItemPhotoSource | null> {
+  const res = await pool.query(
+    `select coalesce(source_bytes, image_bytes) as source_bytes,
+            coalesce(source_width, width) as source_width,
+            coalesce(source_height, height) as source_height,
+            version, focal_x, focal_y, source_bytes is not null as repositionable
+       from cafe_menu_item_photos where item_id = $1 and version = $2`,
+    [itemId, version],
+  );
+  return (res.rows[0] as MenuItemPhotoSource) ?? null;
+}
+
 export async function setMenuItemPhoto(input: {
   itemId: string;
   imageBytes: Buffer;
   mimeType: "image/webp";
   width: number;
   height: number;
+  sourceBytes: Buffer;
+  sourceWidth: number;
+  sourceHeight: number;
+  focalX: number;
+  focalY: number;
 }): Promise<string> {
   const version = randomUUID();
   await pool.query(
     `insert into cafe_menu_item_photos
-       (item_id, image_bytes, mime_type, width, height, version)
-     values ($1,$2,$3,$4,$5,$6)
+       (item_id, image_bytes, mime_type, width, height, source_bytes, source_width,
+        source_height, focal_x, focal_y, version)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      on conflict (item_id) do update set
        image_bytes = excluded.image_bytes,
        mime_type = excluded.mime_type,
        width = excluded.width,
        height = excluded.height,
+       source_bytes = excluded.source_bytes,
+       source_width = excluded.source_width,
+       source_height = excluded.source_height,
+       focal_x = excluded.focal_x,
+       focal_y = excluded.focal_y,
        version = excluded.version,
        updated_at = now()`,
-    [input.itemId, input.imageBytes, input.mimeType, input.width, input.height, version],
+    [
+      input.itemId,
+      input.imageBytes,
+      input.mimeType,
+      input.width,
+      input.height,
+      input.sourceBytes,
+      input.sourceWidth,
+      input.sourceHeight,
+      input.focalX,
+      input.focalY,
+      version,
+    ],
   );
   return version;
+}
+
+/** Replace only the public crop if the source version is still current. */
+export async function updateMenuItemPhotoCrop(input: {
+  itemId: string;
+  expectedVersion: string;
+  imageBytes: Buffer;
+  focalX: number;
+  focalY: number;
+}): Promise<string | null> {
+  const version = randomUUID();
+  const res = await pool.query(
+    `update cafe_menu_item_photos set
+       image_bytes = $3, focal_x = $4, focal_y = $5, version = $6, updated_at = now()
+     where item_id = $1 and version = $2 and source_bytes is not null`,
+    [
+      input.itemId,
+      input.expectedVersion,
+      input.imageBytes,
+      input.focalX,
+      input.focalY,
+      version,
+    ],
+  );
+  return (res.rowCount ?? 0) > 0 ? version : null;
 }
 
 export async function removeMenuItemPhoto(itemId: string): Promise<boolean> {

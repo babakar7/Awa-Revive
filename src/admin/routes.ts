@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { MultipartFile } from "@fastify/multipart";
 import { config } from "../config.js";
 import QRCode from "qrcode";
 import { pool } from "../db/index.js";
@@ -119,7 +120,11 @@ import { parseQuoteForm } from "../domain/quoteRules.js";
 import { renderQuotePdf } from "../lib/quotePdf.js";
 import { devisBanner, renderQuoteForm, renderQuotesList } from "./devisPage.js";
 import * as menu from "../domain/cafeMenuRepo.js";
-import { normalizeMenuPhoto } from "../lib/cafeMenuPhoto.js";
+import {
+  cropMenuPhotoSource,
+  normalizeFocalPoint,
+  normalizeMenuPhoto,
+} from "../lib/cafeMenuPhoto.js";
 import {
   menuBanner,
   renderCategoriesPage,
@@ -2162,11 +2167,16 @@ ${
       admin.get("/menu/items/:id", async (req, reply) => {
         const { id } = req.params as { id: string };
         const queryIn = (req.query ?? {}) as Record<string, string>;
-        const [item, categories] = await Promise.all([menu.getMenuItem(id), menu.categoryNames()]);
+        const [item, categories, photoState] = await Promise.all([
+          menu.getMenuItem(id),
+          menu.categoryNames(),
+          menu.getMenuItemPhotoEditorState(id),
+        ]);
         if (!item) return reply.redirect("/admin/menu?err=article introuvable", 303);
         const body = renderMenuItemForm({
           item,
           categories,
+          photoState,
           banner: menuBanner(queryIn.done, queryIn.err),
         });
         reply.type("text/html").send(await layout(item.name, "/admin/menu", body, {
@@ -2210,12 +2220,21 @@ ${
 
       // Photo actions intentionally stay separate from the URL-encoded article
       // editor so an invalid image can never discard text-form modifications.
+      admin.get("/menu/items/:id/photo/source/:version", async (req, reply) => {
+        const { id, version } = req.params as { id: string; version: string };
+        const source = await menu.getMenuItemPhotoSource(id, version);
+        reply.header("Cache-Control", "no-store");
+        reply.header("X-Content-Type-Options", "nosniff");
+        if (!source) return reply.code(404).type("text/plain").send("Photo introuvable");
+        return reply.type("image/webp").send(source.source_bytes);
+      });
+
       admin.post("/menu/items/:id/photo", async (req, reply) => {
         const { id } = req.params as { id: string };
         const item = await menu.getMenuItem(id);
         if (!item) return reply.redirect("/admin/menu?err=article introuvable", 303);
 
-        let upload;
+        let upload: MultipartFile | undefined;
         try {
           upload = await req.file();
           if (!upload) {
@@ -2224,8 +2243,18 @@ ${
               303,
             );
           }
-          const input = await upload.toBuffer();
-          const normalized = await normalizeMenuPhoto(input, upload.mimetype);
+          const uploadedFile = upload;
+          const input = await uploadedFile.toBuffer();
+          const fieldValue = (name: string): unknown => {
+            const field = (uploadedFile.fields as Record<string, any> | undefined)?.[name];
+            return Array.isArray(field) ? field[0]?.value : field?.value;
+          };
+          const normalized = await normalizeMenuPhoto(
+            input,
+            uploadedFile.mimetype,
+            normalizeFocalPoint(fieldValue("focal_x")),
+            normalizeFocalPoint(fieldValue("focal_y")),
+          );
           if ("error" in normalized) {
             return reply.redirect(
               `/admin/menu/items/${encodeURIComponent(id)}?err=${encodeURIComponent(normalized.error)}`,
@@ -2238,6 +2267,11 @@ ${
             mimeType: normalized.mimeType,
             width: normalized.width,
             height: normalized.height,
+            sourceBytes: normalized.sourceBytes,
+            sourceWidth: normalized.sourceWidth,
+            sourceHeight: normalized.sourceHeight,
+            focalX: normalized.focalX,
+            focalY: normalized.focalY,
           });
         } catch (error) {
           const code = String((error as { code?: string })?.code ?? "");
@@ -2253,6 +2287,60 @@ ${
         await menu.refreshCafeMenu();
         req.log.info({ by: req.adminUser, id }, "Menu item photo updated");
         return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?done=photo_uploaded`, 303);
+      });
+
+      admin.post("/menu/items/:id/photo/position", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const body = (req.body ?? {}) as Record<string, string>;
+        const expectedVersion = String(body.version ?? "");
+        const focalXRaw = Number(body.focal_x);
+        const focalYRaw = Number(body.focal_y);
+        const invalid =
+          !expectedVersion ||
+          !Number.isFinite(focalXRaw) ||
+          !Number.isFinite(focalYRaw) ||
+          focalXRaw < 0 ||
+          focalXRaw > 1 ||
+          focalYRaw < 0 ||
+          focalYRaw > 1;
+        if (invalid) {
+          return reply.redirect(
+            `/admin/menu/items/${encodeURIComponent(id)}?err=${encodeURIComponent("cadrage invalide — replacez la photo puis réessayez.")}`,
+            303,
+          );
+        }
+        const source = await menu.getMenuItemPhotoSource(id, expectedVersion);
+        if (!source?.repositionable) {
+          return reply.redirect(
+            `/admin/menu/items/${encodeURIComponent(id)}?err=${encodeURIComponent("remplacez cette ancienne photo une fois pour pouvoir régler son cadrage.")}`,
+            303,
+          );
+        }
+        const focalX = normalizeFocalPoint(focalXRaw);
+        const focalY = normalizeFocalPoint(focalYRaw);
+        const imageBytes = await cropMenuPhotoSource(
+          source.source_bytes,
+          source.source_width,
+          source.source_height,
+          focalX,
+          focalY,
+        );
+        const version = await menu.updateMenuItemPhotoCrop({
+          itemId: id,
+          expectedVersion,
+          imageBytes,
+          focalX,
+          focalY,
+        });
+        if (!version) {
+          return reply.redirect(
+            `/admin/menu/items/${encodeURIComponent(id)}?err=${encodeURIComponent("la photo a changé entre-temps — rechargez la page.")}`,
+            303,
+          );
+        }
+        await menu.refreshCafeMenu();
+        req.log.info({ by: req.adminUser, id, focalX, focalY }, "Menu item photo repositioned");
+        return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?done=photo_positioned`, 303);
       });
 
       admin.post("/menu/items/:id/photo/remove", async (req, reply) => {

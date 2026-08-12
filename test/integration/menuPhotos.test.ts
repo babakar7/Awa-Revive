@@ -37,20 +37,40 @@ beforeEach(async () => {
   await refreshCafeMenu();
 });
 
-function multipartPayload(bytes: Buffer, mimeType: string, filename = "photo.png") {
+function multipartPayload(
+  bytes: Buffer,
+  mimeType: string,
+  filename = "photo.png",
+  fields: Record<string, string> = {},
+) {
   const boundary = `----revive-${Math.random().toString(16).slice(2)}`;
+  const fieldBytes = Object.entries(fields).map(([name, value]) =>
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+    ),
+  );
   const head = Buffer.from(
     `--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
   );
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
   return {
-    payload: Buffer.concat([head, bytes, tail]),
+    payload: Buffer.concat([...fieldBytes, head, bytes, tail]),
     contentType: `multipart/form-data; boundary=${boundary}`,
   };
 }
 
-async function upload(bytes: Buffer, mimeType: string, authenticated = true) {
-  const multipart = multipartPayload(bytes, mimeType);
+async function upload(
+  bytes: Buffer,
+  mimeType: string,
+  authenticated = true,
+  focal?: { x: number; y: number },
+) {
+  const multipart = multipartPayload(
+    bytes,
+    mimeType,
+    "photo.png",
+    focal ? { focal_x: String(focal.x), focal_y: String(focal.y) } : {},
+  );
   return app.inject({
     method: "POST",
     url: `/admin/menu/items/${ITEM_ID}/photo`,
@@ -72,12 +92,24 @@ async function png(color: string) {
 
 async function storedPhoto() {
   const result = await pool.query(
-    `select image_bytes, mime_type, width, height, version
+    `select image_bytes, mime_type, width, height, source_bytes, source_width,
+            source_height, focal_x, focal_y, version
        from cafe_menu_item_photos where item_id = $1`,
     [ITEM_ID],
   );
   return result.rows[0] as
-    | { image_bytes: Buffer; mime_type: string; width: number; height: number; version: string }
+    | {
+        image_bytes: Buffer;
+        mime_type: string;
+        width: number;
+        height: number;
+        source_bytes: Buffer | null;
+        source_width: number | null;
+        source_height: number | null;
+        focal_x: number;
+        focal_y: number;
+        version: string;
+      }
     | undefined;
 }
 
@@ -89,14 +121,26 @@ describe("admin-managed menu photos", () => {
   });
 
   it("uploads normalized WebP bytes and refreshes metadata-only snapshots/picker data", async () => {
-    const response = await upload(await png("#ff0000"), "image/png");
+    const response = await upload(await png("#ff0000"), "image/png", true, {
+      x: 0.2,
+      y: 0.8,
+    });
     expect(response.statusCode).toBe(303);
     expect(response.headers.location).toBe(
       `/admin/menu/items/${ITEM_ID}?done=photo_uploaded`,
     );
 
     const photo = (await storedPhoto())!;
-    expect(photo).toMatchObject({ mime_type: "image/webp", width: 900, height: 600 });
+    expect(photo).toMatchObject({
+      mime_type: "image/webp",
+      width: 900,
+      height: 600,
+      source_width: 1200,
+      source_height: 700,
+      focal_x: 0.2,
+      focal_y: 0.8,
+    });
+    expect(photo.source_bytes).toBeInstanceOf(Buffer);
     const metadata = await sharp(photo.image_bytes).metadata();
     expect(metadata).toMatchObject({ format: "webp", width: 900, height: 600 });
 
@@ -108,6 +152,86 @@ describe("admin-managed menu photos", () => {
     const pickerItem = pickerMenu().flatMap((category) => category.items).find((item) => item.id === ITEM_ID)!;
     expect(pickerItem.photoUrl).toBe(`/menu/photos/${ITEM_ID}/${photo.version}`);
     expect(pickerItem).not.toHaveProperty("image_bytes");
+  });
+
+  it("serves the full-frame source only through the authenticated admin route", async () => {
+    await upload(await png("#00ff00"), "image/png");
+    const photo = (await storedPhoto())!;
+    const url = `/admin/menu/items/${ITEM_ID}/photo/source/${photo.version}`;
+    const denied = await app.inject({ method: "GET", url });
+    expect(denied.statusCode).toBe(302);
+    expect(denied.headers.location).toContain("/admin/login");
+    const response = await app.inject({ method: "GET", url, headers: { authorization: AUTH } });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("image/webp");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(await sharp(response.rawPayload).metadata()).toMatchObject({
+      format: "webp",
+      width: 1200,
+      height: 700,
+    });
+  });
+
+  it("repositions the retained source, changes the public version, and refreshes the picker", async () => {
+    const portrait = await sharp({
+      create: { width: 600, height: 1200, channels: 3, background: "#ff0000" },
+    })
+      .composite([
+        {
+          input: Buffer.from('<svg width="600" height="600"><rect width="600" height="600" fill="#0000ff"/></svg>'),
+          top: 600,
+          left: 0,
+        },
+      ])
+      .png()
+      .toBuffer();
+    await upload(portrait, "image/png");
+    const before = (await storedPhoto())!;
+    const response = await app.inject({
+      method: "POST",
+      url: `/admin/menu/items/${ITEM_ID}/photo/position`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ version: before.version, focal_x: "0.5", focal_y: "1" }).toString(),
+    });
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(
+      `/admin/menu/items/${ITEM_ID}?done=photo_positioned`,
+    );
+    const after = (await storedPhoto())!;
+    expect(after.version).not.toBe(before.version);
+    expect(after.focal_y).toBe(1);
+    expect(after.source_bytes).toEqual(before.source_bytes);
+    const center = await sharp(after.image_bytes)
+      .extract({ left: 450, top: 300, width: 1, height: 1 })
+      .raw()
+      .toBuffer();
+    expect(center[2]).toBeGreaterThan(center[0]);
+    expect(getCafeMenu().items.get(ITEM_ID)?.photoVersion).toBe(after.version);
+    expect(
+      pickerMenu().flatMap((category) => category.items).find((item) => item.id === ITEM_ID)?.photoUrl,
+    ).toBe(`/menu/photos/${ITEM_ID}/${after.version}`);
+    const stale = await app.inject({ method: "GET", url: `/menu/photos/${ITEM_ID}/${before.version}` });
+    expect(stale.statusCode).toBe(404);
+    expect(stale.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("preserves legacy crops and asks for one original re-upload", async () => {
+    await upload(await png("#ff0000"), "image/png");
+    await pool.query(
+      `update cafe_menu_item_photos set source_bytes = null, source_width = null, source_height = null
+        where item_id = $1`,
+      [ITEM_ID],
+    );
+    const legacy = (await storedPhoto())!;
+    const response = await app.inject({
+      method: "POST",
+      url: `/admin/menu/items/${ITEM_ID}/photo/position`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ version: legacy.version, focal_x: "0", focal_y: "1" }).toString(),
+    });
+    expect(response.statusCode).toBe(303);
+    expect(decodeURIComponent(response.headers.location!)).toContain("remplacez cette ancienne photo");
+    expect((await storedPhoto())!.version).toBe(legacy.version);
   });
 
   it("serves the same immutable versioned WebP on menu and ordering hosts", async () => {
