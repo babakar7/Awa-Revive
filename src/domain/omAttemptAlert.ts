@@ -2,10 +2,11 @@ import { config } from "../config.js";
 import { pool } from "../db/index.js";
 import { notifyReception } from "../lib/notify.js";
 import type { OmPaymentMethod } from "../lib/orangeMoney.js";
+import { isOmOutageActive } from "./omOutage.js";
 
 /**
- * Alerte propriétaire à CHAQUE tentative de paiement Orange Money / Max It,
- * c'est-à-dire dès qu'un lien/QR est créé pour un client.
+ * Alerte propriétaire à chaque tentative de paiement Orange Money / Max It
+ * uniquement pendant un mode panne explicitement activé.
  *
  * Contexte (panne Sonatel du 31/07/2026) : quand le callback se perd, un
  * paiement RÉEL reste invisible localement et personne n'est prévenu. En
@@ -81,27 +82,31 @@ export function formatOmAttemptAlert(args: {
 }
 
 /**
- * Fire-and-forget : jamais awaité par le flux de paiement, n'échoue jamais
- * vers l'appelant. La ligne d'ordre existe déjà (créée avant la session) ;
- * si la recherche échoue quand même, l'alerte part avec le libellé de secours.
+ * La ligne d'ordre existe déjà (créée avant la session) ; si la recherche
+ * échoue quand même, l'alerte part avec le libellé de secours. L'appelant
+ * garde cette notification hors du chemin critique du paiement.
  */
-export function notifyOmPaymentAttempt(args: {
+export async function notifyOmPaymentAttempt(args: {
   orderId: string;
   method: OmPaymentMethod;
   amountXof: number;
   fallbackLabel?: string | null;
-}): void {
-  void (async () => {
-    const order = await findAttemptOrder(args.orderId).catch((err) => {
-      console.error("[om] attempt alert order lookup failed:", err);
-      return null;
-    });
-    const { subject, body } = formatOmAttemptAlert({
-      method: args.method,
-      amountXof: args.amountXof,
-      fallbackLabel: args.fallbackLabel,
-      order,
-    });
-    notifyReception(subject, body);
-  })().catch((err) => console.error("[om] attempt owner alert failed:", err));
+}): Promise<void> {
+  const outageActive = await isOmOutageActive().catch((err) => {
+    console.error("[om] attempt alert outage-mode lookup failed:", err);
+    return false;
+  });
+  if (!outageActive) return;
+
+  const order = await findAttemptOrder(args.orderId).catch((err) => {
+    console.error("[om] attempt alert order lookup failed:", err);
+    return null;
+  });
+  const { subject, body } = formatOmAttemptAlert({
+    method: args.method,
+    amountXof: args.amountXof,
+    fallbackLabel: args.fallbackLabel,
+    order,
+  });
+  notifyReception(subject, body);
 }

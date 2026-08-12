@@ -71,14 +71,14 @@ export async function createClientPaymentSession(args: {
       ? new Date(Math.min(qr.validUntil.getTime(), Date.now() + ttlMin * 60_000))
       : new Date(Date.now() + ttlMin * 60_000);
   console.log(`[pay] om/${args.method} session ${Date.now() - t0}ms qrId=${qr.qrId}`);
-  // Les callbacks Sonatel peuvent se perdre silencieusement (panne 31/07) :
-  // le gérant est prévenu de CHAQUE tentative OM/Max It pour pouvoir
-  // réconcilier manuellement via /admin/paiements-om.
-  notifyOmPaymentAttempt({
+  // Pendant un mode panne explicitement activé, prévenir le gérant de la
+  // tentative afin qu'il puisse retrouver un éventuel callback perdu. Le test
+  // du mode reste dans la notification et ne ralentit jamais le paiement.
+  void notifyOmPaymentAttempt({
     orderId: args.clientReference,
     method: args.method,
     amountXof: args.amountXof,
     fallbackLabel: args.name,
-  });
+  }).catch((err) => console.error("[om] attempt owner alert failed:", err));
   return { sessionId: qr.qrId, paymentLink: link, expiresAt, method: args.method };
 }

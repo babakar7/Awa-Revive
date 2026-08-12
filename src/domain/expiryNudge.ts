@@ -138,7 +138,7 @@ const OM_METHOD_LABEL: Record<string, string> = {
   maxit: "Max It",
 };
 
-/** Reception (+ owner via the ⚠ marker) alert for an OM/Max It link that expired with no callback. */
+/** Outage-only alert for an OM/Max It link that expired with no callback. */
 function alertOmExpiry(args: {
   methodLabel: string;
   what: string;
@@ -163,11 +163,9 @@ function alertOmExpiry(args: {
 }
 
 /**
- * Plan-order twin of nudgeExpiredLinks. Same one-shot client follow-up, PLUS a
- * reception alert for Orange Money / Max It orders: a lost Sonatel callback is
- * invisible to Awa (the list API can't be joined to pending rows), so an OM/Max
- * It link that expires with no callback is the one case where a real payment can
- * silently vanish (Maryeme 01/08). Flag reception to check the portal.
+ * Plan-order twin of nudgeExpiredLinks. Same one-shot client follow-up. While
+ * outage mode is explicitly active, also flag reception because a lost Sonatel
+ * callback is then a known operational risk.
  */
 export async function nudgeExpiredPlanOrders(log: {
   info: (o: unknown, m?: string) => void;
@@ -184,7 +182,7 @@ export async function nudgeExpiredPlanOrders(log: {
       const msg = planExpiryNudgeMessage(o.language, o.plan_name, omOutage && isOm);
       await sendText(o.wa_phone, msg);
       await repo.addTurn(o.client_id, "assistant", msg);
-      if (isOm) {
+      if (isOm && omOutage) {
         alertOmExpiry({
           methodLabel: OM_METHOD_LABEL[o.payment_method] ?? o.payment_method,
           what: o.plan_name,
@@ -225,9 +223,10 @@ export async function nudgeExpiredLinks(log: {
       );
       await sendText(b.wa_phone, msg);
       await repo.addTurn(b.client_id, "assistant", msg);
-      // Same lost-callback exposure as plan orders (real case Marie 02/08:
-      // Aquabike paid via Max It, no callback, nobody alerted).
-      if (isOm) {
+      // During an explicit outage, retain the lost-callback safety net used for
+      // plan orders. In normal operation, successful callbacks reconcile
+      // automatically and an expired unpaid link needs no owner intervention.
+      if (isOm && omOutage) {
         alertOmExpiry({
           methodLabel: OM_METHOD_LABEL[b.payment_method] ?? b.payment_method,
           what: `${b.service_name} (${formatSlot(new Date(b.slot_start), "fr-FR")})`,
