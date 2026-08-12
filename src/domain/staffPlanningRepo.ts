@@ -203,18 +203,33 @@ export async function setStaffName(id: string, name: string): Promise<boolean> {
 export async function swapStaffSchedule(scheduleId: string, staffId1: string, staffId2: string): Promise<boolean> {
   if (!UUID_RE.test(String(scheduleId)) || !UUID_RE.test(String(staffId1)) || !UUID_RE.test(String(staffId2))) return false;
   if (staffId1 === staffId2) return false;
-  // Swap staff_id values in shifts for this schedule
-  const res = await pool.query(
-    `update staff_shifts
-     set staff_id = case
-       when staff_id = $2 then $3
-       when staff_id = $3 then $2
-       else staff_id
-     end
-     where schedule_id = $1 and staff_id in ($2, $3)`,
-    [scheduleId, staffId1, staffId2],
-  );
-  return (res.rowCount ?? 0) > 0;
+  // Use a temporary UUID to avoid unique constraint violation during the swap
+  const tempId = `00000000-0000-0000-0000-000000000001`; // Placeholder that won't exist
+  try {
+    // Step 1: Temporarily set staffId1 shifts to tempId
+    await pool.query(
+      `update staff_shifts set staff_id = $3 where schedule_id = $1 and staff_id = $2`,
+      [scheduleId, staffId1, tempId],
+    );
+    // Step 2: Move staffId2 shifts to staffId1
+    await pool.query(
+      `update staff_shifts set staff_id = $2 where schedule_id = $1 and staff_id = $3`,
+      [scheduleId, staffId1, staffId2],
+    );
+    // Step 3: Move tempId shifts to staffId2
+    const res = await pool.query(
+      `update staff_shifts set staff_id = $2 where schedule_id = $1 and staff_id = $3`,
+      [scheduleId, staffId2, tempId],
+    );
+    return (res.rowCount ?? 0) > 0;
+  } catch (err) {
+    // If it fails, try to restore by moving tempId back (best effort)
+    await pool.query(
+      `update staff_shifts set staff_id = $2 where schedule_id = $1 and staff_id = $3`,
+      [scheduleId, staffId1, tempId],
+    ).catch(() => null);
+    throw err;
+  }
 }
 
 /** Add a planning employee (role restricted to a planning role; phone may be ""). */
