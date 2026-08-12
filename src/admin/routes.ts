@@ -3223,11 +3223,29 @@ ${photoSection}
         return reply.redirect(`/admin/staff?${ok ? "done=phone-saved" : "err=employée introuvable"}`, 303);
       });
 
+      admin.post("/staff/contact/:staffId/name", async (req, reply) => {
+        const { staffId } = req.params as { staffId: string };
+        const name = String((req.body as any)?.name ?? "").trim();
+        if (!name) return reply.redirect(`/admin/staff?err=${encodeURIComponent("nom obligatoire")}`, 303);
+        const ok = await staffPlan.setStaffName(staffId, name);
+        return reply.redirect(`/admin/staff?${ok ? "done=name-saved" : "err=employée introuvable"}`, 303);
+      });
+
       admin.post("/staff/contact/:staffId/delete", async (req, reply) => {
         const { staffId } = req.params as { staffId: string };
         const ok = await staffPlan.removePlanningStaff(staffId);
         req.log.info({ staff: staffId, by: req.adminUser }, "Planning staff removed");
         return reply.redirect(`/admin/staff?${ok ? "done=contact-removed" : "err=employée introuvable"}`, 303);
+      });
+
+      admin.post("/staff/:scheduleId/swap", async (req, reply) => {
+        const { scheduleId } = req.params as { scheduleId: string };
+        const staffId1 = String((req.body as any)?.staff_id_1 ?? "").trim();
+        const staffId2 = String((req.body as any)?.staff_id_2 ?? "").trim();
+        if (!staffId1 || !staffId2) return reply.redirect(`/admin/staff?s=${scheduleId}&err=${encodeURIComponent("sélection invalide")}`, 303);
+        const ok = await staffPlan.swapStaffSchedule(scheduleId, staffId1, staffId2);
+        req.log.info({ schedule: scheduleId, staff_1: staffId1, staff_2: staffId2, by: req.adminUser }, "Planning staff schedules swapped");
+        return reply.redirect(`/admin/staff?s=${scheduleId}&${ok ? "done=schedule-swapped" : "err=" + encodeURIComponent("échange échoué")}`, 303);
       });
 
       // ---------- Notifications automatiques (rappels staff, journal) ----------

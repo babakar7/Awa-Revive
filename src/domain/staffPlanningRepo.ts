@@ -187,6 +187,36 @@ export async function setStaffPhone(id: string, phone: string): Promise<boolean>
   return (res.rowCount ?? 0) > 0;
 }
 
+/** Update a planning employee's name. Restricted to planning roles. */
+export async function setStaffName(id: string, name: string): Promise<boolean> {
+  if (!UUID_RE.test(String(id))) return false;
+  const trimmed = String(name ?? "").trim();
+  if (!trimmed) return false;
+  const res = await pool.query(
+    `update staff_contacts set name=$2 where id=$1 and role = any($3)`,
+    [id, trimmed, PLANNING_ROLES as unknown as string[]],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** Swap all shifts between two staff members in a given schedule. */
+export async function swapStaffSchedule(scheduleId: string, staffId1: string, staffId2: string): Promise<boolean> {
+  if (!UUID_RE.test(String(scheduleId)) || !UUID_RE.test(String(staffId1)) || !UUID_RE.test(String(staffId2))) return false;
+  if (staffId1 === staffId2) return false;
+  // Swap staff_id values in shifts for this schedule
+  const res = await pool.query(
+    `update staff_shifts
+     set staff_id = case
+       when staff_id = $2 then $3
+       when staff_id = $3 then $2
+       else staff_id
+     end
+     where schedule_id = $1 and staff_id in ($2, $3)`,
+    [scheduleId, staffId1, staffId2],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
 /** Add a planning employee (role restricted to a planning role; phone may be ""). */
 export async function addPlanningStaff(name: string, role: string, phone: string): Promise<void> {
   await pool.query(`insert into staff_contacts (name, phone, role) values ($1, $2, $3)`, [name, phone, role]);

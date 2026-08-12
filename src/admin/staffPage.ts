@@ -37,6 +37,8 @@ const BANNERS: Record<string, string> = {
   "phone-cleared": "Numéro retiré.",
   "contact-added": "Employée ajoutée.",
   "contact-removed": "Employée retirée de l'équipe.",
+  "name-saved": "Nom enregistré.",
+  "schedule-swapped": "Horaires échangés.",
 };
 
 export function staffBanner(done?: string, err?: string): string {
@@ -149,13 +151,17 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
 <div class="section-header"><div><span class="eyebrow">Répertoire</span><h2>L’équipe</h2></div><span class="badge badge--gray">${staff.length}</span></div>
 <div class="card" style="overflow-x:auto">
   <p class="muted" style="margin:.1rem 0 .7rem">Gérez ici les employées et leurs numéros WhatsApp, puis envoyez à chacune son planning (« ${esc(current.name)} »). L’ajout ou le retrait d’une employée s’applique à tous les scénarios.</p>
-  <table style="min-width:560px"><thead><tr><th>Employée</th><th>Numéro WhatsApp</th><th class="right">Envoi</th><th></th></tr></thead><tbody>
+  <table style="min-width:720px"><thead><tr><th>Employée</th><th>Numéro WhatsApp</th><th></th><th class="right">Actions</th></tr></thead><tbody>
   ${
     staff.length
       ? staff
           .map(
-            (p) => `<tr>
-<td><b>${esc(p.name)}</b> <span class="muted">${esc(p.role)}</span></td>
+            (p, idx) => `<tr>
+<td><form method="post" action="/admin/staff/contact/${esc(p.id)}/name" style="display:flex;gap:.35rem;align-items:center;margin:0">
+  <input name="name" value="${esc(p.name)}" required style="font-weight:600;flex:1;min-width:120px">
+  <span class="muted" style="white-space:nowrap">${esc(p.role)}</span>
+  <button class="act act--sm act--ghost" type="submit" title="Enregistrer">✓</button>
+</form></td>
 <td><form method="post" action="/admin/staff/contact/${esc(p.id)}/phone" style="display:flex;gap:.35rem;align-items:center;margin:0">
   <input name="phone" value="${esc(p.phone)}" placeholder="77 123 45 67" style="width:11rem">
   <button class="act act--sm act--ghost" type="submit">Enregistrer</button>
@@ -163,9 +169,11 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
 <td class="right">${
               p.phone
                 ? `<form method="post" action="/admin/staff/${esc(current.id)}/send/${esc(p.id)}" class="inline" data-confirm="Envoyer son planning à ${esc(p.name)} ?"><button class="act act--sm" type="submit">Envoyer</button></form>`
-                : `<span class="muted">Ajoutez d’abord un numéro</span>`
+                : `<span class="muted">Ajoutez un numéro</span>`
             }</td>
-<td class="right"><form method="post" action="/admin/staff/contact/${esc(p.id)}/delete" class="inline" data-confirm="Retirer ${esc(p.name)} de l’équipe ? Ses horaires seront supprimés de tous les plannings."><button class="act act--sm act--danger" type="submit">Retirer</button></form></td>
+<td class="right" style="display:flex;gap:.3rem;justify-content:flex-end">
+${staff.length > 1 ? `<button class="act act--sm act--ghost swap-schedule-btn" data-swap-id="${esc(p.id)}" data-swap-name="${esc(p.name)}" type="button">⟷</button>` : ""}
+<form method="post" action="/admin/staff/contact/${esc(p.id)}/delete" class="inline" data-confirm="Retirer ${esc(p.name)} de l’équipe ? Ses horaires seront supprimés de tous les plannings."><button class="act act--sm act--danger" type="submit">Retirer</button></form></td>
 </tr>`,
           )
           .join("")
@@ -217,6 +225,25 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   </div>
 </div>
 
+<div id="swapschedule" class="planning-dialog" role="dialog" aria-modal="true" aria-labelledby="swaptitle" aria-describedby="swaphelp">
+  <div class="planning-dialog-panel">
+    <span class="eyebrow">Échange d'horaires</span>
+    <h2 id="swaptitle" class="planning-dialog-title">Échanger les horaires</h2>
+    <p id="swaphelp" class="muted">Choisissez une autre employée pour échanger les horaires de <b id="swapname"></b>.</p>
+    <label for="swaptarget">Échanger avec
+      <select id="swaptarget"></select>
+    </label>
+    <div class="planning-copy-warning">
+      <b>Les horaires de cette semaine seront échangés.</b>
+      <span>Tous les jours de la semaine seront affectés pour les deux employées.</span>
+    </div>
+    <div class="planning-dialog-actions">
+      <button type="button" onclick="swapScheduleClose()" class="act act--sm act--ghost">Annuler</button>
+      <button type="button" class="act" onclick="swapScheduleConfirm()">Échanger les horaires</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   var ST = JSON.parse("${stateJson.replace(/"/g, '\\"')}");
@@ -224,6 +251,7 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
   var DAYS = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
   var dirty = false, editKey = null, lastGridFocus = null;
   var copyTargetId = null, lastCopyFocus = null;
+  var swapSourceId = null, swapSourceName = null, lastSwapFocus = null;
 
   function pad(n){ return (n<10?"0":"")+n; }
   function fmt(x){ return Math.floor(x/60)+"h"+pad(x%60); }
@@ -390,10 +418,74 @@ ${(data as any).showNewForm ? `<div class="card"><form method="post" action="/ad
     document.getElementById("gridform").submit();
   };
 
+  // ----- schedule swap -----
+  window.swapScheduleOpen = function(sourceId, sourceName){
+    if(ST.staff.length < 2) return;
+    swapSourceId = sourceId;
+    swapSourceName = sourceName;
+    lastSwapFocus = document.activeElement;
+    document.getElementById("swapname").textContent = sourceName;
+    var select = document.getElementById("swaptarget");
+    select.innerHTML = "";
+    ST.staff.forEach(function(person){
+      if(person.id===sourceId) return;
+      var option = document.createElement("option");
+      option.value = person.id;
+      option.textContent = person.name + " — " + person.role;
+      select.appendChild(option);
+    });
+    if(select.options.length > 0){
+      document.getElementById("swapschedule").style.display = "flex";
+      select.focus();
+    }
+  };
+
+  window.swapScheduleClose = function(){
+    document.getElementById("swapschedule").style.display = "none";
+    swapSourceId = null;
+    swapSourceName = null;
+    if(lastSwapFocus && lastSwapFocus.focus) lastSwapFocus.focus();
+    lastSwapFocus = null;
+  };
+
+  window.swapScheduleConfirm = function(){
+    if(!swapSourceId) return;
+    var targetId = document.getElementById("swaptarget").value;
+    if(!targetId || targetId === swapSourceId) return;
+    // Submit the swap via POST
+    var form = document.createElement("form");
+    form.method = "post";
+    form.action = "/admin/staff/${esc(current.id)}/swap";
+    var inp1 = document.createElement("input");
+    inp1.type = "hidden";
+    inp1.name = "staff_id_1";
+    inp1.value = swapSourceId;
+    form.appendChild(inp1);
+    var inp2 = document.createElement("input");
+    inp2.type = "hidden";
+    inp2.name = "staff_id_2";
+    inp2.value = targetId;
+    form.appendChild(inp2);
+    document.body.appendChild(form);
+    swapScheduleClose();
+    form.submit();
+  };
+
+  // Wire up swap buttons
+  function wireSwapButtons(){
+    document.querySelectorAll(".swap-schedule-btn").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        swapScheduleOpen(btn.getAttribute("data-swap-id"), btn.getAttribute("data-swap-name"));
+      });
+    });
+  }
+  wireSwapButtons();
+
   window.addEventListener("beforeunload", function(ev){ if(dirty){ ev.preventDefault(); ev.returnValue=""; } });
   document.addEventListener("keydown", function(ev){
     if(ev.key!=="Escape") return;
-    if(copyTargetId){ ev.preventDefault();copyWeekClose(); }
+    if(swapSourceId){ ev.preventDefault();swapScheduleClose(); }
+    else if(copyTargetId){ ev.preventDefault();copyWeekClose(); }
     else if(editKey){ ev.preventDefault();edClose(); }
   });
   render();
