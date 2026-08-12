@@ -203,33 +203,43 @@ export async function setStaffName(id: string, name: string): Promise<boolean> {
 export async function swapStaffSchedule(scheduleId: string, staffId1: string, staffId2: string): Promise<boolean> {
   if (!UUID_RE.test(String(scheduleId)) || !UUID_RE.test(String(staffId1)) || !UUID_RE.test(String(staffId2))) return false;
   if (staffId1 === staffId2) return false;
-  // Use a temporary UUID to avoid unique constraint violation during the swap
-  const tempId = `00000000-0000-0000-0000-000000000001`; // Placeholder that won't exist
-  try {
-    // Step 1: Temporarily set staffId1 shifts to tempId
-    await pool.query(
-      `update staff_shifts set staff_id = $3 where schedule_id = $1 and staff_id = $2`,
-      [scheduleId, staffId1, tempId],
-    );
-    // Step 2: Move staffId2 shifts to staffId1
-    await pool.query(
-      `update staff_shifts set staff_id = $2 where schedule_id = $1 and staff_id = $3`,
-      [scheduleId, staffId1, staffId2],
-    );
-    // Step 3: Move tempId shifts to staffId2
-    const res = await pool.query(
-      `update staff_shifts set staff_id = $2 where schedule_id = $1 and staff_id = $3`,
-      [scheduleId, staffId2, tempId],
-    );
-    return (res.rowCount ?? 0) > 0;
-  } catch (err) {
-    // If it fails, try to restore by moving tempId back (best effort)
-    await pool.query(
-      `update staff_shifts set staff_id = $2 where schedule_id = $1 and staff_id = $3`,
-      [scheduleId, staffId1, tempId],
-    ).catch(() => null);
-    throw err;
+
+  // Fetch all shifts for both staff, swap them, delete originals, and reinsert
+  const shiftsRes = await pool.query(
+    `select schedule_id, staff_id, weekday, start_min, end_min from staff_shifts
+     where schedule_id = $1 and staff_id in ($2, $3)
+     order by staff_id, weekday`,
+    [scheduleId, staffId1, staffId2],
+  );
+
+  if ((shiftsRes.rowCount ?? 0) === 0) {
+    return false; // No shifts to swap
   }
+
+  // Delete original shifts
+  await pool.query(
+    `delete from staff_shifts where schedule_id = $1 and staff_id in ($2, $3)`,
+    [scheduleId, staffId1, staffId2],
+  );
+
+  // Reinsert with swapped staff_ids
+  if ((shiftsRes.rowCount ?? 0) > 0) {
+    const values: string[] = [];
+    const params: unknown[] = [];
+
+    shiftsRes.rows.forEach((shift: any, i: number) => {
+      const newStaffId = shift.staff_id === staffId1 ? staffId2 : staffId1;
+      values.push(`($${i * 5 + 1}, $${i * 5 + 2}, $${i * 5 + 3}, $${i * 5 + 4}, $${i * 5 + 5})`);
+      params.push(shift.schedule_id, newStaffId, shift.weekday, shift.start_min, shift.end_min);
+    });
+
+    await pool.query(
+      `insert into staff_shifts (schedule_id, staff_id, weekday, start_min, end_min) values ${values.join(", ")}`,
+      params,
+    );
+  }
+
+  return true;
 }
 
 /** Add a planning employee (role restricted to a planning role; phone may be ""). */
