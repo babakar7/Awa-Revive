@@ -206,4 +206,65 @@ describe("team management on the planning page", () => {
     expect(add.headers.location).toContain("err=");
     expect((await staffPlan.listPlanningStaff()).some((s) => s.name === "X")).toBe(false);
   });
+
+  it("renames an employee", async () => {
+    const id = await mkStaff("Ancien", "accueil");
+    const res = await post(`/admin/staff/contact/${id}/name`, { name: "Nouveau" });
+    expect(res.headers.location).toContain("done=name-saved");
+    expect((await staffPlan.listPlanningStaff()).find((s) => s.id === id)!.name).toBe("Nouveau");
+
+    // blank name is rejected, old name kept
+    const blank = await post(`/admin/staff/contact/${id}/name`, { name: "  " });
+    expect(blank.headers.location).toContain("err=");
+    expect((await staffPlan.listPlanningStaff()).find((s) => s.id === id)!.name).toBe("Nouveau");
+  });
+});
+
+describe("swap two employees' week", () => {
+  // Camille has Mon–Wed, Yacine only Mon: the uneven case that trips a plain
+  // swapping UPDATE against UNIQUE(schedule_id, staff_id, weekday).
+  it("swaps whole weeks, including days one of them didn't work", async () => {
+    const camille = await mkStaff("Camille", "accueil");
+    const yacine = await mkStaff("Yacine", "bar");
+    const sched = await staffPlan.createSchedule("S", "test");
+    await staffPlan.replaceShifts(sched.id, [
+      { staff_id: camille, weekday: 0, start_min: 540, end_min: 1020 },
+      { staff_id: camille, weekday: 1, start_min: 600, end_min: 1080 },
+      { staff_id: camille, weekday: 2, start_min: 480, end_min: 960 },
+      { staff_id: yacine, weekday: 0, start_min: 660, end_min: 1140 },
+    ]);
+
+    const res = await post(`/admin/staff/${sched.id}/swap`, { staff_id_1: camille, staff_id_2: yacine });
+    expect(res.headers.location).toContain("done=schedule-swapped");
+
+    const shifts = await staffPlan.getShifts(sched.id);
+    const byStaff = (id: string) =>
+      shifts.filter((s) => s.staff_id === id).map((s) => `${s.weekday}:${s.start_min}-${s.end_min}`).sort();
+    // Yacine now holds Camille's Mon–Wed; Camille holds Yacine's old Mon.
+    expect(byStaff(yacine)).toEqual(["0:540-1020", "1:600-1080", "2:480-960"]);
+    expect(byStaff(camille)).toEqual(["0:660-1140"]);
+    // No shift lost or duplicated.
+    expect(shifts.length).toBe(4);
+  });
+
+  it("swap only touches the target schedule, not others", async () => {
+    const a = await mkStaff("A", "accueil");
+    const b = await mkStaff("B", "bar");
+    const s1 = await staffPlan.createSchedule("S1", "test");
+    const s2 = await staffPlan.createSchedule("S2", "test");
+    await staffPlan.replaceShifts(s1.id, [{ staff_id: a, weekday: 0, start_min: 540, end_min: 1020 }]);
+    await staffPlan.replaceShifts(s2.id, [{ staff_id: a, weekday: 3, start_min: 600, end_min: 900 }]);
+
+    await staffPlan.swapStaffSchedule(s1.id, a, b);
+    // S1 flipped to B, S2 untouched (still A).
+    expect((await staffPlan.getShifts(s1.id))[0].staff_id).toBe(b);
+    expect((await staffPlan.getShifts(s2.id))[0].staff_id).toBe(a);
+  });
+
+  it("returns false when neither employee has a shift", async () => {
+    const a = await mkStaff("A", "accueil");
+    const b = await mkStaff("B", "bar");
+    const sched = await staffPlan.createSchedule("S", "test");
+    expect(await staffPlan.swapStaffSchedule(sched.id, a, b)).toBe(false);
+  });
 });

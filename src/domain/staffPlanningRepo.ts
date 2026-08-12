@@ -199,47 +199,54 @@ export async function setStaffName(id: string, name: string): Promise<boolean> {
   return (res.rowCount ?? 0) > 0;
 }
 
-/** Swap all shifts between two staff members in a given schedule. */
+/**
+ * Swap the whole week of two staff members in one schedule.
+ *
+ * Must be DELETE-then-INSERT as two separate statements: a plain swapping UPDATE
+ * trips the per-row UNIQUE(schedule_id, staff_id, weekday) check, and a single
+ * data-modifying CTE does NOT work either — its sub-statements share one snapshot
+ * and can't see each other's effects, so the INSERT's uniqueness check still sees
+ * the not-yet-deleted rows and collides (23505). Only a separate DELETE statement
+ * makes the old rows invisible to the INSERT. This is the one place we open a
+ * transaction (house style otherwise avoids them): the swap is server-computed, so
+ * a crash between the two statements would destroy both weeks with no way to resave
+ * — the transaction closes that window. Returns true iff at least one shift moved.
+ */
 export async function swapStaffSchedule(scheduleId: string, staffId1: string, staffId2: string): Promise<boolean> {
   if (!UUID_RE.test(String(scheduleId)) || !UUID_RE.test(String(staffId1)) || !UUID_RE.test(String(staffId2))) return false;
   if (staffId1 === staffId2) return false;
-
-  // Fetch all shifts for both staff, swap them, delete originals, and reinsert
-  const shiftsRes = await pool.query(
-    `select schedule_id, staff_id, weekday, start_min, end_min from staff_shifts
-     where schedule_id = $1 and staff_id in ($2, $3)
-     order by staff_id, weekday`,
-    [scheduleId, staffId1, staffId2],
-  );
-
-  if ((shiftsRes.rowCount ?? 0) === 0) {
-    return false; // No shifts to swap
-  }
-
-  // Delete original shifts
-  await pool.query(
-    `delete from staff_shifts where schedule_id = $1 and staff_id in ($2, $3)`,
-    [scheduleId, staffId1, staffId2],
-  );
-
-  // Reinsert with swapped staff_ids
-  if ((shiftsRes.rowCount ?? 0) > 0) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const del = await client.query(
+      `delete from staff_shifts where schedule_id = $1 and staff_id in ($2, $3)
+       returning staff_id, weekday, start_min, end_min`,
+      [scheduleId, staffId1, staffId2],
+    );
+    if ((del.rowCount ?? 0) === 0) {
+      await client.query("rollback");
+      return false;
+    }
     const values: string[] = [];
-    const params: unknown[] = [];
-
-    shiftsRes.rows.forEach((shift: any, i: number) => {
-      const newStaffId = shift.staff_id === staffId1 ? staffId2 : staffId1;
-      values.push(`($${i * 5 + 1}, $${i * 5 + 2}, $${i * 5 + 3}, $${i * 5 + 4}, $${i * 5 + 5})`);
-      params.push(shift.schedule_id, newStaffId, shift.weekday, shift.start_min, shift.end_min);
+    const params: unknown[] = [scheduleId];
+    del.rows.forEach((r: any, i: number) => {
+      const b = i * 4;
+      const swappedId = r.staff_id === staffId1 ? staffId2 : staffId1;
+      values.push(`($1, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5})`);
+      params.push(swappedId, r.weekday, r.start_min, r.end_min);
     });
-
-    await pool.query(
+    await client.query(
       `insert into staff_shifts (schedule_id, staff_id, weekday, start_min, end_min) values ${values.join(", ")}`,
       params,
     );
+    await client.query("commit");
+    return true;
+  } catch (err) {
+    await client.query("rollback").catch(() => null);
+    throw err;
+  } finally {
+    client.release();
   }
-
-  return true;
 }
 
 /** Add a planning employee (role restricted to a planning role; phone may be ""). */
