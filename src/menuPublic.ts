@@ -125,8 +125,8 @@ main{max-width:42rem;margin:0 auto;padding:0 1.1rem 7rem}
 section{scroll-margin-top:4.6rem;padding-top:1.7rem}
 h2{font-family:Georgia,"Times New Roman",serif;font-weight:500;text-transform:uppercase;letter-spacing:.16em;font-size:1.05rem;color:#7c547d;border-bottom:1px solid #f2e7e2;padding-bottom:.45rem;margin:0 0 .3rem}
 .item{padding:.7rem 0}
-.item--photo{margin:1rem 0;padding:0;background:#fff;border:1px solid #f2e7e2;border-radius:16px;overflow:hidden;box-shadow:0 4px 18px rgba(33,25,33,.07)}
-.item--photo>img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover;background:#f2e7e2}
+.item--photo{width:min(100%,19rem);margin:1rem auto;padding:0;background:#fff;border:1px solid #f2e7e2;border-radius:16px;overflow:hidden;box-shadow:0 4px 18px rgba(33,25,33,.07)}
+.item--photo>img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover;object-position:center center;background:#f2e7e2}
 .item--photo .item-body{padding:.85rem 1rem 1rem}
 .line{display:flex;align-items:baseline;gap:.6rem}
 .name{font-weight:600}

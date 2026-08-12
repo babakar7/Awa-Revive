@@ -105,6 +105,8 @@ describe("renderPublicMenuPage", () => {
     expect(photographed).toContain('alt="Café latte"');
     expect(photographed).toContain('width="900" height="600"');
     expect(photographed).toContain('loading="lazy" decoding="async"');
+    expect(photographed).toContain("width:min(100%,19rem);margin:1rem auto");
+    expect(photographed).toContain("object-position:center center");
 
     const plain = renderPublicMenuPage(groupPublicMenu([item()], ["Cafés"]));
     expect(plain).toContain('<article class="item"><div class="line">');
