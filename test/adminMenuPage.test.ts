@@ -21,6 +21,7 @@ function item(over: Partial<MenuItemView> = {}): MenuItemView {
     favourite: true,
     enabled: true,
     sort_order: 10,
+    photo_version: null,
     updated_at: new Date("2026-07-20T10:00:00Z"),
     ...over,
   };
@@ -109,6 +110,28 @@ describe("menu admin rendering", () => {
     expect(html).toContain('name="no_recipe_needed"');
     expect(html).not.toContain('name="no_recipe_needed" checked');
     expect(html).toContain("Nouvel article");
+  });
+
+  it("renders separate multipart photo controls and a versioned preview on existing items", () => {
+    const html = renderMenuItemForm({
+      item: item({ photo_version: "photo-v1" }),
+      categories: ["SMOOTHIES"],
+      banner: "",
+    });
+    expect(html).toContain('enctype="multipart/form-data"');
+    expect(html).toContain('action="/admin/menu/items/SMOOTHIE_MANGUE/photo"');
+    expect(html).toContain('name="photo"');
+    expect(html).toContain('accept="image/jpeg,image/png,image/webp"');
+    expect(html).toContain('src="/menu/photos/SMOOTHIE_MANGUE/photo-v1"');
+    expect(html).toContain('alt="Smoothie Mangue"');
+    expect(html).toContain('action="/admin/menu/items/SMOOTHIE_MANGUE/photo/remove"');
+    expect(html).toContain("10 Mo maximum");
+  });
+
+  it("does not mix photo fields into the create or URL-encoded article form", () => {
+    const html = renderMenuItemForm({ item: null, categories: ["SMOOTHIES"], banner: "" });
+    expect(html).not.toContain('enctype="multipart/form-data"');
+    expect(html).not.toContain('name="photo"');
   });
 
   it("renders saved customer-choice responses as separate escaped rows with a live count", () => {

@@ -119,6 +119,7 @@ import { parseQuoteForm } from "../domain/quoteRules.js";
 import { renderQuotePdf } from "../lib/quotePdf.js";
 import { devisBanner, renderQuoteForm, renderQuotesList } from "./devisPage.js";
 import * as menu from "../domain/cafeMenuRepo.js";
+import { normalizeMenuPhoto } from "../lib/cafeMenuPhoto.js";
 import {
   menuBanner,
   renderCategoriesPage,
@@ -2205,6 +2206,63 @@ ${
         await menu.refreshCafeMenu();
         req.log.info({ by: req.adminUser, id, enabled: !item.enabled }, "Menu item toggled");
         return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?done=${item.enabled ? "retired" : "restored"}`, 303);
+      });
+
+      // Photo actions intentionally stay separate from the URL-encoded article
+      // editor so an invalid image can never discard text-form modifications.
+      admin.post("/menu/items/:id/photo", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const item = await menu.getMenuItem(id);
+        if (!item) return reply.redirect("/admin/menu?err=article introuvable", 303);
+
+        let upload;
+        try {
+          upload = await req.file();
+          if (!upload) {
+            return reply.redirect(
+              `/admin/menu/items/${encodeURIComponent(id)}?err=${encodeURIComponent("sélectionnez une image à envoyer.")}`,
+              303,
+            );
+          }
+          const input = await upload.toBuffer();
+          const normalized = await normalizeMenuPhoto(input, upload.mimetype);
+          if ("error" in normalized) {
+            return reply.redirect(
+              `/admin/menu/items/${encodeURIComponent(id)}?err=${encodeURIComponent(normalized.error)}`,
+              303,
+            );
+          }
+          await menu.setMenuItemPhoto({
+            itemId: id,
+            imageBytes: normalized.bytes,
+            mimeType: normalized.mimeType,
+            width: normalized.width,
+            height: normalized.height,
+          });
+        } catch (error) {
+          const code = String((error as { code?: string })?.code ?? "");
+          const message = code === "FST_REQ_FILE_TOO_LARGE"
+            ? "image trop volumineuse — 10 Mo maximum."
+            : "envoi de la photo impossible — réessayez avec une image JPEG, PNG ou WebP.";
+          return reply.redirect(
+            `/admin/menu/items/${encodeURIComponent(id)}?err=${encodeURIComponent(message)}`,
+            303,
+          );
+        }
+
+        await menu.refreshCafeMenu();
+        req.log.info({ by: req.adminUser, id }, "Menu item photo updated");
+        return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?done=photo_uploaded`, 303);
+      });
+
+      admin.post("/menu/items/:id/photo/remove", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const item = await menu.getMenuItem(id);
+        if (!item) return reply.redirect("/admin/menu?err=article introuvable", 303);
+        await menu.removeMenuItemPhoto(id);
+        await menu.refreshCafeMenu();
+        req.log.info({ by: req.adminUser, id }, "Menu item photo removed");
+        return reply.redirect(`/admin/menu/items/${encodeURIComponent(id)}?done=photo_removed`, 303);
       });
 
       // ---------- Cartes cadeaux (visuel PNG + envoi WhatsApp) ----------

@@ -66,6 +66,7 @@ color:var(--plum-600);font-size:.88rem;font-weight:600;white-space:nowrap}
 color:var(--plum-600);border-bottom:1px solid var(--rose);padding-bottom:.35rem;margin:1rem 0 .3rem}
 .mi{display:flex;align-items:center;gap:.6rem;padding:.6rem 0;border-bottom:1px solid var(--border-soft);flex-wrap:wrap}
 .mi.on{background:var(--plum-50);border-radius:var(--radius);padding:.6rem;margin:.2rem 0;border-bottom:0}
+.mi-thumb{flex:0 0 auto;width:72px;height:48px;object-fit:cover;border-radius:9px;background:var(--rose)}
 .mi .nm{flex:1;min-width:8rem;font-size:1.02rem}
 .mi .nm .pr{display:block;color:var(--ink-500);font-size:.82rem;font-weight:500}
 .mi .qbadge{background:var(--ok-strong);color:#fff;border-radius:999px;font-size:.8rem;font-weight:800;
@@ -201,6 +202,7 @@ export const COMMANDER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     var d=draft[it.id]||{qty:0,selections:{},note:''};
     var groups=it.optionGroups||[];
     var row=el('div','mi'+(d.qty>0?' on':'')); row.dataset.id=it.id;
+    if(it.photoUrl){ var pic=el('img','mi-thumb'); pic.src=it.photoUrl; pic.alt=it.name; pic.loading='lazy'; pic.decoding='async'; pic.width=72; pic.height=48; row.appendChild(pic); }
     var nm=el('div','nm'); nm.appendChild(el('span',null,it.name));
     if(d.qty>0){ nm.appendChild(el('span','qbadge','×'+d.qty)); }
     nm.appendChild(el('span','pr',it.price+' F')); row.appendChild(nm);

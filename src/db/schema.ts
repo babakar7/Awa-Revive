@@ -1210,6 +1210,20 @@ update cafe_menu_items set option_label = 'Lait',
 -- UPDATE au boot re-flaguerait un article décoché) → one-off manuel en prod.
 alter table cafe_menu_items add column if not exists no_recipe_needed boolean not null default false;
 
+-- Photo commerciale facultative, optimisée à l'import. Les octets restent
+-- séparés des requêtes menu ordinaires : celles-ci ne joignent que version.
+-- La version change à chaque remplacement et rend l'URL publique immuable.
+create table if not exists cafe_menu_item_photos (
+  item_id text primary key references cafe_menu_items(id) on delete cascade,
+  image_bytes bytea not null,
+  mime_type text not null check (mime_type = 'image/webp'),
+  width integer not null check (width > 0),
+  height integer not null check (height > 0),
+  version text not null unique,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- Liste CANONIQUE des catégories du bar (avant : catégorie = simple texte libre
 -- sur chaque article → typos « SMOOTHIES »/« Smoothies »). La fiche article
 -- choisit désormais dans cette liste (menu déroulant), gérée sur

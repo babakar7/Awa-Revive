@@ -17,6 +17,7 @@ function item(over: Partial<PublicMenuItem> = {}): PublicMenuItem {
     option_choices: null,
     favourite: false,
     sort_order: 10,
+    photo_version: null,
     ...over,
   };
 }
@@ -93,6 +94,22 @@ describe("renderPublicMenuPage", () => {
     const plain = renderPublicMenuPage(groupPublicMenu([item()], ["Cafés"]));
     expect(fav).toContain("Incontournable");
     expect(plain).not.toContain("Incontournable");
+  });
+
+  it("renders photographed items as wide lazy cards and leaves plain items unchanged", () => {
+    const photographed = renderPublicMenuPage(
+      groupPublicMenu([item({ photo_version: "version-123" })], ["Cafés"]),
+    );
+    expect(photographed).toContain('class="item item--photo"');
+    expect(photographed).toContain('src="/menu/photos/CAFE_LATTE/version-123"');
+    expect(photographed).toContain('alt="Café latte"');
+    expect(photographed).toContain('width="900" height="600"');
+    expect(photographed).toContain('loading="lazy" decoding="async"');
+
+    const plain = renderPublicMenuPage(groupPublicMenu([item()], ["Cafés"]));
+    expect(plain).toContain('<article class="item"><div class="line">');
+    expect(plain).not.toContain('class="item item--photo"');
+    expect(plain).not.toContain("/menu/photos/");
   });
 
   it("escapes HTML coming from the database", () => {
@@ -200,12 +217,12 @@ describe("public menu routes", () => {
     await app.close();
   });
 
-  it("keeps the strict CSP with only the data: image relaxation", async () => {
+  it("keeps the strict CSP with same-origin menu photos and the data: favicon", async () => {
     mockMenuDb([item()], ["Cafés"]);
     const app = buildServer();
     const res = await app.inject({ method: "GET", url: "/menu" });
     expect(res.headers["content-security-policy"]).toContain("default-src 'none'");
-    expect(res.headers["content-security-policy"]).toContain("img-src data:");
+    expect(res.headers["content-security-policy"]).toContain("img-src 'self' data:");
     await app.close();
   });
 
@@ -216,6 +233,41 @@ describe("public menu routes", () => {
     expect(res.headers["content-type"]).toMatch(/image\/png/);
     expect(res.headers["cache-control"]).toContain("public");
     expect(res.rawPayload.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await app.close();
+  });
+
+  it("serves versioned WebP photos globally with immutable caching", async () => {
+    const bytes = Buffer.from("optimized-webp-bytes");
+    vi.spyOn(pool, "query").mockImplementation(((sql: unknown) => {
+      const text = typeof sql === "string" ? sql : String((sql as { text?: string })?.text ?? "");
+      if (text.includes("from cafe_menu_item_photos")) {
+        return Promise.resolve({
+          rows: [{ image_bytes: bytes, mime_type: "image/webp", width: 900, height: 600, version: "v1" }],
+        });
+      }
+      return Promise.resolve({ rows: [] });
+    }) as never);
+    const app = buildServer();
+    for (const host of ["menu.revive.sn", "awa-production.up.railway.app"]) {
+      const res = await app.inject({
+        method: "GET",
+        url: "/menu/photos/CAFE_LATTE/v1",
+        headers: { host },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toContain("image/webp");
+      expect(res.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+      expect(res.rawPayload).toEqual(bytes);
+    }
+    await app.close();
+  });
+
+  it("returns no-store 404s for missing, unknown, and stale photo versions", async () => {
+    vi.spyOn(pool, "query").mockResolvedValue({ rows: [] } as never);
+    const app = buildServer();
+    const res = await app.inject({ method: "GET", url: "/menu/photos/UNKNOWN/stale" });
+    expect(res.statusCode).toBe(404);
+    expect(res.headers["cache-control"]).toBe("no-store");
     await app.close();
   });
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { pool } from "../db/index.js";
 import {
   type CafeMenuRow,
@@ -35,6 +36,7 @@ export interface MenuItemView {
   favourite: boolean;
   enabled: boolean;
   sort_order: number;
+  photo_version: string | null;
   updated_at: Date;
 }
 
@@ -53,15 +55,19 @@ function rowToSnapshot(r: MenuItemView): CafeMenuRow {
     favourite: r.favourite,
     enabled: r.enabled,
     sortOrder: r.sort_order,
+    photoVersion: r.photo_version ?? undefined,
   };
 }
 
-const ITEM_COLUMNS = `id, name, price_xof, category, description, recipe_ingredients, recipe_steps,
-            no_recipe_needed, option_label, option_choices, option_groups, favourite, enabled, sort_order, updated_at`;
+const ITEM_COLUMNS = `i.id, i.name, i.price_xof, i.category, i.description, i.recipe_ingredients, i.recipe_steps,
+            i.no_recipe_needed, i.option_label, i.option_choices, i.option_groups, i.favourite, i.enabled,
+            i.sort_order, i.updated_at, p.version as photo_version`;
 
 export async function listMenuItems(): Promise<MenuItemView[]> {
   const res = await pool.query(
-    `select ${ITEM_COLUMNS} from cafe_menu_items order by sort_order, name`,
+    `select ${ITEM_COLUMNS} from cafe_menu_items i
+       left join cafe_menu_item_photos p on p.item_id = i.id
+      order by i.sort_order, i.name`,
   );
   return res.rows as MenuItemView[];
 }
@@ -79,19 +85,26 @@ export interface PublicMenuItem {
   option_groups?: unknown;
   favourite: boolean;
   sort_order: number;
+  photo_version: string | null;
 }
 
 export async function listPublicMenuItems(): Promise<PublicMenuItem[]> {
   const res = await pool.query(
-    `select id, name, price_xof, category, description, option_label, option_choices, option_groups, favourite, sort_order
-       from cafe_menu_items where enabled order by sort_order, name`,
+    `select i.id, i.name, i.price_xof, i.category, i.description, i.option_label,
+            i.option_choices, i.option_groups, i.favourite, i.sort_order,
+            p.version as photo_version
+       from cafe_menu_items i
+       left join cafe_menu_item_photos p on p.item_id = i.id
+      where i.enabled order by i.sort_order, i.name`,
   );
   return res.rows as PublicMenuItem[];
 }
 
 export async function getMenuItem(id: string): Promise<MenuItemView | null> {
   const res = await pool.query(
-    `select ${ITEM_COLUMNS} from cafe_menu_items where id = $1`,
+    `select ${ITEM_COLUMNS} from cafe_menu_items i
+       left join cafe_menu_item_photos p on p.item_id = i.id
+      where i.id = $1`,
     [id],
   );
   return (res.rows[0] as MenuItemView) ?? null;
@@ -384,6 +397,58 @@ export async function refreshCafeMenu(): Promise<void> {
 export async function initCafeMenu(): Promise<void> {
   await seedMenuIfEmpty();
   await refreshCafeMenu();
+}
+
+// ---------- optional optimized menu-item photos ----------
+
+export interface MenuItemPhoto {
+  image_bytes: Buffer;
+  mime_type: "image/webp";
+  width: number;
+  height: number;
+  version: string;
+}
+
+/** Fetch bytes only for the dedicated versioned image response. */
+export async function getMenuItemPhoto(
+  itemId: string,
+  version: string,
+): Promise<MenuItemPhoto | null> {
+  const res = await pool.query(
+    `select image_bytes, mime_type, width, height, version
+       from cafe_menu_item_photos where item_id = $1 and version = $2`,
+    [itemId, version],
+  );
+  return (res.rows[0] as MenuItemPhoto) ?? null;
+}
+
+export async function setMenuItemPhoto(input: {
+  itemId: string;
+  imageBytes: Buffer;
+  mimeType: "image/webp";
+  width: number;
+  height: number;
+}): Promise<string> {
+  const version = randomUUID();
+  await pool.query(
+    `insert into cafe_menu_item_photos
+       (item_id, image_bytes, mime_type, width, height, version)
+     values ($1,$2,$3,$4,$5,$6)
+     on conflict (item_id) do update set
+       image_bytes = excluded.image_bytes,
+       mime_type = excluded.mime_type,
+       width = excluded.width,
+       height = excluded.height,
+       version = excluded.version,
+       updated_at = now()`,
+    [input.itemId, input.imageBytes, input.mimeType, input.width, input.height, version],
+  );
+  return version;
+}
+
+export async function removeMenuItemPhoto(itemId: string): Promise<boolean> {
+  const res = await pool.query(`delete from cafe_menu_item_photos where item_id = $1`, [itemId]);
+  return (res.rowCount ?? 0) > 0;
 }
 
 // ---------- managed categories (table menu_categories) ----------

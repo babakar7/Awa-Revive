@@ -6,6 +6,7 @@ import {
   type MenuItemView,
 } from "../domain/cafeMenuRepo.js";
 import { parseOptionGroups, type MenuOptionGroup } from "../lib/cafeMenu.js";
+import { menuPhotoUrl } from "../lib/cafeMenuPhoto.js";
 
 /** Server-rendered menu catalogue and internal recipe editor. */
 
@@ -27,6 +28,8 @@ const BANNERS: Record<string, string> = {
   updated: "Article et recette mis à jour.",
   retired: "Article retiré du menu.",
   restored: "Article remis au menu.",
+  photo_uploaded: "Photo de l’article mise à jour.",
+  photo_removed: "Photo de l’article supprimée.",
   cat_created: "Catégorie ajoutée.",
   cat_renamed: "Catégorie renommée — les articles ont suivi.",
   cat_deleted: "Catégorie supprimée.",
@@ -392,6 +395,17 @@ export function renderMenuItemForm(opts: {
     : [{ label: "", choices: [] }];
   const favourite = item?.favourite ? " checked" : "";
   const noRecipeNeeded = item?.no_recipe_needed ? " checked" : "";
+  const photoEditor = item
+    ? `<section class="card form-card menu-photo-editor">
+    <div class="section-header menu-editor-heading"><div><span class="eyebrow">Photo</span><h2>Visuel de l’article</h2><p class="muted">Affiché en grand sur le menu public et en miniature dans la commande en ligne.</p></div></div>
+    ${item.photo_version ? `<img src="${esc(menuPhotoUrl(item.id, item.photo_version))}" alt="${esc(item.name)}" width="900" height="600" loading="lazy" decoding="async" style="display:block;width:min(100%,28rem);height:auto;aspect-ratio:3/2;object-fit:cover;border-radius:12px;margin-bottom:1rem">` : `<p class="muted">Aucune photo pour cet article.</p>`}
+    <form method="post" enctype="multipart/form-data" action="/admin/menu/items/${query(item.id)}/photo">
+      <label>Ajouter ou remplacer la photo<span class="field-help">JPEG, PNG ou WebP · 10 Mo maximum. L’image sera recadrée au centre au format 3:2.</span><input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required></label>
+      <div class="actionbar"><button class="act" type="submit">${item.photo_version ? "Remplacer la photo" : "Ajouter la photo"}</button></div>
+    </form>
+    ${item.photo_version ? `<form method="post" action="/admin/menu/items/${query(item.id)}/photo/remove" data-confirm="Supprimer la photo de « ${esc(item.name)} » ?"><button class="act act--danger" type="submit">Supprimer la photo</button></form>` : ""}
+  </section>`
+    : "";
 
   return `${banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Menu du bar</span><h2>${creating ? "Nouvel article" : esc(item.name)}</h2><p>${creating ? "Créez l’article vendu et sa fiche de préparation interne." : "Mettez à jour les informations commerciales et la recette utilisée par l’équipe."}</p></div><div class="page-header-actions">${recipeState(item)}${item ? (item.enabled ? `<span class="badge badge--green">Actif</span>` : `<span class="badge badge--gray">Retiré</span>`) : ""}</div></header>
@@ -431,6 +445,7 @@ export function renderMenuItemForm(opts: {
   </section>
   <div class="actionbar"><button class="act" type="submit">${creating ? "Créer l’article" : "Enregistrer les modifications"}</button><a class="act act--ghost" href="/admin/menu">Retour au menu</a></div>
 </form>
+${photoEditor}
 ${item ? `<div class="card menu-danger-zone"><div><b>${item.enabled ? "Retirer cet article" : "Remettre cet article au menu"}</b><p class="muted">La recette et l’historique sont conservés.</p></div><form class="inline" method="post" action="/admin/menu/items/${query(item.id)}/toggle"${item.enabled ? ` data-confirm="Retirer « ${esc(item.name)} » du menu ? L’article pourra être restauré plus tard."` : ""}><button class="act ${item.enabled ? "act--danger" : "act--ok"}" type="submit">${item.enabled ? "Retirer du menu" : "Remettre au menu"}</button></form></div>` : ""}
 ${MENU_OPTION_EDITOR_SCRIPT}`;
 }

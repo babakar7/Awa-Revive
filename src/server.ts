@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import multipart from "@fastify/multipart";
 import { registerWhatsAppWebhook } from "./webhooks/whatsapp.js";
 import { registerWaveWebhook } from "./webhooks/wave.js";
 import { registerOrangeMoneyWebhook } from "./webhooks/orangeMoney.js";
@@ -11,6 +12,8 @@ import { registerCommande } from "./public/commandeRoutes.js";
 import { registerOps, serveCuisineRoot, serveServiceRoot, serveOwnerRoot } from "./ops/opsRoutes.js";
 import { config } from "./config.js";
 import { pool } from "./db/index.js";
+import { getMenuItemPhoto } from "./domain/cafeMenuRepo.js";
+import { MAX_MENU_PHOTO_BYTES } from "./lib/cafeMenuPhoto.js";
 
 const HEALTHCHECK_TIMEOUT_MS = 2_000;
 
@@ -35,6 +38,10 @@ export async function checkDatabaseHealth(timeoutMs = HEALTHCHECK_TIMEOUT_MS): P
 
 export function buildServer() {
   const app = Fastify({ logger: true, trustProxy: true });
+
+  app.register(multipart, {
+    limits: { files: 1, fileSize: MAX_MENU_PHOTO_BYTES },
+  });
 
   // Keep the raw body — both webhook signatures are HMACs over the raw bytes.
   app.addContentTypeParser(
@@ -74,6 +81,18 @@ export function buildServer() {
   app.get("/healthz", async (_req, reply) => {
     const ok = await checkDatabaseHealth();
     return reply.code(ok ? 200 : 503).send({ ok });
+  });
+
+  // Global same-origin route: menu, ordering, Railway and configured hosts all
+  // use this exact relative URL. Failed lookups must never poison a CDN cache.
+  app.get("/menu/photos/:itemId/:version", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    reply.header("X-Content-Type-Options", "nosniff");
+    const { itemId, version } = req.params as { itemId: string; version: string };
+    const photo = await getMenuItemPhoto(itemId, version);
+    if (!photo) return reply.code(404).type("text/plain").send("Photo introuvable");
+    reply.header("Cache-Control", "public, max-age=31536000, immutable");
+    return reply.type("image/webp").send(photo.image_bytes);
   });
 
   // Root is host-aware: menu.revive.sn serves the public café menu directly;

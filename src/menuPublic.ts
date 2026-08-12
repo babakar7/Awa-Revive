@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { config } from "./config.js";
 import { parseOptionGroups } from "./lib/cafeMenu.js";
 import { renderMenuOgImage } from "./lib/menuOgImage.js";
+import { menuPhotoUrl } from "./lib/cafeMenuPhoto.js";
 import {
   categoryNames,
   listPublicMenuItems,
@@ -65,10 +66,10 @@ function headers(reply: FastifyReply): void {
   reply.header("X-Content-Type-Options", "nosniff");
   reply.header("X-Frame-Options", "DENY");
   reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
-  // img-src data: = la seule relaxation, pour le favicon SVG inline.
+  // Same-origin menu photos + data: favicon only; the page remains script-free.
   reply.header(
     "Content-Security-Policy",
-    "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'",
+    "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; base-uri 'none'",
   );
 }
 
@@ -124,6 +125,9 @@ main{max-width:42rem;margin:0 auto;padding:0 1.1rem 7rem}
 section{scroll-margin-top:4.6rem;padding-top:1.7rem}
 h2{font-family:Georgia,"Times New Roman",serif;font-weight:500;text-transform:uppercase;letter-spacing:.16em;font-size:1.05rem;color:#7c547d;border-bottom:1px solid #f2e7e2;padding-bottom:.45rem;margin:0 0 .3rem}
 .item{padding:.7rem 0}
+.item--photo{margin:1rem 0;padding:0;background:#fff;border:1px solid #f2e7e2;border-radius:16px;overflow:hidden;box-shadow:0 4px 18px rgba(33,25,33,.07)}
+.item--photo>img{display:block;width:100%;height:auto;aspect-ratio:3/2;object-fit:cover;background:#f2e7e2}
+.item--photo .item-body{padding:.85rem 1rem 1rem}
 .line{display:flex;align-items:baseline;gap:.6rem}
 .name{font-weight:600}
 .dots{flex:1;min-width:1.25rem;border-bottom:1px dotted #d9c9da;transform:translateY(-4px)}
@@ -179,7 +183,10 @@ function itemHtml(item: PublicMenuItem): string {
         `<p class="opts">${esc(group.label)} : ${group.choices.map(esc).join(" · ")}</p>`,
     )
     .join("");
-  return `<article class="item"><div class="line"><span class="name">${esc(item.name)}${fav}</span><span class="dots"></span><span class="price">${esc(price(item.price_xof))}</span></div>${desc}${opts}</article>`;
+  const content = `<div class="line"><span class="name">${esc(item.name)}${fav}</span><span class="dots"></span><span class="price">${esc(price(item.price_xof))}</span></div>${desc}${opts}`;
+  if (!item.photo_version) return `<article class="item">${content}</article>`;
+  const src = menuPhotoUrl(item.id, item.photo_version);
+  return `<article class="item item--photo"><img src="${esc(src)}" alt="${esc(item.name)}" width="900" height="600" loading="lazy" decoding="async"><div class="item-body">${content}</div></article>`;
 }
 
 export function renderPublicMenuPage(groups: MenuGroup[]): string {

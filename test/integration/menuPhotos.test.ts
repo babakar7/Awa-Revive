@@ -1,0 +1,200 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import sharp from "sharp";
+import { buildServer } from "../../src/server.js";
+import { migrate, pool } from "../../src/db/index.js";
+import {
+  getMenuItem,
+  listMenuItems,
+  refreshCafeMenu,
+} from "../../src/domain/cafeMenuRepo.js";
+import { getCafeMenu, pickerMenu } from "../../src/lib/cafeMenu.js";
+import { MAX_MENU_PHOTO_BYTES } from "../../src/lib/cafeMenuPhoto.js";
+
+const AUTH = `Basic ${Buffer.from("revive:revive@5000").toString("base64")}`;
+const ITEM_ID = "PHOTO_TEST";
+let app: FastifyInstance;
+
+beforeAll(async () => {
+  await migrate();
+  app = buildServer();
+  await app.ready();
+});
+
+afterAll(async () => {
+  await app.close();
+  await pool.end();
+});
+
+beforeEach(async () => {
+  await pool.query(`delete from cafe_menu_items where id = $1`, [ITEM_ID]);
+  await pool.query(
+    `insert into cafe_menu_items
+       (id, name, price_xof, category, description, favourite, enabled, sort_order)
+     values ($1, 'Poke photo test', 4500, 'PLATS', 'Description publique', false, true, 1)`,
+    [ITEM_ID],
+  );
+  await refreshCafeMenu();
+});
+
+function multipartPayload(bytes: Buffer, mimeType: string, filename = "photo.png") {
+  const boundary = `----revive-${Math.random().toString(16).slice(2)}`;
+  const head = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+  return {
+    payload: Buffer.concat([head, bytes, tail]),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+async function upload(bytes: Buffer, mimeType: string, authenticated = true) {
+  const multipart = multipartPayload(bytes, mimeType);
+  return app.inject({
+    method: "POST",
+    url: `/admin/menu/items/${ITEM_ID}/photo`,
+    headers: {
+      ...(authenticated ? { authorization: AUTH } : {}),
+      "content-type": multipart.contentType,
+    },
+    payload: multipart.payload,
+  });
+}
+
+async function png(color: string) {
+  return sharp({
+    create: { width: 1200, height: 700, channels: 3, background: color },
+  })
+    .png()
+    .toBuffer();
+}
+
+async function storedPhoto() {
+  const result = await pool.query(
+    `select image_bytes, mime_type, width, height, version
+       from cafe_menu_item_photos where item_id = $1`,
+    [ITEM_ID],
+  );
+  return result.rows[0] as
+    | { image_bytes: Buffer; mime_type: string; width: number; height: number; version: string }
+    | undefined;
+}
+
+describe("admin-managed menu photos", () => {
+  it("requires admin authentication and keeps the database unchanged", async () => {
+    const response = await upload(await png("#ff0000"), "image/png", false);
+    expect(response.statusCode).toBe(401);
+    expect(await storedPhoto()).toBeUndefined();
+  });
+
+  it("uploads normalized WebP bytes and refreshes metadata-only snapshots/picker data", async () => {
+    const response = await upload(await png("#ff0000"), "image/png");
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(
+      `/admin/menu/items/${ITEM_ID}?done=photo_uploaded`,
+    );
+
+    const photo = (await storedPhoto())!;
+    expect(photo).toMatchObject({ mime_type: "image/webp", width: 900, height: 600 });
+    const metadata = await sharp(photo.image_bytes).metadata();
+    expect(metadata).toMatchObject({ format: "webp", width: 900, height: 600 });
+
+    const ordinary = (await listMenuItems()).find((item) => item.id === ITEM_ID)!;
+    expect(ordinary.photo_version).toBe(photo.version);
+    expect(ordinary).not.toHaveProperty("image_bytes");
+    expect(getCafeMenu().items.get(ITEM_ID)?.photoVersion).toBe(photo.version);
+    expect(getCafeMenu().promptText).not.toContain(photo.version);
+    const pickerItem = pickerMenu().flatMap((category) => category.items).find((item) => item.id === ITEM_ID)!;
+    expect(pickerItem.photoUrl).toBe(`/menu/photos/${ITEM_ID}/${photo.version}`);
+    expect(pickerItem).not.toHaveProperty("image_bytes");
+  });
+
+  it("serves the same immutable versioned WebP on menu and ordering hosts", async () => {
+    await upload(await png("#00ff00"), "image/png");
+    const version = (await getMenuItem(ITEM_ID))!.photo_version!;
+    for (const host of ["menu.revive.sn", "awa-production.up.railway.app"]) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/menu/photos/${ITEM_ID}/${version}`,
+        headers: { host },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toContain("image/webp");
+      expect(response.headers["cache-control"]).toBe(
+        "public, max-age=31536000, immutable",
+      );
+      expect((await sharp(response.rawPayload).metadata()).format).toBe("webp");
+    }
+  });
+
+  it("replaces atomically and leaves missing/stale versions as uncached 404s", async () => {
+    await upload(await png("#ff0000"), "image/png");
+    const first = (await storedPhoto())!;
+    await upload(await png("#0000ff"), "image/png");
+    const second = (await storedPhoto())!;
+    expect(second.version).not.toBe(first.version);
+
+    for (const url of [
+      `/menu/photos/${ITEM_ID}/${first.version}`,
+      `/menu/photos/${ITEM_ID}/missing-version`,
+      `/menu/photos/UNKNOWN/${second.version}`,
+    ]) {
+      const response = await app.inject({ method: "GET", url });
+      expect(response.statusCode).toBe(404);
+      expect(response.headers["cache-control"]).toBe("no-store");
+    }
+    const current = await app.inject({
+      method: "GET",
+      url: `/menu/photos/${ITEM_ID}/${second.version}`,
+    });
+    expect(current.statusCode).toBe(200);
+  });
+
+  it("preserves an existing photo after malformed, unsupported, or oversized uploads", async () => {
+    await upload(await png("#ff0000"), "image/png");
+    const original = (await storedPhoto())!;
+
+    const malformed = await upload(Buffer.from("not an image"), "image/png");
+    expect(malformed.statusCode).toBe(303);
+    expect(decodeURIComponent(malformed.headers.location!)).toContain("image illisible ou endommagée");
+    expect((await storedPhoto())!.version).toBe(original.version);
+
+    const unsupported = await upload(Buffer.from("GIF89a"), "image/gif");
+    expect(unsupported.statusCode).toBe(303);
+    expect(decodeURIComponent(unsupported.headers.location!)).toContain("format non pris en charge");
+    expect((await storedPhoto())!.version).toBe(original.version);
+
+    const oversized = await upload(Buffer.alloc(MAX_MENU_PHOTO_BYTES + 1), "image/png");
+    expect(oversized.statusCode).toBe(303);
+    expect(decodeURIComponent(oversized.headers.location!)).toContain("10 Mo maximum");
+    expect((await storedPhoto())!.version).toBe(original.version);
+  });
+
+  it("removes a photo and refreshes the picker immediately", async () => {
+    await upload(await png("#ff0000"), "image/png");
+    const version = (await storedPhoto())!.version;
+    const response = await app.inject({
+      method: "POST",
+      url: `/admin/menu/items/${ITEM_ID}/photo/remove`,
+      headers: { authorization: AUTH, "content-type": "application/x-www-form-urlencoded" },
+      payload: "",
+    });
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(
+      `/admin/menu/items/${ITEM_ID}?done=photo_removed`,
+    );
+    expect(await storedPhoto()).toBeUndefined();
+    expect(getCafeMenu().items.get(ITEM_ID)?.photoVersion).toBeUndefined();
+    expect(
+      pickerMenu().flatMap((category) => category.items).find((item) => item.id === ITEM_ID),
+    ).not.toHaveProperty("photoUrl");
+
+    const stale = await app.inject({
+      method: "GET",
+      url: `/menu/photos/${ITEM_ID}/${version}`,
+    });
+    expect(stale.statusCode).toBe(404);
+    expect(stale.headers["cache-control"]).toBe("no-store");
+  });
+});

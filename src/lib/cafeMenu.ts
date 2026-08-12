@@ -31,6 +31,8 @@ export interface CafeMenuItem {
   optionGroups?: MenuOptionGroup[];
   /** Studio "incontournable" — surfaced as a Favoris shortcut in the order picker. */
   favourite?: boolean;
+  /** Immutable cache-busting token only; photo bytes never enter the snapshot. */
+  photoVersion?: string;
 }
 
 /** Parse the pipe-separated option_choices column into a clean list. */
@@ -209,6 +211,8 @@ export interface PickerMenuItem {
   /** Every independent choice group (the /commander app submits `selections`). */
   optionGroups: MenuOptionGroup[];
   fav: boolean;
+  /** Same-origin URL for display only; omitted from order submissions. */
+  photoUrl?: string;
 }
 export interface PickerMenuCategory {
   category: string;
@@ -242,6 +246,9 @@ export function pickerMenu(): PickerMenuCategory[] {
       choices: groups[0]?.choices ?? [],
       optionGroups: groups,
       fav: Boolean(it.favourite),
+      ...(it.photoVersion
+        ? { photoUrl: `/menu/photos/${encodeURIComponent(it.id)}/${encodeURIComponent(it.photoVersion)}` }
+        : {}),
     });
   }
   return cats;
@@ -289,6 +296,7 @@ export function setCafeMenu(rows: CafeMenuRow[]): void {
       optionChoices: r.optionChoices,
       optionGroups: r.optionGroups,
       favourite: r.favourite,
+      photoVersion: r.photoVersion,
     });
   }
   snapshot = { items, promptText: buildPromptText(rows) };

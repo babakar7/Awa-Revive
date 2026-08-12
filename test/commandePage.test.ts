@@ -53,6 +53,16 @@ describe("/commander page assets", () => {
     expect(commandeErreurPage()).toContain("Paiement non abouti");
     expect(commandeMerciPage()).not.toContain("<script src");
   });
+
+  it("renders compact accessible lazy thumbnails from the picker photo URL", () => {
+    expect(COMMANDER_APP_JS).toContain("if(it.photoUrl)");
+    expect(COMMANDER_APP_JS).toContain("pic.src=it.photoUrl");
+    expect(COMMANDER_APP_JS).toContain("pic.alt=it.name");
+    expect(COMMANDER_APP_JS).toContain("pic.loading='lazy'");
+    expect(COMMANDER_APP_JS).toContain("pic.decoding='async'");
+    expect(COMMANDER_APP_JS).toContain("pic.width=72");
+    expect(COMMANDER_APP_JS).toContain("pic.height=48");
+  });
 });
 
 describe("computeBarOpen (bar hours + delivery cutoff)", () => {
@@ -116,6 +126,7 @@ describe("pickerMenu (shared order-picker menu)", () => {
         favourite: true,
         enabled: true,
         sortOrder: 1,
+        photoVersion: "photo-v1",
         optionGroups: [
           { label: "Boisson", choices: ["Jus", "Café"] },
           { label: "Pain", choices: ["Blanc", "Complet"] },
@@ -128,6 +139,7 @@ describe("pickerMenu (shared order-picker menu)", () => {
     expect(item.fav).toBe(true);
     expect(item.price).toBe(6000);
     expect(item.optionGroups).toHaveLength(2);
+    expect(item.photoUrl).toBe("/menu/photos/BRUNCH/photo-v1");
     // Back-compat single-choice fields still present for the service composer.
     expect(item.optionLabel).toBe("Boisson");
     expect(item.choices).toEqual(["Jus", "Café"]);
