@@ -97,7 +97,8 @@ describe("payment ledger persistence", () => {
       if (url.endsWith("/ecom/v1/orders/search")) return new Response(JSON.stringify({ orders: [{
         id: "site-order-1", createdDate: "2026-08-08T10:00:00Z", updatedDate: "2026-08-08T11:00:00Z",
         paymentStatus: "FULLY_REFUNDED", currency: "XOF", channelInfo: { type: "WEB" },
-        billingInfo: { contactDetails: { firstName: "Awa", phone: "221770000001" } },
+        buyerInfo: { contactId: "contact-1", email: "awa@example.com" },
+        billingInfo: { contactDetails: { firstName: "", lastName: "" } },
         lineItems: [{ productName: { original: "Cours" } }],
       }], pagingMetadata: { cursors: {} } }), { status: 200 });
       if (url.includes("/ecom/v1/payments/orders/site-order-1")) return new Response(JSON.stringify({
@@ -108,11 +109,29 @@ describe("payment ledger persistence", () => {
             transactions: [{ paymentId: "pay-1", refundStatus: "SUCCEEDED" }] }],
         },
       }), { status: 200 });
+      if (url.endsWith("/contacts/v4/contacts/contact-1")) return new Response(JSON.stringify({
+        contact: {
+          id: "contact-1",
+          info: {
+            name: { first: "Papa amadou", last: "Kante" },
+            phones: { items: [{ primary: true, e164Phone: "+221776896054" }] },
+          },
+        },
+      }), { status: 200 });
       return new Response("not found", { status: 404 });
     }));
     expect(await syncWixPayments({}, true)).toMatchObject({ ran: true, recordCount: 2 });
     expect(Number((await pool.query(`select count(*) n from wix_payment_movements`)).rows[0].n)).toBe(2);
-    expect((await pool.query(`select provider_method from wix_payment_movements where movement_type='refund'`)).rows[0].provider_method).toBe("wave");
+    expect((await pool.query(
+      `select provider_method,buyer_name,buyer_phone,buyer_contact_id,buyer_identity_synced_at
+         from wix_payment_movements where movement_type='refund'`,
+    )).rows[0]).toMatchObject({
+      provider_method: "wave",
+      buyer_name: "Papa amadou Kante",
+      buyer_phone: "+221776896054",
+      buyer_contact_id: "contact-1",
+      buyer_identity_synced_at: expect.any(Date),
+    });
     expect(await syncWixPayments({}, true)).toMatchObject({ ran: true, recordCount: 2 });
     expect(Number((await pool.query(`select count(*) n from wix_payment_movements`)).rows[0].n)).toBe(2);
     const before = (await pool.query(`select last_updated_date_seen from wix_payment_sync_state`)).rows[0].last_updated_date_seen;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { csvCell, renderPaymentsPage } from "../src/admin/paiementsPage.js";
 import { dakarDay } from "../src/domain/paymentsLedger.js";
-import { normalizeWixProviderMethod } from "../src/domain/wixPaymentSync.js";
+import { normalizeWixProviderMethod, wixOrderBuyer } from "../src/domain/wixPaymentSync.js";
 
 describe("payments ledger pure rules", () => {
   it("uses the Dakar calendar day", () => {
@@ -19,6 +19,13 @@ describe("payments ledger pure rules", () => {
       paymentMethod: "Payer en personne", status: "APPROVED", offlinePayment: true,
       paymentMethodName: { userDefinedName: { custom: "OM" } },
     }})).toMatchObject({ method: "orange_money", offline: true });
+  });
+
+  it("keeps the contact id when a Wix WEB order has blank billing names", () => {
+    expect(wixOrderBuyer({
+      buyerInfo: { contactId: "contact-1", email: "cliente@example.com" },
+      billingInfo: { contactDetails: { firstName: "", lastName: "" } },
+    })).toEqual({ name: null, phone: null, contactId: "contact-1" });
   });
 
   it("neutralizes spreadsheet formulas in every CSV cell", () => {

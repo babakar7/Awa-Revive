@@ -2,7 +2,13 @@ import crypto from "node:crypto";
 import type pg from "pg";
 import { config } from "../config.js";
 import { pool } from "../db/index.js";
-import { getOrderTransactions, searchEcomOrdersByUpdatedDate } from "../lib/wix.js";
+import {
+  getContactById,
+  getOrderTransactions,
+  searchEcomOrdersByUpdatedDate,
+  wixContactFullName,
+  wixDeliveryClientFromContact,
+} from "../lib/wix.js";
 import type { LedgerPaymentMethod, LedgerMovementType } from "./paymentsLedger.js";
 
 type Log = {
@@ -72,6 +78,8 @@ interface StagedMovement {
   currency: string;
   buyerName: string | null;
   buyerPhone: string | null;
+  buyerContactId: string | null;
+  buyerIdentitySyncedAt: Date | null;
   label: string;
   providerMethod: LedgerPaymentMethod | null;
   rawMethod: string;
@@ -112,10 +120,72 @@ function refundStatus(entry: any): string | null {
   return statuses.every((status: string) => status === "SUCCEEDED") ? "SUCCEEDED" : statuses[0];
 }
 
-function buyer(order: any): { name: string | null; phone: string | null } {
-  const details = order?.billingInfo?.contactDetails ?? order?.buyerInfo ?? {};
-  const name = [details?.firstName, details?.lastName].filter(Boolean).join(" ").trim();
-  return { name: name || details?.name || null, phone: details?.phone || null };
+interface WixBuyerIdentity {
+  name: string | null;
+  phone: string | null;
+  contactId: string | null;
+  lookupCompleted: boolean;
+}
+
+function cleanIdentityValue(value: unknown): string | null {
+  const cleaned = String(value ?? "").trim();
+  return cleaned || null;
+}
+
+/** Identity embedded directly in an eCommerce order, without a Contacts call. */
+export function wixOrderBuyer(order: any): Omit<WixBuyerIdentity, "lookupCompleted"> {
+  const billing = order?.billingInfo?.contactDetails ?? {};
+  const buyerInfo = order?.buyerInfo ?? {};
+  const billingName = [billing?.firstName, billing?.lastName]
+    .map(cleanIdentityValue)
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const buyerName = [buyerInfo?.firstName, buyerInfo?.lastName]
+    .map(cleanIdentityValue)
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return {
+    name: cleanIdentityValue(billingName || billing?.name || buyerName || buyerInfo?.name),
+    phone: cleanIdentityValue(billing?.phone || buyerInfo?.phone),
+    contactId: cleanIdentityValue(buyerInfo?.contactId),
+  };
+}
+
+async function enrichedBuyer(
+  order: any,
+  contactCache: Map<string, Promise<any | null>>,
+  log: Log,
+): Promise<WixBuyerIdentity> {
+  const embedded = wixOrderBuyer(order);
+  if ((embedded.name && embedded.phone) || !embedded.contactId) {
+    return { ...embedded, lookupCompleted: true };
+  }
+
+  try {
+    let pending = contactCache.get(embedded.contactId);
+    if (!pending) {
+      pending = getContactById(embedded.contactId);
+      contactCache.set(embedded.contactId, pending);
+    }
+    const contact = await pending;
+    const snapshot = wixDeliveryClientFromContact(contact);
+    return {
+      name: embedded.name || wixContactFullName(contact),
+      phone: embedded.phone || snapshot?.phone || null,
+      contactId: embedded.contactId,
+      lookupCompleted: true,
+    };
+  } catch (error) {
+    // Identity enrichment must never prevent an authoritative monetary entry
+    // from reaching the ledger. A null timestamp makes the next sync retry a
+    // full pass instead of permanently accepting the missing identity.
+    contactCache.delete(embedded.contactId);
+    log.warn?.({ orderId: order?.id, contactId: embedded.contactId, error },
+      "Wix payment buyer contact lookup failed; payment kept for retry");
+    return { ...embedded, lookupCompleted: false };
+  }
 }
 
 function label(order: any): string {
@@ -162,19 +232,24 @@ async function commitSuccessfulScan(args: {
       await client.query(
         `insert into wix_payment_movements
           (wix_order_id,source,movement_type,wix_entry_id,provider_status,occurred_at,
-           amount_xof,currency,buyer_name,buyer_phone,label,provider_method,raw_method,
-           offline,raw,synced_at,last_seen_at,invalidated_at)
-         values ($1,'ecom',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now(),now(),null)
+           amount_xof,currency,buyer_name,buyer_phone,buyer_contact_id,buyer_identity_synced_at,
+           label,provider_method,raw_method,offline,raw,synced_at,last_seen_at,invalidated_at)
+         values ($1,'ecom',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now(),null)
          on conflict (wix_order_id,movement_type,wix_entry_id) do update set
            provider_status=excluded.provider_status,occurred_at=excluded.occurred_at,
            amount_xof=excluded.amount_xof,currency=excluded.currency,
-           buyer_name=excluded.buyer_name,buyer_phone=excluded.buyer_phone,label=excluded.label,
+           buyer_name=coalesce(nullif(excluded.buyer_name,''),wix_payment_movements.buyer_name),
+           buyer_phone=coalesce(nullif(excluded.buyer_phone,''),wix_payment_movements.buyer_phone),
+           buyer_contact_id=coalesce(excluded.buyer_contact_id,wix_payment_movements.buyer_contact_id),
+           buyer_identity_synced_at=coalesce(excluded.buyer_identity_synced_at,wix_payment_movements.buyer_identity_synced_at),
+           label=excluded.label,
            provider_method=excluded.provider_method,raw_method=excluded.raw_method,
            offline=excluded.offline,raw=excluded.raw,synced_at=now(),last_seen_at=now(),
            invalidated_at=null`,
         [m.wixOrderId,m.movementType,m.wixEntryId,m.providerStatus,m.occurredAt,
-         m.amountXof,m.currency,m.buyerName,m.buyerPhone,m.label,m.providerMethod,
-         m.rawMethod,m.offline,JSON.stringify(m.raw)],
+         m.amountXof,m.currency,m.buyerName,m.buyerPhone,m.buyerContactId,
+         m.buyerIdentitySyncedAt,m.label,m.providerMethod,m.rawMethod,m.offline,
+         JSON.stringify(m.raw)],
       );
     }
     for (const d of args.diagnostics) {
@@ -217,7 +292,11 @@ export async function syncWixPayments(log: Log = {}, force = false): Promise<{ r
   try {
     const state = await pool.query(`select * from wix_payment_sync_state where singleton=true`);
     const row = state.rows[0] ?? {};
-    const full = force || !row.last_full_reconciled_at ||
+    const identityBackfill = await pool.query(
+      `select exists(select 1 from wix_payment_movements
+        where invalidated_at is null and buyer_identity_synced_at is null) needed`,
+    );
+    const full = force || Boolean(identityBackfill.rows[0]?.needed) || !row.last_full_reconciled_at ||
       new Date(row.last_full_reconciled_at).getTime() < Date.now() - 7 * 86400_000;
     const ledgerStart = new Date(`${config.PAYMENTS_LEDGER_START_DATE}T00:00:00Z`);
     const last = row.last_updated_date_seen ? new Date(row.last_updated_date_seen) : ledgerStart;
@@ -228,6 +307,7 @@ export async function syncWixPayments(log: Log = {}, force = false): Promise<{ r
     let cursor: string | undefined;
     let watermark = last;
     const seenCursors = new Set<string>();
+    const contactCache = new Map<string, Promise<any | null>>();
     for (;;) {
       const page = await searchEcomOrdersByUpdatedDate({ updatedAfter, cursor });
       for (const order of page.orders) {
@@ -238,7 +318,10 @@ export async function syncWixPayments(log: Log = {}, force = false): Promise<{ r
         const externalId = String(order?.channelInfo?.externalOrderId ?? "").trim();
         if ((externalId && ids.external.has(externalId)) || ids.wix.has(orderId)) continue;
         const tx = await getOrderTransactions(orderId);
-        const contact = buyer(order);
+        const hasMonetaryEntry = tx.payments.some((entry: any) => !entry?.membershipPaymentDetails) ||
+          tx.refunds.length > 0;
+        if (!hasMonetaryEntry) continue;
+        const contact = await enrichedBuyer(order, contactCache, log);
         for (const [movementType, entries] of [["payment", tx.payments], ["refund", tx.refunds]] as const) {
           for (const entry of entries) {
             // Wix also exposes plan-session redemptions as "payments". They
@@ -289,6 +372,8 @@ export async function syncWixPayments(log: Log = {}, force = false): Promise<{ r
               providerStatus: provider.providerStatus, occurredAt: entryDate(entry, order),
               amountXof: movementType === "refund" ? -Math.abs(money.amount) : Math.abs(money.amount),
               currency: money.currency, buyerName: contact.name, buyerPhone: contact.phone,
+              buyerContactId: contact.contactId,
+              buyerIdentitySyncedAt: contact.lookupCompleted ? startedAt : null,
               label: label(order), providerMethod: provider.method, rawMethod: provider.rawMethod,
               offline: provider.offline, raw: entry,
             });

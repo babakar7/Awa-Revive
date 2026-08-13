@@ -2053,6 +2053,13 @@ create table if not exists wix_payment_movements (
 create index if not exists idx_wix_payment_occurred
   on wix_payment_movements (occurred_at desc, wix_order_id);
 
+-- Some Wix WEB orders carry only buyerInfo.contactId; their billing name and
+-- phone stay blank even though the CRM contact is complete. These columns make
+-- the Contacts enrichment durable and trigger one full historical catch-up
+-- after this migration (existing rows start with a null sync timestamp).
+alter table wix_payment_movements add column if not exists buyer_contact_id text;
+alter table wix_payment_movements add column if not exists buyer_identity_synced_at timestamptz;
+
 create table if not exists wix_payment_sync_diagnostics (
   fingerprint text primary key,
   kind text not null,
