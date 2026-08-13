@@ -2036,6 +2036,11 @@ export interface WaitlistEntry {
   slot_start: Date;
   status: string;
   notified_at: Date | null;
+  wix_registration_id: string | null;
+  wix_waitlist_booking_id: string | null;
+  wix_left_at: Date | null;
+  wix_sync_error: string | null;
+  wix_sync_attempted_at: Date | null;
 }
 
 /** Idempotent join: one WAITING entry per client+event (unique partial index). */
@@ -2057,6 +2062,57 @@ export async function joinWaitlist(args: {
     [args.clientId, args.serviceId, args.serviceName, args.eventId, args.slotStart],
   );
   return { entry: res.rows[0], already: false };
+}
+
+/** Attach the native Wix mirror after its remote registration succeeds. */
+export async function attachWixWaitlistRegistration(
+  id: string,
+  registrationId: string,
+  bookingId: string | null,
+): Promise<boolean> {
+  const res = await pool.query(
+    `update waitlist_entries
+        set wix_registration_id = $2,
+            wix_waitlist_booking_id = $3,
+            wix_left_at = null,
+            wix_sync_error = null,
+            wix_sync_attempted_at = now()
+      where id = $1 and status = 'WAITING' and wix_registration_id is null`,
+    [id, registrationId, bookingId],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function recordWixWaitlistSyncError(id: string, error: unknown): Promise<void> {
+  await pool.query(
+    `update waitlist_entries
+        set wix_sync_error = $2, wix_sync_attempted_at = now()
+      where id = $1`,
+    [id, String(error).slice(0, 1000)],
+  );
+}
+
+export async function markWixWaitlistLeft(id: string): Promise<void> {
+  await pool.query(
+    `update waitlist_entries
+        set wix_left_at = now(), wix_sync_error = null
+      where id = $1`,
+    [id],
+  );
+}
+
+/** Native registrations that must no longer remain visible/active in Wix. */
+export async function wixWaitlistCleanupEntries(limit = 200): Promise<WaitlistEntry[]> {
+  const res = await pool.query(
+    `select * from waitlist_entries
+      where status <> 'WAITING'
+        and wix_registration_id is not null
+        and wix_left_at is null
+      order by created_at asc
+      limit $1`,
+    [limit],
+  );
+  return res.rows;
 }
 
 /** Cancel this client's WAITING entries (all of them, or one class's). */
@@ -2086,10 +2142,15 @@ export async function listClientWaitlist(clientId: string): Promise<WaitlistEntr
 
 /** All WAITING entries for future slots — the sweep's work list. */
 export async function pendingWaitlistEntries(): Promise<
-  (WaitlistEntry & { wa_phone: string; language: string | null })[]
+  (WaitlistEntry & {
+    wa_phone: string;
+    name: string | null;
+    claimed_email: string | null;
+    language: string | null;
+  })[]
 > {
   const res = await pool.query(
-    `select w.*, c.wa_phone, c.language from waitlist_entries w
+    `select w.*, c.wa_phone, c.name, c.claimed_email, c.language from waitlist_entries w
       join clients c on c.id = w.client_id
       where w.status = 'WAITING' and w.slot_start > now()
       order by w.slot_start asc limit 200`,

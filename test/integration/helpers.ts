@@ -43,6 +43,15 @@ export interface WixState {
   createdBookingIds: string[];
   /** Make create-booking answer 500 (Wix outage). */
   failCreateBooking: boolean;
+  /** Native Bookings waitlist fixtures (Developer Preview API). */
+  waitlistRegistrations: Array<{
+    id: string;
+    bookingId: string;
+    waitingResource: string;
+    status: "WAITING" | "SUGGESTING" | "DECLINED" | "ENROLLED";
+  }>;
+  failWaitlistRegister: boolean;
+  failWaitlistLeave: boolean;
   /** CRM contacts returned for phone lookups. */
   contacts: any[];
   plans: any[];
@@ -180,6 +189,9 @@ export function makeFetchMock(): FetchMock {
     rescheduleEventId: null,
     createdBookingIds: [],
     failCreateBooking: false,
+    waitlistRegistrations: [],
+    failWaitlistRegister: false,
+    failWaitlistLeave: false,
     contacts: [],
     plans: [],
     memberId: "member_1",
@@ -544,6 +556,51 @@ export function makeFetchMock(): FetchMock {
       return json(200, { transactionId: `refund_${originalId}` });
     }
 
+    // --- Wix Bookings native waitlist (Developer Preview) ---
+    if (url.endsWith("/bookings/v1/waitlist/register") && method === "POST") {
+      if (wix.failWaitlistRegister) {
+        return json(503, { message: "native waitlist unavailable" });
+      }
+      const sequence = wix.waitlistRegistrations.length + 1;
+      const registration = {
+        id: `wlr_${sequence}`,
+        bookingId: `wlb_${sequence}`,
+        waitingResource: String(body?.waitingResource ?? ""),
+        status: "WAITING" as const,
+      };
+      wix.waitlistRegistrations.push(registration);
+      return json(200, {
+        registrationId: registration.id,
+        registration,
+        booking: { id: registration.bookingId },
+      });
+    }
+
+    if (url.endsWith("/bookings/v1/waitlist/leave") && method === "POST") {
+      if (wix.failWaitlistLeave) {
+        return json(503, { message: "native waitlist leave unavailable" });
+      }
+      const registration = wix.waitlistRegistrations.find(
+        (candidate) =>
+          candidate.id === body?.registrationId &&
+          candidate.waitingResource === body?.waitingResource,
+      );
+      if (registration) registration.status = "DECLINED";
+      return json(200, {});
+    }
+
+    if (url.includes("/bookings/v1/waitlist/list?") && method === "GET") {
+      const waitingResources = new URL(url).searchParams.getAll("waitingResources");
+      return json(200, {
+        list: waitingResources.map((waitingResource) => ({
+          waitingResource,
+          registrations: wix.waitlistRegistrations.filter(
+            (registration) => registration.waitingResource === waitingResource,
+          ),
+        })),
+      });
+    }
+
     // --- Wix create booking ---
     if (url.endsWith("/bookings/v2/bookings") && method === "POST") {
       if (wix.failCreateBooking) return json(500, { message: "wix exploded" });
@@ -680,6 +737,9 @@ export function makeFetchMock(): FetchMock {
       wix.rescheduleEventId = null;
       wix.createdBookingIds.length = 0;
       wix.failCreateBooking = false;
+      wix.waitlistRegistrations.length = 0;
+      wix.failWaitlistRegister = false;
+      wix.failWaitlistLeave = false;
       wix.contacts = [];
       wix.plans = [];
       wix.memberId = "member_1";

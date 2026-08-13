@@ -61,6 +61,10 @@ import {
 import { resolveContinuitySource } from "../domain/keyContinuity.js";
 import { isOmOutageActive } from "../domain/omOutage.js";
 import {
+  cleanupNativeWaitlistEntry,
+  mirrorWaitlistInWix,
+} from "../domain/wixWaitlist.js";
+import {
   logOutboundIntroRepair,
   missingReplyRequirements,
   missingRequirementsToolResult,
@@ -4655,16 +4659,25 @@ export async function executeTool(
             "(re-run check_availability, then payment link or membership).",
         });
       }
-      const { already } = await repo.joinWaitlist({
+      const { entry, already } = await repo.joinWaitlist({
         clientId: client.id,
         serviceId,
         serviceName: service.name,
         eventId,
         slotStart: slot.startDate,
       });
+      const wixMirror = await mirrorWaitlistInWix(entry, client);
+      if (!wixMirror.mirrored) {
+        console.warn("Native Wix waitlist mirror failed; local fallback remains active", {
+          clientId: client.id,
+          eventId,
+          error: wixMirror.error,
+        });
+      }
       return JSON.stringify({
         joined: true,
         already_on_waitlist: already || undefined,
+        visible_in_wix_waitlist: wixMirror.mirrored,
         class: service.name,
         slot_start_dakar: fmtDakar(slot.startDate),
         note:
@@ -4692,9 +4705,17 @@ export async function executeTool(
           }
         }
       }
+      const activeEntries = (await repo.listClientWaitlist(client.id)).filter(
+        (entry) => !serviceId || entry.service_id === serviceId,
+      );
       const removed = await repo.leaveWaitlist(client.id, serviceId);
+      let wixCleanupPending = 0;
+      for (const entry of activeEntries) {
+        if (!(await cleanupNativeWaitlistEntry(entry))) wixCleanupPending++;
+      }
       return JSON.stringify({
         removed,
+        wix_cleanup_pending: wixCleanupPending || undefined,
         note:
           removed > 0
             ? "Confirm to the client they're off the waitlist."

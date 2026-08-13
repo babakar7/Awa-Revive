@@ -540,6 +540,97 @@ export async function findSlot(
   return slots.find((s) => s.eventId === eventId) ?? null;
 }
 
+// ---------- native Wix waitlist (Developer Preview) ----------
+
+export interface WixWaitlistContactDetails {
+  contactId?: string;
+  firstName: string;
+  lastName?: string;
+  email?: string;
+  phone: string;
+}
+
+export interface WixWaitlistRegistration {
+  id: string;
+  bookingId: string | null;
+  waitingResource: string;
+  status: "WAITING" | "SUGGESTING" | "DECLINED" | "ENROLLED" | string;
+}
+
+export interface WixWaitlistedEntity {
+  waitingResource: string;
+  registrations: WixWaitlistRegistration[];
+}
+
+/**
+ * Mirror an Awa waitlist request into Wix Bookings so it is visible in the
+ * session's native Waitlist tab. The API is still Developer Preview, hence the
+ * caller deliberately keeps the local waitlist as the operational fallback.
+ */
+export async function registerToWaitlist(args: {
+  waitingResource: string;
+  contactDetails: WixWaitlistContactDetails;
+}): Promise<WixWaitlistRegistration> {
+  const data = await wixPost("/bookings/v1/waitlist/register", {
+    waitingResource: args.waitingResource,
+    formInfo: {
+      contactDetails: args.contactDetails,
+      paymentSelection: [{ rateLabel: "general", numberOfParticipants: 1 }],
+    },
+  });
+  const registration = data?.registration ?? {};
+  const id = String(registration?.id ?? data?.registrationId ?? "").trim();
+  if (!id) {
+    throw new Error(`Wix waitlist register returned no registration id: ${JSON.stringify(data)}`);
+  }
+  return {
+    id,
+    bookingId: registration?.bookingId ?? data?.booking?.id ?? null,
+    waitingResource: String(registration?.waitingResource ?? args.waitingResource),
+    status: String(registration?.status ?? "WAITING"),
+  };
+}
+
+export async function leaveNativeWaitlist(
+  registrationId: string,
+  waitingResource: string,
+): Promise<void> {
+  await wixPost("/bookings/v1/waitlist/leave", {
+    registrationId,
+    waitingResource,
+  });
+}
+
+/** Read Wix's live WAITING/SUGGESTING state for concrete class sessions. */
+export async function listWaitlistedEntities(
+  waitingResources: string[],
+): Promise<WixWaitlistedEntity[]> {
+  const unique = [...new Set(waitingResources.map(String).filter(Boolean))];
+  if (unique.length === 0) return [];
+  const query = new URLSearchParams();
+  for (const id of unique) query.append("waitingResources", id);
+  const data = await wixGet(`/bookings/v1/waitlist/list?${query.toString()}`);
+  // Preview response naming has changed in Wix's published schemas; accept the
+  // documented entity collection plus the earlier aliases during rollout.
+  const entities =
+    data?.waitlistedEntities ??
+    data?.waitingListEntries ??
+    data?.entries ??
+    data?.list ??
+    [];
+  return (Array.isArray(entities) ? entities : []).map((entry: any) => ({
+    waitingResource: String(entry?.waitingResource ?? ""),
+    registrations: (Array.isArray(entry?.registrations) ? entry.registrations : [])
+      .filter((registration: any) => registration?.id)
+      .map((registration: any) => ({
+        id: String(registration.id),
+        bookingId: registration?.bookingId ? String(registration.bookingId) : null,
+        waitingResource: String(registration?.waitingResource ?? entry?.waitingResource ?? ""),
+        status: String(registration?.status ?? ""),
+      })),
+  }));
+}
+
 /** Re-check that a specific class event still has enough open spots. */
 export async function isSlotStillOpen(
   serviceId: string,

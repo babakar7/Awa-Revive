@@ -3,6 +3,11 @@ import { sendText, sendTemplate } from "../lib/whatsapp.js";
 import { toTemplateParam } from "../lib/notify.js";
 import * as wix from "../lib/wix.js";
 import * as repo from "./repo.js";
+import {
+  cleanupClosedNativeWaitlists,
+  cleanupNativeWaitlistEntry,
+  mirrorWaitlistInWix,
+} from "./wixWaitlist.js";
 
 /**
  * Waitlist sweep (runs with the 5-min cancellation sweep): for every WAITING
@@ -86,8 +91,31 @@ export async function sweepWaitlist(log: {
   const expired = await repo.expirePastWaitlistEntries();
   if (expired > 0) log.info({ expired }, "Waitlist entries expired (class started)");
 
+  const cleaned = await cleanupClosedNativeWaitlists().catch((error) => {
+    log.error({ error }, "Native Wix waitlist cleanup sweep failed");
+    return 0;
+  });
+  if (cleaned > 0) log.info({ cleaned }, "Native Wix waitlist registrations cleaned up");
+
   const entries = await repo.pendingWaitlistEntries();
   if (entries.length === 0) return 0;
+
+  // Backfill local registrations created before native mirroring was deployed,
+  // and retry Preview API outages at most every 30 minutes. The local queue is
+  // always authoritative, so a failed mirror never blocks notification.
+  for (const entry of entries) {
+    const attemptedAt = entry.wix_sync_attempted_at?.getTime() ?? 0;
+    if (
+      !entry.wix_registration_id &&
+      Date.now() - attemptedAt >= 30 * 60 * 1000
+    ) {
+      const result = await mirrorWaitlistInWix(entry, entry);
+      if (result.mirrored && result.registrationId) {
+        entry.wix_registration_id = result.registrationId;
+        entry.wix_sync_error = null;
+      }
+    }
+  }
 
   // One batched availability call covering every waited-on slot.
   const serviceIds = [...new Set(entries.map((e) => e.service_id))];
@@ -99,11 +127,47 @@ export async function sweepWaitlist(log: {
     slots.filter((s) => s.openSpots > 0).map((s) => [s.eventId, s.openSpots]),
   );
 
+  // Wix holds an opened spot while a native registration is SUGGESTING, so
+  // Availability can still report zero. Treat that state as the authoritative
+  // opening, then leave the native waitlist before Awa sends her own nudge and
+  // resumes the normal payment-first booking flow.
+  const nativeEntries = entries.filter((entry) => entry.wix_registration_id);
+  const suggestingRegistrations = new Set<string>();
+  if (nativeEntries.length > 0) {
+    try {
+      const entities = await wix.listWaitlistedEntities(
+        nativeEntries.map((entry) => entry.event_id),
+      );
+      for (const entity of entities) {
+        for (const registration of entity.registrations) {
+          if (registration.status === "SUGGESTING") {
+            suggestingRegistrations.add(registration.id);
+          }
+        }
+      }
+    } catch (error) {
+      // Preview API unavailable: local availability remains the fallback.
+      log.error({ error }, "Native Wix waitlist status read failed; using local fallback");
+    }
+  }
+
   let sent = 0;
   for (const entry of entries) {
-    if (!openByEvent.has(entry.event_id)) continue;
+    const nativeSuggesting = !!(
+      entry.wix_registration_id && suggestingRegistrations.has(entry.wix_registration_id)
+    );
+    if (!openByEvent.has(entry.event_id) && !nativeSuggesting) continue;
     // Claim BEFORE sending — one-shot per entry even across concurrent sweeps.
     if (!(await repo.claimWaitlistNotify(entry.id))) continue;
+    if (entry.wix_registration_id) {
+      const left = await cleanupNativeWaitlistEntry(entry);
+      if (!left) {
+        log.error(
+          { waitlistId: entry.id, registrationId: entry.wix_registration_id },
+          "Native Wix waitlist leave failed before Awa nudge",
+        );
+      }
+    }
     const msg = waitlistNudgeMessage(
       entry.language,
       entry.service_name,

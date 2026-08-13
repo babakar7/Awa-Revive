@@ -1,5 +1,30 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Liste d’attente Awa visible dans Wix Bookings (13 août 2026)
+
+- **Incident observé** : Adjiaratou Aby Sissoko (`+221776372807`) avait bien
+  été inscrite par Awa dans la liste d’attente locale puis notifiée quand une
+  place s’est libérée, mais elle n’apparaissait pas dans l’onglet **Waitlist**
+  de la séance Wix. Cause : le moteur Awa et la liste native Wix étaient deux
+  systèmes indépendants ; `join_waitlist` n’écrivait que dans Postgres.
+- **Décision** : double écriture. Postgres reste la source opérationnelle
+  durable (l’API Waitlist Wix est encore en Developer Preview), et chaque
+  inscription Awa est aussi enregistrée dans la waitlist native de la séance
+  (`/bookings/v1/waitlist/register`) avec la fiche contact Wix, donc visible par
+  la réception. Une panne ou une configuration Wix absente ne fait jamais
+  perdre la demande locale.
+- **Cycle de vie** : désinscription cliente, expiration et notification Awa
+  retirent aussi l’inscription native ; les échecs de nettoyage sont conservés
+  et retentés. Quand Wix met une inscription en `SUGGESTING`, la place est
+  temporairement retenue et l’availability peut rester à zéro : le sweep lit
+  donc ce statut, libère la retenue Wix, puis envoie le WhatsApp Awa habituel.
+- **Historique actif** : au démarrage/sweep, les anciennes lignes locales encore
+  `WAITING` et non synchronisées sont rétro-propagées vers Wix. Les échecs sont
+  retentés au maximum toutes les 30 minutes pour ne pas marteler l’API Preview.
+- **Validation** : `tsc --noEmit`, 1 235 tests unitaires (143 fichiers) et 399
+  tests d’intégration (41 fichiers), tous verts. Cinq tests d’intégration dédiés
+  couvrent miroir Wix, repli local, rattrapage, retrait et `SUGGESTING`.
+
 ## OM : limite 30 caractères sur le nom du QR + résa enfant au nom du parent (11 août 2026)
 
 Vente perdue en direct (Mariata, 21:48) : carnet Natation 70 000 F, email

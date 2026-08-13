@@ -557,6 +557,21 @@ create index if not exists idx_waitlist_status_start
 create unique index if not exists idx_waitlist_one_waiting
   on waitlist_entries (client_id, event_id) where status = 'WAITING';
 
+-- Native Wix waitlist mirror. Awa's local row remains the durable fallback
+-- because Wix's waitlist API is Developer Preview. When present, these ids
+-- make the client visible in Wix's session Waitlist tab and let us remove the
+-- pending Wix booking when Awa notifies, expires or removes the entry.
+alter table waitlist_entries add column if not exists wix_registration_id text;
+alter table waitlist_entries add column if not exists wix_waitlist_booking_id text;
+alter table waitlist_entries add column if not exists wix_left_at timestamptz;
+alter table waitlist_entries add column if not exists wix_sync_error text;
+alter table waitlist_entries add column if not exists wix_sync_attempted_at timestamptz;
+create unique index if not exists idx_waitlist_wix_registration
+  on waitlist_entries (wix_registration_id) where wix_registration_id is not null;
+create index if not exists idx_waitlist_wix_cleanup
+  on waitlist_entries (status, wix_left_at)
+  where wix_registration_id is not null and wix_left_at is null;
+
 create table if not exists slot_cache (
   client_id uuid not null references clients(id),
   event_id text not null,
