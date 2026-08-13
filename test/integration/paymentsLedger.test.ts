@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { migrate, pool } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { buildServer } from "../../src/server.js";
 import { markBookingRefunded } from "../../src/domain/repo.js";
 import {
@@ -15,7 +15,6 @@ import { syncWixPayments } from "../../src/domain/wixPaymentSync.js";
 
 let app: FastifyInstance;
 beforeAll(async () => {
-  await migrate();
   app = buildServer();
   await app.ready();
 });

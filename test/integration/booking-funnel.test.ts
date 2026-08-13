@@ -22,7 +22,6 @@ const fullClient = (client: { id: string; wa_phone: string }) => ({
 });
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
 });

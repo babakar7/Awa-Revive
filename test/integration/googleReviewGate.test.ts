@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { pool } from "../../src/db/index.js";
 import * as keys from "../../src/domain/keyRepo.js";
 import type { KeyPlanMapping } from "../../src/domain/keyRules.js";
 import { inHours, seedClient, truncateAll } from "./helpers.js";
@@ -34,9 +34,6 @@ async function seedActiveKey(clientId: string, paidOrderId: string) {
   });
 }
 
-beforeAll(async () => {
-  await migrate();
-});
 
 afterAll(async () => {
   await pool.end();

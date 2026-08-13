@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { pool, migrate } from "../../src/db/index.js";
+import { describe, it, expect, afterAll, beforeEach } from "vitest";
+import { pool } from "../../src/db/index.js";
 import { escalateStaleLinkRequests } from "../../src/domain/linkRequests.js";
 import { seedClient, truncateAll } from "./helpers.js";
 
@@ -34,9 +34,6 @@ const statusOf = async (id: string): Promise<string> =>
 const detailOf = async (id: string): Promise<string> =>
   (await pool.query(`select detail from link_requests where id = $1`, [id])).rows[0].detail;
 
-beforeAll(async () => {
-  await migrate();
-});
 
 afterAll(async () => {
   await pool.end();

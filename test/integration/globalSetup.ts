@@ -115,6 +115,20 @@ export async function setup(): Promise<void> {
     HABITUEE_PLAN_ID: "key-habituee",
     RESIDENTE_PLAN_ID: "key-residente",
   });
+
+  // Every file in this suite shares this one disposable database and files run
+  // serially. Build the schema once here instead of replaying the full
+  // idempotent production migration in nearly every file's beforeAll hook.
+  // Tests that specifically exercise migration/backfill idempotency still call
+  // migrate() themselves.
+  const { SCHEMA_SQL } = await import("../../src/db/schema.js");
+  const migrationClient = new pg.Client({ connectionString: url });
+  await migrationClient.connect();
+  try {
+    await migrationClient.query(SCHEMA_SQL);
+  } finally {
+    await migrationClient.end();
+  }
 }
 
 export async function teardown(): Promise<void> {

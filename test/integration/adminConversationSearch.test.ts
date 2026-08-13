@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
-import { migrate, pool } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { listClientsPage } from "../../src/admin/queries.js";
 import { makeFetchMock, seedClient, truncateAll, type FetchMock } from "./helpers.js";
 
@@ -27,7 +27,6 @@ async function teamMessage(clientId: string, body: string, status: "pending" | "
 }
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
   app = buildServer();

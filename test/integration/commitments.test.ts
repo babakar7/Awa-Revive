@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import * as commitments from "../../src/domain/commitments.js";
 import { makeFetchMock, seedClient, truncateAll, inHours, type FetchMock } from "./helpers.js";
 
@@ -12,7 +12,6 @@ import { makeFetchMock, seedClient, truncateAll, inHours, type FetchMock } from 
 let mock: FetchMock;
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
-import { pool, migrate } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import {
   categoryNames,
   createCategory,
@@ -28,7 +28,6 @@ let app: FastifyInstance;
  */
 
 beforeAll(async () => {
-  await migrate();
   app = buildServer();
   await app.ready();
 });

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
-import { migrate, pool } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { makeFetchMock, seedClient, truncateAll, type FetchMock } from "./helpers.js";
 
 const AUTH = `Basic ${Buffer.from("revive:revive@5000").toString("base64")}`;
@@ -9,7 +9,6 @@ let app: FastifyInstance;
 let mock: FetchMock;
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
   app = buildServer();

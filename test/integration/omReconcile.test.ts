@@ -1,13 +1,10 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { pool } from "../../src/db/index.js";
 import * as repo from "../../src/domain/repo.js";
 import { omReconcileCandidates } from "../../src/admin/omReconcilePage.js";
 import { isOmOutageActive, setOmOutageMode } from "../../src/domain/omOutage.js";
 import { seedClient, truncateAll } from "./helpers.js";
 
-beforeAll(async () => {
-  await migrate();
-});
 
 afterAll(async () => {
   await pool.end();

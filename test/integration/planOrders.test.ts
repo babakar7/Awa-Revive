@@ -1,12 +1,9 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { pool } from "../../src/db/index.js";
 import { PACK_DISCOVERY_CAMPAIGN } from "../../src/domain/packDiscoveryCampaign.js";
 import { createDraftPlanOrder } from "../../src/domain/repo.js";
 import { inHours, seedClient, truncateAll } from "./helpers.js";
 
-beforeAll(async () => {
-  await migrate();
-});
 
 afterAll(async () => {
   await pool.end();

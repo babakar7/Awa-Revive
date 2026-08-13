@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
-import { pool, migrate } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { executeTool } from "../../src/agent/tools.js";
 import {
   makeFetchMock,
@@ -44,7 +44,6 @@ async function draftFor(clientId: string): Promise<any> {
 }
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
   app = buildServer();
@@ -150,6 +149,9 @@ describe("add_spots_to_booking", () => {
       participants: 1,
       payment_method: "membership",
     });
+    // Fulfilment starts non-blocking contact/notification follow-ups. Let them
+    // release their transactions before the next test truncates the shared DB.
+    await settle();
   });
 
   it("covered_by_membership steers the companion case to add_spots_to_booking", async () => {

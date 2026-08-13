@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
 import { buildServer } from "../../src/server.js";
-import { migrate, pool } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import {
   getMenuItem,
   listMenuItems,
@@ -16,7 +16,6 @@ const ITEM_ID = "PHOTO_TEST";
 let app: FastifyInstance;
 
 beforeAll(async () => {
-  await migrate();
   app = buildServer();
   await app.ready();
 });

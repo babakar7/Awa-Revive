@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { pool } from "../../src/db/index.js";
 import * as keys from "../../src/domain/keyRepo.js";
 import * as repo from "../../src/domain/repo.js";
 import type { KeyPlanMapping, KeyType } from "../../src/domain/keyRules.js";
@@ -50,9 +50,6 @@ const surMesureMapping = makeMapping("SUR_MESURE", {
   bonus: null,
 });
 
-beforeAll(async () => {
-  await migrate();
-});
 
 afterAll(async () => {
   await pool.end();

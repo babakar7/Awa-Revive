@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { pool } from "../../src/db/index.js";
 import {
   clearAgentToolFailure,
   ensureOpenTechnicalHandoff,
@@ -15,7 +15,6 @@ import {
 import { reviewTurns } from "../../src/domain/conversationReview.js";
 import { seedClient, truncateAll } from "./helpers.js";
 
-beforeAll(migrate);
 afterAll(() => pool.end());
 
 describe("durable agent reliability state", () => {

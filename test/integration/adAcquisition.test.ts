@@ -1,12 +1,9 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { pool } from "../../src/db/index.js";
 import { adAcquisitionDashboard } from "../../src/domain/adAcquisition.js";
 import { addCalendarDays, dateInTimezone, syncAdInsights } from "../../src/domain/adInsightsSync.js";
 import { truncateAll } from "./helpers.js";
 
-beforeAll(async () => {
-  await migrate();
-});
 
 beforeEach(async () => {
   await truncateAll();

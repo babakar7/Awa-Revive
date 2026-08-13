@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { pool } from "../../src/db/index.js";
 import * as links from "../../src/domain/linkRequests.js";
 import {
   AUTO_LINKED_BY,
@@ -18,9 +18,6 @@ import { seedClient, truncateAll } from "./helpers.js";
  * existant, elle, reste escaladée à la réception (anti-usurpation).
  */
 
-beforeAll(async () => {
-  await migrate();
-});
 
 afterAll(async () => {
   await pool.end();

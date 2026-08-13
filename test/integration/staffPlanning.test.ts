@@ -18,7 +18,6 @@ let app: FastifyInstance;
 let mock: FetchMock;
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
   app = buildServer();

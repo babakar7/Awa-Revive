@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { config } from "../../src/config.js";
-import { migrate, pool } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { handleTechnicalFailure } from "../../src/domain/technicalFailure.js";
 import { findClientByPhone } from "../../src/domain/repo.js";
 import {
@@ -14,7 +14,6 @@ import {
 let mock: FetchMock;
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
 });

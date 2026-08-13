@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { config } from "../../src/config.js";
-import { pool, migrate } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { truncateAll } from "./helpers.js";
 import { type ExtraLine, type CafeMenuRow, setCafeMenu } from "../../src/lib/cafeMenu.js";
 import { createPairingDevice } from "../../src/domain/opsDeviceRepo.js";
@@ -58,9 +58,6 @@ let canapeSpot: string;
 let terrasseSpot: string;
 let pergolaSpot: string;
 
-beforeAll(async () => {
-  await migrate();
-});
 
 beforeEach(async () => {
   await truncateAll();

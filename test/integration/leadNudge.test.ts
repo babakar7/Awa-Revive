@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
-import { migrate, pool } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { config } from "../../src/config.js";
 import { PACK_DISCOVERY_CAMPAIGN } from "../../src/domain/packDiscoveryCampaign.js";
 import { sendManualLeadNudge, skipLeadNudge } from "../../src/domain/leadNudge.js";
@@ -20,7 +20,6 @@ const original = {
 };
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
 });

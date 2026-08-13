@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { pool, migrate } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { executeTool } from "../../src/agent/tools.js";
 import * as repo from "../../src/domain/repo.js";
 import * as keyRepo from "../../src/domain/keyRepo.js";
@@ -18,7 +18,6 @@ const asClient = (c: { id: string; wa_phone: string }) => ({
 });
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
 });

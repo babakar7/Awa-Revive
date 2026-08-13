@@ -37,7 +37,10 @@ export async function checkDatabaseHealth(timeoutMs = HEALTHCHECK_TIMEOUT_MS): P
 }
 
 export function buildServer() {
-  const app = Fastify({ logger: true, trustProxy: true });
+  // Fastify keeps a no-op logger with the same interface when disabled, so
+  // integration tests can still pass app.log into domain services without
+  // emitting thousands of routine request lines into CI output.
+  const app = Fastify({ logger: process.env.NODE_ENV !== "test", trustProxy: true });
 
   app.register(multipart, {
     limits: { files: 1, fileSize: MAX_MENU_PHOTO_BYTES },

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { migrate, pool } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { createDraftPlanOrder, findPlanOrderById } from "../../src/domain/repo.js";
 import { fulfillPlanOrder } from "../../src/domain/fulfillment.js";
 import { buildServer } from "../../src/server.js";
@@ -18,7 +18,6 @@ let mock: FetchMock;
 let app: FastifyInstance;
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
   app = buildServer();

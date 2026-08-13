@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { config } from "../../src/config.js";
-import { pool, migrate } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { setCafeMenu, type CafeMenuRow } from "../../src/lib/cafeMenu.js";
 import { __resetPublicOrderLimiter } from "../../src/lib/rateLimit.js";
 import { makeFetchMock, type FetchMock, deliverWaveWebhook, waitFor, settle, truncateAll } from "./helpers.js";
@@ -36,7 +36,6 @@ const MENU_ROWS: CafeMenuRow[] = [
 ];
 
 beforeAll(async () => {
-  await migrate();
   mock = makeFetchMock();
   mock.install();
   app = buildServer();

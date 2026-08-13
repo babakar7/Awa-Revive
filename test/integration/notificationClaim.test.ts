@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { pool, migrate } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import {
   areStaffAlertsPaused,
   claimOrReclaim,
@@ -23,7 +23,6 @@ const RULE_ID = "00000000-0000-4000-8000-000000000001";
 const SLOT = { startDate: "2026-07-20T17:15:00Z", endDate: "2026-07-20T18:05:00Z" };
 
 beforeAll(async () => {
-  await migrate();
   await pool.query(
     `insert into notification_rules (id, label, kind, message_template)
      values ($1, 'test rule', 'class_reminder', 'x') on conflict (id) do nothing`,

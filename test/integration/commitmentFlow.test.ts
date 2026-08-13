@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
-import { pool, migrate } from "../../src/db/index.js";
+import { pool } from "../../src/db/index.js";
 import { initCafeMenu } from "../../src/domain/cafeMenuRepo.js";
 import { executeTool } from "../../src/agent/tools.js";
 import * as repo from "../../src/domain/repo.js";
@@ -29,7 +29,6 @@ let app: FastifyInstance;
 let mock: FetchMock;
 
 beforeAll(async () => {
-  await migrate();
   await initCafeMenu();
   mock = makeFetchMock();
   mock.install();

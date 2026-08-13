@@ -1,23 +1,22 @@
 name: CI
 
-# Every push to main deploys straight to Railway, so every push gets the full
-# check: typecheck + unit tests + payment-path integration tests (throwaway
-# Postgres in Docker — preinstalled on ubuntu-latest runners; all external
-# APIs mocked, no secrets needed).
-#
-# To actually BLOCK bad deploys (not just flag them), enable "Wait for CI" on
-# the service in the Railway dashboard — Railway then only deploys commits
-# whose checks pass.
-
+# Railway waits for this workflow before promoting main. Keep the complete
+# suite, but give each integration shard its own disposable Postgres so the
+# slow files can run concurrently without sharing/truncating one database.
 on:
   push:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  checks:
+    name: Typecheck and unit tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -35,5 +34,38 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Integration tests (payment path)
-        run: npm run test:integration
+  integration:
+    name: Integration shard ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Integration tests
+        run: npm run test:integration -- --shard=${{ matrix.shard }}/4
+
+  ci-success:
+    name: CI success
+    if: ${{ always() }}
+    needs: [checks, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every check and shard
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+        run: |
+          test "$CHECKS_RESULT" = "success"
+          test "$INTEGRATION_RESULT" = "success"
