@@ -1397,23 +1397,6 @@ function verificationRequiredResult(
   });
 }
 
-async function exactBenefitWithShortRetry(args: {
-  serviceId: string;
-  contactId: string;
-  planId: string;
-  orderId: string;
-}): Promise<wix.EligibleBenefit | null> {
-  for (const delay of [0, 300, 900]) {
-    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-    const benefit = wix.selectEligibleBenefit(
-      await wix.findEligibleBenefits(args.serviceId, args.contactId, 1),
-      { planId: args.planId, orderId: args.orderId },
-    );
-    if (benefit) return benefit;
-  }
-  return null;
-}
-
 type ValidInitialPlanSlot = {
   service: wix.WixService;
   fresh: wix.WixSlot;
@@ -1473,17 +1456,10 @@ async function createProtectedBenefitBooking(args: {
       count: 1,
     });
     redeemed = true;
-    try {
-      await wix.confirmBookingPaid(wixBookingId);
-    } catch (error) {
-      notifyReception(
-        "⚠️ Avantage Clé — réservation à confirmer",
-        `Le crédit ${args.kind} a été consommé, mais la confirmation Wix a échoué.\n` +
-          `Booking Wix : ${wixBookingId}\nClient : ${args.bookingName} (${phone})`,
-      );
-    }
     let local: repo.PendingBooking | null = null;
     try {
+      // Persist the authoritative ledger transaction before any calendar
+      // confirmation attempt so cancellation/recovery can always re-credit it.
       local = await repo.createMembershipBooking({
         clientId: args.client.id,
         serviceId: args.serviceId,
@@ -1498,6 +1474,15 @@ async function createProtectedBenefitBooking(args: {
       });
     } catch (error) {
       console.error(`Protected-benefit local booking persistence failed for ${wixBookingId}:`, error);
+    }
+    try {
+      await wix.confirmBookingPaid(wixBookingId);
+    } catch (error) {
+      notifyReception(
+        "⚠️ Avantage Clé — réservation à confirmer",
+        `Le crédit ${args.kind} a été consommé, mais la confirmation Wix a échoué.\n` +
+          `Booking Wix : ${wixBookingId}\nClient : ${args.bookingName} (${phone})`,
+      );
     }
     if (local) {
       await recordWixOrderForBooking(local.id, consolePaymentLog).catch(() => undefined);
@@ -3606,9 +3591,10 @@ export async function executeTool(
           | { key: keyRepo.KeyRegistry; benefit: wix.EligibleBenefit }
           | null = null;
         for (const candidate of eligibleKeys) {
-          const benefit = await exactBenefitWithShortRetry({
+          const benefit = await wix.findExactBenefitWithFallback({
             serviceId,
             contactId: contact.id,
+            memberId,
             planId: candidate.bonus_plan_id!,
             orderId: candidate.bonus_order_id!,
           });
@@ -3768,9 +3754,10 @@ export async function executeTool(
           const stored = await keyRepo.attachInvitationOrder(assigned.id, invitationOrderId);
           invitationOrderId = stored?.wix_invitation_order_id ?? invitationOrderId;
         }
-        const benefit = await exactBenefitWithShortRetry({
+        const benefit = await wix.findExactBenefitWithFallback({
           serviceId,
           contactId: contact.id,
+          memberId,
           planId: invitationPlanId,
           orderId: invitationOrderId,
         });
@@ -3953,15 +3940,16 @@ export async function executeTool(
                 "Pour une amie, utilise une invitation disponible ou un paiement séparé.",
             });
           }
-          const benefits = await wix.findEligibleBenefits(
-            serviceId,
-            contact.id,
-            participants,
-          );
-          for (const candidate of activeKeys) {
-            const exact = wix.selectEligibleBenefit(benefits, {
+          for (const candidate of activeKeys.filter(
+            (candidate) => !!memberId && candidate.wix_member_id === memberId,
+          )) {
+            const exact = await wix.findExactBenefitWithFallback({
+              serviceId,
+              contactId: contact.id,
+              memberId: memberId!,
               planId: candidate.plan_id,
               orderId: candidate.paid_order_id,
+              count: participants,
             });
             if (exact) {
               selectedKey = candidate;
@@ -4042,6 +4030,20 @@ export async function executeTool(
           benefit,
           count: participants,
         });
+        // Store the proven Wix debit before calendar confirmation. If the
+        // process stops after this point, cancellation can still revert it.
+        const membershipBooking = await repo.createMembershipBooking({
+          clientId: client.id,
+          serviceId,
+          serviceName: service.name,
+          eventId: resolvedEventId,
+          slotJson: fresh.raw,
+          slotStart: fresh.startDate,
+          slotEnd: fresh.endDate ?? null,
+          wixBookingId,
+          benefitTransactionId: redemption.transactionId || null,
+          participants,
+        });
         try {
           await wix.confirmBookingPaid(wixBookingId);
         } catch (err) {
@@ -4055,18 +4057,6 @@ export async function executeTool(
               `À faire : confirmer la réservation dans le dashboard Wix.`,
           );
         }
-        const membershipBooking = await repo.createMembershipBooking({
-          clientId: client.id,
-          serviceId,
-          serviceName: service.name,
-          eventId: resolvedEventId,
-          slotJson: fresh.raw,
-          slotStart: fresh.startDate,
-          slotEnd: fresh.endDate ?? null,
-          wixBookingId,
-          benefitTransactionId: redemption.transactionId || null,
-          participants,
-        });
         if (selectedKey) {
           await keyRepo.recordKeyReformerBooking({
             wixBookingId,

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { pool } from "../../src/db/index.js";
+import { executeTool } from "../../src/agent/tools.js";
 import { createDraftPlanOrder, findPlanOrderById } from "../../src/domain/repo.js";
 import { fulfillPlanOrder } from "../../src/domain/fulfillment.js";
 import { buildServer } from "../../src/server.js";
@@ -195,6 +196,60 @@ describe("plan payment fulfillment", () => {
       `select count(*)::int as n from pending_bookings
         where wix_booking_id='wb_1' and payment_method='membership'`,
     )).rows[0].n).toBe(1);
+  });
+
+  it("books from the exact active pool when eligible-pools omits it, without duplicate debit on replay", async () => {
+    const { client, order } = await draftWithInitialClass();
+    mock.wix.membershipEligible = false;
+    mock.wix.exactPoolFallbackEnabled = true;
+    mock.wix.nativeRedeemStatus = 428;
+    mock.wix.membershipAvailable = 3;
+
+    await deliverWaveWebhook(app, order.id, { eventId: "EV_exact_pool_fallback" });
+    await waitFor(
+      async () => (await findPlanOrderById(order.id))?.discovery_booking_status === "BOOKED",
+      "exact-pool fallback initial booking",
+    );
+    await deliverWaveWebhook(app, order.id, { eventId: "EV_exact_pool_fallback_replay" });
+    await fulfillPlanOrder(order.id, testLog);
+    await settle();
+
+    const stored = await findPlanOrderById(order.id);
+    const wixBookingId = mock.wix.createdBookingIds[0];
+    expect(stored).toMatchObject({
+      status: "ACTIVATED",
+      discovery_booking_status: "BOOKED",
+      wix_booking_id: wixBookingId,
+      benefit_transaction_id: "fallback_tx_1",
+      technical_failure_at: null,
+    });
+    expect(mock.wix.membershipAvailable).toBe(2);
+    expect(mock.wixCreateBookingCalls()).toHaveLength(1);
+    expect(mock.calls.filter((call) => call.url.endsWith("/balances/pool_1/change")))
+      .toHaveLength(1);
+    expect(Object.keys(mock.wix.balanceChangeTransactions)).toHaveLength(1);
+    expect((await pool.query(
+      `select count(*)::int as n from pending_bookings where wix_booking_id=$1`,
+      [wixBookingId],
+    )).rows[0].n).toBe(1);
+
+    mock.wix.nativeRefundRecreditsBenefit = false;
+    const cancelled = JSON.parse(await executeTool({
+      id: client.id,
+      wa_phone: client.wa_phone,
+      name: client.name,
+      language: client.language,
+      email_prompted_at: client.email_prompted_at,
+      claimed_email: client.claimed_email,
+      capability_menu_at: client.capability_menu_at,
+    }, "cancel_booking", { booking_id: stored?.linked_booking_id }));
+    expect(cancelled).toMatchObject({
+      cancelled: true,
+      session_recredited: true,
+      recredit_source: "fallback",
+    });
+    expect(mock.wix.membershipAvailable).toBe(3);
+    expect(mock.wix.revertedBenefitTransactionIds).toEqual(["fallback_tx_1"]);
   });
 
   it("enters technical takeover when the post-activation booking still fails on retry", async () => {

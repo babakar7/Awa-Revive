@@ -22,6 +22,7 @@ const HTTP_TIMEOUT_MS = 15_000;
 // them prevents Create Order / Add Payments from becoming the third request in
 // the same short rate-limit window. Tests use mocked HTTP and skip the wait.
 const WIX_ECOM_PACE_MS = process.env.NODE_ENV === "test" ? 0 : 1_250;
+const EXACT_BENEFIT_RETRY_MS = process.env.NODE_ENV === "test" ? [0, 0, 0] : [0, 300, 900];
 
 async function paceWixEcomCall(): Promise<void> {
   if (WIX_ECOM_PACE_MS === 0) return;
@@ -2001,6 +2002,8 @@ export interface EligibleBenefit {
   /** Pricing Plans order id (provisioned program external id). */
   orderId: string | null;
   available: number;
+  /** How this pool was proven safe to use. */
+  selectionSource: "eligible" | "exact_pool_fallback";
 }
 
 /** Members and contacts are distinct entities; resolve via the Members API. */
@@ -2062,7 +2065,114 @@ export async function findEligibleBenefits(
         : null,
       orderId: benefit.programInfo?.externalId ? String(benefit.programInfo.externalId) : null,
       available: Number(benefit.poolInfo?.balance?.available ?? 0),
+      selectionSource: "eligible" as const,
     }));
+}
+
+function entityId(value: any): string {
+  return String(value?.id ?? value?._id ?? "");
+}
+
+function memberIdOf(value: any): string {
+  return String(value?.memberId ?? value?.member_id ?? "");
+}
+
+/**
+ * Resolve one exact paid Pricing Plans order when Wix's eligible-pools index
+ * has not materialized it. This deliberately runs only after every native
+ * eligibility response was empty. Any unrelated eligible benefit, ambiguous
+ * balance, inactive pool, insufficient credit, or missing service item keeps
+ * the flow fail-closed.
+ */
+export async function findExactBenefitWithFallback(args: {
+  serviceId: string;
+  contactId: string;
+  memberId: string;
+  planId: string;
+  orderId: string;
+  count?: number;
+}): Promise<EligibleBenefit | null> {
+  const count = Math.max(1, Math.floor(args.count ?? 1));
+  for (const delayMs of EXACT_BENEFIT_RETRY_MS) {
+    if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    const benefits = await findEligibleBenefits(args.serviceId, args.contactId, count);
+    if (benefits.length > 0) {
+      const exact = selectEligibleBenefit(benefits, {
+        planId: args.planId,
+        orderId: args.orderId,
+      });
+      return exact?.memberId === args.memberId ? exact : null;
+    }
+  }
+
+  const balanceData = await wixPost("/benefit-programs/v1/balances/query", {
+    query: {
+      filter: { "beneficiary.memberId": { $eq: args.memberId } },
+      cursorPaging: { limit: 100 },
+    },
+  });
+  const matches = (Array.isArray(balanceData?.balances) ? balanceData.balances : [])
+    .filter((balance: any) => {
+      const pool = balance?.poolInfo ?? {};
+      const available = Number(balance?.amount?.available);
+      return (
+        entityId(balance) &&
+        entityId(balance) === entityId(pool) &&
+        memberIdOf(balance?.beneficiary) === args.memberId &&
+        String(pool?.namespace ?? "") === PRICING_PLANS_NAMESPACE &&
+        String(pool?.externalProgramDefinitionId ?? "") === args.planId &&
+        String(pool?.externalProgramId ?? "") === args.orderId &&
+        String(pool?.status ?? "") === "ACTIVE" &&
+        Number.isFinite(available) &&
+        available >= count
+      );
+    });
+  if (matches.length !== 1) return null;
+
+  const balance = matches[0];
+  const poolId = entityId(balance);
+  const itemData = await wixPost("/benefit-programs/v1/pool-items/query", {
+    query: {
+      filter: {
+        $and: [
+          { poolId: { $eq: poolId } },
+          { "beneficiary.memberId": { $eq: args.memberId } },
+          { externalProgramDefinitionId: { $eq: args.planId } },
+          { externalProgramId: { $eq: args.orderId } },
+          { providerAppId: { $eq: WIX_BOOKINGS_APP_ID } },
+          { externalId: { $eq: args.serviceId } },
+          { namespace: { $eq: PRICING_PLANS_NAMESPACE } },
+        ],
+      },
+      cursorPaging: { limit: 10 },
+    },
+  });
+  const poolItems = (Array.isArray(itemData?.poolItems) ? itemData.poolItems : [])
+    .filter(
+      (item: any) =>
+        item?.removed !== true &&
+        String(item?.poolId ?? "") === poolId &&
+        memberIdOf(item?.beneficiary) === args.memberId &&
+        String(item?.externalProgramDefinitionId ?? "") === args.planId &&
+        String(item?.externalProgramId ?? "") === args.orderId &&
+        String(item?.providerAppId ?? "") === WIX_BOOKINGS_APP_ID &&
+        String(item?.externalId ?? "") === args.serviceId &&
+        String(item?.namespace ?? "") === PRICING_PLANS_NAMESPACE &&
+        typeof item?.benefitKey === "string" &&
+        item.benefitKey.length > 0,
+    );
+  if (poolItems.length !== 1) return null;
+
+  return {
+    poolId,
+    benefitKey: poolItems[0].benefitKey,
+    memberId: args.memberId,
+    planName: String(poolItems[0]?.pool?.displayName ?? "abonnement"),
+    planId: args.planId,
+    orderId: args.orderId,
+    available: Number(balance.amount.available),
+    selectionSource: "exact_pool_fallback",
+  };
 }
 
 /**
@@ -2133,23 +2243,178 @@ export async function redeemMembershipForBooking(args: {
   /** Number of sessions to deduct (group booking on one plan). Defaults to 1. */
   count?: number;
 }): Promise<{ transactionId: string; membershipName: string }> {
+  const count = Math.max(1, Math.floor(args.count ?? 1));
+  const nativeBody = {
+    poolId: args.benefit.poolId,
+    benefitKey: args.benefit.benefitKey,
+    itemReference: { externalId: args.serviceId, providerAppId: WIX_BOOKINGS_APP_ID },
+    count,
+    beneficiary: { identityType: "MEMBER", memberId: args.benefit.memberId },
+    namespace: PRICING_PLANS_NAMESPACE,
+    idempotencyKey: `awa-booking-${args.wixBookingId}`,
+  };
   try {
-    const data = await wixPost("/benefit-programs/v1/benefits/redeem", {
-      poolId: args.benefit.poolId,
-      benefitKey: args.benefit.benefitKey,
-      itemReference: { externalId: args.serviceId, providerAppId: WIX_BOOKINGS_APP_ID },
-      count: Math.max(1, Math.floor(args.count ?? 1)),
-      beneficiary: { identityType: "MEMBER", memberId: args.benefit.memberId },
-      namespace: PRICING_PLANS_NAMESPACE,
-      idempotencyKey: `awa-booking-${args.wixBookingId}`,
-    });
-    return { transactionId: data?.transactionId ?? "", membershipName: args.benefit.planName };
+    const data = await wixPost("/benefit-programs/v1/benefits/redeem", nativeBody);
+    const result = {
+      transactionId: String(data?.transactionId ?? ""),
+      membershipName: args.benefit.planName,
+    };
+    if (!result.transactionId) {
+      throw new Error("Wix redemption returned no transaction id");
+    }
+    if (args.benefit.selectionSource === "exact_pool_fallback") {
+      warnExactPoolFallback(args, result.transactionId, "native");
+    }
+    return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // 428 = NOT_ENOUGH_BALANCE / POLICY_EXPRESSION_EVALUATED_TO_FALSE / POOL_NOT_ACTIVE
-    if (msg.includes("(428)") || msg.includes("(404)")) throw new Error("not_eligible");
-    throw err;
+    const nativeRejected = msg.includes("(428)") || msg.includes("(404)");
+    if (!nativeRejected || args.benefit.selectionSource !== "exact_pool_fallback") {
+      if (nativeRejected) throw new Error("not_eligible");
+      throw err;
+    }
   }
+
+  const idempotencyKey = `awa-booking-${args.wixBookingId}-exact-pool`;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) {
+      const recovered = await recoverExactBalanceDeduction({
+        poolId: args.benefit.poolId,
+        memberId: args.benefit.memberId,
+        idempotencyKey,
+        count,
+      });
+      if (recovered) {
+        warnExactPoolFallback(args, recovered, "change_balance_recovered");
+        return { transactionId: recovered, membershipName: args.benefit.planName };
+      }
+    }
+    try {
+      const data = await wixPost(
+        `/benefit-programs/v1/balances/${encodeURIComponent(args.benefit.poolId)}/change`,
+        {
+          idempotencyKey,
+          type: "ADJUST",
+          adjustOptions: {
+            value: String(-count),
+            beneficiary: { identityType: "MEMBER", memberId: args.benefit.memberId },
+          },
+          transactionDetails: {
+            item: {
+              externalId: args.serviceId,
+              providerAppId: WIX_BOOKINGS_APP_ID,
+            },
+            itemCount: count,
+            reason: "Resabot booking redemption",
+            benefitKey: args.benefit.benefitKey,
+          },
+        },
+      );
+      const transactionId = String(data?.transactionId ?? "");
+      const proven = transactionId
+        ? await getProvenExactBalanceDeduction({
+            transactionId,
+            poolId: args.benefit.poolId,
+            memberId: args.benefit.memberId,
+            idempotencyKey,
+            count,
+          })
+        : null;
+      if (!proven) throw new Error("Wix did not prove the exact-pool balance deduction");
+      warnExactPoolFallback(args, proven, "change_balance");
+      return { transactionId: proven, membershipName: args.benefit.planName };
+    } catch (error) {
+      lastError = error;
+      const recovered = await recoverExactBalanceDeduction({
+        poolId: args.benefit.poolId,
+        memberId: args.benefit.memberId,
+        idempotencyKey,
+        count,
+      });
+      if (recovered) {
+        warnExactPoolFallback(args, recovered, "change_balance_recovered");
+        return { transactionId: recovered, membershipName: args.benefit.planName };
+      }
+    }
+  }
+  warnExactPoolFallback(args, null, "failed");
+  throw lastError ?? new Error("Wix exact-pool balance deduction failed without proof");
+}
+
+function exactDeductionTransactionId(
+  transaction: any,
+  expected: { poolId: string; memberId: string; idempotencyKey: string; count: number },
+): string | null {
+  const id = entityId(transaction);
+  const amount = Number(transaction?.amount);
+  return id &&
+    entityId(transaction?.pool) === expected.poolId &&
+    memberIdOf(transaction?.beneficiary) === expected.memberId &&
+    String(transaction?.idempotencyKey ?? "") === expected.idempotencyKey &&
+    String(transaction?.status ?? "") === "COMPLETED" &&
+    String(transaction?.source ?? "") === "AVAILABLE" &&
+    String(transaction?.target ?? "") === "EXTERNAL" &&
+    Number.isFinite(amount) &&
+    amount === expected.count
+    ? id
+    : null;
+}
+
+async function getProvenExactBalanceDeduction(args: {
+  transactionId: string;
+  poolId: string;
+  memberId: string;
+  idempotencyKey: string;
+  count: number;
+}): Promise<string | null> {
+  const data = await wixGet(
+    `/benefit-programs/v1/transactions/${encodeURIComponent(args.transactionId)}`,
+  );
+  return exactDeductionTransactionId(data?.transaction, args);
+}
+
+async function recoverExactBalanceDeduction(args: {
+  poolId: string;
+  memberId: string;
+  idempotencyKey: string;
+  count: number;
+}): Promise<string | null> {
+  const data = await wixPost("/benefit-programs/v1/transactions/query", {
+    query: {
+      filter: {
+        $and: [
+          { "pool.id": { $eq: args.poolId } },
+          { "beneficiary.memberId": { $eq: args.memberId } },
+        ],
+      },
+      cursorPaging: { limit: 100 },
+    },
+  });
+  const matches = (Array.isArray(data?.transactions) ? data.transactions : [])
+    .map((transaction: any) => exactDeductionTransactionId(transaction, args))
+    .filter((id: string | null): id is string => id !== null);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function warnExactPoolFallback(
+  args: {
+    wixBookingId: string;
+    benefit: EligibleBenefit;
+  },
+  transactionId: string | null,
+  mode: "native" | "change_balance" | "change_balance_recovered" | "failed",
+): void {
+  console.warn("Wix exact-pool fallback", {
+    event: "wix_exact_pool_fallback",
+    mode,
+    planId: args.benefit.planId,
+    orderId: args.benefit.orderId,
+    poolId: args.benefit.poolId,
+    bookingId: args.wixBookingId,
+    transactionId,
+  });
 }
 
 /**

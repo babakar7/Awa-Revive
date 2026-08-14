@@ -67,6 +67,12 @@ export interface WixState {
   /** Benefit Programs fixture used by membership-booking tests. */
   membershipEligible: boolean;
   membershipAvailable: number;
+  /** Expose the exact paid plan through Balances/Pool Items when eligibility is empty. */
+  exactPoolFallbackEnabled: boolean;
+  /** Optional native Redeem Benefit rejection used to exercise Change Balance. */
+  nativeRedeemStatus: 404 | 428 | null;
+  /** Completed Change Balance ledger entries keyed by their deterministic key. */
+  balanceChangeTransactions: Record<string, any>;
   /** Native withRefund cancellation creates the related credit transaction. */
   nativeRefundRecreditsBenefit: boolean;
   /** Original redemption transaction ids re-credited by the fallback route. */
@@ -203,6 +209,9 @@ export function makeFetchMock(): FetchMock {
     failOfflinePlanOrder: false,
     membershipEligible: true,
     membershipAvailable: 5,
+    exactPoolFallbackEnabled: false,
+    nativeRedeemStatus: null,
+    balanceChangeTransactions: {},
     nativeRefundRecreditsBenefit: true,
     revertedBenefitTransactionIds: [],
     createdOrderIds: [],
@@ -520,11 +529,92 @@ export function makeFetchMock(): FetchMock {
       });
     }
 
+    if (url.includes("/benefit-programs/v1/balances/query")) {
+      return json(200, {
+        balances: wix.exactPoolFallbackEnabled
+          ? [{
+              id: "pool_1",
+              beneficiary: { memberId: wix.memberId },
+              amount: { available: String(wix.membershipAvailable) },
+              poolInfo: {
+                id: "pool_1",
+                namespace: "@wix/pricing-plans",
+                externalProgramDefinitionId: wix.offlinePlanIds.at(-1) ?? null,
+                externalProgramId: wix.offlinePlanOrderIds.at(-1) ?? null,
+                status: "ACTIVE",
+              },
+            }]
+          : [],
+      });
+    }
+
+    if (url.includes("/benefit-programs/v1/pool-items/query")) {
+      return json(200, {
+        poolItems: wix.exactPoolFallbackEnabled
+          ? [{
+              poolId: "pool_1",
+              beneficiary: { memberId: wix.memberId },
+              externalProgramDefinitionId: wix.offlinePlanIds.at(-1) ?? null,
+              externalProgramId: wix.offlinePlanOrderIds.at(-1) ?? null,
+              providerAppId: "13d21c63-b5ec-5912-8397-c3a5ddb27a97",
+              externalId: wix.serviceId,
+              namespace: "@wix/pricing-plans",
+              benefitKey: "benefit_1",
+              pool: { displayName: "Pack Reformer" },
+            }]
+          : [],
+      });
+    }
+
     if (url.includes("/benefit-programs/v1/benefits/redeem")) {
+      if (wix.nativeRedeemStatus) {
+        return json(wix.nativeRedeemStatus, { message: "native eligibility index rejected pool" });
+      }
       return json(200, { transactionId: `benefit_tx_${calls.length}` });
     }
 
+    if (
+      url.includes("/benefit-programs/v1/balances/") &&
+      url.endsWith("/change") &&
+      !url.includes("/balances/changes/")
+    ) {
+      const idempotencyKey = String(body?.idempotencyKey ?? "");
+      const existing = wix.balanceChangeTransactions[idempotencyKey];
+      if (existing) return json(409, { message: "idempotency key already exists" });
+      const amount = Math.abs(Number(body?.adjustOptions?.value ?? 0));
+      if (!Number.isFinite(amount) || amount <= 0 || amount > wix.membershipAvailable) {
+        return json(428, { message: "not enough balance" });
+      }
+      wix.membershipAvailable -= amount;
+      const transaction = {
+        id: `fallback_tx_${Object.keys(wix.balanceChangeTransactions).length + 1}`,
+        pool: { id: "pool_1" },
+        beneficiary: { memberId: wix.memberId },
+        idempotencyKey,
+        status: "COMPLETED",
+        source: "AVAILABLE",
+        target: "EXTERNAL",
+        amount: String(amount),
+      };
+      wix.balanceChangeTransactions[idempotencyKey] = transaction;
+      return json(200, { transactionId: transaction.id });
+    }
+
+    if (
+      url.includes("/benefit-programs/v1/transactions/") &&
+      method === "GET"
+    ) {
+      const transactionId = decodeURIComponent(url.split("/transactions/")[1]);
+      const transaction = Object.values(wix.balanceChangeTransactions)
+        .find((candidate: any) => candidate.id === transactionId);
+      return transaction ? json(200, { transaction }) : json(404, {});
+    }
+
     if (url.includes("/benefit-programs/v1/transactions/query")) {
+      const exactPoolFilter = body?.query?.filter?.$and;
+      if (Array.isArray(exactPoolFilter)) {
+        return json(200, { transactions: Object.values(wix.balanceChangeTransactions) });
+      }
       const originalId = body?.query?.filter?.relatedTransactionId?.$eq;
       const reverted =
         typeof originalId === "string" &&
@@ -552,7 +642,13 @@ export function makeFetchMock(): FetchMock {
       const originalId = decodeURIComponent(
         url.split("/balances/changes/")[1].split("/revert")[0],
       );
-      wix.revertedBenefitTransactionIds.push(originalId);
+      if (!wix.revertedBenefitTransactionIds.includes(originalId)) {
+        wix.revertedBenefitTransactionIds.push(originalId);
+        const original = Object.values(wix.balanceChangeTransactions)
+          .find((transaction: any) => transaction.id === originalId);
+        const amount = Number((original as any)?.amount ?? 0);
+        if (Number.isFinite(amount) && amount > 0) wix.membershipAvailable += amount;
+      }
       return json(200, { transactionId: `refund_${originalId}` });
     }
 
@@ -751,6 +847,9 @@ export function makeFetchMock(): FetchMock {
       wix.failOfflinePlanOrder = false;
       wix.membershipEligible = true;
       wix.membershipAvailable = 5;
+      wix.exactPoolFallbackEnabled = false;
+      wix.nativeRedeemStatus = null;
+      wix.balanceChangeTransactions = {};
       wix.nativeRefundRecreditsBenefit = true;
       wix.revertedBenefitTransactionIds.length = 0;
       wix.createdOrderIds.length = 0;

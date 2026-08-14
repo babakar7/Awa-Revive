@@ -16,6 +16,7 @@ const benefit = (
   planId,
   orderId,
   available: 1,
+  selectionSource: "eligible",
 });
 
 describe("selectEligibleBenefit", () => {

@@ -908,23 +908,6 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
   }
 }
 
-async function exactPlanBenefitWithShortRetry(args: {
-  serviceId: string;
-  contactId: string;
-  planId: string;
-  orderId: string;
-}): Promise<wix.EligibleBenefit | null> {
-  for (const delay of [0, 300, 900]) {
-    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-    const benefit = wix.selectEligibleBenefit(
-      await wix.findEligibleBenefits(args.serviceId, args.contactId, 1),
-      { planId: args.planId, orderId: args.orderId },
-    );
-    if (benefit) return benefit;
-  }
-  return null;
-}
-
 async function failInitialPlanBooking(
   order: repo.PlanOrder,
   client: repo.Client,
@@ -1002,10 +985,11 @@ async function fulfillInitialPlanBooking(
 
   const phone = `+${String(client?.wa_phone ?? "").replace(/^\+/, "")}`;
   const contact = await wix.findContactByPhone(phone, client?.name ?? undefined);
-  const benefit = contact && order.wix_order_id && !order.benefit_transaction_id
-    ? await exactPlanBenefitWithShortRetry({
+  const benefit = contact && order.member_id && order.wix_order_id && !order.benefit_transaction_id
+    ? await wix.findExactBenefitWithFallback({
         serviceId: order.service_id,
         contactId: contact.id,
+        memberId: order.member_id,
         planId: order.plan_id,
         orderId: order.wix_order_id,
       })
