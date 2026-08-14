@@ -24,7 +24,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v7";
+const ASSET_VERSION = "v8";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -119,6 +119,17 @@ button.act.cancelx{background:none;border:1px solid var(--danger-border);color:v
 .cfm .cfmacts{display:flex;flex-direction:column;gap:.55rem}
 .cfm button{padding:.85rem;border-radius:var(--radius);border:1px solid var(--border-strong);background:#fff;color:var(--ink-700);font-weight:700;font-size:.95rem}
 .cfm button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+.cfm button.primary{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+.cfm button:disabled{opacity:.5}
+/* Alerts panel (🔔) — install/enable/test walkthrough (same as the salle PWA). */
+.cfm h3{font-family:var(--serif);font-size:1.2rem;font-weight:600;margin:.1rem 0 .7rem}
+.cfm .amsg{font-size:1rem;font-weight:500;color:var(--ink-800);margin:0 0 .8rem}
+.cfm .asteps{margin:0 0 .8rem 1.1rem;padding:0;font-size:.95rem;color:var(--ink-700);line-height:1.55}
+.cfm .anote{font-size:.82rem;font-weight:400;color:var(--ink-500);margin:.7rem 0 0}
+/* Dimmed until THIS phone is subscribed — coverage visible at a glance. */
+#bell{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border);border-radius:999px;
+min-height:2.5rem;padding:.35rem .9rem;font-size:.85rem;font-weight:700}
+#bell.off{background:var(--cream-100);color:var(--ink-500);border-color:var(--border)}
 #clock{font-variant-numeric:tabular-nums;font-weight:600;font-size:.95rem;color:var(--ink-500)}
 .empty{grid-column:1/-1;text-align:center;color:var(--ink-500);margin-top:16vh;font-family:var(--serif);font-size:1.3rem;font-style:italic}
 /* "＋ Commande" — the owner can also take an order. */
@@ -191,7 +202,7 @@ export function ownerBoardPage(): string {
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Supervision</h1><span id="clock"></span><span class="spacer"></span>
-<button id="take" type="button">＋ Commande</button><span class="count" id="count"></span></header>
+<button id="bell" type="button" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><button id="take" type="button">＋ Commande</button><span class="count" id="count"></span></header>
 <section id="kpi" class="kpi-bar"></section>
 <section id="devs" class="dev-bar"></section>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
@@ -228,6 +239,25 @@ self.addEventListener('fetch',e=>{
   if(e.request.method==='GET' && SHELL.includes(url.pathname)){
     e.respondWith(fetch(e.request).then(r=>{const c=r.clone();caches.open(CACHE).then(cc=>cc.put(e.request,c));return r;}).catch(()=>caches.match(e.request)));
   }
+});
+// Web Push: show the "commande prête" alert on the lock screen.
+self.addEventListener('push',e=>{
+  let d={}; try{ d=e.data?e.data.json():{}; }catch(_){}
+  const title=d.title||'Revive';
+  e.waitUntil(self.registration.showNotification(title,{
+    body:d.body||'', tag:d.tag, renotify:true, requireInteraction:true,
+    vibrate:[200,100,200,100,300],   // Android vibrates; iOS vibrates per system settings
+    icon:'${BASE}/icon-192.png', badge:'${BASE}/icon-192.png',
+    data:{url:d.url||'${BASE}/'}
+  }));
+});
+self.addEventListener('notificationclick',e=>{
+  e.notification.close();
+  const url=(e.notification.data&&e.notification.data.url)||'${BASE}/';
+  e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(cl=>{
+    for(const c of cl){ if(c.url.indexOf('${BASE}')>=0 && 'focus' in c) return c.focus(); }
+    if(self.clients.openWindow) return self.clients.openWindow(url);
+  }));
 });`;
 
 // ── Client app (SSE cuisine channel + /stats poll; can also take an order) ───
@@ -425,7 +455,8 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       if(d.menu&&d.menu.length) MENU=d.menu;
       if(d.top) TOP=d.top;
       if(d.stats)renderStats(d.stats); if(d.devices)renderDevices(d.devices);
-      booted=true; render();
+      if(d.vapidKey){ VAPID=d.vapidKey; }
+      booted=true; render(); initPush();
       if(!connected){ connected=true; connect(); }
     }).catch(function(){});
   }
@@ -605,6 +636,113 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     try{ spotSel.focus(); }catch(e){}
   }
   if(takeBtn) takeBtn.onclick=openComposer;
+
+  // ---- Web Push (lock-screen "commande prête") ----
+  // Same walkthrough as the salle PWA: the bell stays visible and dims (.off)
+  // until THIS phone is subscribed; tapping it walks the owner from « installe
+  // la PWA » → « active les alertes » → « teste la sonnerie ».
+  var bell=document.getElementById('bell');
+  var VAPID='';
+  function urlB64(b64){ var pad='='.repeat((4-b64.length%4)%4); var s=(b64+pad).replace(/-/g,'+').replace(/_/g,'/');
+    var raw=atob(s); var a=new Uint8Array(raw.length); for(var i=0;i<raw.length;i++)a[i]=raw.charCodeAt(i); return a; }
+  // iOS only allows web-push once the PWA runs from the home screen (not Safari).
+  var IOS=/iPhone|iPad|iPod/.test(navigator.userAgent||'');
+  function isStandalone(){ try{ return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone===true; }catch(e){ return false; } }
+  function pushSupported(){ return !!VAPID && ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
+  function postSub(sub){ postJSON('/push/subscribe',sub.toJSON()).catch(function(){}); }
+  var subscribed=false;
+  function paintBell(){ if(bell) bell.classList.toggle('off',!subscribed); }
+  function initPush(){
+    if(!('serviceWorker' in navigator)){ subscribed=false; paintBell(); return; }
+    navigator.serviceWorker.ready.then(function(reg){
+      return reg.pushManager.getSubscription().then(function(sub){
+        subscribed=!!(sub && (!('Notification' in window) || Notification.permission==='granted'));
+        if(sub && subscribed) postSub(sub);   // self-heal the server row on every load
+        paintBell();
+      });
+    }).catch(function(){ subscribed=false; paintBell(); });
+  }
+  // Ask permission + subscribe; onDone(true) on success. Must run from a gesture.
+  function subscribeNow(onDone){
+    if(!pushSupported()){ onDone(false); return; }
+    Notification.requestPermission().then(function(p){
+      if(p!=='granted'){ subscribed=false; paintBell(); onDone(false); return; }
+      navigator.serviceWorker.ready.then(function(reg){
+        reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64(VAPID)}).then(function(sub){
+          postSub(sub); subscribed=true; paintBell(); onDone(true);
+        }).catch(function(){ onDone(false); });
+      });
+    }).catch(function(){ onDone(false); });
+  }
+  function openAlerts(){
+    var ov=el('div','ov center'); var box=el('div','cfm');
+    box.setAttribute('role','dialog'); box.setAttribute('aria-modal','true'); box.setAttribute('aria-label','Alertes commandes prêtes');
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); }
+    ov.onclick=function(e){ if(e.target===ov) close(); };
+    function paint(){
+      box.textContent='';
+      box.appendChild(el('h3',null,'🔔 Alertes commandes prêtes'));
+      var msg=el('p','amsg'); box.appendChild(msg);
+      var acts=el('div','cfmacts');
+      if(IOS && !isStandalone()){
+        // iOS hard-gates push behind a home-screen install — no button to offer yet.
+        msg.textContent='Pour être alerté quand une commande est prête, même écran verrouillé, installe l’app sur l’écran d’accueil :';
+        var steps=el('ol','asteps');
+        steps.appendChild(el('li',null,'Ouvre cette page dans Safari'));
+        steps.appendChild(el('li',null,'Bouton Partager, puis « Sur l’écran d’accueil »'));
+        steps.appendChild(el('li',null,'Rouvre l’app depuis son icône, puis reviens ici'));
+        box.appendChild(steps);
+        box.appendChild(el('p','anote','iPhone : iOS 16.4 ou plus récent requis.'));
+      } else if(!pushSupported()){
+        msg.textContent=IOS?'Ce téléphone ne supporte pas les alertes. Mets à jour iOS (16.4 minimum) puis réessaie.'
+          :'Ce navigateur ne supporte pas les alertes. Ouvre cette page avec Chrome, puis réessaie.';
+      } else if(('Notification' in window) && Notification.permission==='denied'){
+        if(IOS){
+          // A stuck « denied » with no Réglages entry can only be reset by
+          // reinstalling the icon (which also wipes the pairing cookie).
+          msg.textContent='Notifications bloquées pour cette app. Cherche « Supervision » dans Réglages → Notifications ; si elle n’y figure pas, réinitialise-la :';
+          var rsteps=el('ol','asteps');
+          rsteps.appendChild(el('li',null,'Supprime l’icône Supervision de l’écran d’accueil'));
+          rsteps.appendChild(el('li',null,'Rouvre la page dans Safari → Partager → « Sur l’écran d’accueil »'));
+          rsteps.appendChild(el('li',null,'Rouvre l’app et réappaire le téléphone (code à créer sur /admin/appareils)'));
+          rsteps.appendChild(el('li',null,'Reviens ici → « Activer les alertes » → autorise'));
+          box.appendChild(rsteps);
+        } else {
+          msg.textContent='Notifications bloquées. Réautorise-les puis reviens ici :';
+          var asteps=el('ol','asteps');
+          asteps.appendChild(el('li',null,'Dans Chrome : icône 🔒 à gauche de l’adresse → Autorisations → Notifications → Autoriser'));
+          asteps.appendChild(el('li',null,'Ou : appui long sur l’icône de l’app Supervision → Infos → Notifications → Autoriser'));
+          asteps.appendChild(el('li',null,'Reviens ici → « Activer les alertes »'));
+          box.appendChild(asteps);
+        }
+      } else if(subscribed){
+        msg.textContent='✓ Alertes activées sur ce téléphone.';
+        var test=el('button','primary','🔔 Tester la sonnerie');
+        test.onclick=function(){ test.disabled=true; test.textContent='Envoi…';
+          postJSON('/push/test',{}).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
+            test.disabled=false; test.textContent='🔔 Tester la sonnerie';
+            if(j&&j.sent>0){ msg.textContent='Envoyé ✓ — verrouille l’écran : tu dois entendre la sonnerie et vibrer dans quelques secondes.'; }
+            else { subscribed=false; paintBell(); paint(); }
+          }).catch(function(){ test.disabled=false; test.textContent='🔔 Tester la sonnerie'; msg.textContent='Erreur réseau — réessaie.'; });
+        };
+        acts.appendChild(test);
+        box.appendChild(el('p','anote',IOS?'Pas de son ? Vérifie le bouton silencieux (côté du téléphone) et le volume.'
+          :'Pas de son ? Vérifie le volume des notifications et le mode Ne pas déranger.'));
+      } else {
+        msg.textContent='Active les alertes pour être prévenu dès qu’une commande est prête, même écran verrouillé.';
+        var go=el('button','primary','Activer les alertes');
+        go.onclick=function(){ go.disabled=true; go.textContent='…';
+          subscribeNow(function(){ go.disabled=false; go.textContent='Activer les alertes'; paint(); }); };
+        acts.appendChild(go);
+        if(!IOS && !isStandalone()) box.appendChild(el('p','anote','Astuce : installe aussi l’app (menu Chrome ⋮ → « Ajouter à l’écran d’accueil ») pour des alertes plus fiables.'));
+      }
+      var closeb=el('button',null,'Fermer'); closeb.onclick=close; acts.appendChild(closeb);
+      box.appendChild(acts);
+    }
+    paint();
+    ov.appendChild(box); document.body.appendChild(ov); try{ box.querySelector('button').focus(); }catch(e){}
+  }
+  if(bell) bell.onclick=openAlerts;
 
   // Keep the supervision screen awake while open; re-acquire on visibility return.
   var wakeLock=null;

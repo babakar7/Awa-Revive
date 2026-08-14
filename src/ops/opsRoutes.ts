@@ -13,6 +13,7 @@ import {
   listOpenKitchenTickets,
   kitchenTicketView,
   advanceTicketByCuisine,
+  type KitchenTicket,
   ackTicketDisplayed,
   createTableTicket,
   completeBarTicket,
@@ -150,6 +151,20 @@ export async function serveCuisineRoot(_req: FastifyRequest, reply: FastifyReply
   return reply.redirect(`${BASE}/`, 302);
 }
 
+/**
+ * A room order going READY rings lock screens: the reception phones (who serve
+ * it) AND the owner's phone (supervision). Fire-and-forget — never fails the
+ * route; each PWA's tap lands on its own board.
+ */
+function pushReadyTableAlert(t: KitchenTicket): void {
+  if (t.source !== "TABLE") return;
+  const view = kitchenTicketView(t);
+  const title = "🔔 Commande prête";
+  const body = `${view.heading} · ${ticketItemsSummary(view)}`;
+  void pushToRole("accueil", { title, body, url: "/ops/service/", tag: `ready-${t.id}` }).catch(() => {});
+  void pushToRole("owner", { title, body, url: "/ops/owner/", tag: `ready-${t.id}` }).catch(() => {});
+}
+
 export function registerOps(app: FastifyInstance): void {
   // ── Static PWA assets (cache-friendly; no device auth needed) ──
   app.get(`${BASE}/manifest.webmanifest`, async (_req, reply) => {
@@ -234,16 +249,7 @@ export function registerOps(app: FastifyInstance): void {
     const device = await requireCuisine(req, reply);
     if (!device) return reply;
     const t = await advanceTicketByCuisine((req.params as any).id, "READY", device.label);
-    // A room order going ready → push the reception phones' lock screens.
-    if (t && t.source === "TABLE") {
-      const view = kitchenTicketView(t);
-      void pushToRole("accueil", {
-        title: "🔔 Commande prête",
-        body: `${view.heading} · ${ticketItemsSummary(view)}`,
-        url: "/ops/service/",
-        tag: `ready-${t.id}`,
-      }).catch(() => {});
-    }
+    if (t) pushReadyTableAlert(t);
     return reply.type("application/json").send({ ok: !!t });
   });
 
@@ -710,7 +716,17 @@ async function ownerBootData(): Promise<unknown> {
   ]);
   // spots + menu + top let the owner board also TAKE an order with the same
   // findability as the salle (server still decides prices/choices).
-  return { cursor, tickets: tickets.map(kitchenTicketView), stats, devices, spots, menu: buildServiceMenu(), top };
+  return {
+    cursor,
+    tickets: tickets.map(kitchenTicketView),
+    stats,
+    devices,
+    spots,
+    menu: buildServiceMenu(),
+    top,
+    // Public VAPID key so the PWA can subscribe to push; "" = push disabled.
+    vapidKey: config.VAPID_PUBLIC_KEY,
+  };
 }
 
 async function serveOwnerHome(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
@@ -825,6 +841,35 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     return device;
   };
 
+  // Register the owner phone's Web Push subscription (lock-screen "commande
+  // prête" alerts) — same contract as the salle endpoint, scoped to this role.
+  app.post(`${OWNER_BASE}/push/subscribe`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const b = (req.body as any) ?? {};
+    const endpoint = String(b.endpoint ?? "");
+    const p256dh = String(b.keys?.p256dh ?? "");
+    const auth = String(b.keys?.auth ?? "");
+    if (!endpoint || !p256dh || !auth) {
+      return reply.code(400).type("application/json").send({ ok: false });
+    }
+    await savePushSubscription(device.id, { endpoint, p256dh, auth });
+    return reply.type("application/json").send({ ok: true });
+  });
+
+  // Self-check: ring THIS phone's lock screen to prove alerts work.
+  app.post(`${OWNER_BASE}/push/test`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const sent = await pushToDevice(device.id, {
+      title: "🔔 Test — la sonnerie fonctionne",
+      body: "Si tu vois et entends ceci, les alertes commandes prêtes sont bien actives.",
+      url: `${OWNER_BASE}/`,
+      tag: "push-test",
+    });
+    return reply.type("application/json").send({ sent });
+  });
+
   app.post(`${OWNER_BASE}/tickets/:id/preparing`, async (req, reply) => {
     const device = await requireOwner(req, reply);
     if (!device) return reply;
@@ -836,17 +881,8 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     const device = await requireOwner(req, reply);
     if (!device) return reply;
     const t = await advanceTicketByCuisine((req.params as any).id, "READY", device.label);
-    // Same side effect as the cuisine route: a room order going ready → push the
-    // reception phones' lock screens so it gets picked up.
-    if (t && t.source === "TABLE") {
-      const view = kitchenTicketView(t);
-      void pushToRole("accueil", {
-        title: "🔔 Commande prête",
-        body: `${view.heading} · ${ticketItemsSummary(view)}`,
-        url: "/ops/service/",
-        tag: `ready-${t.id}`,
-      }).catch(() => {});
-    }
+    // Same side effect as the cuisine route: reception + owner lock screens ring.
+    if (t) pushReadyTableAlert(t);
     return reply.type("application/json").send({ ok: !!t });
   });
 

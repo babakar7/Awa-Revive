@@ -81,6 +81,26 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).not.toMatch(/https?:\/\//);
   });
 
+  it("web push: bell walkthrough + SW lock-screen alert on its own endpoints", () => {
+    // Bell is always visible and dims until subscribed (same UX as the salle).
+    expect(ownerBoardPage()).toContain('id="bell"');
+    expect(OWNER_APP_JS).toContain("paintBell");
+    expect(OWNER_APP_JS).toContain("pushManager.subscribe");
+    // Subscribe/test go through the OWNER endpoints (postJSON prefixes BASE).
+    expect(OWNER_APP_JS).toContain("/push/subscribe");
+    expect(OWNER_APP_JS).toContain("/push/test");
+    expect(OWNER_APP_JS).toContain("Activer les alertes");
+    expect(OWNER_APP_JS).toContain("Tester la sonnerie");
+    // iOS reset instructions name THIS app, not the salle.
+    expect(OWNER_APP_JS).toContain("Supprime l’icône Supervision");
+    // Android is never gated on install; iOS is.
+    expect(OWNER_APP_JS).toMatch(/IOS\s*&&\s*!isStandalone\(\)/);
+    // The SW shows the alert, vibrates, and a tap lands on the owner board.
+    expect(OWNER_SW).toContain("showNotification");
+    expect(OWNER_SW).toContain("vibrate:");
+    expect(OWNER_SW).toContain("'/ops/owner/'");
+  });
+
   it("the board has no inline boot (CSP script-src 'self' would block it)", () => {
     expect(ownerBoardPage()).not.toContain("window.__BOOT__");
     expect(ownerBoardPage()).not.toContain("<script>");
