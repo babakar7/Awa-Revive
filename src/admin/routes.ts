@@ -87,6 +87,8 @@ import {
   getContactById,
   getWixDeliveryClient,
   listAllActiveOrders,
+  listAllPoolBalances,
+  getContactNamesByIds,
   listServices,
   findMemberContactIds,
   phoneMatchVariants,
@@ -191,6 +193,11 @@ import { adAcquisitionDashboard, setUsdXofRate } from "../domain/adAcquisition.j
 import { syncAdInsights } from "../domain/adInsightsSync.js";
 import { renderConversionPage } from "./conversionPage.js";
 import { renderSubscriptionsReference } from "./subscriptionsReferencePage.js";
+import {
+  assemblePlanBalanceRows,
+  renderPlanBalances,
+  type PlanBalanceRow,
+} from "./planBalancesPage.js";
 import {
   attendanceDetail,
   attendanceLeaders,
@@ -463,12 +470,37 @@ export function registerAdmin(app: FastifyInstance): void {
                   <p>Suivez les activations et validez ici les prolongations autorisées.</p>
                 </div>
                 <div class="page-header-actions">
+                  <a class="act" href="/admin/abonnements/soldes">Soldes séances (live Wix)</a>
                   <a class="act act--ghost" href="/admin/abonnements/memo">Ouvrir la référence réception</a>
                 </div>
               </header>
               <section class="grid">${cards}</section>`,
               { subtitle: "Registre réception", contentWidth: "wide" },
             ),
+          );
+      });
+
+      admin.get("/abonnements/soldes", async (_req, reply) => {
+        let rows: PlanBalanceRow[] = [];
+        let loadError = false;
+        try {
+          const orders = await listAllActiveOrders();
+          const balances = await listAllPoolBalances();
+          const names = await getContactNamesByIds(
+            orders.map((order) => String(order?.buyer?.contactId ?? "")),
+          );
+          rows = assemblePlanBalanceRows(orders, balances, names);
+        } catch (err) {
+          console.error("Plan balances page failed to load Wix data:", err);
+          loadError = true;
+        }
+        return reply
+          .type("text/html")
+          .send(
+            await layout("Soldes séances", "/admin/abonnements", renderPlanBalances(rows, loadError), {
+              subtitle: "Soldes séances",
+              contentWidth: "wide",
+            }),
           );
       });
 

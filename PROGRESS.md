@@ -5511,3 +5511,20 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
 - La route PNG porte `Cache-Control: no-store` afin qu'un mobile ne réutilise
   pas l'image d'une journée précédente. WhatsApp reste le canal fiable de
   notification hors fenêtre 24 h, pas le transport HD de l'asset final.
+
+## 2026-08-14 — Admin « Soldes séances » : séances restantes par abonnement
+
+- Nouveau `/admin/abonnements/soldes` (lien depuis le registre réception) :
+  toutes les commandes de plan ACTIVES avec cliente, plan, date de fin et
+  **séances restantes / total**, triées par échéance. Données 100 % serveur :
+  `listAllActiveOrders` + nouveau `listAllPoolBalances` (registre de crédits
+  Benefit Programs) + `getContactNamesByIds` (noms CRM par lot de 50, `$in`).
+- Raison d'être : le dashboard Wix n'affiche JAMAIS le solde d'un abonnement —
+  le compteur vit dans le ledger Benefit Programs, pas sur la commande. La
+  réception était aveugle (demande Babakar 14/08, après le cas Mariama Thiam).
+- Pièges vérifiés en live : la pagination de `balances/query` passe par
+  `metadata.cursors.next` (PAS `pagingMetadata` — 749 pools / 8 pages) ; une
+  commande sans pool lisible s'affiche « Solde introuvable » (jamais un faux
+  0) ; échec Wix → bandeau d'erreur, jamais de page vide silencieuse.
+- Vérifié contre la prod : 128 commandes actives, 128 soldes appariés, spot
+  checks conformes aux opérations du jour (Clés Invitée 2/3, carnet 9/10).

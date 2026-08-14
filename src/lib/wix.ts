@@ -1640,6 +1640,70 @@ export async function listAllActiveOrders(): Promise<any[]> {
   return orders;
 }
 
+export interface PoolBalance {
+  /** Order id (pricing-plans) this credit pool belongs to. */
+  orderId: string;
+  planId: string;
+  memberId: string;
+  status: string;
+  /** Total credits granted by the plan ("" when Wix omits it). */
+  total: string;
+  available: string;
+  reserved: string;
+}
+
+/**
+ * Every Benefit Programs credit pool on the site, one per plan order. This is
+ * the ledger Awa debits on redemption — the Wix dashboard never displays it,
+ * which is why remaining sessions are invisible there. Cursor-paged via
+ * `metadata.cursors.next` (NOT `pagingMetadata` — verified live 14/08, 749
+ * pools across 8 pages).
+ */
+export async function listAllPoolBalances(): Promise<PoolBalance[]> {
+  const balances: PoolBalance[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < 50; page++) {
+    const data = await wixPost("/benefit-programs/v1/balances/query", {
+      query: { cursorPaging: { limit: 100, ...(cursor ? { cursor } : {}) } },
+    });
+    for (const raw of data?.balances ?? []) {
+      const pool = raw?.poolInfo ?? {};
+      if (String(pool?.namespace ?? "") !== PRICING_PLANS_NAMESPACE) continue;
+      balances.push({
+        orderId: String(pool?.externalProgramId ?? ""),
+        planId: String(pool?.externalProgramDefinitionId ?? ""),
+        memberId: String(raw?.beneficiary?.memberId ?? ""),
+        status: String(pool?.status ?? ""),
+        total: String(pool?.creditAmount ?? ""),
+        available: String(raw?.amount?.available ?? ""),
+        reserved: String(raw?.amount?.reserved ?? "0"),
+      });
+    }
+    cursor = data?.metadata?.cursors?.next ?? null;
+    if (!cursor) break;
+  }
+  return balances;
+}
+
+/** Contact display names for a batch of contact ids (missing ids are absent). */
+export async function getContactNamesByIds(ids: string[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const unique = [...new Set(ids.filter(Boolean))];
+  for (let i = 0; i < unique.length; i += 50) {
+    const data = await wixPost("/contacts/v4/contacts/query", {
+      query: { filter: { id: { $in: unique.slice(i, i + 50) } }, paging: { limit: 50 } },
+    });
+    for (const contact of data?.contacts ?? []) {
+      const name = [contact?.info?.name?.first, contact?.info?.name?.last]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      if (contact?.id && name) names.set(String(contact.id), name);
+    }
+  }
+  return names;
+}
+
 /**
  * All pricing-plan orders, including ENDED/CANCELED ones. Wix documents the
  * unfiltered management endpoint as returning every status; this is required
