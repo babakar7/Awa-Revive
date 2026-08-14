@@ -1006,6 +1006,19 @@ export async function expiredLinksToNudge(
         and not exists (select 1 from pending_plan_orders p
                          where p.client_id = b.client_id
                            and p.status in ('DRAFT', 'AWAITING_PAYMENT'))
+        -- A PAID/BOOKED sibling touched after this link was created means the
+        -- client completed the purchase through ANOTHER link (double-tap on the
+        -- payment buttons creates twins; the OLDER twin can be the paid one, so
+        -- the newer-attempt guard above never sees it). "Payment not received"
+        -- right after a successful payment reads as a failed sale (Khadija 14/08).
+        and not exists (select 1 from pending_bookings s
+                         where s.client_id = b.client_id
+                           and s.status in ('PAID', 'BOOKED')
+                           and s.updated_at > b.created_at)
+        and not exists (select 1 from pending_plan_orders s
+                         where s.client_id = b.client_id
+                           and s.paid_at is not null
+                           and s.paid_at > b.created_at)
         and not exists (select 1 from conversations m
                          where m.client_id = b.client_id and m.role = 'user'
                            and m.created_at > b.link_expires_at)
@@ -1064,6 +1077,20 @@ export async function expiredPlanOrdersToNudge(
         and not exists (select 1 from pending_plan_orders r where r.retry_of_order_id = p.id)
         and not exists (select 1 from pending_plan_orders n
                          where n.client_id = p.client_id and n.created_at > p.created_at)
+        -- Paid sibling guard (Khadija 14/08): she tapped Wave AND Orange Money
+        -- almost at once → two orders. She paid the OLDER Wave twin (activated
+        -- 3 min later); the newer OM twin expired and nudged "payment not
+        -- received" right after her ✅ confirmation, and her "j'ai payé" reply
+        -- opened a needless reception handoff. Any sibling paid after this
+        -- order was created means the purchase succeeded elsewhere — stay silent.
+        and not exists (select 1 from pending_plan_orders s
+                         where s.client_id = p.client_id
+                           and s.paid_at is not null
+                           and s.paid_at > p.created_at)
+        and not exists (select 1 from pending_bookings s
+                         where s.client_id = p.client_id
+                           and s.status in ('PAID', 'BOOKED')
+                           and s.updated_at > p.created_at)
         and not exists (select 1 from conversations m
                          where m.client_id = p.client_id and m.role = 'user'
                            and m.created_at > p.link_expires_at)

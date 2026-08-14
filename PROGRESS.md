@@ -5528,3 +5528,26 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   0) ; échec Wix → bandeau d'erreur, jamais de page vide silencieuse.
 - Vérifié contre la prod : 128 commandes actives, 128 soldes appariés, spot
   checks conformes aux opérations du jour (Clés Invitée 2/3, carnet 9/10).
+
+## 2026-08-14 — Nudge d'expiration : garde « jumeau payé » (cas Khadija)
+
+- Incident (21h30–21h51) : une cliente a tapé « Payer Wave » PUIS « Payer
+  Orange Money » quasi simultanément → deux pending_plan_orders jumeaux. Elle a
+  payé le lien Wave (le plus ANCIEN, activé 3 min plus tard, Clé + résa OK) ;
+  le jumeau OM a expiré à 21h50 et la relance « nous n'avons pas reçu de
+  confirmation de paiement » est partie 17 min après sa confirmation ✅. Elle a
+  répondu « j'ai déjà payé » → handoff réception inutile.
+- Cause : `expiredPlanOrdersToNudge`/`expiredLinksToNudge` excluaient une
+  tentative PLUS RÉCENTE, jamais un jumeau plus ancien payé après la création
+  du lien expiré.
+- Fix ([src/domain/repo.ts](src/domain/repo.ts)) : les deux sweeps se taisent
+  si un ordre/résa du même client a été payé (paid_at, ou statut PAID/BOOKED
+  via updated_at) APRÈS la création du lien expiré — cross-type (plan payé ⇒
+  silence côté résa et vice-versa). Un achat ancien ne masque pas un nouveau
+  lien réellement abandonné (borne = created_at du lien). Couvert par
+  [test/integration/expiryNudgePaidTwin.test.ts](test/integration/expiryNudgePaidTwin.test.ts).
+- Reste PHASE2 : à la création d'un lien de remplacement, le lien précédent
+  n'est PAS annulé côté Wave/OM (Awa dit « n'est plus valable » à tort — c'est
+  précisément ce qui a permis le paiement du jumeau) ; si une cliente payait
+  LES DEUX liens, double débit possible. Envisager void/cancel du lien
+  remplacé ou détection du double paiement au webhook.
