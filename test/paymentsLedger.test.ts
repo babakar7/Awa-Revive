@@ -44,7 +44,7 @@ describe("payments ledger pure rules", () => {
     };
     const html = renderPaymentsPage({
       from: "2026-08-01", to: "2026-08-10", today: "2026-08-10", startDate: "2026-07-01",
-      rows: [movement], daily: [], currentMonth: [], previousMonth: [],
+      rows: [movement], bookings: [], daily: [], currentMonth: [], previousMonth: [],
       untagged: [movement], excludedCounts: {}, refundNeeded: [], owner: true,
       sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
         lastFullReconciledAt: null, lastError: null, recordCount: 0 },
@@ -67,7 +67,7 @@ describe("payments ledger pure rules", () => {
     const untagged = Array.from({ length: 12 }, (_, i) => make(i));
     const html = renderPaymentsPage({
       from: "2026-08-01", to: "2026-08-10", today: "2026-08-10", startDate: "2026-07-01",
-      rows: untagged, daily: [], currentMonth: [], previousMonth: [],
+      rows: untagged, bookings: [], daily: [], currentMonth: [], previousMonth: [],
       untagged, excludedCounts: {}, refundNeeded: [], owner: false,
       sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
         lastFullReconciledAt: null, lastError: null, recordCount: 0 },
@@ -92,7 +92,7 @@ describe("payments ledger pure rules", () => {
     const daily = [{ day: "2026-08-11", method: "wave", grossXof: 24000, refundsXof: 24000, netXof: 0, movementCount: 2 }];
     const html = renderPaymentsPage({
       from: "2026-08-10", to: "2026-08-11", today: "2026-08-11", startDate: "2026-07-01",
-      rows, daily, currentMonth: [], previousMonth: [], untagged: [], excludedCounts: {}, refundNeeded: [], owner: false,
+      rows, bookings: [], daily, currentMonth: [], previousMonth: [], untagged: [], excludedCounts: {}, refundNeeded: [], owner: false,
       sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
         lastFullReconciledAt: null, lastError: null, recordCount: 0 },
     });
@@ -111,7 +111,7 @@ describe("payments ledger pure rules", () => {
 
   it("scopes movements to the day with Today/Yesterday/7-day chips", () => {
     const base = {
-      rows: [], daily: [], currentMonth: [], previousMonth: [], untagged: [], excludedCounts: {},
+      rows: [], bookings: [], daily: [], currentMonth: [], previousMonth: [], untagged: [], excludedCounts: {},
       refundNeeded: [], owner: false, startDate: "2026-07-01",
       sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
         lastFullReconciledAt: null, lastError: null, recordCount: 0 },
@@ -128,5 +128,41 @@ describe("payments ledger pure rules", () => {
     const weekView = renderPaymentsPage({ ...base, from: "2026-08-05", to: "2026-08-11", today: "2026-08-11" });
     expect(weekView).toMatch(/<a class="active" href="[^"]*from=2026-08-05&amp;to=2026-08-11[^"]*">7 derniers jours<\/a>/);
     expect(weekView).toMatch(/<a class="" href="[^"]*">Aujourd’hui<\/a>/);
+  });
+
+  it("groups confirmed bookings by client and scopes them by class date", () => {
+    const booking = (overrides: Partial<{
+      bookingId: string; clientId: string; clientName: string; clientPhone: string;
+      serviceName: string; slotStart: Date; participants: number; amountXof: number;
+      paymentMethod: string; paidAt: Date | null;
+    }> = {}) => ({
+      bookingId: "booking-1", clientId: "11111111-1111-4111-8111-111111111111",
+      clientName: "Awa Ndiaye", clientPhone: "221770000001", serviceName: "Reformer",
+      slotStart: new Date("2026-08-11T09:00:00Z"), participants: 1, amountXof: 12000,
+      paymentMethod: "wave", paidAt: new Date("2026-08-03T12:00:00Z"), ...overrides,
+    });
+    const html = renderPaymentsPage({
+      from: "2026-08-11", to: "2026-08-11", today: "2026-08-11", startDate: "2026-07-01",
+      view: "bookings", rows: [], bookings: [
+        booking(),
+        booking({ bookingId: "booking-2", serviceName: "Pilates Mat", participants: 2,
+          slotStart: new Date("2026-08-11T11:00:00Z"), paymentMethod: "membership", amountXof: 0, paidAt: null }),
+        booking({ bookingId: "booking-3", clientId: "22222222-2222-4222-8222-222222222222",
+          clientName: "Binta Fall", clientPhone: "221770000002" }),
+      ],
+      daily: [], currentMonth: [], previousMonth: [], untagged: [], excludedCounts: {},
+      refundNeeded: [], owner: false,
+      sync: { lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
+        lastFullReconciledAt: null, lastError: null, recordCount: 0 },
+    });
+    expect(html).toContain("Par date de réservation");
+    expect(html).toContain("Clients ayant une réservation du 2026-08-11");
+    expect(html).toContain("Awa Ndiaye");
+    expect(html.match(/Awa Ndiaye/g)).toHaveLength(1);
+    expect(html).toContain("3 places");
+    expect(html).toContain("Réglé le 03/08");
+    expect(html).toContain("Séance décomptée");
+    expect(html).toContain("from=2026-08-12&amp;to=2026-08-12&amp;view=bookings");
+    expect(html).not.toContain("Mois en cours");
   });
 });

@@ -48,6 +48,19 @@ export interface MethodTotal {
   movementCount: number;
 }
 
+export interface BookingByServiceDate {
+  bookingId: string;
+  clientId: string;
+  clientName: string | null;
+  clientPhone: string | null;
+  serviceName: string;
+  slotStart: Date;
+  participants: number;
+  amountXof: number;
+  paymentMethod: string;
+  paidAt: Date | null;
+}
+
 const FINAL_WIX_STATUSES = ["APPROVED", "SUCCESSFUL", "COMPLETED", "SUCCEEDED"];
 
 // Keep this projection in one place: list, CSV and totals must agree. The
@@ -208,6 +221,38 @@ export function dailyMethodTotals(filters: LedgerFilters): Promise<MethodTotal[]
 
 export function periodMethodTotals(filters: LedgerFilters): Promise<MethodTotal[]> {
   return aggregate(filters, false);
+}
+
+/** Confirmed Awa bookings selected by class date, independently of payment date. */
+export async function bookingsByServiceDate(
+  from: Date,
+  to: Date,
+  limit = 1_000,
+): Promise<BookingByServiceDate[]> {
+  const res = await pool.query(
+    `select b.id booking_id, b.client_id, c.name client_name, c.wa_phone client_phone,
+            b.service_name, b.slot_start, b.participants, b.amount_xof,
+            b.payment_method, b.paid_at
+       from pending_bookings b
+       join clients c on c.id=b.client_id
+      where b.status='BOOKED' and not c.is_test
+        and b.slot_start >= $1 and b.slot_start < $2
+      order by lower(coalesce(c.name,c.wa_phone)), c.wa_phone, b.slot_start, b.id
+      limit $3`,
+    [from, to, limit],
+  );
+  return res.rows.map((row) => ({
+    bookingId: row.booking_id,
+    clientId: row.client_id,
+    clientName: row.client_name,
+    clientPhone: row.client_phone,
+    serviceName: row.service_name,
+    slotStart: new Date(row.slot_start),
+    participants: Number(row.participants),
+    amountXof: Number(row.amount_xof),
+    paymentMethod: row.payment_method,
+    paidAt: row.paid_at ? new Date(row.paid_at) : null,
+  }));
 }
 
 export async function untaggedWixOffline(limit = 50): Promise<LedgerMovement[]> {

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { paymentMethodLabel } from "../lib/paymentMethod.js";
 import { dakarDay } from "../domain/paymentsLedger.js";
-import type { LedgerMovement, MethodTotal } from "../domain/paymentsLedger.js";
+import type { BookingByServiceDate, LedgerMovement, MethodTotal } from "../domain/paymentsLedger.js";
 import type { WixPaymentSyncState } from "../domain/wixPaymentSync.js";
 import { escapeHtml as esc, fmtDate, fmtFcfa } from "./helpers.js";
 
@@ -11,6 +11,7 @@ export interface PaymentsPageData {
   today: string;
   startDate: string;
   rows: LedgerMovement[];
+  bookings: BookingByServiceDate[];
   daily: MethodTotal[];
   currentMonth: MethodTotal[];
   previousMonth: MethodTotal[];
@@ -24,6 +25,7 @@ export interface PaymentsPageData {
   notice?: string;
   error?: string;
   sync: WixPaymentSyncState;
+  view?: "payments" | "bookings";
 }
 
 const METHODS = ["wave", "orange_money", "maxit", "cash", "card", "other"];
@@ -37,8 +39,16 @@ function totalCards(title: string, rows: MethodTotal[]): string {
 }
 
 function rangeHref(from: string, to: string, d: PaymentsPageData): string {
-  const q = new URLSearchParams({ from, to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) });
-  return `/admin/paiements?${q.toString()}#pay-mouvements`;
+  const bookings = d.view === "bookings";
+  const q = new URLSearchParams({
+    from,
+    to,
+    ...(bookings ? { view: "bookings" } : {}),
+    ...(!bookings && d.method ? { method: d.method } : {}),
+    ...(!bookings && d.source ? { source: d.source } : {}),
+    ...(!bookings && d.type ? { type: d.type } : {}),
+  });
+  return `/admin/paiements?${q.toString()}#${bookings ? "pay-reservations" : "pay-mouvements"}`;
 }
 
 function dayHref(day: string, d: PaymentsPageData): string {
@@ -55,29 +65,84 @@ function shiftDay(day: string, delta: number): string {
 // Quick range chips + a date picker for the movements list. Presets preserve the
 // active method/source/type filters; the picker (in the Filtrer card) goes further back.
 function rangeBar(d: PaymentsPageData): string {
+  const bookings = d.view === "bookings";
   const yesterday = shiftDay(d.today, -1);
-  const weekAgo = shiftDay(d.today, -6);
-  const presets: Array<{ label: string; from: string; to: string }> = [
-    { label: "Aujourd’hui", from: d.today, to: d.today },
-    { label: "Hier", from: yesterday, to: yesterday },
-    { label: "7 derniers jours", from: weekAgo, to: d.today },
-  ];
+  const tomorrow = shiftDay(d.today, 1);
+  const presets: Array<{ label: string; from: string; to: string }> = bookings
+    ? [
+        { label: "Aujourd’hui", from: d.today, to: d.today },
+        { label: "Demain", from: tomorrow, to: tomorrow },
+        { label: "7 prochains jours", from: d.today, to: shiftDay(d.today, 6) },
+      ]
+    : [
+        { label: "Aujourd’hui", from: d.today, to: d.today },
+        { label: "Hier", from: yesterday, to: yesterday },
+        { label: "7 derniers jours", from: shiftDay(d.today, -6), to: d.today },
+      ];
   const chips = presets.map((p) => {
     const active = d.from === p.from && d.to === p.to ? " active" : "";
     return `<a class="${active.trim()}" href="${esc(rangeHref(p.from, p.to, d))}">${esc(p.label)}</a>`;
   }).join("");
   const hidden = [
-    d.method ? `<input type="hidden" name="method" value="${esc(d.method)}">` : "",
-    d.source ? `<input type="hidden" name="source" value="${esc(d.source)}">` : "",
-    d.type ? `<input type="hidden" name="type" value="${esc(d.type)}">` : "",
+    bookings ? `<input type="hidden" name="view" value="bookings">` : "",
+    !bookings && d.method ? `<input type="hidden" name="method" value="${esc(d.method)}">` : "",
+    !bookings && d.source ? `<input type="hidden" name="source" value="${esc(d.source)}">` : "",
+    !bookings && d.type ? `<input type="hidden" name="type" value="${esc(d.type)}">` : "",
   ].join("");
   return `<div class="range-bar">
     <nav class="filters" aria-label="Période">${chips}</nav>
     <form method="get" action="/admin/paiements" class="range-picker">${hidden}
-      <label>Du <input type="date" name="from" value="${esc(d.from)}" min="${esc(d.startDate)}" max="${esc(d.today)}"></label>
-      <label>Au <input type="date" name="to" value="${esc(d.to)}" max="${esc(d.today)}"></label>
+      <label>Du <input type="date" name="from" value="${esc(d.from)}"${bookings ? "" : ` min="${esc(d.startDate)}" max="${esc(d.today)}"`}></label>
+      <label>Au <input type="date" name="to" value="${esc(d.to)}"${bookings ? "" : ` max="${esc(d.today)}"`}></label>
       <button class="act act--sm" type="submit">Voir</button>
     </form></div>`;
+}
+
+function viewSwitch(d: PaymentsPageData): string {
+  const paymentQuery = new URLSearchParams({
+    from: d.from, to: d.to,
+    ...(d.method ? { method: d.method } : {}),
+    ...(d.source ? { source: d.source } : {}),
+    ...(d.type ? { type: d.type } : {}),
+  });
+  const bookingQuery = new URLSearchParams({ view: "bookings", from: d.from, to: d.to });
+  return `<nav class="filters payment-view-switch" aria-label="Organiser les paiements">
+    <a href="/admin/paiements?${esc(paymentQuery.toString())}" class="${d.view === "bookings" ? "" : "active"}"${d.view === "bookings" ? "" : ' aria-current="page"'}>Par date de paiement</a>
+    <a href="/admin/paiements?${esc(bookingQuery.toString())}" class="${d.view === "bookings" ? "active" : ""}"${d.view === "bookings" ? ' aria-current="page"' : ""}>Par date de réservation</a>
+  </nav>`;
+}
+
+function bookingClientGroups(rows: BookingByServiceDate[]): string {
+  if (!rows.length) {
+    return `<div class="empty"><b>Aucune réservation confirmée</b><p>Aucun client n’a de réservation enregistrée par Awa sur cette période.</p></div>`;
+  }
+  const groups = new Map<string, BookingByServiceDate[]>();
+  for (const row of rows) {
+    const existing = groups.get(row.clientId);
+    if (existing) existing.push(row);
+    else groups.set(row.clientId, [row]);
+  }
+  return `<div class="booking-client-grid">${[...groups.values()].map((clientRows) => {
+    const client = clientRows[0];
+    const places = clientRows.reduce((total, row) => total + row.participants, 0);
+    const rowsHtml = clientRows.map((row) => {
+      const amount = row.amountXof > 0 ? fmtFcfa(row.amountXof) : "Inclus";
+      const paid = row.paidAt ? `Réglé le ${fmtDate(row.paidAt)}` : row.paymentMethod === "membership" ? "Séance décomptée" : "Date non enregistrée";
+      return `<tr><td data-label="Horaire"><b>${fmtDate(row.slotStart)}</b></td><td data-label="Cours">${esc(row.serviceName)}</td><td data-label="Places">${row.participants}</td><td data-label="Règlement"><b>${esc(paymentMethodLabel(row.paymentMethod))}</b><div class="muted">${amount} · ${esc(paid)}</div></td></tr>`;
+    }).join("");
+    return `<article class="card booking-client-card"><div class="section-header"><div><h3><a href="/admin/conversations/${esc(client.clientId)}">${esc(client.clientName ?? "Client")}</a></h3><p class="muted">${esc(client.clientPhone ?? "Téléphone non renseigné")}</p></div><span class="badge badge--gray">${places} place${places > 1 ? "s" : ""}</span></div><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Horaire</th><th>Cours</th><th>Places</th><th>Règlement</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></article>`;
+  }).join("")}</div>`;
+}
+
+function bookingsView(d: PaymentsPageData): string {
+  const clientCount = new Set(d.bookings.map((row) => row.clientId)).size;
+  const places = d.bookings.reduce((total, row) => total + row.participants, 0);
+  const period = d.from === d.to ? `du ${esc(d.from)}` : `du ${esc(d.from)} au ${esc(d.to)}`;
+  return `<section class="anchor-target" id="pay-reservations">
+    <div class="card"><div class="section-header"><div><span class="eyebrow">Date du cours</span><h2>Clients ayant une réservation ${period}</h2></div></div>${rangeBar(d)}<p class="muted">Cette vue suit la date de la séance, quelle que soit la date du paiement. Seules les réservations confirmées enregistrées par Awa sont affichées.</p></div>
+    <div class="payment-booking-stats"><article><span>Clients</span><b>${clientCount}</b></article><article><span>Réservations</span><b>${d.bookings.length}</b></article><article><span>Places</span><b>${places}</b></article></div>
+    ${bookingClientGroups(d.bookings)}
+  </section>`;
 }
 
 function dailyTable(rows: MethodTotal[], d: PaymentsPageData): string {
@@ -178,9 +243,14 @@ function jumpNav(d: PaymentsPageData): string {
 }
 
 export function renderPaymentsPage(d: PaymentsPageData): string {
+  if (d.view === "bookings") {
+    return `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}
+    ${viewSwitch(d)}${bookingsView(d)}`;
+  }
   const alerts = Object.entries(d.excludedCounts).filter(([, n]) => n > 0);
   const filterQuery = new URLSearchParams({ from: d.from, to: d.to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) }).toString();
   return `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}
+  ${viewSwitch(d)}
   ${jumpNav(d)}
   <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2>${rangeBar(d)}<p class="muted">${d.from === d.to ? `Transactions du ${esc(d.from)}` : `Transactions du ${esc(d.from)} au ${esc(d.to)}`} · 300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
   <div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p><p class="muted">Périmètre comptable depuis le ${esc(d.startDate)} : les lignes antérieures ne sont pas couvertes, les dates historiques estimées sont signalées, et les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF (devise d’origine conservée pour audit).</p></div>

@@ -59,6 +59,9 @@ alter table pending_bookings add constraint pending_bookings_refund_amount_check
 create unique index if not exists idx_pending_bookings_wix_booking
   on pending_bookings (wix_booking_id);
 
+create index if not exists idx_pending_bookings_confirmed_slot
+  on pending_bookings (slot_start, client_id) where status='BOOKED';
+
 -- Voluntary cancellation of a mobile-money booking: the seat is released but
 -- the payment is retained under the studio's no-refund policy. This marker
 -- distinguishes it from a reception/Wix cancellation that may have another

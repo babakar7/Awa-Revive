@@ -1,5 +1,20 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Paiements : vue clients par date de réservation (14 août 2026)
+
+- `/admin/paiements` propose désormais deux vues : **Par date de paiement**
+  (ledger comptable inchangé) et **Par date de réservation**. La seconde filtre
+  sur `pending_bookings.slot_start`, pas sur `paid_at`, puis regroupe les
+  réservations confirmées par client avec horaire, cours, places, mode de
+  règlement et date d'encaissement à titre informatif.
+- Raccourcis adaptés au planning : Aujourd'hui, Demain et 7 prochains jours ;
+  les dates futures sont autorisées. Les annulations et clients de test sont
+  exclus. Le périmètre est explicitement celui des réservations enregistrées
+  par Awa (`pending_bookings`), car les réservations Wix externes ne sont pas
+  reliées localement à un client et un créneau dans le ledger.
+- La requête dédiée ne charge pas les agrégats comptables et s'appuie sur un
+  index partiel des réservations `BOOKED` par `slot_start`.
+
 ## Liste d’attente Awa visible dans Wix Bookings (13 août 2026)
 
 - **Incident observé** : Adjiaratou Aby Sissoko (`+221776372807`) avait bien

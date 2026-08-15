@@ -7,6 +7,7 @@ import { markBookingRefunded } from "../../src/domain/repo.js";
 import {
   addManualMovement,
   appendTagEvent,
+  bookingsByServiceDate,
   movements,
   periodMethodTotals,
 } from "../../src/domain/paymentsLedger.js";
@@ -38,6 +39,33 @@ const from = new Date("2026-08-01T00:00:00Z");
 const to = new Date("2026-09-01T00:00:00Z");
 
 describe("payment ledger persistence", () => {
+  it("lists clients by class date rather than payment date", async () => {
+    const client = await seedClient({ name: "Cliente du jour" });
+    await seedBooking(client.id, {
+      status: "BOOKED", slot_start: "2026-08-15T09:00:00Z",
+      paid_at: "2026-08-02T10:00:00Z", payment_method: "wave",
+    });
+    await seedBooking(client.id, {
+      status: "CANCELLED", slot_start: "2026-08-15T11:00:00Z",
+      paid_at: "2026-08-02T10:00:00Z", payment_method: "wave",
+    });
+    await seedBooking(client.id, {
+      status: "BOOKED", slot_start: "2026-08-16T09:00:00Z",
+      paid_at: "2026-08-15T10:00:00Z", payment_method: "wave",
+    });
+    const rows = await bookingsByServiceDate(
+      new Date("2026-08-15T00:00:00Z"),
+      new Date("2026-08-16T00:00:00Z"),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      clientName: "Cliente du jour",
+      paymentMethod: "wave",
+      paidAt: new Date("2026-08-02T10:00:00Z"),
+      slotStart: new Date("2026-08-15T09:00:00Z"),
+    });
+  });
+
   it("keeps the original booking payment and records one idempotent refund", async () => {
     const client = await seedClient();
     const booking = await seedBooking(client.id, {

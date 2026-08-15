@@ -620,6 +620,7 @@ export function registerAdmin(app: FastifyInstance): void {
       // ---------- Rapprochement des paiements ----------
       admin.get("/paiements", async (req, reply) => {
         const query = req.query as Record<string, string | undefined>;
+        const view = query.view === "bookings" ? "bookings" : "payments";
         const startDate = config.PAYMENTS_LEDGER_START_DATE;
         const today = new Date().toISOString().slice(0, 10);
         const monthStart = `${today.slice(0, 7)}-01`;
@@ -627,7 +628,7 @@ export function registerAdmin(app: FastifyInstance): void {
         const defaultFrom = today;
         const validDate = (raw: string | undefined, fallback: string) =>
           /^\d{4}-\d{2}-\d{2}$/.test(raw ?? "") ? String(raw) : fallback;
-        const fromText = validDate(query.from, defaultFrom) < startDate
+        const fromText = view === "payments" && validDate(query.from, defaultFrom) < startDate
           ? startDate
           : validDate(query.from, defaultFrom);
         const toText = validDate(query.to, today);
@@ -635,7 +636,27 @@ export function registerAdmin(app: FastifyInstance): void {
         const to = new Date(`${toText}T00:00:00Z`);
         to.setUTCDate(to.getUTCDate() + 1);
         if (!(from < to)) {
-          return reply.redirect(`/admin/paiements?err=${encodeURIComponent("Période invalide.")}`, 303);
+          const errorQuery = new URLSearchParams({
+            ...(view === "bookings" ? { view } : {}),
+            err: "Période invalide.",
+          });
+          return reply.redirect(`/admin/paiements?${errorQuery.toString()}`, 303);
+        }
+        if (view === "bookings") {
+          const bookings = await paymentsLedger.bookingsByServiceDate(from, to);
+          const body = renderPaymentsPage({
+            from: fromText, to: toText, today, startDate, view, bookings,
+            rows: [], daily: [], currentMonth: [], previousMonth: [], untagged: [],
+            excludedCounts: {}, refundNeeded: [], owner: req.adminRole === "owner",
+            notice: query.done, error: query.err,
+            sync: {
+              lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
+              lastFullReconciledAt: null, lastError: null, recordCount: 0,
+            },
+          });
+          return reply.type("text/html").send(await layout("Paiements", "/admin/paiements", body, {
+            subtitle: "Réservations par date de séance", contentWidth: "full",
+          }));
         }
         const filters = {
           from, to,
@@ -659,11 +680,11 @@ export function registerAdmin(app: FastifyInstance): void {
           wixPaymentSyncState(),
         ]);
         const body = renderPaymentsPage({
-          from: fromText, to: toText, today, startDate, rows, daily, currentMonth, previousMonth,
+          from: fromText, to: toText, today, startDate, rows, bookings: [], daily, currentMonth, previousMonth,
           untagged, excludedCounts, refundNeeded: refundNeeded.rows,
           owner: req.adminRole === "owner", method: filters.method,
           source: filters.source, type: filters.type, notice: query.done, error: query.err,
-          sync,
+          sync, view,
         });
         reply.type("text/html").send(await layout("Paiements", "/admin/paiements", body, {
           subtitle: "Rapprochement comptable", contentWidth: "full",
