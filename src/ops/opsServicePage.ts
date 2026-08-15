@@ -30,7 +30,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v24";
+const ASSET_VERSION = "v25";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -164,35 +164,43 @@ background:#fff;color:var(--ink-700);font-weight:700;font-size:1rem}
 /* Stable height + internal scroll: switching categories changes only the inner
    list, never the sheet box, so the sheet never jumps as list size varies. */
 .sheet{position:relative;display:flex;flex-direction:column;background:var(--surface);width:100%;max-width:34rem;
-height:90vh;height:90dvh;overflow:hidden;overscroll-behavior:contain;
+height:96vh;height:96dvh;overflow:hidden;overscroll-behavior:contain;
 border-radius:var(--radius-xl) var(--radius-xl) 0 0;box-shadow:var(--shadow-2);
-padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom));animation:sheet-up .3s var(--ease)}
+padding:.75rem .8rem;padding-bottom:calc(.55rem + env(safe-area-inset-bottom));animation:sheet-up .3s var(--ease)}
 .list{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 @keyframes sheet-up{0%{transform:translateY(24px);opacity:.5}100%{transform:none;opacity:1}}
 .sheet::before{content:"";display:block;width:2.6rem;height:.3rem;border-radius:99px;background:var(--border-strong);margin:0 auto .7rem}
-.sheet h2{font-family:var(--serif);font-size:1.3rem;font-weight:600;letter-spacing:-.02em;margin:.1rem 0 .8rem}
-.modeseg{display:flex;gap:.45rem;margin:0 0 .7rem}
+.sheet h2{font-family:var(--serif);font-size:1.25rem;font-weight:600;letter-spacing:-.02em;margin:0 2.7rem .55rem 0}
+.modeseg{display:flex;gap:.45rem;margin:0 0 .55rem}
 .modeseg .mode{flex:1;min-height:2.75rem;padding:.7rem;border-radius:var(--radius);border:1px solid var(--border);
 background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:.95rem}
 .modeseg .mode.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 .modeseg .mode.away.sel{background:var(--info);border-color:var(--info);color:#fff}
 /* Test-order toggle: quiet when off, loud (danger) when on so it's never sent by accident. */
-.testrow{display:flex;align-items:center;gap:.6rem;margin:0 0 .7rem;padding:.6rem .7rem;border-radius:var(--radius);
+.testrow{display:flex;align-items:center;gap:.6rem;margin:0 0 .6rem;padding:.6rem .7rem;border-radius:var(--radius);
 border:1px dashed var(--border-strong);background:var(--surface-raised);color:var(--ink-500);font-size:.9rem;font-weight:600}
 .testrow.on{border-style:solid;border-color:var(--danger);background:var(--danger-bg);color:var(--danger)}
 .testrow .testcb{width:1.3rem;height:1.3rem;flex:0 0 auto;accent-color:var(--danger)}
 .sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:var(--radius);border:1px solid var(--border);
 background:#fff;color:var(--ink-900);font-size:1rem;font-family:inherit}
-.sheet textarea{min-height:3rem;margin-top:.6rem}
+.sheet textarea{min-height:3rem}.optional{border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--surface-raised);margin-bottom:.55rem}
+.optional summary{padding:.65rem .75rem;cursor:pointer;font-weight:700;color:var(--ink-600);font-size:.88rem}
+.optional-fields{padding:0 .65rem .1rem}.optional input,.optional textarea{margin:0 0 .55rem}
 /* sticky search + category chips */
-.toolbar{position:sticky;top:0;z-index:3;background:var(--surface);padding:.2rem 0 .5rem}
-.search{margin-bottom:.5rem}
+.toolbar{position:sticky;top:0;z-index:3;background:var(--surface);padding:.05rem 0 .45rem}
+.searchbar{display:flex;align-items:stretch;gap:.4rem}.searchbar .search{flex:1;min-width:0;margin-bottom:.45rem}
+.searchbar>.cart{min-height:2.75rem;margin:0 0 .45rem auto}
+.searchctl{display:none;min-width:3rem;height:2.75rem;border:1px solid var(--border);border-radius:var(--radius);background:#fff;
+color:var(--plum-700);font-weight:750;padding:0 .65rem}
+.search-summary{display:none;align-items:center;gap:.4rem;min-height:2rem;margin:-.15rem 3rem .35rem 0;color:var(--ink-600);font-size:.82rem;font-weight:700}
+.search-summary .dotsep{color:var(--ink-300)}
+.browsebar{display:block}.browsebar .chips{width:100%}
 .chips{display:flex;gap:.4rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:.2rem;scrollbar-width:none}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex:0 0 auto;padding:.55rem .95rem;border-radius:999px;background:var(--rose);border:1px solid transparent;
 color:var(--plum-600);font-size:.88rem;font-weight:600;white-space:nowrap}
 .chip.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
-.chip.cart{background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok-strong)}
+.chip.cart{margin-left:auto;background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok-strong);font-weight:800}
 .chip.cart.sel{background:var(--ok-strong);border-color:var(--ok-strong);color:#fff}
 .cat{font-family:var(--serif);font-size:.95rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
 color:var(--plum-600);border-bottom:1px solid var(--rose);padding-bottom:.35rem;margin:.9rem 0 .3rem}
@@ -210,8 +218,12 @@ background:#fff;color:var(--ink-900);font-size:1.35rem;font-weight:700;line-heig
 .stepper .qv{min-width:1.3rem;text-align:center;font-weight:800;font-size:1.1rem}
 .creq{margin-top:.5rem;border:1px solid var(--border-soft);border-radius:var(--radius);padding:.55rem .65rem;background:var(--surface-raised)}
 .creq.missing{border-color:var(--warn-border);background:var(--warn-bg)}
-.clab{font-size:.75rem;font-weight:700;color:var(--ink-500);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.05em}
+.clab{display:block;width:100%;padding:0;border:0;background:none;text-align:left;font-family:inherit;font-size:.75rem;font-weight:700;
+color:var(--ink-500);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.05em}
 .creq.missing .clab{color:var(--warn)}
+.creq.collapsed{padding:.42rem .58rem;border-color:var(--ok-border);background:var(--ok-bg)}
+.creq.collapsed .clab{margin:0;color:var(--ok);text-transform:none;letter-spacing:0;font-size:.82rem}
+.creq.collapsed .cpills{display:none}
 .cpills{display:flex;gap:.45rem;flex-wrap:wrap}
 .cpill{padding:.55rem .9rem;border-radius:999px;border:1px solid var(--border-strong);background:#fff;color:var(--ink-700);font-weight:600;font-size:.95rem}
 .cpill.sel{background:var(--ok-strong);border-color:var(--ok-strong);color:#fff}
@@ -220,15 +232,28 @@ background:#fff;color:var(--ink-900);font-size:1.35rem;font-weight:700;line-heig
 .mi .lnlab{font-size:.75rem;color:var(--ink-500);margin-top:.5rem}
 .wrap{width:100%}
 .nores{color:var(--ink-500);text-align:center;padding:2rem 0}
-.foot{position:sticky;bottom:0;background:var(--surface);padding:.6rem 0 .2rem;display:flex;gap:.6rem;align-items:center;
+.foot{position:sticky;bottom:0;background:var(--surface);padding:.5rem 0 0;display:flex;gap:.55rem;align-items:center;
 border-top:1px solid var(--border-soft)}
-.total{font-weight:800;font-size:1.05rem;white-space:nowrap}
-.total small{color:var(--ink-500);font-weight:500}
+.total{font-weight:800;font-size:.95rem;white-space:nowrap;line-height:1.15}
+.total small{display:block;color:var(--ink-500);font-weight:500;font-size:.7rem}
 .foot button.go{flex:1;padding:.95rem;border:none;border-radius:12px;background:var(--ok-strong);color:#fff;
 font-weight:800;font-size:1.02rem;box-shadow:var(--shadow-1)}
 .foot button.go:disabled{opacity:.45}
 .close-x{position:absolute;top:.55rem;right:.6rem;background:none;border:none;color:var(--ink-500);font-size:1.7rem;line-height:1;z-index:4;min-width:2.75rem;min-height:2.75rem}
-.msg{color:var(--danger);font-size:.9rem;margin:.4rem 0}`;
+.msg{color:var(--danger);font-size:.88rem;margin:.25rem 0}.msg[hidden]{display:none}
+.toast{position:fixed;z-index:40;left:50%;bottom:calc(1rem + env(safe-area-inset-bottom));transform:translateX(-50%);
+max-width:calc(100% - 2rem);padding:.75rem 1rem;border-radius:999px;background:var(--ok-strong);color:#fff;font-weight:750;
+box-shadow:var(--shadow-2);animation:pop .2s var(--ease);white-space:nowrap}
+/* Focused search spends the keyboard-reduced viewport on dense menu rows. */
+.sheet.searching .sheet-title,.sheet.searching .modeseg,.sheet.searching .optional,.sheet.searching .browsebar{display:none}
+.sheet.searching::before{display:none}.sheet.searching .search-summary,.sheet.searching .searchctl{display:flex}
+.sheet.searching .searchbar>.cart{display:none}.sheet.searching{padding-top:.55rem}.sheet.searching .toolbar{padding-bottom:.15rem}
+.sheet.searching .mi{padding:.35rem .2rem;gap:.35rem;flex-wrap:wrap}.sheet.searching .mi .nm{font-size:.94rem;min-width:7rem}
+.sheet.searching .mi .nm .pr{font-size:.76rem}.sheet.searching .stepper{gap:.3rem}.sheet.searching .stepper button{width:2.55rem;height:2.55rem}
+.sheet.searching .cat{font-size:.76rem;margin:.4rem 0 .1rem;padding-bottom:.2rem}
+.sheet.searching .creq.collapsed~.lnlab,.sheet.searching .creq.collapsed~.ln{display:none}.sheet.searching .foot{padding-top:.3rem}
+@media(min-width:42rem){.sheet{max-width:42rem}}@media(max-height:620px){.sheet{height:100vh;height:100dvh;border-radius:0}.sheet::before{display:none}}
+`;
 
 export function serviceBoardPage(): string {
   // No inline boot: script-src 'self' blocks it. The client fetches /state before
@@ -505,76 +530,96 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
 
   function normalize(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
 
+  function showServiceNotice(message){
+    var old=document.querySelector('.toast'); if(old&&old.parentNode) old.parentNode.removeChild(old);
+    var notice=el('div','toast',message); notice.setAttribute('role','status'); notice.setAttribute('aria-live','polite');
+    document.body.appendChild(notice); setTimeout(function(){if(notice.parentNode)notice.parentNode.removeChild(notice);},2800);
+  }
+
   function openOrder(sp,session,trigger){
     unlock();
     var ov=overlay(); var sh=el('div','sheet');
     sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true');
     sh.setAttribute('aria-label','Nouvelle commande — '+sp.label);
-    // Lock the board behind the sheet (no scroll bleed) and return focus on close.
     var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
+    var draft={};
+    var state={cat:'__ALL__',q:'',cartOnly:false,takeaway:false,test:false,searching:false,sending:false};
+    var totalEl,cartChip,searchCart,listEl,go,msg,search,summaryMode;
     function returnFocus(){ var t=trigger;
       if(!t||!t.isConnected){ var host=board.querySelector('[data-spot="'+sp.id+'"]');
         t=host&&host.tagName==='BUTTON'?host:(host?host.querySelector('button'):null); }
       if(t&&t.focus){ try{ t.focus(); }catch(e){} } }
-    function closeSheet(){ if(ov.parentNode) document.body.removeChild(ov); document.body.style.overflow=prevOverflow; returnFocus(); }
+    function closeSheet(){
+      if(window.visualViewport){window.visualViewport.removeEventListener('resize',fitViewport);window.visualViewport.removeEventListener('scroll',fitViewport);}
+      window.removeEventListener('resize',fitViewport);
+      if(ov.parentNode)document.body.removeChild(ov); document.body.style.overflow=prevOverflow; returnFocus();
+    }
     function requestClose(){ if(cartCount()>0){ askConfirm('Abandonner cette commande ?','Oui, abandonner','Non, continuer la saisie',closeSheet); return; } closeSheet(); }
+    function fitViewport(){ var vv=window.visualViewport;
+      if(vv){ov.style.height=Math.round(vv.height)+'px';ov.style.top=Math.round(vv.offsetTop)+'px';ov.style.bottom='auto';sh.style.height='100%';}
+      else{ov.style.height='';ov.style.top='';ov.style.bottom='';sh.style.height='';} }
     ov.onclick=function(e){ if(e.target===ov) requestClose(); };
-    var x=el('button','close-x','×'); x.setAttribute('aria-label','Fermer la commande'); x.onclick=requestClose; sh.appendChild(x);
-    sh.appendChild(el('h2','Commande — '+sp.label));
-    var fn=null;
-    if(!session){ fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; fn.style.marginBottom='.6rem'; sh.appendChild(fn); }
+    var x=el('button','close-x','×'); x.type='button'; x.setAttribute('aria-label','Fermer la commande'); x.onclick=requestClose; sh.appendChild(x);
+    sh.appendChild(el('h2','sheet-title','Commande — '+sp.label));
 
-    var draft={};       // id -> {qty, choice, note}
-    var state={cat:'__ALL__', q:'', cartOnly:false, takeaway:false, test:false};
-    var totalEl, cartChip, listEl;
-
-    // Packaging mode for THIS order (default sur place). A mixed table = two sends
-    // on the same spot; one ticket = one packaging mode keeps the kitchen unambiguous.
     var modeseg=el('div','modeseg');
     var mHere=el('button','mode sel'); mHere.type='button'; mHere.textContent='🍽️ Sur place';
     var mAway=el('button','mode away'); mAway.type='button'; mAway.textContent='📦 À emporter';
     mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false');
-    mHere.onclick=function(){ state.takeaway=false; mHere.classList.add('sel'); mAway.classList.remove('sel'); mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false'); };
-    mAway.onclick=function(){ state.takeaway=true; mAway.classList.add('sel'); mHere.classList.remove('sel'); mAway.setAttribute('aria-pressed','true'); mHere.setAttribute('aria-pressed','false'); };
+    function paintMode(){mHere.classList.toggle('sel',!state.takeaway);mAway.classList.toggle('sel',state.takeaway);
+      mHere.setAttribute('aria-pressed',state.takeaway?'false':'true');mAway.setAttribute('aria-pressed',state.takeaway?'true':'false');
+      summaryMode.textContent=state.takeaway?'À emporter':'Sur place';}
+    mHere.onclick=function(){state.takeaway=false;paintMode();}; mAway.onclick=function(){state.takeaway=true;paintMode();};
     modeseg.appendChild(mHere); modeseg.appendChild(mAway); sh.appendChild(modeseg);
 
-    // Discreet "test order" toggle (off by default, reset every time the composer
-    // opens). A test order still reaches the kitchen — red-badged "Test" there — so
-    // the flow can be exercised for real, but it is excluded from every stat. The
-    // loud styling when ON makes an accidental toggle obvious before sending.
+    // Prénom, note générale and the service-only test flag are intentionally
+    // collapsed so the menu receives most of the phone viewport.
+    var optional=document.createElement('details'); optional.className='optional';
+    var optionalSummary=document.createElement('summary'); optionalSummary.textContent='Détails optionnels'; optional.appendChild(optionalSummary);
+    var optionalFields=el('div','optional-fields'); var fn=null;
+    if(!session){fn=el('input');fn.placeholder='Prénom';fn.maxLength=40;fn.setAttribute('autocomplete','given-name');optionalFields.appendChild(fn);}
+    var gnote=el('textarea');gnote.placeholder='Note générale pour la table';gnote.maxLength=280;optionalFields.appendChild(gnote);
     var testRow=el('label','testrow'); testRow.setAttribute('role','switch'); testRow.setAttribute('aria-checked','false');
     var testCb=document.createElement('input'); testCb.type='checkbox'; testCb.className='testcb';
     testCb.onchange=function(){ state.test=testCb.checked; testRow.classList.toggle('on',testCb.checked); testRow.setAttribute('aria-checked',testCb.checked?'true':'false'); };
     testRow.appendChild(testCb); testRow.appendChild(el('span',null,'🧪 Commande test — exclue des statistiques'));
-    sh.appendChild(testRow);
+    optionalFields.appendChild(testRow); optional.appendChild(optionalFields); sh.appendChild(optional);
+
+    var searchSummary=el('div','search-summary'); searchSummary.appendChild(el('span',null,sp.label));
+    searchSummary.appendChild(el('span','dotsep','·')); summaryMode=el('span',null,'Sur place'); searchSummary.appendChild(summaryMode);
+    searchCart=el('button','chip cart','Panier (0)'); searchCart.type='button'; searchSummary.appendChild(searchCart); sh.appendChild(searchSummary);
 
     function cartCount(){ var n=0; Object.keys(draft).forEach(function(id){ if(draft[id].qty>0) n+=draft[id].qty; }); return n; }
     function recompute(){
+      if(!totalEl)return;
       var tot=0; Object.keys(draft).forEach(function(id){ var it=findItem(id); if(it&&draft[id].qty>0) tot+=it.price*draft[id].qty; });
-      totalEl.textContent=''; totalEl.appendChild(document.createTextNode(tot+' F ')); totalEl.appendChild(el('small','','(indicatif)'));
-      var n=cartCount(); cartChip.textContent='🛒 Panier'+(n?' ('+n+')':''); cartChip.classList.toggle('sel',state.cartOnly);
+      var n=cartCount();totalEl.textContent='';totalEl.appendChild(document.createTextNode(n+' article'+(n>1?'s':'')+' · '+tot+' F'));totalEl.appendChild(el('small',null,'Total indicatif'));
+      cartChip.textContent='Panier ('+n+')';searchCart.textContent='Panier ('+n+')';cartChip.classList.toggle('sel',state.cartOnly);searchCart.classList.toggle('sel',state.cartOnly);
+      go.textContent=n?'Envoyer en cuisine':'Ajouter des articles';
     }
 
-    // ── sticky toolbar: search + category chips + cart ──
+    // Search mode keeps the keyboard-open viewport focused on dense results.
     var toolbar=el('div','toolbar');
-    var search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search'); search.setAttribute('enterkeyhint','search'); search.setAttribute('autocomplete','off'); search.setAttribute('aria-label','Rechercher un article');
-    // Real-time filter: results update on every keystroke, no Enter needed.
-    search.oninput=function(){ state.q=search.value; if(state.q) state.cartOnly=false; renderList(); };
-    toolbar.appendChild(search);
+    var searchbar=el('div','searchbar'); search=el('input','search');search.placeholder='🔍 Rechercher un article…';search.setAttribute('inputmode','search');search.setAttribute('enterkeyhint','search');search.setAttribute('autocomplete','off');search.setAttribute('aria-label','Rechercher un article');
+    var clearSearch=el('button','searchctl','×');clearSearch.type='button';clearSearch.setAttribute('aria-label','Effacer la recherche');
+    var doneSearch=el('button','searchctl','Terminé');doneSearch.type='button';
+    function enterSearch(){if(state.cartOnly)state.cartOnly=false;state.searching=true;sh.classList.add('searching');renderList();fitViewport();}
+    function finishSearch(){state.searching=false;sh.classList.remove('searching');try{search.blur();}catch(e){}renderList();fitViewport();}
+    search.onfocus=enterSearch;search.oninput=function(){state.q=search.value;state.cartOnly=false;renderList();};
+    clearSearch.onpointerdown=function(e){e.preventDefault();};clearSearch.onclick=function(){state.q='';search.value='';renderList();try{search.focus();}catch(e){}};
+    doneSearch.onclick=finishSearch;searchbar.appendChild(search);searchbar.appendChild(clearSearch);searchbar.appendChild(doneSearch);toolbar.appendChild(searchbar);
     var chips=el('div','chips');
     function setCat(c){ state.cat=c; state.cartOnly=false; renderList(); }
     var chipAll=el('button','chip','Tout'); chipAll.onclick=function(){ setCat('__ALL__'); }; chips.appendChild(chipAll);
-    // ⭐ Favoris — the studio "incontournables" (server-flagged), a shortcut to the
-    // most-ordered items. Rendered only when at least one favourite exists.
     var anyFav=MENU.some(function(c){ return c.items.some(function(it){ return it.fav; }); });
     var chipFav=anyFav?el('button','chip fav','⭐ Favoris'):null;
     if(chipFav){ chipFav.onclick=function(){ setCat('__FAV__'); }; chips.appendChild(chipFav); }
     var catChips={};
     MENU.forEach(function(cat){ var ch=el('button','chip',cat.category); ch.onclick=(function(name){return function(){ setCat(name); };})(cat.category); catChips[cat.category]=ch; chips.appendChild(ch); });
-    cartChip=el('button','chip cart','🛒 Panier'); cartChip.onclick=function(){ state.cartOnly=!state.cartOnly; if(state.cartOnly){state.q='';search.value='';} renderList(); };
-    chips.appendChild(cartChip);
-    toolbar.appendChild(chips);
-    sh.appendChild(toolbar);
+    cartChip=el('button','chip cart','Panier (0)');cartChip.type='button';searchbar.appendChild(cartChip);
+    function showCart(){state.cartOnly=true;state.q='';search.value='';finishSearch();renderList();}
+    cartChip.onclick=function(){if(state.cartOnly){state.cartOnly=false;renderList();}else showCart();};searchCart.onclick=showCart;
+    var browsebar=el('div','browsebar');browsebar.appendChild(chips);toolbar.appendChild(browsebar);sh.appendChild(toolbar);
 
     listEl=el('div','list'); sh.appendChild(listEl);
 
@@ -587,34 +632,38 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       nm.appendChild(el('span','pr',it.price+' F')); row.appendChild(nm);
       var stp=el('div','stepper');
       var minus=el('button',null,'−'); var qv=el('span','qv',String(d.qty)); var plus=el('button','plus','+');
-      var extra=el('div','wrap'); extra.style.display=d.qty>0?'block':'none';
+      var extra=el('div','wrap');extra.style.display=(d.qty>0&&(!state.searching||needsChoice||state.cartOnly))?'block':'none';
       var creq=null;
       function markChoice(){ if(!creq)return; var dd=draft[it.id]||{qty:0}; var miss=dd.qty>0 && !dd.choice; creq.classList.toggle('missing',miss); row.classList.toggle('needchoice',miss); }
       function sync(){ var dd=draft[it.id]||{qty:0}; qv.textContent=dd.qty;
-        extra.style.display=dd.qty>0?'block':'none'; row.classList.toggle('on',dd.qty>0);
+        extra.style.display=(dd.qty>0&&(!state.searching||needsChoice||state.cartOnly))?'block':'none'; row.classList.toggle('on',dd.qty>0);
         var old=nm.querySelector('.qbadge'); if(old) nm.removeChild(old);
         if(dd.qty>0){ var b=el('span','qbadge','×'+dd.qty); nm.insertBefore(b,nm.querySelector('.pr')); }
         markChoice(); recompute();
       }
+      minus.onpointerdown=function(e){if(state.searching)e.preventDefault();};plus.onpointerdown=function(e){if(state.searching&&!needsChoice)e.preventDefault();};
       minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0) renderList(); };
-      plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync(); };
+      plus.onclick=function(){var dd=draft[it.id]||{qty:0,choice:'',note:''};var wasEmpty=dd.qty===0;dd.qty=Math.min(10,dd.qty+1);draft[it.id]=dd;sync();
+        if(state.searching){state.q='';search.value='';renderList();if(needsChoice&&wasEmpty){try{search.blur();}catch(e){}setTimeout(function(){var fresh=listEl.querySelector('[data-id="'+it.id+'"]');if(fresh&&fresh.scrollIntoView)fresh.scrollIntoView({block:'center'});},50);}}};
       stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
       if(needsChoice){
-        creq=el('div','creq'); creq.appendChild(el('div','clab',(it.optionLabel||'Choix')+' · obligatoire'));
+        creq=el('div','creq');var optionName=it.optionLabel||'Choix';var choiceLabel=el('button','clab');choiceLabel.type='button';creq.appendChild(choiceLabel);
         var pills=el('div','cpills');
+        function paintChoice(){var dd=draft[it.id]||d;var picked=dd.choice||'';creq.classList.toggle('collapsed',!!picked);
+          choiceLabel.textContent=picked?optionName+' · '+picked+' ✓ — modifier':optionName+' · obligatoire';choiceLabel.setAttribute('aria-expanded',picked?'false':'true');}
+        choiceLabel.onclick=function(){var dd=draft[it.id]||d;if(!dd.choice)return;var folded=creq.classList.toggle('collapsed');choiceLabel.setAttribute('aria-expanded',folded?'false':'true');if(!folded&&creq.scrollIntoView)creq.scrollIntoView({block:'center'});};
         it.choices.forEach(function(ch){
           var p=el('button','cpill'+(d.choice===ch?' sel':''),ch);
           p.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.choice=ch; draft[it.id]=dd;
-            Array.from(pills.children).forEach(function(c){c.classList.remove('sel');}); p.classList.add('sel'); markChoice(); };
+            Array.from(pills.children).forEach(function(c){c.classList.remove('sel');});p.classList.add('sel');paintChoice();markChoice();if(state.searching){try{search.focus();}catch(e){}} };
           pills.appendChild(p);
         });
-        creq.appendChild(pills); extra.appendChild(creq);
+        creq.appendChild(pills);extra.appendChild(creq);paintChoice();
       }
       extra.appendChild(el('div','lnlab','Note (optionnel)'));
       var ntn=el('input','ln'); ntn.placeholder='ex: sans sucre, bien chaud…'; ntn.maxLength=140; ntn.value=d.note||'';
       ntn.oninput=function(){ var dd=draft[it.id]||{qty:0}; dd.note=ntn.value; draft[it.id]=dd; }; extra.appendChild(ntn);
-      row.appendChild(extra);
-      markChoice();
+      row.appendChild(extra);markChoice();
       return row;
     }
 
@@ -627,6 +676,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       Object.keys(catChips).forEach(function(k){ catChips[k].classList.toggle('sel',state.cat===k&&!state.q&&!state.cartOnly); });
       cartChip.classList.toggle('sel',state.cartOnly);
       listEl.textContent='';
+      if(!MENU.length){listEl.appendChild(el('div','nores','Menu indisponible.'));return;}
       var q=normalize(state.q);
       var any=false;
       // The default "Tout" view leads with 🔥 Populaires (best-sellers, server-
@@ -654,36 +704,33 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
         any=true;
       });
       if(!any){ listEl.appendChild(el('div','nores', state.cartOnly?'Panier vide — ajoutez des articles.':'Aucun article trouvé.')); }
+      recompute();
     }
 
-    var gnote=el('textarea'); gnote.placeholder='Note générale pour la table (optionnel)'; gnote.maxLength=280; sh.appendChild(gnote);
-    var msg=el('div','msg'); msg.style.display='none'; sh.appendChild(msg);
+    msg=el('div','msg');msg.hidden=true;msg.setAttribute('role','alert');sh.appendChild(msg);function setError(text){msg.textContent=text;msg.hidden=false;}
     var foot=el('div','foot'); totalEl=el('div','total'); foot.appendChild(totalEl);
-    var go=el('button','go','Envoyer en cuisine');
+    go=el('button','go','Ajouter des articles');
     go.onclick=function(){
-      // Client-side guard: every added item with a required option must have its
-      // choice picked. Reveal the offender (cart view + scroll) with a clear message.
       var miss=null;
       Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0 && !miss){ var it=findItem(id); if(it&&it.choices&&it.choices.length&&!d.choice) miss=it; } });
       if(miss){
-        msg.textContent='Choisissez « '+(miss.optionLabel||'option')+' » pour '+miss.name+'.'; msg.style.display='block';
-        state.cartOnly=true; state.q=''; search.value=''; renderList();
+        setError('Choisissez « '+(miss.optionLabel||'option')+' » pour '+miss.name+'.');state.cartOnly=true;state.q='';search.value='';finishSearch();renderList();
         var r=listEl.querySelector('[data-id="'+miss.id+'"]'); if(r&&r.scrollIntoView) r.scrollIntoView({block:'center'});
         return;
       }
       var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
-      if(!items.length){ msg.textContent='Ajoutez au moins un article.'; msg.style.display='block'; return; }
-      go.disabled=true; msg.style.display='none';
+      if(!items.length){setError('Ajoutez au moins un article au panier.');return;}
+      state.sending=true;go.disabled=true;go.textContent='Envoi…';msg.hidden=true;
       var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,test:state.test}; if(fn&&fn.value) body.first_name=fn.value;
       post('/spots/'+sp.id+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.ok){ if(j.id) trackSend(j.id); closeSheet(); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
-      }).catch(function(){ go.disabled=false; msg.textContent='Erreur réseau.'; msg.style.display='block'; });
+        if(j&&j.ok){if(j.id)trackSend(j.id);closeSheet();showServiceNotice('Commande envoyée — '+sp.label);}
+        else{state.sending=false;go.disabled=false;recompute();setError((j&&j.message)||'Commande refusée. Corrigez les choix puis réessayez.');}
+      }).catch(function(){state.sending=false;go.disabled=false;recompute();setError('Envoi impossible. Vérifiez la connexion puis réessayez.');});
     };
     foot.appendChild(go); sh.appendChild(foot);
     ov.appendChild(sh); document.body.appendChild(ov);
-    renderList(); recompute();
-    // Land focus inside the dialog: prénom on a new session, else the search field.
-    try{ (fn||search).focus(); }catch(e){}
+    if(window.visualViewport){window.visualViewport.addEventListener('resize',fitViewport);window.visualViewport.addEventListener('scroll',fitViewport);}
+    window.addEventListener('resize',fitViewport);fitViewport();paintMode();renderList();recompute();try{search.focus();}catch(e){}
   }
 
   // The SSE stream blips routinely (phone backgrounding, screen lock, network

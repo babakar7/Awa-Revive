@@ -22,7 +22,7 @@ describe("service PWA assets", () => {
 
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
     const version = serviceBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBeTruthy();
+    expect(version).toBe("v25");
     expect(SERVICE_SW).toContain(`service-${version}`);
   });
 
@@ -44,6 +44,47 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("'aria-modal'");
     expect(SERVICE_APP_JS).toContain("'dialog'");
     expect(SERVICE_APP_JS).toContain("Abandonner cette commande ?");
+  });
+
+  it("keeps cart persistent without taking width from the category scroller", () => {
+    expect(SERVICE_APP_JS).toContain("searchbar.appendChild(cartChip)");
+    expect(SERVICE_APP_JS).not.toContain("chips.appendChild(cartChip)");
+    expect(SERVICE_APP_JS).not.toContain("browsebar.appendChild(cartChip)");
+    expect(SERVICE_APP_JS).toContain("state.cartOnly");
+    expect(SERVICE_APP_JS).toContain("draft[it.id]&&draft[it.id].qty>0");
+    expect(serviceBoardPage()).toContain(".browsebar .chips{width:100%}");
+    expect(serviceBoardPage()).toContain(".foot{position:sticky");
+  });
+
+  it("uses the same keyboard-aware focused search and clears after add", () => {
+    expect(SERVICE_APP_JS).toContain("state.searching=true");
+    expect(SERVICE_APP_JS).toContain("sh.classList.add('searching')");
+    expect(SERVICE_APP_JS).toContain("Effacer la recherche");
+    expect(SERVICE_APP_JS).toContain("'Terminé'");
+    expect(SERVICE_APP_JS).toContain("window.visualViewport");
+    expect(SERVICE_APP_JS).toContain("vv.height");
+    expect(SERVICE_APP_JS).toContain("if(state.searching&&!needsChoice)e.preventDefault()");
+    expect(SERVICE_APP_JS).toContain("state.q='';search.value='';renderList()");
+    expect(serviceBoardPage()).toContain(".sheet.searching .mi");
+    expect(serviceBoardPage()).toContain(".sheet.searching .optional");
+  });
+
+  it("collapses completed choices, refocuses search, and keeps choices editable", () => {
+    expect(SERVICE_APP_JS).toContain("creq.classList.toggle('collapsed'");
+    expect(SERVICE_APP_JS).toContain("✓ — modifier");
+    expect(SERVICE_APP_JS).toContain("if(state.searching){try{search.focus()");
+    expect(SERVICE_APP_JS).toContain("setAttribute('aria-expanded'");
+    expect(serviceBoardPage()).toContain(".creq.collapsed .cpills{display:none}");
+  });
+
+  it("deprioritizes optional details and provides success/retry feedback", () => {
+    expect(SERVICE_APP_JS).toContain("document.createElement('details')");
+    expect(SERVICE_APP_JS).toContain("Détails optionnels");
+    expect(SERVICE_APP_JS).toContain("Commande envoyée — ");
+    expect(SERVICE_APP_JS).toContain("Vérifiez la connexion puis réessayez.");
+    // Service-only semantics remain inside the optional section and POST body.
+    expect(SERVICE_APP_JS).toContain("Commande test — exclue des statistiques");
+    expect(SERVICE_APP_JS).toContain("test:state.test");
   });
 
   // The native confirm() renders OK/Annuler — ambiguous when the question is
