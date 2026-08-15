@@ -13,6 +13,7 @@ describe("owner supervision PWA assets", () => {
     expect(m.scope).toBe("/ops/owner/");
     expect(m.start_url).toBe("/ops/owner/");
     expect(m.display).toBe("standalone");
+    expect(m.orientation).toBe("portrait");
     expect(m.icons).toHaveLength(2);
     expect(m.theme_color).toBe("#fbf7f2");
     expect(m.background_color).toBe("#fbf6f0");
@@ -50,6 +51,50 @@ describe("owner supervision PWA assets", () => {
     expect(ownerBoardPage()).toContain('id="take"');
   });
 
+  it("uses persistent accessible space buttons instead of a native select", () => {
+    expect(OWNER_APP_JS).not.toContain("createElement('select')");
+    expect(OWNER_APP_JS).toContain("SPOTS.forEach(function(sp)");
+    expect(OWNER_APP_JS).toContain("'spotbtn'");
+    expect(OWNER_APP_JS).toContain("setAttribute('aria-pressed'");
+    expect(OWNER_APP_JS).toContain("summarySpot.textContent");
+    expect(ownerBoardPage()).toContain(".spotbtn.sel");
+    expect(ownerBoardPage()).toContain(".spotbtn.sel .check");
+  });
+
+  it("has a selected-items cart, collapsed optional details, and contextual sticky footer", () => {
+    expect(OWNER_APP_JS).toContain("document.createElement('details')");
+    expect(OWNER_APP_JS).toContain("Détails optionnels");
+    expect(OWNER_APP_JS).toContain("state.cartOnly");
+    expect(OWNER_APP_JS).toContain("Panier (0)");
+    expect(OWNER_APP_JS).toContain("draft[it.id]&&draft[it.id].qty>0");
+    expect(OWNER_APP_JS).toContain("n+' article'");
+    expect(OWNER_APP_JS).toContain("go.textContent='Envoyer en cuisine'");
+    expect(ownerBoardPage()).toContain(".foot{position:sticky");
+  });
+
+  it("has keyboard-aware focused search with compact controls and dense results", () => {
+    expect(OWNER_APP_JS).toContain("state.searching=true");
+    expect(OWNER_APP_JS).toContain("sh.classList.add('searching')");
+    expect(OWNER_APP_JS).toContain("Effacer la recherche");
+    expect(OWNER_APP_JS).toContain("'Terminé'");
+    expect(OWNER_APP_JS).toContain("window.visualViewport");
+    expect(OWNER_APP_JS).toContain("vv.height");
+    expect(OWNER_APP_JS).toContain("vv.offsetTop");
+    expect(OWNER_APP_JS).toContain("if(state.searching&&!needsChoice)e.preventDefault()");
+    expect(OWNER_APP_JS).toContain("search.blur()");
+    expect(ownerBoardPage()).toContain(".sheet.searching .mi");
+    expect(ownerBoardPage()).toContain(".sheet.searching .spot-picker");
+  });
+
+  it("protects drafts and keeps actionable feedback around submission", () => {
+    expect(OWNER_APP_JS).toContain("if(cartCount()>0)");
+    expect(OWNER_APP_JS).toContain("Abandonner cette commande ?");
+    expect(OWNER_APP_JS).toContain("Oui, abandonner");
+    expect(OWNER_APP_JS).toContain("Non, continuer la saisie");
+    expect(OWNER_APP_JS).toContain("Commande envoyée — ");
+    expect(OWNER_APP_JS).toContain("Vérifiez la connexion puis réessayez.");
+  });
+
   it("the owner composer has the SAME findability as the salle (search + chips + Populaires)", () => {
     expect(OWNER_APP_JS).toContain("window.__pick=");         // shared helper bundled
     expect(OWNER_APP_JS).toContain("🔥 Populaires");
@@ -71,7 +116,7 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBeTruthy();
+    expect(version).toBe("v9");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 

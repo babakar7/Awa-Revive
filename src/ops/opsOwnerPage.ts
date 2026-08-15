@@ -24,7 +24,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v8";
+const ASSET_VERSION = "v9";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -135,24 +135,40 @@ min-height:2.5rem;padding:.35rem .9rem;font-size:.85rem;font-weight:700}
 /* "＋ Commande" — the owner can also take an order. */
 #take{background:var(--plum-600);color:#fff;border:1px solid var(--plum-600);border-radius:999px;
 min-height:2.5rem;padding:.35rem .9rem;font-size:.9rem;font-weight:700}
-/* Order composer (a lean variant of the salle sheet; server still decides prices). */
+/* Phone-first supervisor order composer; server still decides prices. */
 .ov{position:fixed;inset:0;z-index:20;background:rgba(33,25,33,.45);display:flex;align-items:flex-end;justify-content:center;animation:pop .2s var(--ease)}
 .sheet{position:relative;display:flex;flex-direction:column;background:var(--surface);width:100%;max-width:34rem;
-height:90vh;height:90dvh;overflow:hidden;overscroll-behavior:contain;
-border-radius:var(--radius-xl) var(--radius-xl) 0 0;box-shadow:var(--shadow-2);
-padding:1rem;padding-bottom:calc(1rem + env(safe-area-inset-bottom))}
+height:96vh;height:96dvh;overflow:hidden;overscroll-behavior:contain;
+border-radius:var(--radius-xl) var(--radius-xl) 0 0;box-shadow:var(--shadow-2);padding:.75rem .8rem;
+padding-bottom:calc(.55rem + env(safe-area-inset-bottom))}
 .sheet::before{content:"";display:block;width:2.6rem;height:.3rem;border-radius:99px;background:var(--border-strong);margin:0 auto .7rem}
-.sheet h2{font-family:var(--serif);font-size:1.3rem;font-weight:600;letter-spacing:-.02em;margin:.1rem 0 .8rem}
-.sheet select,.sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:var(--radius);border:1px solid var(--border);
-background:#fff;color:var(--ink-900);font-size:1rem;font-family:inherit;margin-bottom:.6rem}
+.sheet h2{font-family:var(--serif);font-size:1.25rem;font-weight:600;letter-spacing:-.02em;margin:0 2.7rem .55rem 0}
+.sheet input,.sheet textarea{width:100%;padding:.75rem;border-radius:var(--radius);border:1px solid var(--border);
+background:#fff;color:var(--ink-900);font-size:1rem;font-family:inherit;margin-bottom:.55rem}
 .sheet textarea{min-height:3rem}
-.modeseg{display:flex;gap:.45rem;margin:0 0 .7rem}
+.picker-label{font-size:.72rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-500);margin-bottom:.35rem}
+.spots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.45rem;margin-bottom:.6rem}
+.spotbtn{position:relative;min-height:3.15rem;padding:.55rem 1.9rem .55rem .7rem;text-align:left;border-radius:var(--radius);
+border:1px solid var(--border-strong);background:var(--surface-raised);color:var(--ink-800);font-size:.95rem;font-weight:750}
+.spotbtn.sel{border:2px solid var(--plum-600);background:var(--plum-50);color:var(--plum-700);padding:.5rem 1.85rem .5rem .65rem}
+.spotbtn .check{display:none;position:absolute;right:.65rem;top:50%;transform:translateY(-50%);font-size:1.1rem}
+.spotbtn.sel .check{display:block}
+.modeseg{display:flex;gap:.45rem;margin:0 0 .55rem}
 .modeseg .mode{flex:1;min-height:2.75rem;padding:.7rem;border-radius:var(--radius);border:1px solid var(--border);
 background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:.95rem}
 .modeseg .mode.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 .modeseg .mode.away.sel{background:var(--info);border-color:var(--info);color:#fff}
-.toolbar{position:sticky;top:0;z-index:3;background:var(--surface);padding:.2rem 0 .5rem}
-.search{margin-bottom:.5rem}
+.optional{border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--surface-raised);margin-bottom:.55rem}
+.optional summary{padding:.65rem .75rem;cursor:pointer;font-weight:700;color:var(--ink-600);font-size:.88rem}
+.optional-fields{padding:0 .65rem .1rem}
+.toolbar{position:sticky;top:0;z-index:3;background:var(--surface);padding:.05rem 0 .45rem}
+.searchbar{display:flex;align-items:stretch;gap:.4rem}
+.searchbar .search{flex:1;min-width:0;margin-bottom:.45rem}
+.searchctl{display:none;min-width:3rem;height:2.75rem;border:1px solid var(--border);border-radius:var(--radius);background:#fff;
+color:var(--plum-700);font-weight:750;padding:0 .65rem}
+.search-summary{display:none;align-items:center;gap:.4rem;min-height:2rem;margin:-.15rem 3rem .35rem 0;color:var(--ink-600);font-size:.82rem;font-weight:700}
+.search-summary .dotsep{color:var(--ink-300)}
+.browsebar{display:flex;align-items:center;gap:.4rem}.browsebar .chips{flex:1;min-width:0}
 .chips{display:flex;gap:.4rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:.2rem;scrollbar-width:none}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex:0 0 auto;padding:.55rem .95rem;border-radius:999px;background:var(--rose);border:1px solid transparent;
@@ -160,6 +176,7 @@ color:var(--plum-600);font-size:.88rem;font-weight:600;white-space:nowrap}
 .chip.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 .chip.fav{background:var(--warn-bg);border-color:transparent;color:var(--warn)}
 .chip.fav.sel{background:var(--warn);border-color:var(--warn);color:#fff}
+.chip.cart{margin-left:auto;border-color:var(--plum-300);background:#fff;font-weight:800}
 .list{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .cat{font-family:var(--serif);font-size:.95rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
 color:var(--plum-600);border-bottom:1px solid var(--rose);padding-bottom:.35rem;margin:.9rem 0 .3rem}
@@ -187,13 +204,32 @@ background:#fff;color:var(--ink-900);font-size:1.35rem;font-weight:700;line-heig
 .mi .lnlab{font-size:.75rem;color:var(--ink-500);margin-top:.5rem}
 .wrap{width:100%}
 .nores{color:var(--ink-500);text-align:center;padding:2rem 0}
-.foot{position:sticky;bottom:0;background:var(--surface);padding:.6rem 0 .2rem;display:flex;gap:.6rem;align-items:center;border-top:1px solid var(--border-soft)}
-.total{font-weight:800;font-size:1.05rem;white-space:nowrap}
-.total small{color:var(--ink-500);font-weight:500}
+.foot{position:sticky;bottom:0;background:var(--surface);padding:.5rem 0 0;display:flex;gap:.55rem;align-items:center;border-top:1px solid var(--border-soft)}
+.total{font-weight:800;font-size:.95rem;white-space:nowrap;line-height:1.15}
+.total small{display:block;color:var(--ink-500);font-weight:500;font-size:.7rem}
 .foot button.go{flex:1;padding:.95rem;border:none;border-radius:12px;background:var(--ok-strong);color:#fff;font-weight:800;font-size:1.02rem;box-shadow:var(--shadow-1)}
 .foot button.go:disabled{opacity:.45}
 .close-x{position:absolute;top:.55rem;right:.6rem;background:none;border:none;color:var(--ink-500);font-size:1.7rem;line-height:1;z-index:4;min-width:2.75rem;min-height:2.75rem}
-.msg{color:var(--danger);font-size:.9rem;margin:.4rem 0}`;
+.msg{color:var(--danger);font-size:.88rem;margin:.25rem 0}.msg[hidden]{display:none}
+.toast{position:fixed;z-index:40;left:50%;bottom:calc(1rem + env(safe-area-inset-bottom));transform:translateX(-50%);
+max-width:calc(100% - 2rem);padding:.75rem 1rem;border-radius:999px;background:var(--ok-strong);color:#fff;font-weight:750;
+box-shadow:var(--shadow-2);animation:pop .2s var(--ease);white-space:nowrap}
+/* Search focus spends the keyboard-reduced viewport on dense results. */
+.sheet.searching .sheet-title,.sheet.searching .spot-picker,.sheet.searching .modeseg,.sheet.searching .optional,.sheet.searching .browsebar{display:none}
+.sheet.searching::before{display:none}
+.sheet.searching .search-summary,.sheet.searching .searchctl{display:flex}
+.sheet.searching{padding-top:.55rem}
+.sheet.searching .toolbar{padding-bottom:.15rem}
+.sheet.searching .mi{padding:.35rem .2rem;gap:.35rem;flex-wrap:wrap}
+.sheet.searching .mi .nm{font-size:.94rem;min-width:7rem}
+.sheet.searching .mi .nm .pr{font-size:.76rem}
+.sheet.searching .stepper{gap:.3rem}
+.sheet.searching .stepper button{width:2.55rem;height:2.55rem}
+.sheet.searching .cat{font-size:.76rem;margin:.4rem 0 .1rem;padding-bottom:.2rem}
+.sheet.searching .foot{padding-top:.3rem}
+@media(min-width:42rem){.spots{grid-template-columns:repeat(4,minmax(0,1fr))}.sheet{max-width:42rem}}
+@media(max-height:620px){.sheet{height:100vh;height:100dvh;border-radius:0}.sheet::before{display:none}.spotbtn{min-height:2.8rem}}
+`;
 
 export function ownerBoardPage(): string {
   // No inline boot: script-src 'self' blocks it. The client fetches /state before
@@ -219,7 +255,7 @@ export const OWNER_MANIFEST = JSON.stringify({
   start_url: `${BASE}/`,
   scope: `${BASE}/`,
   display: "standalone",
-  orientation: "landscape",
+  orientation: "portrait",
   background_color: OPS_BG_COLOR,
   theme_color: OPS_THEME_COLOR,
   icons: [
@@ -498,45 +534,104 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   setInterval(function(){ reconnectIfStale(60000); },15000);
   document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'){ reconnectIfStale(30000); refreshState(); } });
 
-  // ---- Take an order (the owner can also compose a salle order) ----
-  // Lean variant of the salle composer: pick an espace, add items (required
-  // choices + per-line notes preserved), send. The SERVER decides prices/choices
-  // and opens/reuses the spot's session — same endpoint contract as the salle.
+  // ---- Take an order (phone-first supervisor composer) ----
+  // The SERVER still decides prices/choices and opens/reuses the spot's session.
   function uuid(){ try{ return crypto.randomUUID(); }catch(e){ return 'r-'+Date.now()+'-'+Math.round(Math.random()*1e9); } }
   function findItem(id){ for(var i=0;i<MENU.length;i++){ for(var j=0;j<MENU[i].items.length;j++){ if(MENU[i].items[j].id===id) return MENU[i].items[j]; } } return null; }
   function normalize(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
   function postJSON(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
+  function showOwnerNotice(message){
+    var old=document.querySelector('.toast'); if(old&&old.parentNode) old.parentNode.removeChild(old);
+    var notice=el('div','toast',message); notice.setAttribute('role','status'); notice.setAttribute('aria-live','polite');
+    document.body.appendChild(notice); setTimeout(function(){ if(notice.parentNode) notice.parentNode.removeChild(notice); },2800);
+  }
   var takeBtn=document.getElementById('take');
   function openComposer(){
     var ov=el('div','ov'); var sh=el('div','sheet');
     sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true'); sh.setAttribute('aria-label','Prendre une commande');
     var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
-    function close(){ if(ov.parentNode) document.body.removeChild(ov); document.body.style.overflow=prevOverflow; if(takeBtn&&takeBtn.focus){try{takeBtn.focus();}catch(e){}} }
-    ov.onclick=function(e){ if(e.target===ov) close(); };
-    var x=el('button','close-x','×'); x.setAttribute('aria-label','Fermer'); x.onclick=close; sh.appendChild(x);
-    sh.appendChild(el('h2',null,'Prendre une commande'));
+    var draft={};
+    var state={takeaway:false,cat:'__ALL__',q:'',cartOnly:false,searching:false,spotId:'',sending:false};
+    var spotButtons=[]; var totalEl,cartChip,searchCart,listEl,go,msg,search,summarySpot,summaryMode;
+    function cartCount(){ var n=0; Object.keys(draft).forEach(function(id){ if(draft[id].qty>0)n+=draft[id].qty; }); return n; }
+    function chosenSpot(){ for(var i=0;i<SPOTS.length;i++){if(SPOTS[i].id===state.spotId)return SPOTS[i];} return null; }
+    function closeSheet(){
+      if(window.visualViewport){ window.visualViewport.removeEventListener('resize',fitViewport); window.visualViewport.removeEventListener('scroll',fitViewport); }
+      window.removeEventListener('resize',fitViewport);
+      if(ov.parentNode) document.body.removeChild(ov); document.body.style.overflow=prevOverflow;
+      if(takeBtn&&takeBtn.focus){try{takeBtn.focus();}catch(e){}}
+    }
+    function requestClose(){
+      if(cartCount()>0){ askConfirm('Abandonner cette commande ?','Oui, abandonner','Non, continuer la saisie',closeSheet); return; }
+      closeSheet();
+    }
+    function fitViewport(){
+      var vv=window.visualViewport;
+      if(vv){ ov.style.height=Math.round(vv.height)+'px'; ov.style.top=Math.round(vv.offsetTop)+'px'; ov.style.bottom='auto'; sh.style.height='100%'; }
+      else { ov.style.height=''; ov.style.top=''; ov.style.bottom=''; sh.style.height=''; }
+    }
+    ov.onclick=function(e){ if(e.target===ov) requestClose(); };
+    var x=el('button','close-x','×'); x.type='button'; x.setAttribute('aria-label','Fermer la commande'); x.onclick=requestClose; sh.appendChild(x);
+    var title=el('h2','sheet-title','Prendre une commande'); sh.appendChild(title);
 
-    // Spot picker (owner has no tiles) — server opens/reuses the session.
-    var spotSel=document.createElement('select'); spotSel.setAttribute('aria-label','Espace');
-    var opt0=el('option',null,'— Choisir un espace —'); opt0.value=''; spotSel.appendChild(opt0);
-    SPOTS.forEach(function(sp){ var o=el('option',null,sp.label); o.value=sp.id; spotSel.appendChild(o); });
-    sh.appendChild(spotSel);
-    var fn=el('input'); fn.placeholder='Prénom (optionnel)'; fn.maxLength=40; sh.appendChild(fn);
+    // Every server-provided space stays visible as a large explicit choice.
+    var spotPicker=el('div','spot-picker'); spotPicker.appendChild(el('div','picker-label','1 · Espace'));
+    var spots=el('div','spots'); spots.setAttribute('role','group'); spots.setAttribute('aria-label','Choisir un espace');
+    function paintSpot(){
+      spotButtons.forEach(function(b){ var on=b.dataset.spot===state.spotId; b.classList.toggle('sel',on); b.setAttribute('aria-pressed',on?'true':'false'); });
+      var sp=chosenSpot(); summarySpot.textContent=sp?sp.label:'Espace à choisir'; recompute();
+    }
+    SPOTS.forEach(function(sp){
+      var b=el('button','spotbtn'); b.type='button'; b.dataset.spot=sp.id; b.setAttribute('aria-pressed','false');
+      b.appendChild(document.createTextNode(sp.label)); b.appendChild(el('span','check','✓'));
+      b.onclick=function(){ state.spotId=sp.id; paintSpot(); if(msg)msg.hidden=true; };
+      spotButtons.push(b); spots.appendChild(b);
+    });
+    if(!SPOTS.length) spots.appendChild(el('div','nores','Aucun espace disponible.'));
+    spotPicker.appendChild(spots); sh.appendChild(spotPicker);
 
-    var draft={}; var state={takeaway:false, cat:'__ALL__', q:''};
+    // Packaging remains in the one-screen flow, but collapses during search.
     var modeseg=el('div','modeseg');
     var mHere=el('button','mode sel'); mHere.type='button'; mHere.textContent='🍽️ Sur place';
     var mAway=el('button','mode away'); mAway.type='button'; mAway.textContent='📦 À emporter';
     mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false');
-    mHere.onclick=function(){ state.takeaway=false; mHere.classList.add('sel'); mAway.classList.remove('sel'); mHere.setAttribute('aria-pressed','true'); mAway.setAttribute('aria-pressed','false'); };
-    mAway.onclick=function(){ state.takeaway=true; mAway.classList.add('sel'); mHere.classList.remove('sel'); mAway.setAttribute('aria-pressed','true'); mHere.setAttribute('aria-pressed','false'); };
+    function paintMode(){
+      mHere.classList.toggle('sel',!state.takeaway); mAway.classList.toggle('sel',state.takeaway);
+      mHere.setAttribute('aria-pressed',state.takeaway?'false':'true'); mAway.setAttribute('aria-pressed',state.takeaway?'true':'false');
+      summaryMode.textContent=state.takeaway?'À emporter':'Sur place';
+    }
+    mHere.onclick=function(){ state.takeaway=false; paintMode(); };
+    mAway.onclick=function(){ state.takeaway=true; paintMode(); };
     modeseg.appendChild(mHere); modeseg.appendChild(mAway); sh.appendChild(modeseg);
 
-    // ── sticky toolbar: real-time search + category chips (same as the salle) ──
+    // Optional customer details yield vertical room to the menu by default.
+    var optional=document.createElement('details'); optional.className='optional';
+    var optionalSummary=document.createElement('summary'); optionalSummary.textContent='Détails optionnels'; optional.appendChild(optionalSummary);
+    var optionalFields=el('div','optional-fields');
+    var fn=el('input'); fn.placeholder='Prénom'; fn.maxLength=40; fn.setAttribute('autocomplete','given-name'); optionalFields.appendChild(fn);
+    var gnote=el('textarea'); gnote.placeholder='Note générale'; gnote.maxLength=280; optionalFields.appendChild(gnote);
+    optional.appendChild(optionalFields); sh.appendChild(optional);
+
+    // Compact search header keeps the two decisions visible over the keyboard.
+    var searchSummary=el('div','search-summary');
+    summarySpot=el('span',null,'Espace à choisir'); summaryMode=el('span',null,'Sur place');
+    searchSummary.appendChild(summarySpot); searchSummary.appendChild(el('span','dotsep','·')); searchSummary.appendChild(summaryMode);
+    searchCart=el('button','chip cart','Panier (0)'); searchCart.type='button'; searchSummary.appendChild(searchCart); sh.appendChild(searchSummary);
+
+    // ── sticky toolbar: focused search + browse/category/cart shortcuts ──
     var toolbar=el('div','toolbar');
-    var search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search'); search.setAttribute('enterkeyhint','search'); search.setAttribute('autocomplete','off'); search.setAttribute('aria-label','Rechercher un article');
-    search.oninput=function(){ state.q=search.value; renderList(); };   // live, no Enter
-    toolbar.appendChild(search);
+    var searchbar=el('div','searchbar');
+    search=el('input','search'); search.placeholder='🔍 Rechercher un article…'; search.setAttribute('inputmode','search'); search.setAttribute('enterkeyhint','search'); search.setAttribute('autocomplete','off'); search.setAttribute('aria-label','Rechercher un article');
+    var clearSearch=el('button','searchctl','×'); clearSearch.type='button'; clearSearch.setAttribute('aria-label','Effacer la recherche');
+    var doneSearch=el('button','searchctl','Terminé'); doneSearch.type='button';
+    function enterSearch(){ if(state.cartOnly)state.cartOnly=false; state.searching=true; sh.classList.add('searching'); renderList(); fitViewport(); }
+    function finishSearch(){ state.searching=false; sh.classList.remove('searching'); try{search.blur();}catch(e){} renderList(); fitViewport(); }
+    search.onfocus=enterSearch;
+    search.oninput=function(){ state.q=search.value; state.cartOnly=false; renderList(); };
+    clearSearch.onpointerdown=function(e){e.preventDefault();};
+    clearSearch.onclick=function(){ state.q=''; search.value=''; renderList(); try{search.focus();}catch(e){} };
+    doneSearch.onclick=finishSearch;
+    searchbar.appendChild(search); searchbar.appendChild(clearSearch); searchbar.appendChild(doneSearch); toolbar.appendChild(searchbar);
     var chips=el('div','chips');
     function setCat(c){ state.cat=c; renderList(); }
     var chipAll=el('button','chip','Tout'); chipAll.onclick=function(){ setCat('__ALL__'); }; chips.appendChild(chipAll);
@@ -545,12 +640,21 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     if(chipFav){ chipFav.onclick=function(){ setCat('__FAV__'); }; chips.appendChild(chipFav); }
     var catChips={};
     MENU.forEach(function(cat){ var ch=el('button','chip',cat.category); ch.onclick=(function(name){return function(){ setCat(name); };})(cat.category); catChips[cat.category]=ch; chips.appendChild(ch); });
-    toolbar.appendChild(chips); sh.appendChild(toolbar);
+    cartChip=el('button','chip cart','Panier (0)'); cartChip.type='button';
+    function showCart(){ state.cartOnly=true; state.q=''; search.value=''; finishSearch(); renderList(); }
+    cartChip.onclick=function(){ if(state.cartOnly){state.cartOnly=false;renderList();}else showCart(); };
+    searchCart.onclick=showCart;
+    var browsebar=el('div','browsebar'); browsebar.appendChild(chips); browsebar.appendChild(cartChip); toolbar.appendChild(browsebar); sh.appendChild(toolbar);
 
-    var listEl=el('div','list'); sh.appendChild(listEl);
-    var totalEl;
-    function recompute(){ var tot=0; Object.keys(draft).forEach(function(id){ var it=findItem(id); if(it&&draft[id].qty>0) tot+=it.price*draft[id].qty; });
-      totalEl.textContent=''; totalEl.appendChild(document.createTextNode(tot+' F ')); totalEl.appendChild(el('small',null,'(indicatif)')); }
+    listEl=el('div','list'); sh.appendChild(listEl);
+    function recompute(){
+      if(!totalEl)return;
+      var tot=0; Object.keys(draft).forEach(function(id){ var it=findItem(id); if(it&&draft[id].qty>0)tot+=it.price*draft[id].qty; });
+      var n=cartCount(); totalEl.textContent=''; totalEl.appendChild(document.createTextNode(n+' article'+(n>1?'s':'')+' · '+tot+' F')); totalEl.appendChild(el('small',null,'Total indicatif'));
+      cartChip.textContent='Panier ('+n+')'; searchCart.textContent='Panier ('+n+')';
+      cartChip.classList.toggle('sel',state.cartOnly); searchCart.classList.toggle('sel',state.cartOnly);
+      if(!state.spotId)go.textContent='Choisir un espace'; else if(!n)go.textContent='Ajouter des articles'; else go.textContent='Envoyer en cuisine';
+    }
 
     function itemRow(it){
       var d=draft[it.id]||{qty:0,choice:'',note:''};
@@ -561,15 +665,18 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       nm.appendChild(el('span','pr',it.price+' F')); row.appendChild(nm);
       var stp=el('div','stepper');
       var minus=el('button',null,'−'); var qv=el('span','qv',String(d.qty)); var plus=el('button','plus','+');
-      var extra=el('div','wrap'); extra.style.display=d.qty>0?'block':'none';
+      var extra=el('div','wrap'); extra.style.display=(d.qty>0&&(!state.searching||needsChoice||state.cartOnly))?'block':'none';
       var creq=null;
       function markChoice(){ if(!creq)return; var dd=draft[it.id]||{qty:0}; var miss=dd.qty>0 && !dd.choice; creq.classList.toggle('missing',miss); row.classList.toggle('needchoice',miss); }
-      function sync(){ var dd=draft[it.id]||{qty:0}; qv.textContent=dd.qty; extra.style.display=dd.qty>0?'block':'none'; row.classList.toggle('on',dd.qty>0);
+      function sync(){ var dd=draft[it.id]||{qty:0}; qv.textContent=dd.qty; extra.style.display=(dd.qty>0&&(!state.searching||needsChoice||state.cartOnly))?'block':'none'; row.classList.toggle('on',dd.qty>0);
         var old=nm.querySelector('.qbadge'); if(old) nm.removeChild(old);
         if(dd.qty>0){ var b=el('span','qbadge','×'+dd.qty); nm.insertBefore(b,nm.querySelector('.pr')); }
         markChoice(); recompute(); }
-      minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); };
-      plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync(); };
+      minus.onpointerdown=function(e){ if(state.searching)e.preventDefault(); };
+      plus.onpointerdown=function(e){ if(state.searching&&!needsChoice)e.preventDefault(); };
+      minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0)renderList(); };
+      plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; var wasEmpty=dd.qty===0; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync();
+        if(state.searching&&needsChoice&&wasEmpty){ try{search.blur();}catch(e){} setTimeout(function(){if(row.scrollIntoView)row.scrollIntoView({block:'center'});},50); } };
       stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
       if(needsChoice){
         creq=el('div','creq'); creq.appendChild(el('div','clab',(it.optionLabel||'Choix')+' · obligatoire'));
@@ -589,19 +696,21 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     function section(label,items){ if(!items.length) return; listEl.appendChild(el('div','cat',label));
       items.forEach(function(it){ listEl.appendChild(itemRow(it)); }); }
     function renderList(){
-      chipAll.classList.toggle('sel',state.cat==='__ALL__'&&!state.q);
-      if(chipFav) chipFav.classList.toggle('sel',state.cat==='__FAV__'&&!state.q);
-      Object.keys(catChips).forEach(function(k){ catChips[k].classList.toggle('sel',state.cat===k&&!state.q); });
+      chipAll.classList.toggle('sel',state.cat==='__ALL__'&&!state.q&&!state.cartOnly);
+      if(chipFav) chipFav.classList.toggle('sel',state.cat==='__FAV__'&&!state.q&&!state.cartOnly);
+      Object.keys(catChips).forEach(function(k){ catChips[k].classList.toggle('sel',state.cat===k&&!state.q&&!state.cartOnly); });
+      cartChip.classList.toggle('sel',state.cartOnly);
       listEl.textContent='';
       if(!MENU.length){ listEl.appendChild(el('div','nores','Menu indisponible.')); return; }
       var q=normalize(state.q); var any=false;
-      var isDefault=!q && state.cat==='__ALL__'; var popIds={};
+      var isDefault=!q && !state.cartOnly && state.cat==='__ALL__'; var popIds={};
       if(isDefault){
         var pop=window.__pick.top(MENU,TOP,8); pop.forEach(function(it){ popIds[it.id]=1; });
         if(pop.length){ section('🔥 Populaires',pop); any=true; }
       }
       MENU.forEach(function(cat){
         var items=cat.items.filter(function(it){
+          if(state.cartOnly)return !!(draft[it.id]&&draft[it.id].qty>0);
           if(q) return normalize(it.name).indexOf(q)>=0;
           if(state.cat==='__FAV__') return !!it.fav;
           if(state.cat!=='__ALL__') return cat.category===state.cat;
@@ -610,30 +719,34 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
         if(!items.length) return;
         section(cat.category, window.__pick.sortItems(items)); any=true;
       });
-      if(!any){ listEl.appendChild(el('div','nores','Aucun article trouvé.')); }
+      if(!any){ listEl.appendChild(el('div','nores',state.cartOnly?'Panier vide — ajoutez des articles.':'Aucun article trouvé.')); }
+      recompute();
     }
 
-    var gnote=el('textarea'); gnote.placeholder='Note générale (optionnel)'; gnote.maxLength=280; sh.appendChild(gnote);
-    var msg=el('div','msg'); msg.style.display='none'; sh.appendChild(msg);
+    msg=el('div','msg'); msg.hidden=true; msg.setAttribute('role','alert'); sh.appendChild(msg);
+    function setError(text){ msg.textContent=text; msg.hidden=false; }
     var foot=el('div','foot'); totalEl=el('div','total'); foot.appendChild(totalEl);
-    var go=el('button','go','Envoyer en cuisine');
+    go=el('button','go','Ajouter des articles');
     go.onclick=function(){
-      if(!spotSel.value){ msg.textContent='Choisissez un espace.'; msg.style.display='block'; return; }
+      if(!state.spotId){ setError('Choisissez d’abord un espace ci-dessus.'); return; }
       var miss=null; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0 && !miss){ var it=findItem(id); if(it&&it.choices&&it.choices.length&&!d.choice) miss=it; } });
-      if(miss){ msg.textContent='Choisissez « '+(miss.optionLabel||'option')+' » pour '+miss.name+'.'; msg.style.display='block';
+      if(miss){ setError('Choisissez « '+(miss.optionLabel||'option')+' » pour '+miss.name+'.'); state.cartOnly=true; state.q=''; search.value=''; finishSearch(); renderList();
         var r=listEl.querySelector('[data-id="'+miss.id+'"]'); if(r&&r.scrollIntoView) r.scrollIntoView({block:'center'}); return; }
       var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
-      if(!items.length){ msg.textContent='Ajoutez au moins un article.'; msg.style.display='block'; return; }
-      go.disabled=true; msg.style.display='none';
+      if(!items.length){ setError('Ajoutez au moins un article au panier.'); return; }
+      state.sending=true; go.disabled=true; go.textContent='Envoi…'; msg.hidden=true;
       var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway}; if(fn.value) body.first_name=fn.value;
-      postJSON('/spots/'+spotSel.value+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.ok){ close(); } else { go.disabled=false; msg.textContent=(j&&j.message)||'Commande refusée. Vérifiez les choix requis.'; msg.style.display='block'; }
-      }).catch(function(){ go.disabled=false; msg.textContent='Erreur réseau.'; msg.style.display='block'; });
+      var sentSpot=chosenSpot();
+      postJSON('/spots/'+state.spotId+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
+        if(j&&j.ok){ closeSheet(); showOwnerNotice('Commande envoyée — '+(sentSpot?sentSpot.label:'Espace')); }
+        else { state.sending=false; go.disabled=false; recompute(); setError((j&&j.message)||'Commande refusée. Corrigez les choix puis réessayez.'); }
+      }).catch(function(){ state.sending=false; go.disabled=false; recompute(); setError('Envoi impossible. Vérifiez la connexion puis réessayez.'); });
     };
     foot.appendChild(go); sh.appendChild(foot);
     ov.appendChild(sh); document.body.appendChild(ov);
-    renderList(); recompute();
-    try{ spotSel.focus(); }catch(e){}
+    if(window.visualViewport){ window.visualViewport.addEventListener('resize',fitViewport); window.visualViewport.addEventListener('scroll',fitViewport); }
+    window.addEventListener('resize',fitViewport); fitViewport(); paintMode(); paintSpot(); renderList(); recompute();
+    if(spotButtons.length){try{spotButtons[0].focus();}catch(e){}}
   }
   if(takeBtn) takeBtn.onclick=openComposer;
 
