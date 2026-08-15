@@ -1,5 +1,28 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## « J'ai payé » ne contredit plus la confirmation ✅ déjà envoyée (15 août 2026)
+
+- **Incident (Khadija, 14/08)** : la confirmation automatique « ✅ Paiement
+  reçu — ta place est confirmée » part à 21:33 ; la cliente écrit « C'est
+  fait » à 21:34 ; Awa répond « je n'ai pas encore reçu la confirmation » —
+  en contradiction directe avec le message précédent. La cliente s'inquiète,
+  handoff, vérification manuelle par l'équipe alors que tout était payé.
+- **Cause** : pas le replay (les confirmations serveur sont bien des tours
+  `assistant` via `repo.addTurn` et incluses dans `lastTurnsForReplay`). C'est
+  la règle 4 du flux paiement du prompt : « If they say they paid but you have
+  no confirmation… » — le modèle pattern-matchait « client dit avoir payé »
+  directement sur le script d'attente sans vérifier que le ✅ figurait déjà
+  une ligne plus haut dans l'historique.
+- **Fix (prompt seul)** : la règle 4 impose désormais de RELIRE l'historique
+  d'abord — si le ✅ de ce paiement y figure, le paiement EST reçu, on
+  rassure, interdiction de dire qu'on attend encore ; le script « la
+  confirmation arrive dans une minute ou deux » ne s'applique que si AUCUN ✅
+  n'apparaît. La règle capture d'écran ≠ preuve est inchangée. Test :
+  `test/paidClaimConfirmationPrompt.test.ts`.
+- **Piège** : le ✅ arrive souvent quelques secondes AVANT le message du
+  client (webhook plus rapide que la saisie) — c'est précisément ce croisement
+  qui déclenchait la contradiction.
+
 ## Paiements : vue clients par date de réservation (14 août 2026)
 
 - `/admin/paiements` propose désormais deux vues : **Par date de paiement**
