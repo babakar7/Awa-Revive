@@ -24,7 +24,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v9";
+const ASSET_VERSION = "v10";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -164,11 +164,12 @@ background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:
 .toolbar{position:sticky;top:0;z-index:3;background:var(--surface);padding:.05rem 0 .45rem}
 .searchbar{display:flex;align-items:stretch;gap:.4rem}
 .searchbar .search{flex:1;min-width:0;margin-bottom:.45rem}
+.searchbar>.cart{min-height:2.75rem;margin:0 0 .45rem auto}
 .searchctl{display:none;min-width:3rem;height:2.75rem;border:1px solid var(--border);border-radius:var(--radius);background:#fff;
 color:var(--plum-700);font-weight:750;padding:0 .65rem}
 .search-summary{display:none;align-items:center;gap:.4rem;min-height:2rem;margin:-.15rem 3rem .35rem 0;color:var(--ink-600);font-size:.82rem;font-weight:700}
 .search-summary .dotsep{color:var(--ink-300)}
-.browsebar{display:flex;align-items:center;gap:.4rem}.browsebar .chips{flex:1;min-width:0}
+.browsebar{display:block}.browsebar .chips{width:100%}
 .chips{display:flex;gap:.4rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:.2rem;scrollbar-width:none}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex:0 0 auto;padding:.55rem .95rem;border-radius:999px;background:var(--rose);border:1px solid transparent;
@@ -218,6 +219,7 @@ box-shadow:var(--shadow-2);animation:pop .2s var(--ease);white-space:nowrap}
 .sheet.searching .sheet-title,.sheet.searching .spot-picker,.sheet.searching .modeseg,.sheet.searching .optional,.sheet.searching .browsebar{display:none}
 .sheet.searching::before{display:none}
 .sheet.searching .search-summary,.sheet.searching .searchctl{display:flex}
+.sheet.searching .searchbar>.cart{display:none}
 .sheet.searching{padding-top:.55rem}
 .sheet.searching .toolbar{padding-bottom:.15rem}
 .sheet.searching .mi{padding:.35rem .2rem;gap:.35rem;flex-wrap:wrap}
@@ -641,10 +643,11 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     var catChips={};
     MENU.forEach(function(cat){ var ch=el('button','chip',cat.category); ch.onclick=(function(name){return function(){ setCat(name); };})(cat.category); catChips[cat.category]=ch; chips.appendChild(ch); });
     cartChip=el('button','chip cart','Panier (0)'); cartChip.type='button';
+    searchbar.appendChild(cartChip);
     function showCart(){ state.cartOnly=true; state.q=''; search.value=''; finishSearch(); renderList(); }
     cartChip.onclick=function(){ if(state.cartOnly){state.cartOnly=false;renderList();}else showCart(); };
     searchCart.onclick=showCart;
-    var browsebar=el('div','browsebar'); browsebar.appendChild(chips); browsebar.appendChild(cartChip); toolbar.appendChild(browsebar); sh.appendChild(toolbar);
+    var browsebar=el('div','browsebar'); browsebar.appendChild(chips); toolbar.appendChild(browsebar); sh.appendChild(toolbar);
 
     listEl=el('div','list'); sh.appendChild(listEl);
     function recompute(){
@@ -676,7 +679,10 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       plus.onpointerdown=function(e){ if(state.searching&&!needsChoice)e.preventDefault(); };
       minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0)renderList(); };
       plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; var wasEmpty=dd.qty===0; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync();
-        if(state.searching&&needsChoice&&wasEmpty){ try{search.blur();}catch(e){} setTimeout(function(){if(row.scrollIntoView)row.scrollIntoView({block:'center'});},50); } };
+        if(state.searching){
+          state.q=''; search.value=''; renderList();
+          if(needsChoice&&wasEmpty){ try{search.blur();}catch(e){} setTimeout(function(){var fresh=listEl.querySelector('[data-id="'+it.id+'"]');if(fresh&&fresh.scrollIntoView)fresh.scrollIntoView({block:'center'});},50); }
+        } };
       stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
       if(needsChoice){
         creq=el('div','creq'); creq.appendChild(el('div','clab',(it.optionLabel||'Choix')+' · obligatoire'));

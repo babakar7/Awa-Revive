@@ -66,6 +66,8 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).toContain("Détails optionnels");
     expect(OWNER_APP_JS).toContain("state.cartOnly");
     expect(OWNER_APP_JS).toContain("Panier (0)");
+    expect(OWNER_APP_JS).toContain("searchbar.appendChild(cartChip)");
+    expect(OWNER_APP_JS).not.toContain("browsebar.appendChild(cartChip)");
     expect(OWNER_APP_JS).toContain("draft[it.id]&&draft[it.id].qty>0");
     expect(OWNER_APP_JS).toContain("n+' article'");
     expect(OWNER_APP_JS).toContain("go.textContent='Envoyer en cuisine'");
@@ -81,6 +83,7 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).toContain("vv.height");
     expect(OWNER_APP_JS).toContain("vv.offsetTop");
     expect(OWNER_APP_JS).toContain("if(state.searching&&!needsChoice)e.preventDefault()");
+    expect(OWNER_APP_JS).toContain("state.q=''; search.value=''; renderList()");
     expect(OWNER_APP_JS).toContain("search.blur()");
     expect(ownerBoardPage()).toContain(".sheet.searching .mi");
     expect(ownerBoardPage()).toContain(".sheet.searching .spot-picker");
@@ -116,7 +119,7 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v9");
+    expect(version).toBe("v10");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 
