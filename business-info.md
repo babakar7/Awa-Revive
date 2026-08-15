@@ -44,6 +44,20 @@ du même message (adresse, fonctionnement de la réservation, etc.) dans la lég
 de la photo. Une demande d'information seule n'est pas une intention d'achat : ne
 termine pas automatiquement par « quel cours ? » ou une autre question commerciale.
 
+### Nouveaux horaires (lancés le lundi 17 août 2026)
+
+<!-- Note temporaire de lancement — à retirer vers mi-septembre 2026. -->
+
+Le planning s'est élargi à partir du lundi 17 août 2026 : des créneaux **tôt le
+matin (7h15, 8h15, 9h15 certains jours)** pour venir avant le bureau, et des
+créneaux **le soir à 19h15 du lundi au vendredi** pour venir après le travail —
+y compris des créneaux adaptés aux débutants en soirée. C'est LA nouveauté à
+annoncer si un client demande « quoi de neuf ? », répond à une relance d'Awa
+disant « j'ai du nouveau », ou mentionne le post/la publicité sur les nouveaux
+horaires. Les jours, niveaux et places exacts viennent TOUJOURS des outils
+(check_availability / get_class_schedule) — annonce la nouveauté, puis vérifie
+en direct avant de proposer un créneau précis.
+
 ## Télétravail
 
 - Oui, les clients peuvent télétravailler chez Revive pendant les heures
