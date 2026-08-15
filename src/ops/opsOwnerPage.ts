@@ -24,7 +24,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v10";
+const ASSET_VERSION = "v11";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -195,8 +195,12 @@ background:#fff;color:var(--ink-900);font-size:1.35rem;font-weight:700;line-heig
 .stepper .qv{min-width:1.3rem;text-align:center;font-weight:800;font-size:1.1rem}
 .creq{margin-top:.5rem;border:1px solid var(--border-soft);border-radius:var(--radius);padding:.55rem .65rem;background:var(--surface-raised)}
 .creq.missing{border-color:var(--warn-border);background:var(--warn-bg)}
-.clab{font-size:.75rem;font-weight:700;color:var(--ink-500);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.05em}
+.clab{display:block;width:100%;padding:0;border:0;background:none;text-align:left;font-family:inherit;font-size:.75rem;font-weight:700;
+color:var(--ink-500);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.05em}
 .creq.missing .clab{color:var(--warn)}
+.creq.collapsed{padding:.42rem .58rem;border-color:var(--ok-border);background:var(--ok-bg)}
+.creq.collapsed .clab{margin:0;color:var(--ok);text-transform:none;letter-spacing:0;font-size:.82rem}
+.creq.collapsed .cpills{display:none}
 .cpills{display:flex;gap:.45rem;flex-wrap:wrap}
 .cpill{padding:.55rem .9rem;border-radius:999px;border:1px solid var(--border-strong);background:#fff;color:var(--ink-700);font-weight:600;font-size:.95rem}
 .cpill.sel{background:var(--ok-strong);border-color:var(--ok-strong);color:#fff}
@@ -228,6 +232,7 @@ box-shadow:var(--shadow-2);animation:pop .2s var(--ease);white-space:nowrap}
 .sheet.searching .stepper{gap:.3rem}
 .sheet.searching .stepper button{width:2.55rem;height:2.55rem}
 .sheet.searching .cat{font-size:.76rem;margin:.4rem 0 .1rem;padding-bottom:.2rem}
+.sheet.searching .creq.collapsed~.lnlab,.sheet.searching .creq.collapsed~.ln{display:none}
 .sheet.searching .foot{padding-top:.3rem}
 @media(min-width:42rem){.spots{grid-template-columns:repeat(4,minmax(0,1fr))}.sheet{max-width:42rem}}
 @media(max-height:620px){.sheet{height:100vh;height:100dvh;border-radius:0}.sheet::before{display:none}.spotbtn{min-height:2.8rem}}
@@ -685,13 +690,20 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
         } };
       stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
       if(needsChoice){
-        creq=el('div','creq'); creq.appendChild(el('div','clab',(it.optionLabel||'Choix')+' · obligatoire'));
+        creq=el('div','creq'); var optionName=it.optionLabel||'Choix';
+        var choiceLabel=el('button','clab'); choiceLabel.type='button'; creq.appendChild(choiceLabel);
         var pills=el('div','cpills');
+        function paintChoice(){ var dd=draft[it.id]||d; var picked=dd.choice||'';
+          creq.classList.toggle('collapsed',!!picked); choiceLabel.textContent=picked?optionName+' · '+picked+' ✓ — modifier':optionName+' · obligatoire';
+          choiceLabel.setAttribute('aria-expanded',picked?'false':'true'); }
+        choiceLabel.onclick=function(){ var dd=draft[it.id]||d; if(!dd.choice)return; var folded=creq.classList.toggle('collapsed');
+          choiceLabel.setAttribute('aria-expanded',folded?'false':'true'); if(!folded&&creq.scrollIntoView)creq.scrollIntoView({block:'center'}); };
         it.choices.forEach(function(ch){ var p=el('button','cpill'+(d.choice===ch?' sel':''),ch);
           p.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.choice=ch; draft[it.id]=dd;
-            Array.from(pills.children).forEach(function(c){c.classList.remove('sel');}); p.classList.add('sel'); markChoice(); };
+            Array.from(pills.children).forEach(function(c){c.classList.remove('sel');}); p.classList.add('sel'); paintChoice(); markChoice();
+            if(state.searching){try{search.focus();}catch(e){}} };
           pills.appendChild(p); });
-        creq.appendChild(pills); extra.appendChild(creq);
+        creq.appendChild(pills); extra.appendChild(creq); paintChoice();
       }
       extra.appendChild(el('div','lnlab','Note (optionnel)'));
       var ntn=el('input','ln'); ntn.placeholder='ex: sans sucre, bien chaud…'; ntn.maxLength=140; ntn.value=d.note||'';

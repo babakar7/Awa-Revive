@@ -89,6 +89,15 @@ describe("owner supervision PWA assets", () => {
     expect(ownerBoardPage()).toContain(".sheet.searching .spot-picker");
   });
 
+  it("collapses a completed required choice and returns focus to search", () => {
+    expect(OWNER_APP_JS).toContain("creq.classList.toggle('collapsed'");
+    expect(OWNER_APP_JS).toContain("✓ — modifier");
+    expect(OWNER_APP_JS).toContain("if(state.searching){try{search.focus()");
+    expect(OWNER_APP_JS).toContain("setAttribute('aria-expanded'");
+    expect(ownerBoardPage()).toContain(".creq.collapsed .cpills{display:none}");
+    expect(ownerBoardPage()).toContain(".sheet.searching .creq.collapsed~.lnlab");
+  });
+
   it("protects drafts and keeps actionable feedback around submission", () => {
     expect(OWNER_APP_JS).toContain("if(cartCount()>0)");
     expect(OWNER_APP_JS).toContain("Abandonner cette commande ?");
@@ -119,7 +128,7 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v10");
+    expect(version).toBe("v11");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 
