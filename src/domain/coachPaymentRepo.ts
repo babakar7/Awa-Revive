@@ -47,6 +47,8 @@ export interface CoachPaymentStatement {
   synced_at: Date | null;
   course_count: number;
   base_total_xof: number;
+  holiday_course_count: number;
+  holiday_bonus_xof: number;
   adjustment_total_xof: number;
   total_xof: number;
   validated_at: Date | null;
@@ -82,7 +84,16 @@ export interface CoachPaymentCourse {
   included: boolean;
   manual_decision: boolean;
   manual_reason: string | null;
+  holiday: boolean;
   raw_snapshot: unknown;
+  created_at: Date;
+}
+
+export interface CoachPaymentHoliday {
+  id: string;
+  holiday_date: string;
+  label: string;
+  created_by: string | null;
   created_at: Date;
 }
 
@@ -288,9 +299,22 @@ async function recalculate(client: PoolClient, statementId: string): Promise<Coa
   const statement = locked.rows[0] as CoachPaymentStatement | undefined;
   if (!statement) throw new CoachPaymentError("État introuvable");
   if (statement.status !== "draft") throw new CoachPaymentError("Un état validé est immuable");
+  // Refresh the per-course holiday flag from the current calendar BEFORE
+  // counting: this is the only writer of `holiday`/`holiday_*`, so a validated
+  // statement (guarded above) keeps its frozen snapshot untouched.
+  await client.query(
+    `update coach_payment_courses c
+        set holiday = exists (
+          select 1 from coach_payment_holidays h
+           where h.holiday_date = (c.starts_at at time zone 'Africa/Dakar')::date)
+      where c.statement_id=$1`,
+    [statementId],
+  );
   const [courseResult, adjustmentResult] = await Promise.all([
     client.query(
-      `select count(*)::int as count from coach_payment_courses where statement_id=$1 and included`,
+      `select count(*) filter (where included)::int as count,
+              count(*) filter (where included and holiday)::int as holiday_count
+         from coach_payment_courses where statement_id=$1`,
       [statementId],
     ),
     client.query(
@@ -302,16 +326,19 @@ async function recalculate(client: PoolClient, statementId: string): Promise<Coa
     Number(courseResult.rows[0].count),
     tariffFromJson(statement.tariff_json),
     adjustmentResult.rows,
+    Number(courseResult.rows[0].holiday_count),
   );
   const updated = await client.query(
     `update coach_payment_statements
-        set course_count=$2, base_total_xof=$3, adjustment_total_xof=$4,
-            total_xof=$5, updated_at=now()
+        set course_count=$2, base_total_xof=$3, holiday_course_count=$4,
+            holiday_bonus_xof=$5, adjustment_total_xof=$6, total_xof=$7, updated_at=now()
       where id=$1 returning *`,
     [
       statementId,
       totals.courseCount,
       totals.baseTotalXof,
+      totals.holidayCourseCount,
+      totals.holidayBonusXof,
       totals.adjustmentTotalXof,
       totals.totalXof,
     ],
@@ -332,6 +359,69 @@ async function transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T
   } finally {
     client.release();
   }
+}
+
+export async function listHolidays(): Promise<CoachPaymentHoliday[]> {
+  const result = await pool.query(
+    `select id, to_char(holiday_date,'YYYY-MM-DD') as holiday_date, label, created_by, created_at
+       from coach_payment_holidays order by holiday_date desc`,
+  );
+  return result.rows as CoachPaymentHoliday[];
+}
+
+/** Recalculate every DRAFT statement holding a course on this Dakar day. Locks
+ * the statement rows in a deterministic order (id) so two concurrent holiday
+ * edits cannot deadlock, and so a statement validated meanwhile is excluded by
+ * `status='draft'` instead of being mutated. */
+async function recalculateDraftsOnDate(client: PoolClient, holidayDate: string): Promise<void> {
+  const affected = await client.query(
+    `select s.id
+       from coach_payment_statements s
+      where s.status='draft'
+        and exists (
+          select 1 from coach_payment_courses c
+           where c.statement_id=s.id
+             and (c.starts_at at time zone 'Africa/Dakar')::date = $1::date)
+      order by s.id
+        for update of s`,
+    [holidayDate],
+  );
+  for (const row of affected.rows) {
+    await recalculate(client, String(row.id));
+  }
+}
+
+export async function addHoliday(input: {
+  date: string;
+  label: string;
+  createdBy: string | null;
+}): Promise<void> {
+  await transaction(async (client) => {
+    const inserted = await client.query(
+      `insert into coach_payment_holidays (holiday_date, label, created_by)
+       values ($1,$2,$3) on conflict (holiday_date) do nothing returning id`,
+      [input.date, input.label, input.createdBy],
+    );
+    if (!inserted.rowCount) throw new CoachPaymentError("Ce jour est déjà défini comme férié");
+    await recalculateDraftsOnDate(client, input.date);
+  });
+}
+
+export async function removeHoliday(
+  id: string,
+): Promise<{ holiday_date: string; label: string } | null> {
+  if (!validUuid(id)) return null;
+  return transaction(async (client) => {
+    const removed = await client.query(
+      `delete from coach_payment_holidays where id=$1
+       returning to_char(holiday_date,'YYYY-MM-DD') as holiday_date, label`,
+      [id],
+    );
+    if (!removed.rowCount) return null;
+    const row = removed.rows[0] as { holiday_date: string; label: string };
+    await recalculateDraftsOnDate(client, row.holiday_date);
+    return row;
+  });
 }
 
 async function insertCourses(
@@ -710,14 +800,17 @@ export async function createCorrection(
       ],
     );
     const copy = inserted.rows[0] as CoachPaymentStatement;
+    // `holiday` is copied for parity, but the trailing recalculate() re-derives
+    // it (and the bonus) from the CURRENT holiday table: a correction is a fresh
+    // draft and follows the live configuration, not the source's frozen flags.
     await client.query(
       `insert into coach_payment_courses
         (statement_id, source, wix_event_id, service_id, service_name, starts_at,
          ends_at, participant_count, wix_status, coach_resource_id, coach_name,
-         included, manual_decision, manual_reason, raw_snapshot)
+         included, manual_decision, manual_reason, holiday, raw_snapshot)
        select $2, source, wix_event_id, service_id, service_name, starts_at,
               ends_at, participant_count, wix_status, coach_resource_id, coach_name,
-              included, manual_decision, manual_reason, raw_snapshot
+              included, manual_decision, manual_reason, holiday, raw_snapshot
          from coach_payment_courses where statement_id=$1`,
       [source.id, copy.id],
     );

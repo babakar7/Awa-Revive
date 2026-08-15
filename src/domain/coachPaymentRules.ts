@@ -6,9 +6,13 @@ export type CoachTariff =
   | { type: "monthly_ratio"; baseAmountXof: number; baseSessionCount: number }
   | { type: "per_session"; perSessionXof: number };
 
+export const HOLIDAY_MARKUP_RATE = 0.5;
+
 export interface PaymentTotals {
   courseCount: number;
   baseTotalXof: number;
+  holidayCourseCount: number;
+  holidayBonusXof: number;
   adjustmentTotalXof: number;
   totalXof: number;
 }
@@ -263,19 +267,42 @@ export function computeBaseTotal(courseCount: number, tariff: CoachTariff): numb
     : courseCount * tariff.perSessionXof;
 }
 
+/** Rounded once on the aggregate: per-course amounts are never displayed, so
+ * rounding each course separately would only introduce drift. */
+export function computeHolidayBonus(holidayCourseCount: number, tariff: CoachTariff): number {
+  if (!Number.isInteger(holidayCourseCount) || holidayCourseCount < 0) {
+    throw new Error("Nombre de cours fériés invalide");
+  }
+  return tariff.type === "monthly_ratio"
+    ? Math.round((holidayCourseCount * tariff.baseAmountXof * HOLIDAY_MARKUP_RATE) / tariff.baseSessionCount)
+    : Math.round(holidayCourseCount * tariff.perSessionXof * HOLIDAY_MARKUP_RATE);
+}
+
 export function computePaymentTotals(
   courseCount: number,
   tariff: CoachTariff,
   adjustments: Array<{ kind: string; amount_xof: number }>,
+  holidayCourseCount = 0,
 ): PaymentTotals {
   const baseTotalXof = computeBaseTotal(courseCount, tariff);
+  if (!Number.isInteger(holidayCourseCount) || holidayCourseCount < 0 || holidayCourseCount > courseCount) {
+    throw new Error("Nombre de cours fériés invalide");
+  }
+  const holidayBonusXof = computeHolidayBonus(holidayCourseCount, tariff);
   const adjustmentTotalXof = adjustments.reduce((sum, a) => {
     const amount = Number(a.amount_xof);
     if (!Number.isInteger(amount) || amount <= 0) throw new Error("Montant d'ajustement invalide");
     if (a.kind !== "bonus" && a.kind !== "deduction") throw new Error("Type d'ajustement invalide");
     return sum + (a.kind === "bonus" ? amount : -amount);
   }, 0);
-  return { courseCount, baseTotalXof, adjustmentTotalXof, totalXof: baseTotalXof + adjustmentTotalXof };
+  return {
+    courseCount,
+    baseTotalXof,
+    holidayCourseCount,
+    holidayBonusXof,
+    adjustmentTotalXof,
+    totalXof: baseTotalXof + holidayBonusXof + adjustmentTotalXof,
+  };
 }
 
 export function isCoachPaymentServiceName(name: string): boolean {

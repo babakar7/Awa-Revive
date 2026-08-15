@@ -1,5 +1,45 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Paiements coachs : majoration jours fériés +50 % & récap séances exclues (15 août 2026)
+
+- **Besoin (Babakar)** : certains jours fériés, les coachs Pilates sont payés
+  avec une **majoration fixe de +50 %** par séance donnée ce jour-là. Il faut
+  pouvoir déclarer un jour comme férié depuis `/admin/paiements-coachs`, sans
+  redéploiement. Taux **fixe à 50 %** (décision produit, pas de taux par jour).
+- **Modèle** : nouvelle table `coach_payment_holidays` (date Dakar unique +
+  libellé), gérée depuis la page **Réglages** (section « Jours fériés (+50 %) »,
+  owner-only). `recalculate()` (seul écrivain) devient date-aware : il pose le
+  flag `coach_payment_courses.holiday` via
+  `(starts_at at time zone 'Africa/Dakar')::date`, compte les séances fériées
+  incluses et stocke `holiday_course_count` / `holiday_bonus_xof` sur l'état.
+  Bonus = `round(nbFériés × valeurMarginale × 0.5)` — **arrondi une seule fois**
+  (aucun montant par cours n'est affiché). Ligne séparée « Majoration jours
+  fériés (+50 %) » dans le Calcul + badge « Férié +50 % » par cours (page & PDF).
+- **États figés** : `recalculate` refuse tout état non-draft, donc validés/payés
+  gardent leurs drapeaux et montants figés à la validation. Ajouter/retirer un
+  férié recalcule **immédiatement** tous les brouillons ayant un cours ce
+  jour-là, dans la même transaction (`for update of s order by s.id` → pas de
+  deadlock, une validation concurrente est exclue par `status='draft'`).
+  Suppression dure : le libellé historique est perdu mais date+booléen du cours
+  restent figés ; ajout/suppression journalisés (date, libellé, `req.adminUser`).
+- **Piège Dakar** : matcher **toujours** `at time zone 'Africa/Dakar'` (jamais
+  `starts_at::date`, qui dépend du GUC) ; colonnes `date` renvoyées en
+  `to_char(...,'YYYY-MM-DD')` (piège Date node-postgres). Dakar = UTC toute
+  l'année : 23:30 UTC compte le jour même, 00:10 le lendemain non.
+- **Récap séances exclues** (2ᵉ demande) : la page d'état affiche en fin de
+  document une carte « Séances exclues du calcul » listant chaque cours non
+  compté (`included=false`) avec son motif — Séance annulée / Séance vide /
+  Exclue manuellement — pour justifier d'un coup d'œil pourquoi le total ne
+  compte pas certaines séances.
+- **Fichiers** : `src/db/schema.ts`, `src/domain/coachPaymentRules.ts`
+  (`computeHolidayBonus`, `HOLIDAY_MARKUP_RATE`), `src/domain/coachPaymentRepo.ts`
+  (`listHolidays`/`addHoliday`/`removeHoliday`, `recalculate`),
+  `src/admin/coachPaymentsRoutes.ts`, `src/admin/coachPaymentsPage.ts`,
+  `src/lib/coachPaymentPdf.ts` (`coachPaymentCourseSubLines`). Tests :
+  `coachPaymentRules`/`coachPaymentsPage`/`coachPaymentUx`/`coachPaymentPdf` +
+  `test/integration/coachPayments.test.ts` (3 nouveaux cas : CRUD+refus team,
+  markup+freeze, recalcul draft & frontière Dakar).
+
 ## « J'ai payé » ne contredit plus la confirmation ✅ déjà envoyée (15 août 2026)
 
 - **Incident (Khadija, 14/08)** : la confirmation automatique « ✅ Paiement

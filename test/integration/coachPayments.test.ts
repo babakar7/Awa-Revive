@@ -657,6 +657,101 @@ describe("monthly statement lifecycle", () => {
     expect(correctionDecisions).toEqual(decisions);
   });
 
+  it("marks holiday courses, applies the +50% markup and freezes it at validation", async () => {
+    const cookie = await loginAsOwner();
+    const profileId = await configureYass();
+
+    // Owner defines a paid holiday from the settings section.
+    const added = await post(`${BASE}/reglages/feries`, { holiday_date: "2026-06-05", label: "Tabaski" }, cookie);
+    expect(added.headers.location).toContain("done=holiday-added");
+    const dup = await post(`${BASE}/reglages/feries`, { holiday_date: "2026-06-05", label: "Doublon" }, cookie);
+    expect(dup.headers.location).toContain("err=");
+    const bad = await post(`${BASE}/reglages/feries`, { holiday_date: "2026-13-40", label: "Invalide" }, cookie);
+    expect(bad.headers.location).toContain("err=");
+    const settings = await app.inject({ method: "GET", url: `${BASE}/reglages`, headers: { cookie } });
+    expect(settings.body).toContain("Tabaski");
+
+    // Two eligible courses, one of them on the holiday.
+    mock.wix.calendarEvents = [
+      calendarEvent("holiday-course", "2026-06-05T10:00:00"),
+      calendarEvent("normal-course", "2026-06-12T10:00:00"),
+    ];
+    const id = await createJuneDraft(cookie, profileId);
+    let statement = (await pool.query(`select * from coach_payment_statements where id=$1`, [id])).rows[0];
+    expect(statement.course_count).toBe(2);
+    expect(statement.holiday_course_count).toBe(1);
+    expect(statement.holiday_bonus_xof).toBe(4_750);
+    expect(statement.base_total_xof).toBe(19_000);
+    expect(statement.total_xof).toBe(23_750);
+
+    const page = await app.inject({ method: "GET", url: `${BASE}/etats/${id}`, headers: { cookie } });
+    expect(page.body).toContain("Férié +50 %");
+    expect(page.body).toContain("Majoration jours fériés (+50 %) · 1 séance(s)");
+
+    // Excluding the holiday course drops the bonus, re-including restores it.
+    const holidayCourseId = (await pool.query(
+      `select id from coach_payment_courses where statement_id=$1 and wix_event_id='holiday-course'`,
+      [id],
+    )).rows[0].id;
+    await post(`${BASE}/etats/${id}/cours/${holidayCourseId}/toggle`, {}, cookie);
+    statement = (await pool.query(`select * from coach_payment_statements where id=$1`, [id])).rows[0];
+    expect(statement.holiday_course_count).toBe(0);
+    expect(statement.holiday_bonus_xof).toBe(0);
+    expect(statement.total_xof).toBe(9_500);
+    await post(`${BASE}/etats/${id}/cours/${holidayCourseId}/toggle`, {}, cookie);
+    expect((await pool.query(`select total_xof from coach_payment_statements where id=$1`, [id])).rows[0].total_xof).toBe(23_750);
+
+    // Validate, then delete the holiday: a frozen statement must not change.
+    const validated = await post(`${BASE}/etats/${id}/valider`, {}, cookie);
+    expect(validated.headers.location).toContain("done=validated");
+    const holidayId = (await pool.query(`select id from coach_payment_holidays where holiday_date='2026-06-05'`)).rows[0].id;
+    const removed = await post(`${BASE}/reglages/feries/${holidayId}/supprimer`, {}, cookie);
+    expect(removed.headers.location).toContain("done=holiday-removed");
+    statement = (await pool.query(`select * from coach_payment_statements where id=$1`, [id])).rows[0];
+    expect(statement.holiday_course_count).toBe(1);
+    expect(statement.holiday_bonus_xof).toBe(4_750);
+    expect(statement.total_xof).toBe(23_750);
+    expect((await pool.query(
+      `select holiday from coach_payment_courses where statement_id=$1 and wix_event_id='holiday-course'`,
+      [id],
+    )).rows[0].holiday).toBe(true);
+    const pdf = await app.inject({ method: "GET", url: `${BASE}/etats/${id}/pdf`, headers: { cookie } });
+    expect(pdf.statusCode).toBe(200);
+    expect(pdf.rawPayload.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+  });
+
+  it("recalculates an existing draft when a holiday is added, and matches on the Dakar day", async () => {
+    const cookie = await loginAsOwner();
+    const profileId = await configureYass();
+    // 23:30 UTC = same Dakar day (UTC+0); 00:10 the next day falls outside.
+    mock.wix.calendarEvents = [
+      calendarEvent("late-same-day", "2026-06-05T23:30:00"),
+      calendarEvent("next-day", "2026-06-06T00:10:00"),
+    ];
+    const id = await createJuneDraft(cookie, profileId);
+    expect((await pool.query(`select holiday_course_count from coach_payment_statements where id=$1`, [id])).rows[0].holiday_course_count).toBe(0);
+
+    // Adding the holiday after the draft exists recalculates it immediately.
+    await post(`${BASE}/reglages/feries`, { holiday_date: "2026-06-05", label: "Korité" }, cookie);
+    let statement = (await pool.query(`select * from coach_payment_statements where id=$1`, [id])).rows[0];
+    expect(statement.holiday_course_count).toBe(1);
+    expect(statement.total_xof).toBe(19_000 + 4_750);
+
+    // Removing it reverts the draft to the base total.
+    const holidayId = (await pool.query(`select id from coach_payment_holidays where holiday_date='2026-06-05'`)).rows[0].id;
+    await post(`${BASE}/reglages/feries/${holidayId}/supprimer`, {}, cookie);
+    statement = (await pool.query(`select * from coach_payment_statements where id=$1`, [id])).rows[0];
+    expect(statement.holiday_course_count).toBe(0);
+    expect(statement.total_xof).toBe(19_000);
+  });
+
+  it("blocks the team account from managing holidays", async () => {
+    const teamCookie = await loginAsTeam();
+    const blocked = await post(`${BASE}/reglages/feries`, { holiday_date: "2026-06-05", label: "X" }, teamCookie);
+    expect(blocked.statusCode).toBe(403);
+    expect(Number((await pool.query(`select count(*) from coach_payment_holidays`)).rows[0].count)).toBe(0);
+  });
+
   it("blocks validation on an open month and after a Wix outage", async () => {
     const cookie = await loginAsOwner();
     const profileId = await configureYass();

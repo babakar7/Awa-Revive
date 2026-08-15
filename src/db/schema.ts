@@ -1442,6 +1442,26 @@ create table if not exists coach_payment_send_log (
 create index if not exists idx_coach_payment_send_log_statement
   on coach_payment_send_log (statement_id, attempted_at desc);
 
+-- Jours fériés payés (studio ouvert) : chaque séance donnée ce jour-là
+-- (calendrier de Dakar) est majorée de 50 %. Ne pilote que les brouillons ;
+-- un état validé conserve les drapeaux et montants figés à la validation,
+-- donc la suppression dure d'un jour férié ne touche jamais un état figé.
+create table if not exists coach_payment_holidays (
+  id uuid primary key default gen_random_uuid(),
+  holiday_date date not null unique,
+  label text not null check (length(trim(label)) > 0 and length(label) <= 100),
+  created_by text,
+  created_at timestamptz not null default now()
+);
+alter table coach_payment_statements
+  add column if not exists holiday_course_count integer not null default 0
+  check (holiday_course_count >= 0);
+alter table coach_payment_statements
+  add column if not exists holiday_bonus_xof integer not null default 0
+  check (holiday_bonus_xof >= 0);
+alter table coach_payment_courses
+  add column if not exists holiday boolean not null default false;
+
 -- Les deux rémunérations initiales demandées. ON CONFLICT préserve toute
 -- modification faite ensuite dans l'écran Réglages.
 insert into coach_payment_profiles

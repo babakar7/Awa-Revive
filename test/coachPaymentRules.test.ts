@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeHolidayBonus,
   computePaymentTotals,
   isCoachPaymentServiceName,
   monthBounds,
@@ -19,6 +20,8 @@ describe("coach payment calculations", () => {
     expect(computePaymentTotals(83, yass, [])).toEqual({
       courseCount: 83,
       baseTotalXof: 788_500,
+      holidayCourseCount: 0,
+      holidayBonusXof: 0,
       adjustmentTotalXof: 0,
       totalXof: 788_500,
     });
@@ -40,7 +43,55 @@ describe("coach payment calculations", () => {
         { kind: "bonus", amount_xof: 12_500 },
         { kind: "deduction", amount_xof: 2_000 },
       ]),
-    ).toEqual({ courseCount: 10, baseTotalXof: 90_000, adjustmentTotalXof: 10_500, totalXof: 100_500 });
+    ).toEqual({
+      courseCount: 10,
+      baseTotalXof: 90_000,
+      holidayCourseCount: 0,
+      holidayBonusXof: 0,
+      adjustmentTotalXof: 10_500,
+      totalXof: 100_500,
+    });
+  });
+});
+
+describe("public-holiday +50% markup", () => {
+  it("adds a 50% bonus per holiday course under a per-session tariff", () => {
+    const totals = computePaymentTotals(10, leslie, [], 2);
+    expect(totals.baseTotalXof).toBe(90_000);
+    expect(totals.holidayCourseCount).toBe(2);
+    expect(totals.holidayBonusXof).toBe(9_000);
+    expect(totals.totalXof).toBe(99_000);
+  });
+
+  it("rounds the aggregate bonus once, not per course", () => {
+    // 3 × 9 001 × 0.5 = 13 501.5 → 13 502 as a single rounding.
+    const oddRate: CoachTariff = { type: "per_session", perSessionXof: 9_001 };
+    expect(computeHolidayBonus(3, oddRate)).toBe(13_502);
+    expect(computePaymentTotals(3, oddRate, [], 3).holidayBonusXof).toBe(13_502);
+  });
+
+  it("rounds the monthly-ratio bonus on the aggregate", () => {
+    // 7 × 800 000 × 0.5 / 84 = 33 333.33 → 33 333 once (per-course would give 33 334).
+    const totals = computePaymentTotals(7, monthlyRatio, [], 7);
+    expect(totals.holidayBonusXof).toBe(33_333);
+    expect(computeHolidayBonus(1, monthlyRatio)).toBe(4_762);
+  });
+
+  it("leaves totals unchanged when there is no holiday course", () => {
+    const totals = computePaymentTotals(10, leslie, []);
+    expect(totals.holidayCourseCount).toBe(0);
+    expect(totals.holidayBonusXof).toBe(0);
+    expect(totals.totalXof).toBe(90_000);
+  });
+
+  it("combines the holiday bonus with adjustments", () => {
+    const totals = computePaymentTotals(10, leslie, [{ kind: "deduction", amount_xof: 5_000 }], 2);
+    expect(totals.totalXof).toBe(90_000 + 9_000 - 5_000);
+  });
+
+  it("rejects a holiday count that is negative or exceeds the course count", () => {
+    expect(() => computePaymentTotals(5, leslie, [], -1)).toThrow(/férié/i);
+    expect(() => computePaymentTotals(5, leslie, [], 6)).toThrow(/férié/i);
   });
 });
 

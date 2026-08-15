@@ -76,6 +76,17 @@ export function coachPaymentCourseSourceLabel(
   return course.wix_status === "CANCELLED" ? "Wix · annulée" : "Wix";
 }
 
+/** Sub-lines printed under a course row. A manual holiday course carries both
+ * its reason and the markup note, so the row height is derived from the count. */
+export function coachPaymentCourseSubLines(
+  course: Pick<CoachPaymentCourse, "manual_reason" | "holiday">,
+): string[] {
+  const lines: string[] = [];
+  if (course.manual_reason) lines.push(`Motif : ${course.manual_reason}`);
+  if (course.holiday) lines.push("Jour férié · majoration +50 %");
+  return lines;
+}
+
 /** Render from stored snapshots only; no Wix/profile lookup occurs here. */
 export function renderCoachPaymentPdf(detail: StatementDetail): Promise<Buffer> {
   assertFonts();
@@ -145,14 +156,16 @@ export function renderCoachPaymentPdf(detail: StatementDetail): Promise<Buffer> 
   };
   drawCourseHeader();
   for (const course of courses) {
-    y = ensureSpace(doc, y, 40, draft);
+    const subLines = coachPaymentCourseSubLines(course);
+    const h = 28 + subLines.length * 11;
+    y = ensureSpace(doc, y, h + 4, draft);
     if (y === MARGIN) drawCourseHeader();
-    const reason = course.manual_reason ? `Motif : ${course.manual_reason}` : "";
-    const h = reason ? 38 : 28;
     doc.font(BODY).fontSize(8.5).fillColor(course.included ? COLORS.text : COLORS.muted);
     doc.text(fmtDate(course.starts_at), MARGIN + 7, y + 7, { width: 92 });
     doc.text(course.service_name, MARGIN + 104, y + 7, { width: 248 });
-    if (reason) doc.fontSize(7.5).fillColor(COLORS.muted).text(reason, MARGIN + 104, y + 20, { width: 248 });
+    subLines.forEach((line, i) => {
+      doc.font(BODY).fontSize(7.5).fillColor(COLORS.muted).text(line, MARGIN + 104, y + 20 + i * 11, { width: 248 });
+    });
     doc.font(BODY).fontSize(8.5).fillColor(COLORS.text).text(
       coachPaymentCourseSourceLabel(course),
       MARGIN + 360,
@@ -168,7 +181,7 @@ export function renderCoachPaymentPdf(detail: StatementDetail): Promise<Buffer> 
     y += 30;
   }
 
-  y = ensureSpace(doc, y + 20, 145, draft);
+  y = ensureSpace(doc, y + 20, 170, draft);
   doc.font(BOLD).fontSize(12).fillColor(COLORS.text).text("Calcul", MARGIN, y);
   y += 22;
   doc.font(BODY).fontSize(9).fillColor(COLORS.text);
@@ -177,6 +190,18 @@ export function renderCoachPaymentPdf(detail: StatementDetail): Promise<Buffer> 
   doc.text(`${statement.course_count} séance(s) comptée(s)`, MARGIN, y);
   doc.font(BOLD).text(fmtXof(statement.base_total_xof), MARGIN, y, { width: CONTENT_W, align: "right" });
   y += 24;
+
+  if (statement.holiday_course_count > 0) {
+    y = ensureSpace(doc, y, 25, draft);
+    doc.font(BODY).fontSize(9).fillColor(COLORS.text).text(
+      `Majoration jours fériés (+50 %) · ${statement.holiday_course_count} séance(s)`,
+      MARGIN,
+      y,
+      { width: CONTENT_W - 140 },
+    );
+    doc.font(BOLD).text(`+ ${fmtXof(statement.holiday_bonus_xof)}`, MARGIN, y, { width: CONTENT_W, align: "right" });
+    y += 24;
+  }
 
   for (const adjustment of adjustments) {
     y = ensureSpace(doc, y, 25, draft);

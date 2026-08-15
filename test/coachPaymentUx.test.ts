@@ -3,7 +3,7 @@ import {
   coachPaymentCourseBuckets,
   coachPaymentState,
 } from "../src/domain/coachPaymentRules.js";
-import { renderCoachPaymentsDashboard } from "../src/admin/coachPaymentsPage.js";
+import { coachPaymentBanner, renderCoachPaymentsDashboard } from "../src/admin/coachPaymentsPage.js";
 import type {
   CoachPaymentCockpitStatement,
   CoachPaymentProfile,
@@ -29,6 +29,8 @@ function statement(overrides: Partial<CoachPaymentCockpitStatement> = {}): Coach
     synced_at: new Date("2026-07-01T00:00:00Z"),
     course_count: 3,
     base_total_xof: 28_500,
+    holiday_course_count: 0,
+    holiday_bonus_xof: 0,
     adjustment_total_xof: 0,
     total_xof: 28_500,
     validated_at: null,
@@ -95,6 +97,14 @@ describe("shared coach payment state", () => {
       coachLinked: true,
       now,
     }).status).toBe("À resynchroniser");
+  });
+});
+
+describe("coach payment banner", () => {
+  it("confirms holiday additions and removals", () => {
+    expect(coachPaymentBanner("holiday-added")).toContain("Jour férié ajouté");
+    expect(coachPaymentBanner("holiday-added")).toContain("recalculés");
+    expect(coachPaymentBanner("holiday-removed")).toContain("Jour férié retiré");
   });
 });
 

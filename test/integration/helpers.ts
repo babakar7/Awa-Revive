@@ -913,6 +913,7 @@ export async function truncateAll(): Promise<void> {
               processed_webhooks, orange_money_verifications, handoffs, slot_cache, delivery_orders,
               staff_contacts, staff_schedules, class_plan_schedules, notification_log, invoices,
               coach_payment_profiles, coach_payment_statements, coach_payment_send_log,
+              coach_payment_holidays,
               multi_session_commitments, multi_session_commitment_items,
               app_state, ad_insights_daily cascade`,
   );

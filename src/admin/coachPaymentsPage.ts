@@ -1,5 +1,6 @@
 import type {
   CoachPaymentCockpitStatement,
+  CoachPaymentHoliday,
   CoachPaymentProfile,
   StatementDetail,
 } from "../domain/coachPaymentRepo.js";
@@ -97,6 +98,8 @@ export function coachPaymentBanner(
     correction: "Nouvelle version corrective créée.",
     sent: "PDF envoyé par e-mail et envoi journalisé.",
     paid: "État marqué comme payé.",
+    "holiday-added": "Jour férié ajouté. Les brouillons concernés ont été recalculés.",
+    "holiday-removed": "Jour férié retiré. Les brouillons concernés ont été recalculés.",
   };
   if (error) return `<div class="card warn">⚠️ ${esc(error)}</div>`;
   if (done === "prepared") {
@@ -170,8 +173,19 @@ export function renderCoachPaymentsDashboard(args: {
   ${rows ? `<div class="card payment-cockpit-table"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Coach</th><th>Statut</th><th>Reformer</th><th>Mat</th><th>Manuel</th><th>Anomalies</th><th class="right">Montant</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>` : `<div class="card empty"><b>Aucune fiche coach active</b><p>Ajoutez ou réactivez une fiche depuis les réglages.</p></div>`}`;
 }
 
+function holidayDateLabel(isoDate: string): string {
+  return new Date(`${isoDate}T00:00:00Z`).toLocaleDateString("fr-FR", {
+    timeZone: "Africa/Dakar",
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
+}
+
 export function renderCoachPaymentSettings(args: {
   profiles: CoachPaymentProfile[];
+  holidays: CoachPaymentHoliday[];
   resources: WixStaffResource[];
   wixError?: string;
   banner: string;
@@ -212,8 +226,15 @@ export function renderCoachPaymentSettings(args: {
       <button class="act" type="submit">Enregistrer la fiche</button>
     </form></details>`;
   }).join("");
+  const holidayRows = args.holidays
+    .map((h) => `<tr><td data-label="Date"><b>${esc(holidayDateLabel(h.holiday_date))}</b><div class="muted">${esc(h.holiday_date)}</div></td><td data-label="Motif">${esc(h.label)}</td><td data-label="Action"><form method="post" action="${BASE}/reglages/feries/${esc(h.id)}/supprimer" data-confirm="Retirer ce jour férié ? Les brouillons concernés seront recalculés."><button class="act act--ghost act--sm" type="submit">Retirer</button></form></td></tr>`)
+    .join("");
+  const holidaysSection = `<div class="section-header"><h2>Jours fériés (+50 %)</h2><span class="badge badge--amber">${args.holidays.length}</span></div>
+    <div class="card"><p class="muted" style="margin:.1rem 0 .7rem">Chaque séance donnée un jour férié est majorée de 50 % (calendrier de Dakar). Les états déjà validés ne sont pas recalculés.</p>
+    <form class="row" method="post" action="${BASE}/reglages/feries"><label>Date<input type="date" name="holiday_date" required></label><label style="flex:1">Motif<input name="label" maxlength="100" required placeholder="Tabaski"></label><button class="act" type="submit">Ajouter le jour férié</button></form></div>
+    ${holidayRows ? `<div class="card"><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Date</th><th>Motif</th><th></th></tr></thead><tbody>${holidayRows}</tbody></table></div></div>` : `<div class="card empty"><b>Aucun jour férié défini</b><p>Ajoutez un jour ci-dessus pour appliquer la majoration de 50 %.</p></div>`}`;
   const script = `<script>document.querySelectorAll('select[data-email-target]').forEach(function(s){s.addEventListener('change',function(){var o=s.options[s.selectedIndex];var input=document.getElementById(s.dataset.emailTarget);if(o&&o.dataset.email&&input&&!input.value)input.value=o.dataset.email;});});var add=document.querySelector('[data-new-coach] select[name="wix_resource_id"]');if(add){add.addEventListener('change',function(){var o=add.options[add.selectedIndex];var input=add.form.querySelector('input[name="email"]');if(input)input.value=o&&o.dataset.email?o.dataset.email:'';});}</script>`;
-  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Paiements coachs · Propriétaire</span><h2>Réglages des coachs</h2><p>Ajoutez une coach existante dans Wix et définissez ses conditions pour les prochains brouillons.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}">États mensuels</a></div></header>${args.banner}${args.wixError ? `<div class="card warn">Ressources Wix indisponibles : ${esc(args.wixError)}</div>` : ""}<p class="subhead">Les états déjà créés conservent les conditions figées lors de leur création.</p>${addCard}<div class="section-header"><h2>Fiches coachs</h2><span class="badge badge--gray">${args.profiles.length}</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach</b><p>Ajoutez une coach depuis Wix pour commencer.</p></div>`}${script}`;
+  return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">Paiements coachs · Propriétaire</span><h2>Réglages des coachs</h2><p>Ajoutez une coach existante dans Wix et définissez ses conditions pour les prochains brouillons.</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}">États mensuels</a></div></header>${args.banner}${args.wixError ? `<div class="card warn">Ressources Wix indisponibles : ${esc(args.wixError)}</div>` : ""}<p class="subhead">Les états déjà créés conservent les conditions figées lors de leur création.</p>${addCard}<div class="section-header"><h2>Fiches coachs</h2><span class="badge badge--gray">${args.profiles.length}</span></div>${cards || `<div class="card empty"><b>Aucune fiche coach</b><p>Ajoutez une coach depuis Wix pour commencer.</p></div>`}${holidaysSection}${script}`;
 }
 
 function tariffFields(detail: StatementDetail): string {
@@ -288,7 +309,8 @@ export function renderCoachPaymentStatement(args: {
     const action = cancelled && !c.included
       ? "Inclure exceptionnellement"
       : c.included ? "Exclure" : "Inclure";
-    return `<tr style="${!priority && !c.included ? "opacity:.55" : ""}"><td>${date(c.starts_at)}<div class="muted">${c.source === "manual" ? `Manuel · ${esc(c.manual_reason)}` : `Wix · ${esc(c.wix_event_id)}`}</div></td><td>${esc(c.service_name)}</td><td>${attendance}</td><td>${counted}</td>${draft ? `<td><form method="post" action="${BASE}/etats/${esc(statement.id)}/cours/${esc(c.id)}/toggle"><button class="act act--ghost act--sm" type="submit">${action}</button></form></td>` : ""}</tr>`;
+    const holidayBadge = c.holiday ? ` <span class="badge badge--amber">Férié +50 %</span>` : "";
+    return `<tr style="${!priority && !c.included ? "opacity:.55" : ""}"><td>${date(c.starts_at)}${holidayBadge}<div class="muted">${c.source === "manual" ? `Manuel · ${esc(c.manual_reason)}` : `Wix · ${esc(c.wix_event_id)}`}</div></td><td>${esc(c.service_name)}</td><td>${attendance}</td><td>${counted}</td>${draft ? `<td><form method="post" action="${BASE}/etats/${esc(statement.id)}/cours/${esc(c.id)}/toggle"><button class="act act--ghost act--sm" type="submit">${action}</button></form></td>` : ""}</tr>`;
   }).join("");
   const columns = draft ? 5 : 4;
   const reviewSummary = priorityCourses.length
@@ -326,6 +348,16 @@ export function renderCoachPaymentStatement(args: {
       ? `<a class="act act--ok" href="#reglement">Marquer payé</a>`
       : `<a class="act" href="${BASE}/etats/${esc(statement.id)}/pdf" target="_blank">Ouvrir le PDF</a>`;
   const bucketSummary = `<div class="payment-buckets"><article><span>Manuel</span><b>${buckets.manual}</b></article><article><span>Pilates Mat</span><b>${buckets.mat}</b></article><article><span>Reformer</span><b>${buckets.reformer}</b></article><article><span>Autres Wix</span><b>${buckets.otherWix}</b></article></div>`;
+  const exclusionReason = (c: typeof courses[number]): string => {
+    if (c.source === "wix" && c.wix_status === "CANCELLED") return "Séance annulée";
+    if (c.source === "wix" && c.participant_count === 0) return "Séance vide (0 participant)";
+    if (c.manual_decision) return "Exclue manuellement";
+    return "Non comptée";
+  };
+  const excludedCourses = courses.filter((c) => !c.included).sort(chronological);
+  const excludedRecap = excludedCourses.length
+    ? `<div class="card"><div class="section-header"><h2>Séances exclues du calcul</h2><span class="badge badge--gray">${excludedCourses.length}</span></div><p class="muted" style="margin:.1rem 0 .6rem">Ces séances ne sont pas comptées dans le total ci-dessus.</p><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Motif d'exclusion</th></tr></thead><tbody>${excludedCourses.map((c) => `<tr><td>${date(c.starts_at)}<div class="muted">${c.source === "manual" ? "Manuel" : `Wix · ${esc(c.wix_event_id)}`}</div></td><td>${esc(c.service_name)}</td><td>${esc(exclusionReason(c))}</td></tr>`).join("")}</tbody></table></div></div>`
+    : "";
 
   return `<header class="page-header"><div class="page-header-copy"><span class="eyebrow">État mensuel · version ${statement.version} · Propriétaire</span><h2>${esc(statement.coach_name_snapshot)} — ${esc(monthLabel(month))}</h2><p>${esc(tariffLabel(tariffFromJson(statement.tariff_json)))}</p></div><div class="page-header-actions"><a class="act act--ghost" href="${BASE}?month=${esc(month)}">États du mois</a><a class="act act--ghost" href="${BASE}/etats/${esc(statement.id)}/pdf" target="_blank">PDF ${draft ? "brouillon" : "validé"}</a>${correction}</div></header>${args.banner}
   <div class="payment-sticky-summary"><div><span>Montant</span><b>${xof(statement.total_xof)}</b></div><div><span>Statut</span>${cockpitStatusBadge(state.status)}</div><div><span>Cours</span><b>${statement.course_count}</b></div><div><span>Anomalies</span><b>${reviewCount}</b></div><div class="payment-primary-action">${primaryAction}</div></div>
@@ -333,6 +365,7 @@ export function renderCoachPaymentStatement(args: {
   ${checklist}${bucketSummary}
   ${reviewSummary}${priorityBlock}
   <details class="card payment-panel"><summary><span><b>Autres séances (${statement.course_count} comptées au total)</b><small>Séances normales repliées</small></span></summary><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Participants Wix</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${otherRows || `<tr><td colspan="${columns}"><div class="empty"><b>Aucune autre séance</b><p>Synchronisez Wix ou ajoutez une séance manuelle.</p></div></td></tr>`}</tbody></table></div></details>
-  <div class="card"><h2>Calcul</h2><div class="table-wrap"><table><tbody><tr><td>${statement.course_count} séance(s) selon la formule figée</td><td class="right"><b>${xof(statement.base_total_xof)}</b></td>${draft ? "<td></td>" : ""}</tr>${adjustmentRows}<tr><td><b>Total à payer</b></td><td class="right"><b style="font-size:1.12rem">${xof(statement.total_xof)}</b></td>${draft ? "<td></td>" : ""}</tr></tbody></table></div></div>
+  <div class="card"><h2>Calcul</h2><div class="table-wrap"><table><tbody><tr><td>${statement.course_count} séance(s) selon la formule figée</td><td class="right"><b>${xof(statement.base_total_xof)}</b></td>${draft ? "<td></td>" : ""}</tr>${statement.holiday_course_count > 0 ? `<tr><td>Majoration jours fériés (+50 %) · ${statement.holiday_course_count} séance(s)</td><td class="right"><b>+ ${xof(statement.holiday_bonus_xof)}</b></td>${draft ? "<td></td>" : ""}</tr>` : ""}${adjustmentRows}<tr><td><b>Total à payer</b></td><td class="right"><b style="font-size:1.12rem">${xof(statement.total_xof)}</b></td>${draft ? "<td></td>" : ""}</tr></tbody></table></div></div>
+  ${excludedRecap}
   ${draftTools}${sendBlock}<div id="reglement">${paidBlock}</div><details class="card payment-panel"><summary><span><b>Versions</b><small>${versions.length} version(s)</small></span></summary><ul>${versionsHtml}</ul></details><details class="card payment-panel"><summary><span><b>Historique des envois</b><small>${sends.length} tentative(s)</small></span></summary>${sendsHtml}</details>`;
 }

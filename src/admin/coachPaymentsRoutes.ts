@@ -66,6 +66,19 @@ function parseTariff(body: Record<string, unknown>): CoachTariff {
   throw new payments.CoachPaymentError("Formule tarifaire invalide");
 }
 
+/** Accept only a real ISO calendar day (rejects 2026-02-30 and the like). */
+function parseHolidayDate(raw: unknown): string {
+  const text = String(raw ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    throw new payments.CoachPaymentError("Date invalide (format attendu : AAAA-MM-JJ)");
+  }
+  const parsed = new Date(`${text}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== text) {
+    throw new payments.CoachPaymentError("Date invalide");
+  }
+  return text;
+}
+
 function validEmail(raw: unknown): string | null {
   const email = String(raw ?? "").trim().toLowerCase();
   if (!email) return null;
@@ -316,7 +329,10 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
 
       section.get("/reglages", async (req, reply) => {
         const query = req.query as { done?: string; err?: string };
-        const profiles = await payments.listProfiles();
+        const [profiles, holidays] = await Promise.all([
+          payments.listProfiles(),
+          payments.listHolidays(),
+        ]);
         let resources: Awaited<ReturnType<typeof listStaffResources>> = [];
         let wixError: string | undefined;
         try {
@@ -326,6 +342,7 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
         }
         const body = renderCoachPaymentSettings({
           profiles,
+          holidays,
           resources,
           wixError,
           banner: coachPaymentBanner(query.done, query.err),
@@ -385,6 +402,36 @@ export function registerCoachPaymentRoutes(admin: FastifyInstance): void {
         } catch (error) {
           return reply.redirect(`${BASE}/reglages?err=${encodeURIComponent(message(error))}`, 303);
         }
+      });
+
+      // Static `feries` wins over the parametric `/reglages/:profileId` in
+      // find-my-way, and `validUuid` rejects "feries" as a profile id anyway.
+      section.post("/reglages/feries", async (req, reply) => {
+        const body = (req.body ?? {}) as Record<string, string>;
+        try {
+          const date = parseHolidayDate(body.holiday_date);
+          const label = String(body.label ?? "").trim();
+          if (!label) throw new payments.CoachPaymentError("Le motif est obligatoire");
+          if (label.length > 100) throw new payments.CoachPaymentError("Motif trop long (100 caractères maximum)");
+          await payments.addHoliday({ date, label, createdBy: req.adminUser ?? null });
+          req.log.info({ date, label, by: req.adminUser }, "Coach payment holiday added");
+          return reply.redirect(`${BASE}/reglages?done=holiday-added`, 303);
+        } catch (error) {
+          return reply.redirect(`${BASE}/reglages?err=${encodeURIComponent(message(error))}`, 303);
+        }
+      });
+
+      section.post("/reglages/feries/:holidayId/supprimer", async (req, reply) => {
+        const { holidayId } = req.params as { holidayId: string };
+        const removed = await payments.removeHoliday(holidayId);
+        if (!removed) {
+          return reply.redirect(`${BASE}/reglages?err=${encodeURIComponent("Jour férié introuvable")}`, 303);
+        }
+        req.log.info(
+          { date: removed.holiday_date, label: removed.label, by: req.adminUser },
+          "Coach payment holiday removed",
+        );
+        return reply.redirect(`${BASE}/reglages?done=holiday-removed`, 303);
       });
 
       section.post("/etats", async (req, reply) => {
