@@ -840,13 +840,35 @@ export function registerAdmin(app: FastifyInstance): void {
         const query = req.query as Record<string, string | undefined>;
         const startDate = config.PAYMENTS_LEDGER_START_DATE;
         const today = new Date().toISOString().slice(0, 10);
+        const q = String(query.q ?? "").trim() || undefined;
+
+        // Bookings export mirrors the "par date de r\u00E9servation" view exactly:
+        // no ledger start-date clamp (the view has none) and an explicit export
+        // limit instead of the 1,000-row default (no silent truncation).
+        if (query.view === "bookings") {
+          const bFrom = /^\d{4}-\d{2}-\d{2}$/.test(query.from ?? "") ? String(query.from) : today;
+          const bTo = /^\d{4}-\d{2}-\d{2}$/.test(query.to ?? "") ? String(query.to) : today;
+          const from = new Date(`${bFrom}T00:00:00Z`);
+          const to = new Date(`${bTo}T00:00:00Z`); to.setUTCDate(to.getUTCDate() + 1);
+          const bookings = await paymentsLedger.bookingsByServiceDate(from, to, 100_000, q);
+          const header = ["date_cours","client","telephone","cours","places","source","methode","montant_xof","paye_le","plan"];
+          const lines = bookings.map((b) => {
+            const method = b.paymentExcluded ? "exclu" : b.paymentMethod === "wix_unreconciled" ? "non_rapproche" : (b.paymentMethod || "a_qualifier");
+            return [b.slotStart.toISOString(), b.clientName, b.clientPhone, b.serviceName, b.participants,
+              b.source, method, b.amountXof, b.paidAt ? b.paidAt.toISOString() : "", b.planName ?? ""]
+              .map(csvCell).join(";");
+          });
+          return reply.header("Content-Disposition", `attachment; filename="reservations-${bFrom}-${bTo}.csv"`)
+            .type("text/csv; charset=utf-8").send(`\uFEFF${header.map(csvCell).join(";")}\r\n${lines.join("\r\n")}`);
+        }
+
         const fromText = /^\d{4}-\d{2}-\d{2}$/.test(query.from ?? "") && String(query.from) >= startDate ? String(query.from) : startDate;
         const toText = /^\d{4}-\d{2}-\d{2}$/.test(query.to ?? "") ? String(query.to) : today;
         const from = new Date(`${fromText}T00:00:00Z`);
         const to = new Date(`${toText}T00:00:00Z`); to.setUTCDate(to.getUTCDate() + 1);
         const rows = await paymentsLedger.movements({
           from, to, method: query.method || undefined, source: query.source || undefined,
-          type: query.type || undefined, q: String(query.q ?? "").trim() || undefined,
+          type: query.type || undefined, q,
         }, 1_000_000);
         const header = ["date","origine","type","source","client","telephone","libelle","methode","montant_xof","date_estimee","exclusion"];
         const lines = rows.map((r) => [r.occurredAt.toISOString(),r.origin,r.movementType,r.sourceKind,

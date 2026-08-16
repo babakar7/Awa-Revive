@@ -262,8 +262,9 @@ function bookingsView(d: PaymentsPageData): string {
   const wixCount = d.bookings.filter((row) => row.source === "wix").length;
   const period = d.from === d.to ? `du ${esc(d.from)}` : `du ${esc(d.from)} au ${esc(d.to)}`;
   const comptable = new URLSearchParams({ view: "payments", from: d.from, to: d.to, ...(d.q ? { q: d.q } : {}) });
+  const csv = new URLSearchParams({ view: "bookings", from: d.from, to: d.to, ...(d.q ? { q: d.q } : {}) });
   return `<section class="anchor-target" id="pay-reservations">
-    <div class="card"><div class="section-header"><div><span class="eyebrow">Date du cours</span><h2>Clients ayant une réservation ${period}</h2></div></div>${rangeBar(d)}${searchForm(d)}<p class="muted">Cette vue suit la date de la séance, quelle que soit la date du paiement. Réservations confirmées du studio (Awa et Wix). <a href="/admin/paiements?${esc(comptable.toString())}">Voir la vue comptable →</a></p></div>
+    <div class="card"><div class="section-header"><div><span class="eyebrow">Date du cours</span><h2>Clients ayant une réservation ${period}</h2></div><a class="act act--ghost act--sm" href="/admin/paiements/export.csv?${esc(csv.toString())}">Exporter CSV</a></div>${rangeBar(d)}${searchForm(d)}<p class="muted">Cette vue suit la date de la séance, quelle que soit la date du paiement. Réservations confirmées du studio (Awa et Wix). <a href="/admin/paiements?${esc(comptable.toString())}">Voir la vue comptable →</a></p></div>
     <div class="payment-booking-stats"><article><span>Clients</span><b>${clientCount}</b></article><article><span>Réservations</span><b>${d.bookings.length}</b></article><article><span>dont Wix</span><b>${wixCount}</b></article><article><span>Places</span><b>${places}</b></article></div>
     ${bookingClientGroups(d.bookings, d)}
   </section>`;

@@ -316,7 +316,7 @@ export async function bookingsByServiceDate(
               mv.occurred_at,
               'wix'::text, null,
               coalesce(r.matched_client_id::text, 'wix:' || coalesce(r.wix_contact_id, r.booking_id)),
-              mv.movement_id, coalesce(mv.payment_excluded, false),
+              mv.movement_id::text, coalesce(mv.payment_excluded, false),
               lower(coalesce(cl.name, r.client_name, r.booking_id))
          from wix_booking_records r
          left join clients cl on cl.id = r.matched_client_id

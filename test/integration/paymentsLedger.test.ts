@@ -233,3 +233,106 @@ describe("payment ledger persistence", () => {
     expect(bookings.body).not.toContain("· membership");
   });
 });
+
+describe("payments search + requalify bridge + bookings export", () => {
+  const win = { from: new Date("2026-08-01T00:00:00Z"), to: new Date("2026-09-01T00:00:00Z") };
+
+  async function seedWixBooking(orderId: string, opts: { session: string; status?: string } = { session: "2026-08-15T09:00:00Z" }) {
+    await pool.query(
+      `insert into wix_booking_records
+        (booking_id, client_name, client_phone, service_name, session_start, status,
+         payment_status, wix_order_id, synced_at, last_seen_at)
+       values ($1,'Awa Ba','+221778299595','Sculpt',$2,$3,'PAID',$4, now(), now())`,
+      [`bk-${orderId}`, opts.session, opts.status ?? "CONFIRMED", orderId],
+    );
+  }
+  async function seedWixMovement(orderId: string): Promise<string> {
+    const res = await pool.query(
+      `insert into wix_payment_movements
+        (wix_order_id,source,movement_type,wix_entry_id,provider_status,occurred_at,
+         amount_xof,currency,label,provider_method,raw_method,offline,raw)
+       values ($1,'ecom','payment',$2,'APPROVED','2026-08-11',12000,'XOF','Sculpt',null,'Pay in Person',true,'{}') returning id`,
+      [orderId, `tx-${orderId}`],
+    );
+    return res.rows[0].id;
+  }
+
+  it("filters movements by client name, escapes wildcards, and matches spaced phone digits", async () => {
+    const awa = await seedClient({ name: "Awa Ba", wa_phone: "221778299595" });
+    const binta = await seedClient({ name: "Binta Fall", wa_phone: "221770000002" });
+    await seedBooking(awa.id, { status: "BOOKED", slot_start: "2026-08-15T09:00:00Z", paid_at: "2026-08-11T10:00:00Z", payment_method: "maxit" });
+    await seedBooking(binta.id, { status: "BOOKED", slot_start: "2026-08-16T09:00:00Z", paid_at: "2026-08-12T10:00:00Z", payment_method: "wave" });
+
+    const byName = await movements({ ...win, q: "awa" });
+    expect(byName.map((r) => r.clientName)).toEqual(["Awa Ba"]);
+    // A bare wildcard must be escaped, not match everyone.
+    expect(await movements({ ...win, q: "%" })).toHaveLength(0);
+    // Spaced phone digits still match.
+    expect((await movements({ ...win, q: "77 829 95 95" })).map((r) => r.clientName)).toEqual(["Awa Ba"]);
+    // Combined with a method filter.
+    expect(await movements({ ...win, q: "awa", method: "wave" })).toHaveLength(0);
+    expect((await movements({ ...win, q: "awa", method: "maxit" })).map((r) => r.clientName)).toEqual(["Awa Ba"]);
+  });
+
+  it("resolves the correlated movement's latest tag into the booking view (cash, then exclu)", async () => {
+    await seedWixBooking("ord-1");
+    const movementId = await seedWixMovement("ord-1");
+    const bwin = { from: new Date("2026-08-15T00:00:00Z"), to: new Date("2026-08-16T00:00:00Z") };
+
+    let rows = await bookingsByServiceDate(bwin.from, bwin.to);
+    expect(rows[0]).toMatchObject({ source: "wix", paymentMethod: "wix_unreconciled", movementId, paymentExcluded: false });
+
+    await appendTagEvent({ targetId: movementId, method: "cash", taggedBy: "team" });
+    rows = await bookingsByServiceDate(bwin.from, bwin.to);
+    expect(rows[0]).toMatchObject({ paymentMethod: "cash", paymentExcluded: false });
+
+    await appendTagEvent({ targetId: movementId, method: "exclu", note: "Doublon", taggedBy: "team" });
+    rows = await bookingsByServiceDate(bwin.from, bwin.to);
+    expect(rows[0].paymentExcluded).toBe(true);
+  });
+
+  it("honors a valid same-page return_to and rejects a foreign one", async () => {
+    const movementId = await seedWixMovement("ord-2");
+    const login = await app.inject({ method: "POST", url: "/admin/login",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ username: "revive", password: "revive@5000", next: "/admin/paiements" }).toString() });
+    const cookie = String(login.headers["set-cookie"]).split(";")[0];
+
+    const ok = await app.inject({ method: "POST", url: "/admin/paiements/tag", headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ target_id: movementId, method: "cash", note: "ok", return_to: "/admin/paiements?view=bookings&q=awa#pay-reservations" }).toString() });
+    expect(ok.statusCode).toBe(303);
+    expect(ok.headers.location).toContain("view=bookings");
+    expect(ok.headers.location).toContain("q=awa");
+
+    const evil = await app.inject({ method: "POST", url: "/admin/paiements/tag", headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ target_id: movementId, method: "cash", note: "again", return_to: "https://evil.example/phish" }).toString() });
+    expect(evil.statusCode).toBe(303);
+    expect(evil.headers.location).not.toContain("evil.example");
+    expect(evil.headers.location).toContain("view=payments");
+  });
+
+  it("exports the bookings view without the ledger start-date clamp and beyond 1,000 rows", async () => {
+    const client = await seedClient({ name: "Marathon", wa_phone: "221770000009" });
+    // 1,001 confirmed bookings on one in-window class date — proves the export
+    // limit is not the 1,000-row default.
+    await pool.query(
+      `insert into pending_bookings
+         (client_id, service_id, service_name, event_id, slot_start, amount_xof, status, participants, payment_method, paid_at)
+       select $1,'svc','Cours','ev','2026-08-15T09:00:00Z',12000,'BOOKED',1,'wave','2026-08-11T10:00:00Z'
+         from generate_series(1,1001)`,
+      [client.id],
+    );
+    const login = await app.inject({ method: "POST", url: "/admin/login",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ username: "revive", password: "revive@5000", next: "/admin/paiements" }).toString() });
+    const cookie = String(login.headers["set-cookie"]).split(";")[0];
+
+    // from is BEFORE PAYMENTS_LEDGER_START_DATE — the bookings export must not clamp it away.
+    const res = await app.inject({ method: "GET", url: "/admin/paiements/export.csv?view=bookings&from=2020-01-01&to=2026-08-15", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-disposition"]).toContain("reservations-2020-01-01-2026-08-15.csv");
+    expect(res.body).toContain('"date_cours";"client";"telephone"');
+    const dataLines = res.body.trim().split("\r\n").length - 1; // minus header
+    expect(dataLines).toBe(1001);
+  });
+});
