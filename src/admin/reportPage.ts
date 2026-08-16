@@ -19,6 +19,7 @@ export function renderAdminReport(report: AdminReport, canViewAudit = false): st
   <div class="stat"><span>Réservations</span><b>${report.bookings}</b><span>${conversion === null ? "—" : `${conversion} réservations / 100 clients actifs`}</span></div>
   <div class="stat"><span>Clients servis</span><b>${report.servedRate === null ? "—" : `${report.servedRate} %`}</b><span>hors abandons libres</span></div>
 </div>
+<p class="muted">Ces chiffres restent au périmètre Awa (réservations et ventes traitées par le bot). Les réservations et paiements faits directement dans Wix (réception) apparaissent dans <a href="/admin/paiements">Paiements</a> et <a href="/admin/bookings">Réservations</a> ; le passage du rapport au périmètre studio complet (comptage par date de création, recettes depuis le registre unifié) est le prochain chantier.</p>
 <div class="section-header"><div><span class="eyebrow">Financier</span><h2>Encaissements enregistrés</h2></div><b>${fmtFcfa(revenue)}</b></div>
 <div class="card report-breakdown"><div><span>Cours</span><b>${fmtFcfa(report.bookingRevenue)}</b></div><div><span>Abonnements</span><b>${fmtFcfa(report.planRevenue)}</b></div><div><span>Bar</span><b>${fmtFcfa(report.cafeRevenue)}</b></div><div><span>Comparaison</span><b>${trend(revenue, report.previousRevenue)}</b></div></div>
 <div class="section-header"><div><span class="eyebrow">Service client</span><h2>Charge de suivi</h2></div></div>

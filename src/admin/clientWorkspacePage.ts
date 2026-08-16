@@ -51,10 +51,16 @@ function operationalHistory(data: ClientWorkspace): string {
     ...data.giftCards.map((row) => ({ label: `Carte cadeau — ${row.recipient_name}`, href: `/admin/cartes-cadeaux/${row.id}`, at: row.created_at })),
   ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
     .map((row) => `<li><a href="${esc(row.href)}"><b>${esc(row.label)}</b></a><span class="muted">${fmtDate(row.at)}</span></li>`).join("");
+  const wixRows = [
+    ...data.wixBookings.map((row) => `<tr><td>${row.session_start ? fmtDate(new Date(row.session_start)) : "—"}</td><td><b>${esc(row.service_name ?? "Cours")}</b><div class="muted">Réservation Wix · ${esc(String(row.status ?? ""))}</div></td><td>—</td></tr>`),
+    ...data.wixPlanOrders.map((row) => `<tr><td>${row.created_date ? fmtDate(new Date(row.created_date)) : "—"}</td><td><b>${esc(row.plan_name ?? "Abonnement")}</b><div class="muted">Abonnement Wix · ${esc(String(row.order_status ?? ""))}</div></td><td>${row.amount_xof ? fmtFcfa(Number(row.amount_xof)) : "—"}</td></tr>`),
+  ].join("");
+  const wixCount = data.wixBookings.length + data.wixPlanOrders.length;
   const table = (rows: string, emptyText: string) => rows ? `<div class="table-wrap"><table><tbody>${rows}</tbody></table></div>` : empty(emptyText);
   return `<div class="workspace-history-grid">
   <details class="card" open><summary><b>Réservations (${data.bookings.length})</b></summary>${table(bookings, "Aucune réservation locale pour ce client.")}</details>
   <details class="card"><summary><b>Abonnements (${data.plans.length})</b></summary>${table(plans, "Aucun abonnement vendu par Awa.")}</details>
+  ${wixCount ? `<details class="card"${data.bookings.length ? "" : " open"}><summary><b>Historique Wix — réception (${wixCount})</b></summary>${table(wixRows, "")}</details>` : ""}
   <details class="card"><summary><b>Bar et livraisons (${data.cafeOrders.length + data.deliveries.length})</b></summary>${table(orders, "Aucune commande associée.")}</details>
   <details class="card"><summary><b>Documents (${docs ? docs.split("<li>").length - 1 : 0})</b></summary>${docs ? `<ul class="document-list">${docs}</ul>` : empty("Aucun document associé à ce numéro.")}</details>
 </div>`;

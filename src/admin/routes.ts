@@ -215,6 +215,66 @@ import { wixPaymentSyncState } from "../domain/wixPaymentSync.js";
 
 export { escapeHtml } from "./helpers.js";
 
+const WIX_STATUS_LABELS: Record<string, string> = {
+  CONFIRMED: "Confirmée",
+  PENDING: "En attente",
+  CANCELED: "Annulée",
+  DECLINED: "Refusée",
+  WAITING_LIST: "Liste d’attente",
+  ACTIVE: "Active",
+  ENDED: "Terminée",
+  PAUSED: "En pause",
+};
+
+function wixStatusBadge(status: string | null): string {
+  const raw = String(status ?? "").toUpperCase();
+  const label = WIX_STATUS_LABELS[raw] ?? (raw || "—");
+  const tone = raw === "CONFIRMED" || raw === "ACTIVE" ? "badge--green"
+    : raw === "CANCELED" || raw === "DECLINED" ? "badge--gray"
+    : "badge--amber";
+  return `<span class="badge ${tone}">${escapeHtml(label)}</span>`;
+}
+
+function wixClientCell(row: { matched_client_id: string | null; client_name: string | null; client_phone: string | null }): string {
+  const name = escapeHtml(row.client_name ?? "Client Wix");
+  const inner = row.matched_client_id
+    ? `<a href="/admin/conversations/${row.matched_client_id}">${name}</a>`
+    : `${name} <span class="muted">(non rattachée)</span>`;
+  return `${inner}<div class="muted">${escapeHtml(row.client_phone ?? "")}</div>`;
+}
+
+function wixBookingsSection(rows: any[]): string {
+  const body = rows.length
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Séance</th><th>Client</th><th>Cours</th><th>Places</th><th>Statut Wix</th></tr></thead><tbody>${rows
+        .map((r) => `<tr>
+<td data-label="Séance">${r.session_start ? fmtDate(new Date(r.session_start)) : "—"}</td>
+<td data-label="Client">${wixClientCell(r)}</td>
+<td data-label="Cours"><b>${escapeHtml(r.service_name ?? "Cours")}</b></td>
+<td data-label="Places">${Number(r.participants ?? 1)}</td>
+<td data-label="Statut Wix">${wixStatusBadge(r.status)}</td>
+</tr>`)
+        .join("")}</tbody></table></div>`
+    : `<div class="empty"><b>Aucune réservation Wix directe</b><p>Aucune réservation faite en réception n’est enregistrée.</p></div>`;
+  return `<div class="section-header"><h2>Réservations faites dans Wix (réception)</h2><span class="badge badge--amber">${rows.length}</span></div>
+<div class="card">${body}</div>`;
+}
+
+function wixPlanOrdersSection(rows: any[]): string {
+  const body = rows.length
+    ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Acheté</th><th>Client</th><th>Formule</th><th>Montant</th><th>Statut Wix</th></tr></thead><tbody>${rows
+        .map((r) => `<tr>
+<td data-label="Acheté">${r.created_date ? fmtDate(new Date(r.created_date)) : "—"}</td>
+<td data-label="Client">${wixClientCell(r)}</td>
+<td data-label="Formule"><b>${escapeHtml(r.plan_name ?? "Abonnement")}</b></td>
+<td data-label="Montant">${r.amount_xof ? fmtFcfa(Number(r.amount_xof)) : "—"}</td>
+<td data-label="Statut Wix">${wixStatusBadge(r.order_status)}</td>
+</tr>`)
+        .join("")}</tbody></table></div>`
+    : `<div class="empty"><b>Aucun abonnement Wix direct</b><p>Aucune formule achetée directement dans Wix.</p></div>`;
+  return `<div class="section-header"><h2>Abonnements achetés dans Wix</h2><span class="badge badge--amber">${rows.length}</span></div>
+<div class="card">${body}</div>`;
+}
+
 function parseDeliveryRecipientFields(
   body: Record<string, string>,
 ):
@@ -1163,9 +1223,11 @@ export function registerAdmin(app: FastifyInstance): void {
         const query = req.query as Record<string, string | undefined>;
         const status = query.status?.toUpperCase();
         const period = query.period === "today" || query.period === "7" || query.period === "30" ? query.period : null;
-        const [bookings, planOrders] = await Promise.all([
+        const [bookings, planOrders, wixBookings, wixPlanOrders] = await Promise.all([
           q.listBookings(status, 100, period),
           q.listPlanOrders(status, 100, period),
+          q.listWixManualBookings(100),
+          q.listWixManualPlanOrders(100),
         ]);
         const bookingRows = bookings
           .map((b) => {
@@ -1209,7 +1271,9 @@ export function registerAdmin(app: FastifyInstance): void {
 <div class="section-header"><h2>Réservations</h2><span class="badge badge--gray">${bookings.length}</span></div>
 <div class="card">${bookingRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créée</th><th>Client</th><th>Cours</th><th>Paiement</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${bookingRows}</tbody></table></div>` : `<div class="empty"><b>Aucune réservation</b><p>Aucune réservation ne correspond à ce filtre.</p></div>`}</div>
 <div class="section-header"><h2>Abonnements vendus</h2><span class="badge badge--gray">${planOrders.length}</span></div>
-<div class="card">${planRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créé</th><th>Client</th><th>Formule</th><th>Paiement</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${planRows}</tbody></table></div>` : `<div class="empty"><b>Aucun abonnement</b><p>Aucune vente d’abonnement ne correspond à ce filtre.</p></div>`}</div>`;
+<div class="card">${planRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créé</th><th>Client</th><th>Formule</th><th>Paiement</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${planRows}</tbody></table></div>` : `<div class="empty"><b>Aucun abonnement</b><p>Aucune vente d’abonnement ne correspond à ce filtre.</p></div>`}</div>
+${wixBookingsSection(wixBookings)}
+${wixPlanOrdersSection(wixPlanOrders)}`;
         reply.type("text/html").send(await layout("Réservations", "/admin/bookings", body, { subtitle: status ? statusLabels[status] ?? status : "Toutes les activités", contentWidth: "wide" }));
       });
 

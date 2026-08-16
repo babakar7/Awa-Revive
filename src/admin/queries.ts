@@ -391,12 +391,14 @@ export interface ClientWorkspace {
   invoices: any[];
   quotes: any[];
   giftCards: any[];
+  wixBookings: any[];
+  wixPlanOrders: any[];
 }
 
 export async function getClientWorkspace(clientId: string, phone: string): Promise<ClientWorkspace> {
   const digits = phone.replace(/\D/g, "");
   const matchPhone = `regexp_replace(coalesce(client_phone,''), '\\D', '', 'g') = $1`;
-  const [bookings, plans, cafeOrders, deliveries, handoffs, reviewRows, invoices, quotes, giftCards] =
+  const [bookings, plans, cafeOrders, deliveries, handoffs, reviewRows, invoices, quotes, giftCards, wixBookings, wixPlanOrders] =
     await Promise.all([
       pool.query(`select * from pending_bookings where client_id=$1 order by created_at desc limit 20`, [clientId]),
       pool.query(`select * from pending_plan_orders where client_id=$1 order by created_at desc limit 20`, [clientId]),
@@ -407,6 +409,21 @@ export async function getClientWorkspace(clientId: string, phone: string): Promi
       pool.query(`select * from invoices where ${matchPhone} order by created_at desc limit 20`, [digits]),
       pool.query(`select * from quotes where ${matchPhone} order by created_at desc limit 20`, [digits]),
       pool.query(`select * from gift_cards where regexp_replace(coalesce(send_phone,''), '\\D', '', 'g')=$1 order by created_at desc limit 20`, [digits]),
+      // Wix-manual history for this client (identity certain via matched_client_id),
+      // deduplicated against Awa bookings by wix_booking_id.
+      pool.query(
+        `select * from wix_booking_records
+          where matched_client_id=$1 and invalidated_at is null
+            and not exists (select 1 from pending_bookings pb where pb.wix_booking_id = wix_booking_records.booking_id)
+          order by session_start desc nulls last limit 20`,
+        [clientId],
+      ),
+      pool.query(
+        `select * from wix_plan_order_records
+          where matched_client_id=$1 and invalidated_at is null
+          order by created_date desc nulls last limit 20`,
+        [clientId],
+      ),
     ]);
   return {
     bookings: bookings.rows,
@@ -418,6 +435,8 @@ export async function getClientWorkspace(clientId: string, phone: string): Promi
     invoices: invoices.rows,
     quotes: quotes.rows,
     giftCards: giftCards.rows,
+    wixBookings: wixBookings.rows,
+    wixPlanOrders: wixPlanOrders.rows,
   };
 }
 
@@ -537,6 +556,45 @@ export async function listPlanOrders(
        ${where}
       order by p.created_at desc limit $1`,
     params,
+  );
+  return res.rows;
+}
+
+/** Confirmed/other bookings made directly in Wix (reception), deduplicated
+ *  against Awa bookings by wix_booking_id. Enriched with the matched client. */
+export async function listWixManualBookings(limit = 100): Promise<any[]> {
+  const res = await pool.query(
+    `select r.booking_id, r.status, r.service_name, r.session_start,
+            coalesce(r.number_of_participants, 1) participants, r.created_date,
+            r.payment_status, r.match_basis, r.matched_client_id,
+            coalesce(cl.name, r.client_name) client_name,
+            coalesce(cl.wa_phone, r.client_phone) client_phone
+       from wix_booking_records r
+       left join clients cl on cl.id = r.matched_client_id
+      where r.invalidated_at is null
+        and not exists (select 1 from pending_bookings pb where pb.wix_booking_id = r.booking_id)
+        and (cl.id is null or not cl.is_test)
+      order by r.session_start desc nulls last, r.created_date desc nulls last
+      limit $1`,
+    [limit],
+  );
+  return res.rows;
+}
+
+/** Pricing-plan orders bought directly in Wix, with their exact plan name. */
+export async function listWixManualPlanOrders(limit = 100): Promise<any[]> {
+  const res = await pool.query(
+    `select o.order_id, o.plan_name, o.amount_xof, o.currency, o.order_status,
+            o.payment_status, o.created_date, o.matched_client_id,
+            coalesce(cl.name, o.buyer_name) client_name,
+            coalesce(cl.wa_phone, o.buyer_phone) client_phone
+       from wix_plan_order_records o
+       left join clients cl on cl.id = o.matched_client_id
+      where o.invalidated_at is null
+        and (cl.id is null or not cl.is_test)
+      order by o.created_date desc nulls last
+      limit $1`,
+    [limit],
   );
   return res.rows;
 }
