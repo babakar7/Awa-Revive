@@ -241,4 +241,47 @@ describe("paiements search + requalify bridge", () => {
     expect(html).toContain("écarté des totaux");
     expect(html).not.toContain("À qualifier");
   });
+
+  const mkMovement = (o: Partial<any> = {}) => ({
+    origin: "wix", movementType: "payment", sourceKind: "wix_ecom", sourceId: "o1",
+    providerTxId: null, clientName: "Awa Ba", clientPhone: "221778299595", label: "Sculpt",
+    amountXof: 12000, method: null, methodOrigin: "provider", occurredAt: new Date("2026-08-11T12:00:00Z"),
+    dateEstimated: false, targetId: "mv-1", excludedReason: null, ...o,
+  });
+
+  it("puts the qualifier queue above the movements table (no search)", () => {
+    const html = renderPaymentsPage({ ...paymentsBase, view: "payments", untagged: [mkMovement()] } as any);
+    expect(html.indexOf('id="pay-qualifier"')).toBeGreaterThan(-1);
+    expect(html.indexOf('id="pay-qualifier"')).toBeLessThan(html.indexOf('id="pay-mouvements"'));
+    // Healthy sync card is a footer: after the daily totals section.
+    expect(html.indexOf("Synchronisation Wix")).toBeGreaterThan(html.indexOf('id="pay-journaliers"'));
+  });
+
+  it("surfaces a broken sync card at the top", () => {
+    const html = renderPaymentsPage({
+      ...paymentsBase, view: "payments",
+      sync: { ...sync, lastError: "boom" },
+    } as any);
+    expect(html.indexOf("Synchronisation Wix")).toBeLessThan(html.indexOf('id="pay-mouvements"'));
+  });
+
+  it("shows results before the qualifier queue when searching", () => {
+    const html = renderPaymentsPage({ ...paymentsBase, view: "payments", q: "awa", untagged: [mkMovement()] } as any);
+    expect(html.indexOf('id="pay-mouvements"')).toBeLessThan(html.indexOf('id="pay-qualifier"'));
+  });
+
+  it("labels the source filter in plain French while keeping raw values", () => {
+    const html = renderPaymentsPage({ ...paymentsBase, view: "payments" } as any);
+    expect(html).toContain('value="wix_ecom"');
+    expect(html).toContain("Wix boutique");
+  });
+
+  it("gives the payments view a single date control (no inline date picker)", () => {
+    const html = renderPaymentsPage({ ...paymentsBase, view: "payments" } as any);
+    // The only type=date inputs live in the Filtrer card; the movements range
+    // bar is chips + an "Autre période" link.
+    const beforeFiltres = html.slice(0, html.indexOf('id="pay-filtres"'));
+    expect(beforeFiltres).not.toContain('type="date"');
+    expect(html).toContain("Autre période");
+  });
 });

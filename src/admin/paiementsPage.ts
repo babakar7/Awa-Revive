@@ -31,6 +31,21 @@ export interface PaymentsPageData {
 
 const METHODS = ["wave", "orange_money", "maxit", "cash", "card", "other"];
 
+// Human labels for the raw ledger source_kind values (filter dropdown + flags).
+const SOURCE_OPTIONS = ["booking", "plan", "cafe", "delivery", "manual", "wix_ecom", "wix_plan"];
+const SOURCE_LABELS: Record<string, string> = {
+  booking: "Cours (Awa)",
+  plan: "Clé / abonnement (Awa)",
+  cafe: "Bar",
+  delivery: "Livraison",
+  manual: "Manuel",
+  wix_ecom: "Wix boutique",
+  wix_plan: "Wix abonnement",
+};
+function sourceLabel(source: string): string {
+  return SOURCE_LABELS[source] ?? source;
+}
+
 function totalCards(title: string, rows: MethodTotal[]): string {
   const net = rows.reduce((n, r) => n + r.netXof, 0);
   const refunds = rows.reduce((n, r) => n + r.refundsXof, 0);
@@ -65,9 +80,12 @@ function shiftDay(day: string, delta: number): string {
 }
 
 // Quick range chips + a date picker for the movements list. Presets preserve the
-// active method/source/type filters; the picker (in the Filtrer card) goes further back.
-function rangeBar(d: PaymentsPageData): string {
+// active method/source/type filters. On the payments view the picker is omitted
+// (the Filtrer card is the single advanced date control — one date UI, not two);
+// the bookings view keeps its inline picker.
+function rangeBar(d: PaymentsPageData, opts: { picker?: boolean } = {}): string {
   const bookings = d.view === "bookings";
+  const showPicker = opts.picker ?? true;
   const yesterday = shiftDay(d.today, -1);
   const tomorrow = shiftDay(d.today, 1);
   const presets: Array<{ label: string; from: string; to: string }> = bookings
@@ -92,13 +110,16 @@ function rangeBar(d: PaymentsPageData): string {
     !bookings && d.type ? `<input type="hidden" name="type" value="${esc(d.type)}">` : "",
     d.q ? `<input type="hidden" name="q" value="${esc(d.q)}">` : "",
   ].join("");
-  return `<div class="range-bar">
-    <nav class="filters" aria-label="Période">${chips}</nav>
-    <form method="get" action="/admin/paiements" class="range-picker">${hidden}
+  const picker = showPicker
+    ? `<form method="get" action="/admin/paiements" class="range-picker">${hidden}
       <label>Du <input type="date" name="from" value="${esc(d.from)}"${bookings ? "" : ` min="${esc(d.startDate)}" max="${esc(d.today)}"`}></label>
       <label>Au <input type="date" name="to" value="${esc(d.to)}"${bookings ? "" : ` max="${esc(d.today)}"`}></label>
       <button class="act act--sm" type="submit">Voir</button>
-    </form></div>`;
+    </form>`
+    : `<a class="act act--ghost act--sm" href="#pay-filtres">Autre période →</a>`;
+  return `<div class="range-bar">
+    <nav class="filters" aria-label="Période">${chips}</nav>
+    ${picker}</div>`;
 }
 
 function viewSwitch(d: PaymentsPageData): string {
@@ -333,13 +354,14 @@ function manualForm(): string {
 
 function jumpNav(d: PaymentsPageData): string {
   const untaggedBadge = d.untagged.length >= 50 ? "50+" : String(d.untagged.length);
+  // Order mirrors the page: the two action queues (qualifier, refunds) first.
   const links = [
-    `<a href="#pay-mouvements">Mouvements</a>`,
     d.untagged.length ? `<a href="#pay-qualifier">À qualifier <span class="badge badge--gray">${untaggedBadge}</span></a>` : "",
+    d.refundNeeded.length ? `<a href="#pay-remboursements">Remboursements <span class="badge badge--gray">${d.refundNeeded.length}</span></a>` : "",
+    `<a href="#pay-mouvements">Mouvements</a>`,
     `<a href="#pay-totaux">Totaux</a>`,
     `<a href="#pay-filtres">Filtrer</a>`,
     `<a href="#pay-journaliers">Journaliers</a>`,
-    d.refundNeeded.length ? `<a href="#pay-remboursements">Remboursements <span class="badge badge--gray">${d.refundNeeded.length}</span></a>` : "",
     d.owner ? `<a href="#pay-manuel">Mouvement manuel</a>` : "",
   ].filter(Boolean);
   return `<nav class="jump-nav jump-nav--sticky" aria-label="Sections">${links.join("")}</nav>`;
@@ -352,25 +374,39 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
   }
   const alerts = Object.entries(d.excludedCounts).filter(([, n]) => n > 0);
   const filterQuery = new URLSearchParams({ from: d.from, to: d.to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}), ...(d.q ? { q: d.q } : {}) }).toString();
-  return `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}
-  ${viewSwitch(d)}
-  ${jumpNav(d)}
-  <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2>${rangeBar(d)}${searchForm(d)}<p class="muted">${d.from === d.to ? `Transactions du ${esc(d.from)}` : `Transactions du ${esc(d.from)} au ${esc(d.to)}`} · 300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
-  <div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p><p class="muted">Périmètre comptable depuis le ${esc(d.startDate)} : les lignes antérieures ne sont pas couvertes, les dates historiques estimées sont signalées, et les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF (devise d’origine conservée pour audit).</p></div>
-  ${alerts.length ? `<div class="card warn"><b>Lignes Wix écartées des totaux</b><p>${alerts.map(([k,n]) => `${esc(k)} : ${n}`).join(" · ")}</p></div>` : ""}
-  ${qualifier(d.untagged)}
-  <section class="grid-2 anchor-target" id="pay-totaux">${totalCards("Mois en cours", d.currentMonth)}${totalCards("Mois précédent", d.previousMonth)}</section>
-  <section class="card anchor-target" id="pay-filtres"><h2>Filtrer</h2><form method="get" action="/admin/paiements" class="form-grid">
+  const banners = `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}`;
+
+  const mouvements = `<section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2>${rangeBar(d, { picker: false })}${searchForm(d)}<p class="muted">${d.from === d.to ? `Transactions du ${esc(d.from)}` : `Transactions du ${esc(d.from)} au ${esc(d.to)}`} · 300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>`;
+  const syncCard = `<div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p><p class="muted">Périmètre comptable depuis le ${esc(d.startDate)} : les lignes antérieures ne sont pas couvertes, les dates historiques estimées sont signalées, et les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF (devise d’origine conservée pour audit).</p></div>`;
+  const excludedAlert = alerts.length ? `<div class="card warn"><b>Lignes Wix écartées des totaux</b><p>${alerts.map(([k,n]) => `${esc(k)} : ${n}`).join(" · ")}</p></div>` : "";
+  const qualifierSection = qualifier(d.untagged);
+  const totaux = `<section class="grid-2 anchor-target" id="pay-totaux">${totalCards("Mois en cours", d.currentMonth)}${totalCards("Mois précédent", d.previousMonth)}</section>`;
+  const filtres = `<section class="card anchor-target" id="pay-filtres"><h2>Filtrer</h2><form method="get" action="/admin/paiements" class="form-grid">
     <input type="hidden" name="view" value="payments">
     ${d.q ? `<input type="hidden" name="q" value="${esc(d.q)}">` : ""}
     <label>Du<input type="date" name="from" value="${esc(d.from)}" min="${esc(d.startDate)}"></label><label>Au<input type="date" name="to" value="${esc(d.to)}"></label>
     <label>Méthode<select name="method"><option value="">Toutes</option><option value="untagged">À qualifier</option>${METHODS.map((m) => `<option value="${m}"${d.method===m?" selected":""}>${esc(paymentMethodLabel(m))}</option>`).join("")}</select></label>
-    <label>Source<select name="source"><option value="">Toutes</option>${["booking","plan","cafe","delivery","manual","wix_ecom","wix_plan"].map((s) => `<option value="${s}"${d.source===s?" selected":""}>${esc(s)}</option>`).join("")}</select></label>
+    <label>Source<select name="source"><option value="">Toutes</option>${SOURCE_OPTIONS.map((s) => `<option value="${s}"${d.source===s?" selected":""}>${esc(sourceLabel(s))}</option>`).join("")}</select></label>
     <label>Type<select name="type"><option value="">Tous</option><option value="payment"${d.type==="payment"?" selected":""}>Encaissements</option><option value="refund"${d.type==="refund"?" selected":""}>Remboursements</option></select></label>
-    <button class="act" type="submit">Afficher</button><a class="act act--ghost" href="/admin/paiements/export.csv?${esc(filterQuery)}">Exporter CSV</a></form></section>
-  <section class="card anchor-target" id="pay-journaliers"><h2>Totaux journaliers</h2>${dailyTable(d.daily, d)}</section>
-  ${d.refundNeeded.length ? `<section class="card anchor-target" id="pay-remboursements"><h2>Remboursements bookings à pointer</h2>${d.refundNeeded.map((b) => `<form class="row between" method="post" action="/admin/bookings/${esc(b.id)}/refund-done"><input type="hidden" name="return_to" value="/admin/paiements?view=payments"><span><b>${esc(b.service_name)}</b> · ${esc(b.client_name ?? "Client")} · ${fmtFcfa(b.amount_xof)}</span><button class="act act--sm" type="submit">Remboursement effectué</button></form>`).join("")}</section>` : ""}
-  ${d.owner ? manualForm() : ""}`;
+    <button class="act" type="submit">Afficher</button><a class="act act--ghost" href="/admin/paiements/export.csv?${esc(filterQuery)}">Exporter CSV</a></form></section>`;
+  const journaliers = `<section class="card anchor-target" id="pay-journaliers"><h2>Totaux journaliers</h2>${dailyTable(d.daily, d)}</section>`;
+  const remboursements = d.refundNeeded.length ? `<section class="card anchor-target" id="pay-remboursements"><h2>Remboursements bookings à pointer</h2>${d.refundNeeded.map((b) => `<form class="row between" method="post" action="/admin/bookings/${esc(b.id)}/refund-done"><input type="hidden" name="return_to" value="/admin/paiements?view=payments"><span><b>${esc(b.service_name)}</b> · ${esc(b.client_name ?? "Client")} · ${fmtFcfa(b.amount_xof)}</span><button class="act act--sm" type="submit">Remboursement effectué</button></form>`).join("")}</section>` : "";
+  const manuel = d.owner ? manualForm() : "";
+
+  const searchActive = Boolean(d.q);
+  const syncTop = Boolean(d.sync.lastError);
+  // Search active → results first (no jump-nav noise). Otherwise the two action
+  // queues (qualifier, refunds) lead. A broken sync surfaces at the top; a
+  // healthy sync card is a true footer.
+  const middle = searchActive
+    ? [mouvements, excludedAlert, qualifierSection, remboursements, totaux, filtres, journaliers, manuel]
+    : [qualifierSection, remboursements, excludedAlert, mouvements, totaux, filtres, journaliers, manuel];
+  const parts = [banners, viewSwitch(d)];
+  if (!searchActive) parts.push(jumpNav(d));
+  if (syncTop) parts.push(syncCard);
+  parts.push(...middle);
+  if (!syncTop) parts.push(syncCard);
+  return parts.filter(Boolean).join("\n  ");
 }
 
 export function csvCell(value: unknown): string {
