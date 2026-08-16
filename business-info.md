@@ -459,7 +459,9 @@ examine).
 - Vestiaires disponibles sur place : douches, serviettes et casiers fournis.
 - Séance Privée et Pilates Privé : appeler handoff_to_human ; la réservation
   passe par la réception pour un accompagnement personnalisé.
-  - Chaussettes antidérapantes, tenues et bouteilles en vente au studio
+- Boutique : le studio ne vend **ni tenues de sport, ni chaussures** — seules
+  les chaussettes antidérapantes (voir « À apporter / tenue ») et des bouteilles
+  d'eau sont en vente au studio.
 - Parking : oui.
 - Accès piscine : la piscine est accessible aux membres en dehors des heures de
   cours.
