@@ -22,6 +22,7 @@ export interface PaymentsPageData {
   method?: string;
   source?: string;
   type?: string;
+  q?: string;
   notice?: string;
   error?: string;
   sync: WixPaymentSyncState;
@@ -47,6 +48,7 @@ function rangeHref(from: string, to: string, d: PaymentsPageData): string {
     ...(!bookings && d.method ? { method: d.method } : {}),
     ...(!bookings && d.source ? { source: d.source } : {}),
     ...(!bookings && d.type ? { type: d.type } : {}),
+    ...(d.q ? { q: d.q } : {}),
   });
   return `/admin/paiements?${q.toString()}#${bookings ? "pay-reservations" : "pay-mouvements"}`;
 }
@@ -88,6 +90,7 @@ function rangeBar(d: PaymentsPageData): string {
     !bookings && d.method ? `<input type="hidden" name="method" value="${esc(d.method)}">` : "",
     !bookings && d.source ? `<input type="hidden" name="source" value="${esc(d.source)}">` : "",
     !bookings && d.type ? `<input type="hidden" name="type" value="${esc(d.type)}">` : "",
+    d.q ? `<input type="hidden" name="q" value="${esc(d.q)}">` : "",
   ].join("");
   return `<div class="range-bar">
     <nav class="filters" aria-label="Période">${chips}</nav>
@@ -104,28 +107,98 @@ function viewSwitch(d: PaymentsPageData): string {
     ...(d.method ? { method: d.method } : {}),
     ...(d.source ? { source: d.source } : {}),
     ...(d.type ? { type: d.type } : {}),
+    ...(d.q ? { q: d.q } : {}),
   });
-  const bookingQuery = new URLSearchParams({ view: "bookings", from: d.from, to: d.to });
+  const bookingQuery = new URLSearchParams({
+    view: "bookings", from: d.from, to: d.to,
+    ...(d.q ? { q: d.q } : {}),
+  });
   return `<nav class="filters payment-view-switch" aria-label="Organiser les paiements">
     <a href="/admin/paiements?${esc(paymentQuery.toString())}" class="${d.view === "bookings" ? "" : "active"}"${d.view === "bookings" ? "" : ' aria-current="page"'}>Par date de paiement</a>
     <a href="/admin/paiements?${esc(bookingQuery.toString())}" class="${d.view === "bookings" ? "active" : ""}"${d.view === "bookings" ? ' aria-current="page"' : ""}>Par date de réservation</a>
   </nav>`;
 }
 
-function bookingSettlement(row: BookingByServiceDate): string {
+// Same-page search (GET reload, no JS). Applies to both views; hidden inputs
+// carry the current view + range + accounting filters so a search never resets
+// them. Result count says "affichés" because the movements table caps at 300.
+function searchForm(d: PaymentsPageData): string {
+  const bookings = d.view === "bookings";
+  const withoutQ = new URLSearchParams({
+    view: bookings ? "bookings" : "payments", from: d.from, to: d.to,
+    ...(!bookings && d.method ? { method: d.method } : {}),
+    ...(!bookings && d.source ? { source: d.source } : {}),
+    ...(!bookings && d.type ? { type: d.type } : {}),
+  });
+  const hidden = [
+    `<input type="hidden" name="view" value="${bookings ? "bookings" : "payments"}">`,
+    `<input type="hidden" name="from" value="${esc(d.from)}">`,
+    `<input type="hidden" name="to" value="${esc(d.to)}">`,
+    !bookings && d.method ? `<input type="hidden" name="method" value="${esc(d.method)}">` : "",
+    !bookings && d.source ? `<input type="hidden" name="source" value="${esc(d.source)}">` : "",
+    !bookings && d.type ? `<input type="hidden" name="type" value="${esc(d.type)}">` : "",
+  ].join("");
+  const count = bookings ? d.bookings.length : d.rows.length;
+  const summary = d.q
+    ? `<p class="muted payment-search-summary">${count} résultat${count > 1 ? "s" : ""} affiché${count > 1 ? "s" : ""} pour « ${esc(d.q)} » · <a href="/admin/paiements?${esc(withoutQ.toString())}">Effacer</a></p>`
+    : "";
+  return `<form method="get" action="/admin/paiements" class="filters payment-search" role="search">${hidden}
+      <input type="search" name="q" value="${esc(d.q ?? "")}" placeholder="Nom, téléphone ou libellé…" aria-label="Rechercher un paiement ou une cliente">
+      <button class="act act--sm" type="submit">Chercher</button>
+    </form>${summary}`;
+}
+
+// Shared select+note requalify form (movements table AND booking rows). The
+// required-note-on-change rule is enforced server-side by appendTagEvent.
+function retagForm(targetId: string, opts: { returnTo?: string; summary?: string } = {}): string {
+  const summary = opts.summary ?? "Requalifier";
+  return `<details class="retag"><summary>${esc(summary)}</summary><form method="post" action="/admin/paiements/tag">`
+    + `<input type="hidden" name="target_id" value="${esc(targetId)}">`
+    + (opts.returnTo ? `<input type="hidden" name="return_to" value="${esc(opts.returnTo)}">` : "")
+    + `<select name="method">${[...METHODS, "exclu"].map((m) => `<option value="${m}">${esc(paymentMethodLabel(m))}</option>`).join("")}</select>`
+    + `<input name="note" required placeholder="Motif du changement">`
+    + `<button class="act act--sm" type="submit">Valider</button></form></details>`;
+}
+
+function bookingsReturnTo(d: PaymentsPageData): string {
+  const q = new URLSearchParams({ view: "bookings", from: d.from, to: d.to, ...(d.q ? { q: d.q } : {}) });
+  return `/admin/paiements?${q.toString()}#pay-reservations`;
+}
+
+function comptableSearchHref(d: PaymentsPageData, clientName: string | null): string {
+  const q = new URLSearchParams({
+    view: "payments", from: d.from, to: d.to,
+    ...(clientName ? { q: clientName } : {}),
+  });
+  return `/admin/paiements?${q.toString()}#pay-qualifier`;
+}
+
+function bookingSettlement(row: BookingByServiceDate, d: PaymentsPageData): string {
   if (row.planName) return `<b>${esc(row.planName)}</b><div class="muted">0 F · Séance décomptée</div>`;
   if (row.paymentMethod === "membership") {
     return `<b>Abonnement</b><div class="muted">0 F · Séance décomptée</div>`;
   }
   const amount = row.amountXof > 0 ? fmtFcfa(row.amountXof) : "Inclus";
+  // A Wix row acts in place: requalify its correlated movement, or (no movement)
+  // jump to the accounting queue pre-filtered by client name.
+  const hasKnownMethod = Boolean(row.paymentMethod) && !row.paymentExcluded && row.paymentMethod !== "wix_unreconciled";
+  const wixAction = row.source === "wix"
+    ? (row.movementId
+        ? retagForm(row.movementId, { returnTo: bookingsReturnTo(d), summary: hasKnownMethod ? "Modifier la méthode" : "Requalifier" })
+        : `<a class="retag-link" href="${esc(comptableSearchHref(d, row.clientName))}">Voir côté comptable →</a>`)
+    : "";
+  // Excluded wins — never fall back to a provider method or "À qualifier".
+  if (row.paymentExcluded) {
+    return `<b>Exclu</b><div class="muted">${amount} · écarté des totaux</div>${wixAction}`;
+  }
   if (row.paymentMethod === "wix_unreconciled") {
-    return `<b>Paiement Wix non rapproché</b><div class="muted">${amount}</div>`;
+    return `<b>Paiement Wix non rapproché</b><div class="muted">${amount}</div>${wixAction}`;
   }
   if (!row.paymentMethod) {
-    return `<b>${row.source === "wix" ? "À qualifier" : "—"}</b><div class="muted">${amount}</div>`;
+    return `<b>${row.source === "wix" ? "À qualifier" : "—"}</b><div class="muted">${amount}</div>${wixAction}`;
   }
   const paid = row.paidAt ? `Réglé le ${fmtDate(row.paidAt)}` : "Date non enregistrée";
-  return `<b>${esc(paymentMethodLabel(row.paymentMethod))}</b><div class="muted">${amount} · ${esc(paid)}</div>`;
+  return `<b>${esc(paymentMethodLabel(row.paymentMethod))}</b><div class="muted">${amount} · ${esc(paid)}</div>${wixAction}`;
 }
 
 function sourceBadge(source: "awa" | "wix"): string {
@@ -134,9 +207,12 @@ function sourceBadge(source: "awa" | "wix"): string {
     : `<span class="badge badge--gray">Awa</span>`;
 }
 
-function bookingClientGroups(rows: BookingByServiceDate[]): string {
+function bookingClientGroups(rows: BookingByServiceDate[], d: PaymentsPageData): string {
   if (!rows.length) {
-    return `<div class="empty"><b>Aucune réservation confirmée</b><p>Aucun client n’a de réservation studio (Awa ou Wix) sur cette période.</p></div>`;
+    const empty = d.q
+      ? `<div class="empty"><b>Aucun résultat pour « ${esc(d.q)} »</b><p>Aucune réservation studio ne correspond à cette recherche sur la période.</p></div>`
+      : `<div class="empty"><b>Aucune réservation confirmée</b><p>Aucun client n’a de réservation studio (Awa ou Wix) sur cette période.</p></div>`;
+    return empty;
   }
   const groups = new Map<string, BookingByServiceDate[]>();
   for (const row of rows) {
@@ -149,7 +225,7 @@ function bookingClientGroups(rows: BookingByServiceDate[]): string {
     const places = clientRows.reduce((total, row) => total + row.participants, 0);
     const anyWix = clientRows.some((row) => row.source === "wix");
     const rowsHtml = clientRows.map((row) => {
-      return `<tr><td data-label="Horaire"><b>${fmtDate(row.slotStart)}</b> ${sourceBadge(row.source)}</td><td data-label="Cours">${esc(row.serviceName)}</td><td data-label="Places">${row.participants}</td><td data-label="Règlement">${bookingSettlement(row)}</td></tr>`;
+      return `<tr><td data-label="Horaire"><b>${fmtDate(row.slotStart)}</b> ${sourceBadge(row.source)}</td><td data-label="Cours">${esc(row.serviceName)}</td><td data-label="Places">${row.participants}</td><td data-label="Règlement">${bookingSettlement(row, d)}</td></tr>`;
     }).join("");
     const name = esc(client.clientName ?? "Client Wix");
     const heading = client.clientId
@@ -164,10 +240,11 @@ function bookingsView(d: PaymentsPageData): string {
   const places = d.bookings.reduce((total, row) => total + row.participants, 0);
   const wixCount = d.bookings.filter((row) => row.source === "wix").length;
   const period = d.from === d.to ? `du ${esc(d.from)}` : `du ${esc(d.from)} au ${esc(d.to)}`;
+  const comptable = new URLSearchParams({ view: "payments", from: d.from, to: d.to, ...(d.q ? { q: d.q } : {}) });
   return `<section class="anchor-target" id="pay-reservations">
-    <div class="card"><div class="section-header"><div><span class="eyebrow">Date du cours</span><h2>Clients ayant une réservation ${period}</h2></div></div>${rangeBar(d)}<p class="muted">Cette vue suit la date de la séance, quelle que soit la date du paiement. Réservations confirmées du studio (Awa et Wix). <a href="/admin/paiements?view=payments&from=${esc(d.from)}&to=${esc(d.to)}">Voir la vue comptable →</a></p></div>
+    <div class="card"><div class="section-header"><div><span class="eyebrow">Date du cours</span><h2>Clients ayant une réservation ${period}</h2></div></div>${rangeBar(d)}${searchForm(d)}<p class="muted">Cette vue suit la date de la séance, quelle que soit la date du paiement. Réservations confirmées du studio (Awa et Wix). <a href="/admin/paiements?${esc(comptable.toString())}">Voir la vue comptable →</a></p></div>
     <div class="payment-booking-stats"><article><span>Clients</span><b>${clientCount}</b></article><article><span>Réservations</span><b>${d.bookings.length}</b></article><article><span>dont Wix</span><b>${wixCount}</b></article><article><span>Places</span><b>${places}</b></article></div>
-    ${bookingClientGroups(d.bookings)}
+    ${bookingClientGroups(d.bookings, d)}
   </section>`;
 }
 
@@ -209,7 +286,7 @@ function qualifier(rows: LedgerMovement[]): string {
 function movementRow(r: LedgerMovement, owner: boolean): string {
   const flags = [r.origin, r.movementType, r.dateEstimated ? "date estimée" : "", r.excludedReason ?? ""].filter(Boolean);
   const amount = r.amountXof < 0 ? `−${fmtFcfa(Math.abs(r.amountXof))}` : fmtFcfa(r.amountXof);
-  const retag = r.origin === "wix" && r.targetId ? `<details><summary>Requalifier</summary><form method="post" action="/admin/paiements/tag"><input type="hidden" name="target_id" value="${esc(r.targetId)}"><select name="method">${[...METHODS,"exclu"].map((m) => `<option value="${m}">${esc(paymentMethodLabel(m))}</option>`).join("")}</select><input name="note" required placeholder="Motif du changement"><button class="act act--sm" type="submit">Valider</button></form></details>` : "";
+  const retag = r.origin === "wix" && r.targetId ? retagForm(r.targetId) : "";
   const reverse = owner && r.origin === "manual" ? `<details><summary>Contre-passer</summary><form method="post" action="/admin/paiements/manuel"><input type="hidden" name="idempotency_key" value="${crypto.randomUUID()}"><input type="hidden" name="movement_type" value="${r.movementType === "payment" ? "refund" : "payment"}"><input type="hidden" name="occurred_at" value="${new Date().toISOString().slice(0,16)}"><input type="hidden" name="amount_xof" value="${Math.abs(r.amountXof)}"><input type="hidden" name="method" value="${esc(r.method)}"><input type="hidden" name="label" value="${esc(`Contre-passation — ${r.label}`)}"><input type="hidden" name="reverses_movement_id" value="${esc(r.sourceId)}"><input name="note" required placeholder="Motif de la correction"><button class="act act--sm" type="submit">Créer le mouvement inverse</button></form></details>` : "";
   return `<tr><td data-label="Date">${fmtDate(r.occurredAt)}</td><td data-label="Mouvement"><b>${esc(r.label)}</b><div class="muted">${flags.map(esc).join(" · ")}</div>${reverse}</td><td data-label="Client">${esc(r.clientName ?? "—")}<div class="muted">${esc(r.clientPhone ?? "")}</div></td><td data-label="Méthode">${esc(r.method ? paymentMethodLabel(r.method) : "À qualifier")}${retag}</td><td data-label="Montant"><b>${amount}</b></td></tr>`;
 }
@@ -274,17 +351,18 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
     ${viewSwitch(d)}${bookingsView(d)}`;
   }
   const alerts = Object.entries(d.excludedCounts).filter(([, n]) => n > 0);
-  const filterQuery = new URLSearchParams({ from: d.from, to: d.to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}) }).toString();
+  const filterQuery = new URLSearchParams({ from: d.from, to: d.to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}), ...(d.q ? { q: d.q } : {}) }).toString();
   return `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}
   ${viewSwitch(d)}
   ${jumpNav(d)}
-  <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2>${rangeBar(d)}<p class="muted">${d.from === d.to ? `Transactions du ${esc(d.from)}` : `Transactions du ${esc(d.from)} au ${esc(d.to)}`} · 300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
+  <section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2>${rangeBar(d)}${searchForm(d)}<p class="muted">${d.from === d.to ? `Transactions du ${esc(d.from)}` : `Transactions du ${esc(d.from)} au ${esc(d.to)}`} · 300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>
   <div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p><p class="muted">Périmètre comptable depuis le ${esc(d.startDate)} : les lignes antérieures ne sont pas couvertes, les dates historiques estimées sont signalées, et les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF (devise d’origine conservée pour audit).</p></div>
   ${alerts.length ? `<div class="card warn"><b>Lignes Wix écartées des totaux</b><p>${alerts.map(([k,n]) => `${esc(k)} : ${n}`).join(" · ")}</p></div>` : ""}
   ${qualifier(d.untagged)}
   <section class="grid-2 anchor-target" id="pay-totaux">${totalCards("Mois en cours", d.currentMonth)}${totalCards("Mois précédent", d.previousMonth)}</section>
   <section class="card anchor-target" id="pay-filtres"><h2>Filtrer</h2><form method="get" action="/admin/paiements" class="form-grid">
     <input type="hidden" name="view" value="payments">
+    ${d.q ? `<input type="hidden" name="q" value="${esc(d.q)}">` : ""}
     <label>Du<input type="date" name="from" value="${esc(d.from)}" min="${esc(d.startDate)}"></label><label>Au<input type="date" name="to" value="${esc(d.to)}"></label>
     <label>Méthode<select name="method"><option value="">Toutes</option><option value="untagged">À qualifier</option>${METHODS.map((m) => `<option value="${m}"${d.method===m?" selected":""}>${esc(paymentMethodLabel(m))}</option>`).join("")}</select></label>
     <label>Source<select name="source"><option value="">Toutes</option>${["booking","plan","cafe","delivery","manual","wix_ecom","wix_plan"].map((s) => `<option value="${s}"${d.source===s?" selected":""}>${esc(s)}</option>`).join("")}</select></label>

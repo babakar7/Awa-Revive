@@ -215,6 +215,38 @@ import { wixPaymentSyncState } from "../domain/wixPaymentSync.js";
 
 export { escapeHtml } from "./helpers.js";
 
+// Strict same-page redirect for /admin/paiements POST actions. Only a
+// /admin/paiements return_to is honored; its query is rebuilt from an allowlist
+// (never reflected verbatim — open-redirect / param-injection guard), the
+// anchor is allowlisted, and the outcome (done/err) is appended. Any other
+// value falls back to the accounting view. Mirrors the refund-done guard.
+const PAIEMENTS_RETURN_PARAMS = new Set(["view", "from", "to", "method", "source", "type", "q"]);
+const PAIEMENTS_RETURN_ANCHORS = new Set(["pay-reservations", "pay-qualifier", "pay-mouvements", "pay-filtres"]);
+function safePaiementsRedirect(
+  rawReturnTo: string | undefined,
+  outcome: { done?: string; err?: string },
+): string {
+  const params = new URLSearchParams();
+  let anchor = "";
+  let ok = false;
+  if (typeof rawReturnTo === "string" && rawReturnTo.startsWith("/admin/paiements")) {
+    try {
+      const u = new URL(rawReturnTo, "http://internal");
+      if (u.pathname === "/admin/paiements") {
+        for (const [k, v] of u.searchParams) if (PAIEMENTS_RETURN_PARAMS.has(k)) params.set(k, v);
+        if (u.hash && PAIEMENTS_RETURN_ANCHORS.has(u.hash.slice(1))) anchor = u.hash;
+        ok = true;
+      }
+    } catch {
+      /* malformed → fallback */
+    }
+  }
+  if (!ok) params.set("view", "payments");
+  if (outcome.done) params.set("done", outcome.done);
+  if (outcome.err) params.set("err", outcome.err);
+  return `/admin/paiements?${params.toString()}${anchor}`;
+}
+
 const WIX_STATUS_LABELS: Record<string, string> = {
   CONFIRMED: "Confirmée",
   PENDING: "En attente",
@@ -684,6 +716,7 @@ export function registerAdmin(app: FastifyInstance): void {
         // Default view is now "by reservation date" (studio bookings, Awa +
         // Wix); the accounting ledger is reached explicitly via ?view=payments.
         const view = query.view === "payments" ? "payments" : "bookings";
+        const q = String(query.q ?? "").trim().slice(0, 120) || undefined;
         const startDate = config.PAYMENTS_LEDGER_START_DATE;
         const today = new Date().toISOString().slice(0, 10);
         const monthStart = `${today.slice(0, 7)}-01`;
@@ -701,14 +734,15 @@ export function registerAdmin(app: FastifyInstance): void {
         if (!(from < to)) {
           const errorQuery = new URLSearchParams({
             ...(view === "payments" ? { view } : {}),
+            ...(q ? { q } : {}),
             err: "Période invalide.",
           });
           return reply.redirect(`/admin/paiements?${errorQuery.toString()}`, 303);
         }
         if (view === "bookings") {
-          const bookings = await paymentsLedger.bookingsByServiceDate(from, to);
+          const bookings = await paymentsLedger.bookingsByServiceDate(from, to, 1_000, q);
           const body = renderPaymentsPage({
-            from: fromText, to: toText, today, startDate, view, bookings,
+            from: fromText, to: toText, today, startDate, view, bookings, q,
             rows: [], daily: [], currentMonth: [], previousMonth: [], untagged: [],
             excludedCounts: {}, refundNeeded: [], owner: req.adminRole === "owner",
             notice: query.done, error: query.err,
@@ -726,6 +760,7 @@ export function registerAdmin(app: FastifyInstance): void {
           method: String(query.method ?? "").trim() || undefined,
           source: String(query.source ?? "").trim() || undefined,
           type: String(query.type ?? "").trim() || undefined,
+          q,
         };
         const currentFrom = new Date(`${monthStart}T00:00:00Z`);
         const nextMonth = new Date(currentFrom); nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
@@ -746,7 +781,7 @@ export function registerAdmin(app: FastifyInstance): void {
           from: fromText, to: toText, today, startDate, rows, bookings: [], daily, currentMonth, previousMonth,
           untagged, excludedCounts, refundNeeded: refundNeeded.rows,
           owner: req.adminRole === "owner", method: filters.method,
-          source: filters.source, type: filters.type, notice: query.done, error: query.err,
+          source: filters.source, type: filters.type, q, notice: query.done, error: query.err,
           sync, view,
         });
         reply.type("text/html").send(await layout("Paiements", "/admin/paiements", body, {
@@ -761,9 +796,12 @@ export function registerAdmin(app: FastifyInstance): void {
             targetId: String(body.target_id ?? ""), method: String(body.method ?? ""),
             note: body.note, taggedBy: req.adminUser ?? "?",
           });
-          return reply.redirect(`/admin/paiements?view=payments&done=${encodeURIComponent("Méthode enregistrée.")}`, 303);
+          return reply.redirect(safePaiementsRedirect(body.return_to, { done: "Méthode enregistrée." }), 303);
         } catch (error) {
-          return reply.redirect(`/admin/paiements?view=payments&err=${encodeURIComponent(error instanceof Error ? error.message : "Tag impossible.")}`, 303);
+          return reply.redirect(
+            safePaiementsRedirect(body.return_to, { err: error instanceof Error ? error.message : "Tag impossible." }),
+            303,
+          );
         }
       });
 
@@ -808,7 +846,7 @@ export function registerAdmin(app: FastifyInstance): void {
         const to = new Date(`${toText}T00:00:00Z`); to.setUTCDate(to.getUTCDate() + 1);
         const rows = await paymentsLedger.movements({
           from, to, method: query.method || undefined, source: query.source || undefined,
-          type: query.type || undefined,
+          type: query.type || undefined, q: String(query.q ?? "").trim() || undefined,
         }, 1_000_000);
         const header = ["date","origine","type","source","client","telephone","libelle","methode","montant_xof","date_estimee","exclusion"];
         const lines = rows.map((r) => [r.occurredAt.toISOString(),r.origin,r.movementType,r.sourceKind,

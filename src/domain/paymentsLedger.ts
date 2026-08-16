@@ -37,6 +37,8 @@ export interface LedgerFilters {
   method?: string;
   source?: string;
   type?: string;
+  /** Free-text search over client name, phone and label (see filterSql). */
+  q?: string;
 }
 
 export interface MethodTotal {
@@ -66,6 +68,40 @@ export interface BookingByServiceDate {
   planName: string | null;
   /** Stable grouping key (client id, or a Wix identity when unmatched). */
   groupKey: string;
+  /** Correlated Wix payment movement id, so the row can be requalified in
+   *  place. Null for Awa rows and unmatched Wix payments. */
+  movementId: string | null;
+  /** True when the correlated Wix movement is tagged 'exclu' — shown as
+   *  "Exclu", never falling back to a provider method or "À qualifier". */
+  paymentExcluded: boolean;
+}
+
+/**
+ * Free-text search fragment shared by the ledger filter and the booking view.
+ * Matches client name / phone / label with ILIKE (wildcards escaped), plus a
+ * digit-normalized phone match when the query carries ≥6 digits (the team
+ * types numbers with spaces, e.g. "77 829 95 95"). Appends to `values` and
+ * returns the ` and (...)` clause, or "" when `q` is blank.
+ */
+function searchClause(
+  q: string | undefined,
+  values: unknown[],
+  startParam: number,
+  columns: { name: string; phone: string; label?: string },
+): string {
+  const trimmed = (q ?? "").trim();
+  if (!trimmed) return "";
+  const like = `%${trimmed.replace(/[\\%_]/g, "\\$&")}%`;
+  values.push(like);
+  const likeIdx = startParam + values.length - 1;
+  const parts = [`${columns.name} ilike $${likeIdx}`, `${columns.phone} ilike $${likeIdx}`];
+  if (columns.label) parts.push(`${columns.label} ilike $${likeIdx}`);
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length >= 6) {
+    values.push(`%${digits}%`);
+    parts.push(`regexp_replace(coalesce(${columns.phone},''),'\\D','','g') like $${startParam + values.length - 1}`);
+  }
+  return ` and (${parts.join(" or ")})`;
 }
 
 const FINAL_WIX_STATUSES = ["APPROVED", "SUCCESSFUL", "COMPLETED", "SUCCEEDED"];
@@ -162,7 +198,14 @@ function filterSql(filters: LedgerFilters, startParam = 4): { sql: string; value
     values.push(filters.type);
     clauses.push(`movement_type=$${startParam + values.length - 1}`);
   }
-  return { sql: clauses.length ? ` and ${clauses.join(" and ")}` : "", values };
+  let sql = clauses.length ? ` and ${clauses.join(" and ")}` : "";
+  // The ledger CTE exposes client_name/client_phone/label on every row.
+  sql += searchClause(filters.q, values, startParam, {
+    name: "client_name",
+    phone: "client_phone",
+    label: "label",
+  });
+  return { sql, values };
 }
 
 function rowToMovement(row: any): LedgerMovement {
@@ -243,7 +286,12 @@ export async function bookingsByServiceDate(
   from: Date,
   to: Date,
   limit = 1_000,
+  q?: string,
 ): Promise<BookingByServiceDate[]> {
+  const params: unknown[] = [from, to, limit];
+  // Search applies to the unified rows; $1/$2 are the inner date window, $3 the
+  // limit, so search params start at $4.
+  const outer = searchClause(q, params, 4, { name: "client_name", phone: "client_phone" });
   const res = await pool.query(
     `select * from (
        select b.id::text booking_id, b.client_id::text client_id,
@@ -252,6 +300,7 @@ export async function bookingsByServiceDate(
               b.payment_method, b.paid_at,
               'awa'::text source, b.membership_plan_name plan_name,
               b.client_id::text group_key,
+              null::text movement_id, false payment_excluded,
               lower(coalesce(c.name,c.wa_phone)) sort_name
          from pending_bookings b
          join clients c on c.id=b.client_id
@@ -267,12 +316,21 @@ export async function bookingsByServiceDate(
               mv.occurred_at,
               'wix'::text, null,
               coalesce(r.matched_client_id::text, 'wix:' || coalesce(r.wix_contact_id, r.booking_id)),
+              mv.movement_id, coalesce(mv.payment_excluded, false),
               lower(coalesce(cl.name, r.client_name, r.booking_id))
          from wix_booking_records r
          left join clients cl on cl.id = r.matched_client_id
          left join lateral (
-            select m.provider_method method, m.amount_xof, m.occurred_at
+            select m.id movement_id,
+                   case when t.method='exclu' then null else coalesce(t.method, m.provider_method) end method,
+                   (t.method='exclu') payment_excluded,
+                   m.amount_xof, m.occurred_at
               from wix_payment_movements m
+              left join lateral (
+                 select method from payment_method_tag_events
+                  where target_kind='wix' and target_id=m.id
+                  order by created_at desc, id desc limit 1
+              ) t on true
              where r.wix_order_id is not null and m.wix_order_id = r.wix_order_id
                and m.movement_type='payment' and m.invalidated_at is null
              order by m.occurred_at asc limit 1
@@ -282,9 +340,10 @@ export async function bookingsByServiceDate(
           and not exists (select 1 from pending_bookings pb where pb.wix_booking_id = r.booking_id)
           and (cl.id is null or not cl.is_test)
      ) rows
+     where true${outer}
      order by sort_name, group_key, slot_start, booking_id
      limit $3`,
-    [from, to, limit],
+    params,
   );
   return res.rows.map((row) => ({
     bookingId: row.booking_id,
@@ -300,6 +359,8 @@ export async function bookingsByServiceDate(
     source: row.source,
     planName: row.plan_name,
     groupKey: row.group_key,
+    movementId: row.movement_id ?? null,
+    paymentExcluded: Boolean(row.payment_excluded),
   }));
 }
 

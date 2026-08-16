@@ -179,3 +179,66 @@ describe("payments ledger pure rules", () => {
     expect(html).not.toContain("Mois en cours");
   });
 });
+
+describe("paiements search + requalify bridge", () => {
+  const sync = {
+    lastStartedAt: null, lastSucceededAt: null, lastUpdatedDateSeen: null,
+    lastFullReconciledAt: null, lastError: null, recordCount: 0,
+  };
+  const paymentsBase = {
+    from: "2026-08-11", to: "2026-08-11", today: "2026-08-11", startDate: "2026-07-01",
+    rows: [], bookings: [], daily: [], currentMonth: [], previousMonth: [], untagged: [],
+    excludedCounts: {}, refundNeeded: [], owner: false, sync,
+  } as const;
+
+  const mkBooking = (o: Partial<any> = {}) => ({
+    bookingId: "b1", clientId: null, clientName: "Awa Ba", clientPhone: "221778299595",
+    serviceName: "Sculpt", slotStart: new Date("2026-08-11T09:00:00Z"), participants: 1,
+    amountXof: 12000, paymentMethod: "", paidAt: null, source: "wix" as const,
+    planName: null, groupKey: "wix:c1", movementId: null, paymentExcluded: false, ...o,
+  });
+
+  it("echoes an escaped search value and threads q into chips, CSV and view switch", () => {
+    const html = renderPaymentsPage({ ...paymentsBase, view: "payments", q: 'Awa "Ba"' } as any);
+    expect(html).toContain('name="q" value="Awa &quot;Ba&quot;"');
+    expect(html).not.toContain('value="Awa "Ba""'); // properly escaped, no raw quotes break out
+    expect(html).toContain("q=Awa"); // chip / link hrefs carry q
+    expect(html).toContain("export.csv?"); // export link present
+    expect(html).toContain("résultat"); // "N résultats affichés pour ..."
+  });
+
+  it("never emits a raw script tag from a hostile q", () => {
+    const html = renderPaymentsPage({ ...paymentsBase, view: "bookings", q: '"><script>alert(1)</script>' } as any);
+    expect(html).not.toContain("<script>alert");
+  });
+
+  it("renders an inline requalify form on a Wix booking row with a movement id", () => {
+    const html = renderPaymentsPage({
+      ...paymentsBase, view: "bookings",
+      bookings: [mkBooking({ movementId: "mv-1", paymentMethod: "wix_unreconciled", amountXof: 12000 })],
+    } as any);
+    expect(html).toContain('action="/admin/paiements/tag"');
+    expect(html).toContain('name="target_id" value="mv-1"');
+    expect(html).toContain('name="return_to"');
+    expect(html).toMatch(/return_to" value="[^"]*view=bookings/);
+  });
+
+  it("links an unmatched Wix booking to the accounting queue pre-filtered by client", () => {
+    const html = renderPaymentsPage({
+      ...paymentsBase, view: "bookings",
+      bookings: [mkBooking({ movementId: null, paymentMethod: "wix_unreconciled" })],
+    } as any);
+    expect(html).toContain("Voir côté comptable");
+    expect(html).toMatch(/view=payments[^"]*q=Awa[^"]*#pay-qualifier/);
+  });
+
+  it("shows an excluded Wix payment as 'Exclu', never a provider method or 'À qualifier'", () => {
+    const html = renderPaymentsPage({
+      ...paymentsBase, view: "bookings",
+      bookings: [mkBooking({ movementId: "mv-2", paymentMethod: "wix_unreconciled", paymentExcluded: true })],
+    } as any);
+    expect(html).toContain("Exclu");
+    expect(html).toContain("écarté des totaux");
+    expect(html).not.toContain("À qualifier");
+  });
+});

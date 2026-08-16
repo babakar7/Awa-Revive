@@ -433,10 +433,17 @@ form.inline{display:inline}
 .range-picker label{display:flex;flex-direction:column;font-size:.78rem;font-weight:700;color:var(--ink-500);gap:.2rem}
 .range-picker input{margin:0}
 .payment-view-switch{margin-bottom:1rem}
-.payment-booking-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:1rem 0}
+.payment-booking-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.75rem;margin:1rem 0}
 .payment-booking-stats article{display:flex;flex-direction:column;gap:.2rem;padding:.85rem 1rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface-raised);box-shadow:var(--shadow-1)}
 .payment-booking-stats span{color:var(--ink-500);font-size:.74rem;font-weight:750;letter-spacing:.045em;text-transform:uppercase}
 .payment-booking-stats b{font-size:1.35rem}
+.payment-search{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:0 0 .75rem;border:0;background:none;padding:0;width:auto}
+.payment-search input[type=search]{flex:1 1 16rem;min-width:0;padding:.5rem .7rem;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-raised)}
+.payment-search-summary{margin:0 0 .9rem}
+.retag{margin-top:.35rem}
+.retag summary,.retag-link{font-size:.82rem;cursor:pointer;color:var(--brand)}
+.retag form{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem}
+.retag-link{display:inline-block;margin-top:.35rem}
 .booking-client-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}
 .booking-client-card{margin:0;min-width:0}
 .booking-client-card h3,.booking-client-card p{margin:0}
@@ -614,7 +621,7 @@ details>summary{cursor:pointer}
   .statement-summary,.checklist-progress{align-items:flex-start;flex-direction:column}
   .payment-month-bar{grid-template-columns:1fr 1fr}.payment-month-bar form{grid-column:1/-1;grid-row:1}.payment-stat-grid,.payment-checklist ul,.payment-buckets{grid-template-columns:1fr 1fr}.payment-sticky-summary{position:static;grid-template-columns:1fr 1fr}.payment-sticky-summary .payment-primary-action{align-items:stretch;grid-column:1/-1}.payment-sync-line{text-align:left}
   .booking-client-grid{grid-template-columns:1fr}
-  .payment-booking-stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .payment-booking-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   .statement-summary>div:last-child,.finance-total{align-items:flex-start;text-align:left}
   .menu-stats,.menu-filters,.menu-form-grid,.recipe-editor{grid-template-columns:1fr}
   .leaderboard-podium{gap:.5rem}.leaderboard-podium-card{padding:.75rem .4rem}.leaderboard-podium-card strong,.leaderboard-total b{font-size:1.6rem}.leaderboard-detail-grid{grid-template-columns:1fr}.leaderboard-total{justify-items:start}.leaderboard-search>div{flex-direction:column}.leaderboard-search .act{width:100%}
