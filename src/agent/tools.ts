@@ -4111,9 +4111,8 @@ export async function executeTool(
             "If the client ALSO wants to pay for a companion's spot on this same class (\"je paie pour mon ami(e)\"), " +
             "call add_spots_to_booking with THIS booking_id and extra_participants — it charges money for only those " +
             "spots without touching the plan; never create_payment_link (it would be refused covered_by_membership). " +
-            "Do NOT mention or propose the bar menu in your confirmation: the system automatically shows the " +
-            "menu list right after your message. When the client then picks an item, use create_cafe_payment_link " +
-            "with this booking_id.",
+            "Do NOT mention or propose the bar menu in your confirmation. There is no automatic menu offer after " +
+            "booking. Only if the client independently asks to order, use create_cafe_payment_link with this booking_id.",
         });
       } catch (err) {
         const notEligible = err instanceof Error && err.message === "not_eligible";

@@ -51,12 +51,15 @@ describe("admin design system shell", () => {
     expect(html).toContain("--surface:#fbf7f2");
     expect(html).toContain("Suivi du studio");
     expect(html).toContain(ADMIN_CLIENT_JS);
+    expect(html).not.toContain("Commandes payées");
+    expect(html).not.toContain('href="/admin/orders"');
 
-    const order = ["pinned", "clients", "finance", "studio", "documents", "bar", "config"].map(
+    const order = ["pinned", "clients", "finance", "studio", "restaurant", "documents", "config"].map(
       (id) => html.indexOf(`data-sec="${id}"`),
     );
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(html).toContain('<span class="nav-section">Restaurant</span>');
   });
 
   it("pins the daily pages above the first collapsible group", async () => {
@@ -69,7 +72,7 @@ describe("admin design system shell", () => {
   it("makes occasional sections collapsible with persisted, no-flash state", async () => {
     const html = await layout("Réservations", "/admin/bookings", "<p>contenu</p>", { badges });
     // Occasional sections start collapsed by default; daily ones do not.
-    for (const id of ["studio", "documents", "bar", "config"]) {
+    for (const id of ["studio", "restaurant", "documents", "config"]) {
       expect(html).toContain(`data-sec="${id}" data-default-collapsed`);
     }
     expect(html).not.toContain('data-sec="clients" data-default-collapsed');
@@ -82,6 +85,8 @@ describe("admin design system shell", () => {
     expect(html).toContain('class="nav-badge nav-group-badge" aria-label="12 en attente"');
     // Pre-paint state script is present and syntactically valid.
     expect(html).toContain(NAV_STATE_JS);
+    expect(NAV_STATE_JS).toContain("navPref!=='open'");
+    expect(html).toContain(".sidebar:is(:hover,:focus-within)");
     expect(() => new Function(NAV_STATE_JS)).not.toThrow();
   });
 

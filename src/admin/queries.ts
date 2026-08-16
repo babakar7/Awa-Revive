@@ -514,29 +514,6 @@ export async function listBookings(
   return res.rows;
 }
 
-/**
- * Commandes bar payées, rattachées à une résa. "today" = cours du jour
- * (c'est le moment où la commande doit être préparée), "upcoming" = cours à
- * venir. Dakar = UTC year-round, so current_date is the local business day.
- */
-export async function listCafeOrders(): Promise<{ today: any[]; upcoming: any[] }> {
-  const base = `
-    select b.*, c.name as client_name, c.wa_phone
-      from pending_bookings b join clients c on c.id = b.client_id
-     where b.status = 'BOOKED' and b.extras_amount_xof > 0`;
-  const [today, upcoming] = await Promise.all([
-    pool.query(
-      `${base} and b.slot_start >= current_date and b.slot_start < current_date + 1
-       order by b.slot_start asc`,
-    ),
-    pool.query(
-      `${base} and b.slot_start >= current_date + 1
-       order by b.slot_start asc limit 50`,
-    ),
-  ]);
-  return { today: today.rows, upcoming: upcoming.rows };
-}
-
 export async function listPlanOrders(
   status?: string,
   limit = 50,

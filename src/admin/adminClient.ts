@@ -269,6 +269,8 @@ export const ADMIN_CLIENT_JS = `
 export const NAV_STATE_JS = `
 (function(){try{
   document.body.classList.add('js-nav');
+  var navPref=null;try{navPref=localStorage.getItem('awa-admin-nav')}catch(e){}
+  document.body.classList.toggle('nav-collapsed',navPref!=='open');
   var store={};try{store=JSON.parse(localStorage.getItem('awa-admin-nav-sections')||'{}')||{}}catch(e){}
   document.querySelectorAll('#admin-sidebar .nav-group[data-sec]:not(.nav-group--pinned)').forEach(function(group){
     var pref=store[group.getAttribute('data-sec')];

@@ -115,6 +115,19 @@ body.nav-collapsed .brand{justify-content:center;padding-inline:0}
 body.nav-collapsed .sidebar a.nav-link{justify-content:center;padding-inline:0}
 body.nav-collapsed .nav-group-toggle{display:none}
 body.nav-collapsed .nav-group-links{display:block!important}
+@media(min-width:901px){
+  body.nav-collapsed .sidebar:is(:hover,:focus-within){width:var(--sidebar-w);box-shadow:12px 0 36px -18px rgba(0,0,0,.55)}
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) .brand-copy,
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) .nav-label,
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) .nav-section,
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) .sidebar-footer span{display:block}
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) .nav-badge{display:inline-flex}
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) .brand{justify-content:flex-start;padding:.45rem .55rem .8rem}
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) a.nav-link{justify-content:flex-start;padding:.5rem .62rem}
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) .nav-group-toggle{display:flex}
+  body.js-nav.nav-collapsed .sidebar:is(:hover,:focus-within) .nav-group.is-collapsed .nav-group-links{display:none!important}
+  body.nav-collapsed .sidebar:is(:hover,:focus-within) .nav-group:not(.is-collapsed) .nav-group-badge{display:none}
+}
 
 /* page composition */
 .page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin:.05rem 0 1.25rem}

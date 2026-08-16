@@ -29,7 +29,6 @@ type IconName =
   | "invoice"
   | "quote"
   | "gift"
-  | "orders"
   | "delivery"
   | "menu"
   | "bell"
@@ -105,6 +104,16 @@ const NAV: NavSection[] = [
     ],
   },
   {
+    id: "restaurant",
+    title: "Restaurant",
+    defaultCollapsed: true,
+    links: [
+      { href: "/admin/livraisons", label: "Livraisons", icon: "delivery", badgeKey: "livraisons" },
+      { href: "/admin/historique-commandes", label: "Historique", icon: "review" },
+      { href: "/admin/menu", label: "Menu", icon: "menu" },
+    ],
+  },
+  {
     id: "documents",
     title: "Documents",
     defaultCollapsed: true,
@@ -112,17 +121,6 @@ const NAV: NavSection[] = [
       { href: "/admin/factures", label: "Factures", icon: "invoice" },
       { href: "/admin/devis", label: "Devis", icon: "quote" },
       { href: "/admin/cartes-cadeaux", label: "Cartes cadeaux", icon: "gift" },
-    ],
-  },
-  {
-    id: "bar",
-    title: "Bar",
-    defaultCollapsed: true,
-    links: [
-      { href: "/admin/orders", label: "Commandes payées", icon: "orders" },
-      { href: "/admin/livraisons", label: "Livraisons", icon: "delivery", badgeKey: "livraisons" },
-      { href: "/admin/historique-commandes", label: "Historique", icon: "review" },
-      { href: "/admin/menu", label: "Menu", icon: "menu" },
     ],
   },
   {
@@ -154,7 +152,6 @@ const ICON_PATHS: Record<IconName, string> = {
   invoice: '<path d="M5 3h8l3 3v11H5z"/><path d="M13 3v4h3M8 10h5M8 13h5"/>',
   quote: '<path d="M5 3h8l3 3v11H5z"/><path d="M13 3v4h3M8 10h5M8 13h3"/><path d="m3 15 2-2"/>',
   gift: '<rect x="3" y="8" width="14" height="9" rx="1"/><path d="M2.5 6h15v3h-15zM10 6v11"/><path d="M10 6C8 6 6 5.3 6 4s1-2 2.2-1C9.2 3.8 10 6 10 6Zm0 0s.8-2.2 1.8-3C13 2 14 2.7 14 4s-2 2-4 2Z"/>',
-  orders: '<path d="M4 5h12l-1 12H5zM7 5a3 3 0 0 1 6 0"/><path d="M7.5 9h5"/>',
   delivery: '<path d="M2.5 5h9v9h-9zM11.5 8h3l3 3v3h-6z"/><circle cx="6" cy="15.5" r="1.5"/><circle cx="15" cy="15.5" r="1.5"/>',
   menu: '<path d="M4 4h12M4 8h12M4 12h8M4 16h6"/>',
   bell: '<path d="M5 14h10l-1.5-2V8a3.5 3.5 0 0 0-7 0v4z"/><path d="M8.5 16.5h3"/>',
