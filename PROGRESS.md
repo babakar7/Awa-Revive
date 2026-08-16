@@ -1,5 +1,31 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Garde horaire : le combo « je confirme + autres dispos ? » ne bloque plus (16 août 2026)
+
+- **Incident (16/08, Fama +33664668226)** : message en deux parties — « Ok je
+  confirme le cours de demain à 18h15. Quelles sont les disponibilités en cours
+  mat dans la semaine ? ». `book_with_membership` **réussit** (Sculpt lundi 17/08
+  18:15, dernière séance de sa Clé L'Invitée décomptée), mais la confirmation
+  citait aussi les horaires Mat issus de `check_availability` → blocage
+  `slot_time_mismatch` (la garde du 11/08 n'autorisait QUE le créneau verrouillé),
+  retry correctif condamné (répondre à la question exige d'énoncer d'autres
+  heures), repli « problème technique » + handoff — pour une résa qui avait
+  marché. La cliente n'a jamais su que son cours était confirmé.
+- **Fix (extension sous condition, sans rouvrir le trou du 11/08)** : les
+  horaires/dates d'un `check_availability` réussi du tour vont dans des ensembles
+  `offered*` du `SlotTimeGuard`. Ils ne deviennent envoyables **que si la réponse
+  énonce aussi TOUTES les heures verrouillées** (`lockedTimes`, repli sur les
+  dates verrouillées pour un fait sans heure). Une réponse qui écrit un horaire
+  d'availability À LA PLACE du créneau réservé (la forme exacte du 11/08) reste
+  bloquée. Le retry correctif explique désormais l'allègement (« tu peux citer
+  les dispos check_availability si tu confirmes d'abord le créneau réservé »).
+- **Résidu accepté** : une réponse qui confirme la bonne heure ET colle un
+  mauvais horaire offert à côté d'un lien passe — indistinguable du cas légitime
+  sans NLP ; la protection principale (le vrai créneau réservé toujours énoncé)
+  est conservée.
+- Tests : `test/outboundLint.test.ts` — replay exact du tour de Fama + non-
+  régression du replay 11/08.
+
 ## Lien booking↔paiement Wix par les lignes de commande (16 août 2026)
 
 **Suite de la vue paiements.** La corrélation booking↔mouvement de

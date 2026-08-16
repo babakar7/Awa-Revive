@@ -61,6 +61,13 @@ const SLOT_VOUCHING_TOOLS = new Set([
   "join_waitlist",
 ]);
 
+/** Tools whose results OFFER slots without locking anything. Their times are
+ *  sendable only in a reply that also states the locked slot (see
+ *  findSlotTimeMismatch) — so a two-part "je confirme X + quelles dispos ?"
+ *  message can be answered, while a reply that misstates the booked slot
+ *  (prod 11/08) stays blocked. */
+const SLOT_OFFERING_TOOLS = new Set(["check_availability"]);
+
 export interface SlotTimeGuard {
   /** True once a slot-locking tool succeeded this turn. */
   active: boolean;
@@ -68,12 +75,28 @@ export interface SlotTimeGuard {
   times: Set<string>;
   /** Normalized "day-monthIndex" dates the server vouched for this turn. */
   dates: Set<string>;
+  /** Times/dates of THE slot(s) a locking tool booked or linked this turn. */
+  lockedTimes: Set<string>;
+  lockedDates: Set<string>;
+  /** Times/dates check_availability offered this turn — allowed only in a
+   *  reply that also states every locked time. */
+  offeredTimes: Set<string>;
+  offeredDates: Set<string>;
   /** Raw Dakar strings ("samedi 15 août à 10:15") — for corrective copy. */
   facts: string[];
 }
 
 export function createSlotTimeGuard(): SlotTimeGuard {
-  return { active: false, times: new Set(), dates: new Set(), facts: [] };
+  return {
+    active: false,
+    times: new Set(),
+    dates: new Set(),
+    lockedTimes: new Set(),
+    lockedDates: new Set(),
+    offeredTimes: new Set(),
+    offeredDates: new Set(),
+    facts: [],
+  };
 }
 
 const MONTH_INDEX: Record<string, number> = {
@@ -147,11 +170,14 @@ function collectDakarStrings(value: unknown, out: string[]): void {
 /**
  * Absorb one successful tool result into the guard. Error results are ignored
  * (an error locks nothing — its alternatives list wrong times on purpose).
- * check_availability is deliberately NOT vouching: "also available" is exactly
- * what must not legitimize a time that differs from the booked slot.
+ * check_availability does NOT vouch unconditionally: its times land in the
+ * offered* sets, honored only when the reply also states the locked slot —
+ * "also available" must never legitimize a time written IN PLACE OF the
+ * booked one.
  */
 export function absorbSlotTimeFacts(guard: SlotTimeGuard, toolName: string, rawResult: string): void {
-  if (!SLOT_VOUCHING_TOOLS.has(toolName)) return;
+  const offering = SLOT_OFFERING_TOOLS.has(toolName);
+  if (!offering && !SLOT_VOUCHING_TOOLS.has(toolName)) return;
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawResult);
@@ -161,12 +187,26 @@ export function absorbSlotTimeFacts(guard: SlotTimeGuard, toolName: string, rawR
   if (parsed === null || typeof parsed !== "object" || "error" in (parsed as object)) return;
   const dakarStrings: string[] = [];
   collectDakarStrings(parsed, dakarStrings);
+  const locking = SLOT_LOCKING_TOOLS.has(toolName);
   for (const fact of dakarStrings) {
-    for (const time of extractTimeTokens(fact)) guard.times.add(time);
-    for (const date of extractDateTokens(fact)) guard.dates.add(date);
+    const times = extractTimeTokens(fact);
+    const dates = extractDateTokens(fact);
+    if (offering) {
+      for (const time of times) guard.offeredTimes.add(time);
+      for (const date of dates) guard.offeredDates.add(date);
+      continue;
+    }
+    for (const time of times) {
+      guard.times.add(time);
+      if (locking) guard.lockedTimes.add(time);
+    }
+    for (const date of dates) {
+      guard.dates.add(date);
+      if (locking) guard.lockedDates.add(date);
+    }
     guard.facts.push(fact);
   }
-  if (SLOT_LOCKING_TOOLS.has(toolName) && dakarStrings.length > 0) guard.active = true;
+  if (locking && dakarStrings.length > 0) guard.active = true;
 }
 
 export interface SlotTimeLintFailure {
@@ -174,18 +214,47 @@ export interface SlotTimeLintFailure {
   token: string;
 }
 
-/** Pure check: every time/date the reply states must be server-vouched. */
+/** True when the reply states every locked time (or, for a time-less locked
+ *  fact, every locked date) — i.e. it confirms the booked slot correctly. */
+function statesLockedSlot(reply: string, guard: SlotTimeGuard): boolean {
+  if (guard.lockedTimes.size > 0) {
+    const replyTimes = new Set(extractTimeTokens(reply));
+    for (const t of guard.lockedTimes) if (!replyTimes.has(t)) return false;
+    return true;
+  }
+  if (guard.lockedDates.size > 0) {
+    const replyDates = new Set(extractDateTokens(reply));
+    for (const d of guard.lockedDates) if (!replyDates.has(d)) return false;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Pure check: every time/date the reply states must be server-vouched.
+ * check_availability offers count as vouched ONLY when the reply also states
+ * the locked slot — that answers a two-part "je confirme + autres dispos ?"
+ * message (Fama 16/08: booking succeeded, confirmation blocked, technical
+ * handoff for nothing) without reopening the 11/08 wrong-time hole.
+ */
 export function findSlotTimeMismatch(reply: string, guard: SlotTimeGuard): SlotTimeLintFailure | null {
   if (!guard.active) return null;
-  if (guard.times.size > 0) {
+  const offersUnlocked = statesLockedSlot(reply, guard);
+  const allowedTimes = offersUnlocked
+    ? new Set([...guard.times, ...guard.offeredTimes])
+    : guard.times;
+  const allowedDates = offersUnlocked
+    ? new Set([...guard.dates, ...guard.offeredDates])
+    : guard.dates;
+  if (allowedTimes.size > 0) {
     for (const m of reply.matchAll(TIME_TOKEN_RE)) {
       const normalized = normalizeTimeToken(Number(m[1]), Number(m[2]), m[3]);
-      if (normalized && !guard.times.has(normalized)) return { kind: "time", token: m[0] };
+      if (normalized && !allowedTimes.has(normalized)) return { kind: "time", token: m[0] };
     }
   }
-  if (guard.dates.size > 0) {
+  if (allowedDates.size > 0) {
     for (const token of extractDateTokens(reply)) {
-      if (!guard.dates.has(token)) return { kind: "date", token };
+      if (!allowedDates.has(token)) return { kind: "date", token };
     }
   }
   return null;
@@ -296,9 +365,13 @@ export function correctiveLintInstruction(
     urls.length > 0
       ? `You may include ONLY these exact server-approved URLs, verbatim: ${urls.join(" , ")}.`
       : `There is NO server-issued payment link this turn. Do NOT include any payment link and do NOT claim a link was sent or created — if the client needs to pay, tell them you are preparing it.`;
+  const offeredNote =
+    slotGuard && (slotGuard.offeredTimes.size > 0 || slotGuard.offeredDates.size > 0)
+      ? ` If the client ALSO asked about other availabilities, you may list times exactly as check_availability returned them this turn — but only in a reply that first confirms the booked slot above.`
+      : "";
   const slotFacts =
     slotGuard?.active && slotGuard.facts.length > 0
-      ? ` The ONLY class date/time the server actually booked or linked this turn: ${Array.from(new Set(slotGuard.facts)).map((f) => `« ${f} »`).join(" and ")} (Dakar time, relay verbatim). If your draft stated any other time or date, that was WRONG — restate exactly this one; if the client asked for a different time, this slot is NOT it: do not send a payment link, apologize and re-run availability instead.`
+      ? ` The ONLY class date/time the server actually booked or linked this turn: ${Array.from(new Set(slotGuard.facts)).map((f) => `« ${f} »`).join(" and ")} (Dakar time, relay verbatim). If your draft stated any other time or date as the booked one, that was WRONG — restate exactly this one; if the client asked to book a different time, this slot is NOT it: do not send a payment link, apologize and re-run availability instead.${offeredNote}`
       : "";
   return (
     `Your previous draft was blocked: it contained a payment link, a tool-call written as text, or a class time/date that the server did not issue. ` +

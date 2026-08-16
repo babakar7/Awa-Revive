@@ -271,6 +271,66 @@ describe("slot-time guard", () => {
     const guard = createSlotTimeGuard();
     expect(lintOutboundReply("On se voit à 11h15 !", [], guard).ok).toBe(true);
   });
+
+  // Prod 16/08 (Fama): "je confirme demain 18h15" + "quelles dispos en Mat ?"
+  // in one message. book_with_membership succeeded, but the confirmation was
+  // blocked because it also quoted the Mat times — technical handoff for a
+  // booking that had actually worked.
+  describe("two-part confirm + availability question", () => {
+    const MAT_AVAILABILITY = JSON.stringify({
+      service: "Pilates Mat",
+      slots: [
+        { start_dakar: "lundi 17 août à 09:15" },
+        { start_dakar: "lundi 17 août à 18:15" },
+        { start_dakar: "samedi 22 août à 11:15" },
+      ],
+    });
+    const BOOKED = JSON.stringify({ booked: true, slot_start_dakar: "lundi 17 août à 18:15" });
+
+    function famaGuard() {
+      const guard = createSlotTimeGuard();
+      absorbSlotTimeFacts(guard, "check_availability", MAT_AVAILABILITY);
+      absorbSlotTimeFacts(guard, "book_with_membership", BOOKED);
+      return guard;
+    }
+
+    it("allows offered times when the reply also states the booked slot", () => {
+      const reply =
+        "C'est réservé, Sculpt demain lundi 17 août à 18:15 ✅ Pour le Mat cette semaine : lundi à 09:15 ou samedi 22 août à 11:15.";
+      expect(lintOutboundReply(reply, [], famaGuard()).ok).toBe(true);
+    });
+
+    it("allows offered times with the booked time stated but no date written out", () => {
+      const reply = "Réservé pour demain à 18h15 ✅ En Mat il reste samedi 22 août à 11:15.";
+      expect(lintOutboundReply(reply, [], famaGuard()).ok).toBe(true);
+    });
+
+    it("still blocks a reply that states an offered time INSTEAD of the booked one (11/08 shape)", () => {
+      const res = lintOutboundReply("C'est réservé pour lundi 17 août à 09:15 ✅", [], famaGuard());
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("slot_time_mismatch");
+    });
+
+    it("still blocks a time that was neither booked nor offered", () => {
+      const reply = "Réservé demain à 18h15 ✅ Il y a aussi du Mat mercredi à 14h30.";
+      const res = lintOutboundReply(reply, [], famaGuard());
+      expect(res.ok).toBe(false);
+      expect(res.detail).toBe("time:14h30");
+    });
+
+    it("offered times alone never unlock anything when no locking tool ran", () => {
+      const guard = createSlotTimeGuard();
+      absorbSlotTimeFacts(guard, "check_availability", MAT_AVAILABILITY);
+      expect(guard.active).toBe(false);
+      expect(lintOutboundReply("Il reste lundi à 09:15 ou même 06h45 !", [], guard).ok).toBe(true);
+    });
+
+    it("mentions the availability allowance in the corrective note only when offers exist", () => {
+      expect(correctiveLintInstruction([], famaGuard())).toContain("check_availability");
+      const bare = guardFrom("book_with_membership", BOOKED);
+      expect(correctiveLintInstruction([], bare)).not.toContain("check_availability");
+    });
+  });
 });
 
 describe("correctiveLintInstruction with slot facts", () => {
