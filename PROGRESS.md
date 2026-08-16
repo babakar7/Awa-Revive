@@ -1,5 +1,70 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Miroir Wix des réservations & abonnements manuels dans l'admin (16 août 2026)
+
+**Problème déclencheur** : une réservation faite à la main dans Wix par la
+réception (Rova Rajaonah, Bébé nageurs) était invisible partout dans l'admin —
+ni Paiements, ni Réservations, ni sa conversation. Wix devient la source
+complète de l'activité studio ; les données Awa enrichissent ces lignes sans
+jamais les doubler ni compter un encaissement deux fois.
+
+**Architecture** (extension des systèmes existants, aucun miroir parallèle) :
+- Table `wix_confirmed_booking_records` **renommée** `wix_booking_records`
+  (bloc DO gardé + renommage d'index) et enrichie : statut Wix, dates
+  create/update, participants, paiement, `matched_client_id`/`match_basis`,
+  `last_seen_at`, `invalidated_at`, `raw`. Elle miroir désormais **tous les
+  statuts** (plus seulement CONFIRMED) ; l'assiduité continue de filtrer
+  confirmé + non invalidé.
+- Nouvelle table `wix_plan_order_records` (commandes Pricing Plans Wix), clé =
+  order id, `updated_date` pour la garde anti-webhook-périmé.
+- `syncAttendanceLeaderboard` délègue à **`syncWixBookings`**
+  ([src/domain/wixBookingSync.ts](src/domain/wixBookingSync.ts)) : incrémental
+  toutes les 5 min (watermark `updatedDate` + chevauchement 1 h), full
+  hebdomadaire, backfill unique (`backfill_completed_at`), sous advisory lock.
+  **Annulation = mise à jour de statut, jamais une suppression.** Invalidation
+  (tombstone) **seulement après un full complet non tronqué** (caps 50 000
+  bookings / 5 000 plans → sinon `last_truncated_at` + pas d'invalidation).
+- Normaliseur téléphonique **canonique partagé**
+  ([src/lib/phoneKey.ts](src/lib/phoneKey.ts)) : Sénégal → `221` + 9 chiffres ;
+  étranger international complet ; étranger ambigu → **aucune clé** (fail-closed).
+  Remplace les deux normalisations divergentes (`crmAudit.phoneKey`,
+  assiduité). **Migration** : `crm_dismissed_duplicates.phone_key` re-préfixé
+  221 pour les clés SN (la signature = hash des ids de fiches, indépendante du
+  format → le masquage est préservé). `buyer_phone_key` ajouté aux mouvements.
+  ⚠️ `appendPhoneItems` n'ajoute plus un numéro étranger ambigu (no-op figé par
+  test) — changement voulu, fail-closed.
+- Rapprochement cliente persisté (`matched_client_id`/`match_basis`), **jamais
+  recalculé au rendu** : hiérarchie de preuves (1) booking Awa même
+  `wix_booking_id` → `awa_booking` ; (2) lien contact→cliente prouvé
+  (key_registry/link_requests) → `contact_id` ; (3) téléphone canonique unique
+  **avec nom compatible** → `phone`. Ambigu (numéro partagé, enfant sous parent)
+  → non rattaché.
+- Webhook Pricing Plans : upsert général **tolérant** avec garde
+  `updated_date >= stored` (webhook retardé n'écrase pas une synchro récente),
+  exécuté **à côté** du chemin Clé strict (jamais devant), indépendant de
+  `KEYS_AUTOMATION_ENABLED`. Nom de plan résolu via **Benefit Programs
+  Transactions** (jamais l'index d'éligibilité, cassé par bénéficiaire).
+- Retry/backoff borné (Retry-After honoré) sur les lectures Wix idempotentes.
+
+**Surfaces admin** :
+- `/admin/paiements` : **défaut inversé** → vue « par date de réservation »
+  (bookings studio Awa+Wix, dédupliqués par `wix_booking_id`, badge source,
+  paiement corrélé au mouvement eCom par order id — affichage seul, la vue
+  comptable compte le mouvement une seule fois). La comptabilité est à
+  `?view=payments`, **préservé partout** (chips, filtres, export CSV, redirects
+  tag/manuel, `return_to` du remboursement). Audit fait : aucun lien croisé
+  n'attendait la vue comptable ; la sidebar atterrit volontairement sur bookings.
+- `/admin/bookings` : deux sections Wix (réservations réception + abonnements
+  Wix). Conversation : carte « Historique Wix » quand `matched_client_id`.
+
+**Reste à faire (chantier suivant, volontairement séparé)** : redéfinir le
+**rapport/tableau de bord** au périmètre studio complet (comptage par date de
+création, recettes depuis le registre unifié `paymentsLedger`, bucketing Dakar,
+ventilation cours/abo/bar/autres Wix). C'est une **rupture de métrique** vs les
+comparaisons existantes (bilans, cohortes pub) : à faire avec la note visible
+déjà posée dans le rapport et une entrée PROGRESS dédiée, pas en catimini. La
+conversion et les cohortes pub restent Awa-only.
+
 ## Paiements coachs : majoration jours fériés +50 % & récap séances exclues (15 août 2026)
 
 - **Besoin (Babakar)** : certains jours fériés, les coachs Pilates sont payés

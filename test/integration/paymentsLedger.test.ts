@@ -179,7 +179,7 @@ describe("payment ledger persistence", () => {
       return String(response.headers["set-cookie"]).split(";")[0];
     };
     const team = await login("revive", "revive@5000");
-    const page = await app.inject({ method: "GET", url: "/admin/paiements", headers: { cookie: team } });
+    const page = await app.inject({ method: "GET", url: "/admin/paiements?view=payments", headers: { cookie: team } });
     expect(page.statusCode).toBe(200);
     expect(page.body).toContain("Rapprochement comptable");
     expect(page.body).not.toContain("Ajouter un mouvement manuel");
@@ -220,7 +220,7 @@ describe("payment ledger persistence", () => {
       payload: new URLSearchParams({ username: "revive", password: "revive@5000", next: "/admin/paiements" }).toString() });
     const cookie = String(login.headers["set-cookie"]).split(";")[0];
 
-    const payments = await app.inject({ method: "GET", url: "/admin/paiements", headers: { cookie } });
+    const payments = await app.inject({ method: "GET", url: "/admin/paiements?view=payments", headers: { cookie } });
     expect(payments.statusCode).toBe(200);
     expect(payments.body).toContain("La Résidente");
     expect(payments.body).toContain("Max It");
