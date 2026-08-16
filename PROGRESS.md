@@ -1,5 +1,56 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## UX /admin/paiements : recherche cliente + requalification depuis la vue réservation (16 août 2026)
+
+**Déclencheur** : deux frictions vécues en prod. (1) Impossible de **chercher
+une cliente** dans les paiements — pour comprendre les deux lignes de 12 000 F
+d'Awa Ba il a fallu du SQL manuel. (2) Le contrôle **Requalifier n'existait pas
+sur la vue « par date de réservation »** (vue par défaut) : une ligne Wix « À
+qualifier » y était un cul-de-sac. Contexte Awa Ba : Awa l'avait mal placée
+(Sculpt 10h15 au lieu de 11h15), d'où un paiement Max It sur une résa annulée +
+une entrée « Pay in Person » saisie en réception → doublon exclu à la main.
+
+**Livré** (4 commits, tous build+test verts) :
+- **Recherche `?q=`** simple côté serveur (rechargement, zéro JS) sur les deux
+  vues : nom / téléphone / libellé, `ILIKE` avec `% _ \` échappés, + variante
+  **téléphone normalisé** (≥6 chiffres) pour les numéros tapés avec espaces
+  (« 77 829 95 95 »). `q` préservé partout : chips, bascule de vue, formulaire
+  Filtrer, lien CSV, redirects de tag. Helper `searchClause` partagé entre le
+  ledger et la vue réservation ([src/domain/paymentsLedger.ts](src/domain/paymentsLedger.ts)).
+- **Pont réservation → requalification** : `bookingsByServiceDate` corrèle
+  désormais le mouvement Wix **en résolvant le dernier tag** (bug corrigé : une
+  ligne déjà requalifiée/exclue restait « À qualifier ») et expose `movementId`
+  + `paymentExcluded`. Une ligne Wix se requalifie **sur place** (avec
+  `return_to` ramenant sur la vue réservation) ; sans mouvement corrélé, lien
+  vers la file comptable pré-filtrée par cliente. Un paiement exclu s'affiche
+  **« Exclu »**, jamais replié sur la méthode fournisseur ni « À qualifier ».
+- **`return_to` en allowlist stricte** ([src/admin/routes.ts](src/admin/routes.ts),
+  `safePaiementsRedirect`) : seul un chemin `/admin/paiements` est honoré, query
+  reconstruite depuis des params autorisés + ancre — jamais reflétée telle
+  quelle (garde open-redirect / injection de params).
+- **Réordonnancement** de la vue comptable : les files d'action (À qualifier,
+  Remboursements) en tête ; carte sync saine = pied de page, sync cassée =
+  épinglée en haut ; en recherche active, résultats d'abord. **Un seul contrôle
+  de dates** (la barre = chips + « Autre période → » vers Filtrer, qui garde
+  Du/Au). Libellés Source en français (« Wix boutique »…, valeurs brutes
+  conservées). Grille stats 4 colonnes (2 sur mobile).
+- **Export CSV vue réservation** (`view=bookings`) : miroir de l'écran, limite
+  d'export explicite **100 000** (pas la troncature silencieuse à 1 000) et
+  **sans clamp** `PAYMENTS_LEDGER_START_DATE` (la vue n'en a pas).
+- **Fuite de volumes Docker corrigée à la source** : `test/integration/globalSetup.ts`
+  faisait `docker rm -f` sans `-v` → chaque run laissait un volume anonyme
+  (~130 Mo) jusqu'à saturer le VM Docker (faux « container did not become
+  ready » en cascade). Ajout de `-v` au teardown + au sweep. **Scopé au
+  conteneur, jamais de purge globale.** (La mémoire `docker-volume-leak-integration`
+  peut être mise à jour : la purge manuelle des volumes dangling devient un
+  dernier recours, plus le remède recommandé.)
+
+Tests : `test/paymentsLedger.test.ts` (recherche échappée/XSS, pont requalif,
+« Exclu », ordre des sections avec/sans `q`, sync top si erreur, libellés
+Source, contrôle de dates unique) + `test/integration/paymentsLedger.test.ts`
+(filtrage `q` nom/`%`/téléphone-espaces/`q`+méthode, résolution tag cash→exclu,
+allowlist `return_to`, export réservation >1 000 lignes non clampé).
+
 ## Commandes salle différées 30/50 min + notes après recherche (16 août 2026)
 
 - Les composeurs **Salle** et **Supervision** gardent la commande immédiate par
