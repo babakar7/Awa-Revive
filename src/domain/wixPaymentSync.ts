@@ -85,6 +85,8 @@ interface StagedMovement {
   rawMethod: string;
   offline: boolean;
   raw: unknown;
+  wixBookingIds: string[];
+  bookingIdsSyncedAt: Date | null;
 }
 
 function entryId(entry: any): string {
@@ -195,6 +197,25 @@ function label(order: any): string {
   return names.join(" + ") || `Commande Wix ${String(order?.number ?? order?.id ?? "")}`;
 }
 
+// Wix Bookings app id. On an eCommerce order line for a class, the booking id
+// is the line's catalogReference.catalogItemId (verified live 16/08 on order
+// 3f488d52 → booking 275fef96). This is the only reliable booking↔payment link:
+// the order carries it, the booking mirror does not.
+const WIX_BOOKINGS_APP_ID = "13d21c63-b5ec-5912-8397-c3a5ddb27a97";
+
+/** Booking ids an eCom order paid for, from its Bookings-app line items. */
+export function extractBookingIds(order: any): string[] {
+  const items = Array.isArray(order?.lineItems) ? order.lineItems : [];
+  const ids = new Set<string>();
+  for (const item of items) {
+    const ref = item?.catalogReference;
+    if (String(ref?.appId ?? "") !== WIX_BOOKINGS_APP_ID) continue;
+    const id = String(ref?.catalogItemId ?? "").trim();
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
 async function localIdentitySets(): Promise<{ external: Set<string>; wix: Set<string> }> {
   const [external, wix] = await Promise.all([
     pool.query(`select id::text id from pending_bookings union select id::text from pending_plan_orders`),
@@ -233,8 +254,9 @@ async function commitSuccessfulScan(args: {
         `insert into wix_payment_movements
           (wix_order_id,source,movement_type,wix_entry_id,provider_status,occurred_at,
            amount_xof,currency,buyer_name,buyer_phone,buyer_contact_id,buyer_identity_synced_at,
-           label,provider_method,raw_method,offline,raw,synced_at,last_seen_at,invalidated_at)
-         values ($1,'ecom',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),now(),null)
+           label,provider_method,raw_method,offline,raw,wix_booking_ids,booking_ids_synced_at,
+           synced_at,last_seen_at,invalidated_at)
+         values ($1,'ecom',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now(),now(),null)
          on conflict (wix_order_id,movement_type,wix_entry_id) do update set
            provider_status=excluded.provider_status,occurred_at=excluded.occurred_at,
            amount_xof=excluded.amount_xof,currency=excluded.currency,
@@ -244,12 +266,15 @@ async function commitSuccessfulScan(args: {
            buyer_identity_synced_at=coalesce(excluded.buyer_identity_synced_at,wix_payment_movements.buyer_identity_synced_at),
            label=excluded.label,
            provider_method=excluded.provider_method,raw_method=excluded.raw_method,
-           offline=excluded.offline,raw=excluded.raw,synced_at=now(),last_seen_at=now(),
+           offline=excluded.offline,raw=excluded.raw,
+           wix_booking_ids=excluded.wix_booking_ids,
+           booking_ids_synced_at=excluded.booking_ids_synced_at,
+           synced_at=now(),last_seen_at=now(),
            invalidated_at=null`,
         [m.wixOrderId,m.movementType,m.wixEntryId,m.providerStatus,m.occurredAt,
          m.amountXof,m.currency,m.buyerName,m.buyerPhone,m.buyerContactId,
          m.buyerIdentitySyncedAt,m.label,m.providerMethod,m.rawMethod,m.offline,
-         JSON.stringify(m.raw)],
+         JSON.stringify(m.raw),m.wixBookingIds,m.bookingIdsSyncedAt],
       );
     }
     for (const d of args.diagnostics) {
@@ -294,7 +319,8 @@ export async function syncWixPayments(log: Log = {}, force = false): Promise<{ r
     const row = state.rows[0] ?? {};
     const identityBackfill = await pool.query(
       `select exists(select 1 from wix_payment_movements
-        where invalidated_at is null and buyer_identity_synced_at is null) needed`,
+        where invalidated_at is null
+          and (buyer_identity_synced_at is null or booking_ids_synced_at is null)) needed`,
     );
     const full = force || Boolean(identityBackfill.rows[0]?.needed) || !row.last_full_reconciled_at ||
       new Date(row.last_full_reconciled_at).getTime() < Date.now() - 7 * 86400_000;
@@ -322,6 +348,7 @@ export async function syncWixPayments(log: Log = {}, force = false): Promise<{ r
           tx.refunds.length > 0;
         if (!hasMonetaryEntry) continue;
         const contact = await enrichedBuyer(order, contactCache, log);
+        const bookingIds = extractBookingIds(order);
         for (const [movementType, entries] of [["payment", tx.payments], ["refund", tx.refunds]] as const) {
           for (const entry of entries) {
             // Wix also exposes plan-session redemptions as "payments". They
@@ -376,6 +403,7 @@ export async function syncWixPayments(log: Log = {}, force = false): Promise<{ r
               buyerIdentitySyncedAt: contact.lookupCompleted ? startedAt : null,
               label: label(order), providerMethod: provider.method, rawMethod: provider.rawMethod,
               offline: provider.offline, raw: entry,
+              wixBookingIds: bookingIds, bookingIdsSyncedAt: startedAt,
             });
           }
         }

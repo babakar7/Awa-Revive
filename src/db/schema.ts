@@ -2239,6 +2239,18 @@ alter table wix_payment_movements add column if not exists buyer_phone_key text;
 create index if not exists idx_wix_payment_buyer_phone_key
   on wix_payment_movements (buyer_phone_key) where buyer_phone_key is not null;
 
+-- Wix Bookings ids this order paid for, read from the order's line-item
+-- catalogReference.catalogItemId (the Bookings app id identifies a class line).
+-- The order carries this reference; the booking mirror does not, so this is the
+-- only reliable booking↔payment link. booking_ids_synced_at is a convergent
+-- sentinel (null = not yet parsed → triggers a full pass; a non-null timestamp
+-- with an empty array = parsed, no class line → stops re-triggering), same
+-- pattern as buyer_identity_synced_at.
+alter table wix_payment_movements add column if not exists wix_booking_ids text[];
+alter table wix_payment_movements add column if not exists booking_ids_synced_at timestamptz;
+create index if not exists idx_wix_payment_booking_ids
+  on wix_payment_movements using gin (wix_booking_ids);
+
 create table if not exists wix_payment_sync_diagnostics (
   fingerprint text primary key,
   kind text not null,

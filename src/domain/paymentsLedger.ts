@@ -331,8 +331,9 @@ export async function bookingsByServiceDate(
                   where target_kind='wix' and target_id=m.id
                   order by created_at desc, id desc limit 1
               ) t on true
-             where r.wix_order_id is not null and m.wix_order_id = r.wix_order_id
-               and m.movement_type='payment' and m.invalidated_at is null
+             where m.movement_type='payment' and m.invalidated_at is null
+               and ((r.wix_order_id is not null and m.wix_order_id = r.wix_order_id)
+                    or r.booking_id = any(m.wix_booking_ids))
              order by m.occurred_at asc limit 1
          ) mv on true
         where r.status='CONFIRMED' and r.invalidated_at is null

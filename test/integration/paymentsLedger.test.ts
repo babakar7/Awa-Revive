@@ -336,3 +336,45 @@ describe("payments search + requalify bridge + bookings export", () => {
     expect(dataLines).toBe(1001);
   });
 });
+
+describe("booking↔payment link via order line items", () => {
+  it("captures booking ids from the order and lights up the booking-view method/exclu", async () => {
+    const bookingsApp = "13d21c63-b5ec-5912-8397-c3a5ddb27a97";
+    vi.stubGlobal("fetch", vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.endsWith("/ecom/v1/orders/search")) return new Response(JSON.stringify({ orders: [{
+        id: "ord-link", createdDate: "2026-08-11T12:59:00Z", updatedDate: "2026-08-11T12:59:00Z",
+        paymentStatus: "PAID", currency: "XOF", channelInfo: { type: "WEB" },
+        buyerInfo: {}, billingInfo: { contactDetails: { firstName: "Awa", lastName: "Ba" } },
+        lineItems: [{ productName: { original: "Sculpt" }, catalogReference: { appId: bookingsApp, catalogItemId: "bk-1115" } }],
+      }], pagingMetadata: { cursors: {} } }), { status: 200 });
+      if (url.includes("/ecom/v1/payments/orders/ord-link")) return new Response(JSON.stringify({
+        orderTransactions: { payments: [{ id: "pay-x", createdDate: "2026-08-11T12:59:00Z", amount: { amount: "12000" },
+          regularPaymentDetails: { paymentMethod: "Pay in Person", status: "APPROVED", offlinePayment: true } }], refunds: [] },
+      }), { status: 200 });
+      return new Response("not found", { status: 404 });
+    }));
+
+    await syncWixPayments({}, true);
+    const mv = (await pool.query(`select id, wix_booking_ids, booking_ids_synced_at from wix_payment_movements`)).rows[0];
+    expect(mv.wix_booking_ids).toEqual(["bk-1115"]);
+    expect(mv.booking_ids_synced_at).toBeInstanceOf(Date);
+
+    // Mirror booking with NO wix_order_id — the real prod condition (the booking
+    // payload never carries the order id). Correlation must fire on the booking id.
+    await pool.query(
+      `insert into wix_booking_records (booking_id, client_name, client_phone, service_name,
+         session_start, status, payment_status, synced_at, last_seen_at)
+       values ('bk-1115','Awa Ba','+221778299595','Sculpt','2026-08-15T11:15:00Z','CONFIRMED','PAID', now(), now())`,
+    );
+    const bwin = { from: new Date("2026-08-15T00:00:00Z"), to: new Date("2026-08-16T00:00:00Z") };
+    let rows = await bookingsByServiceDate(bwin.from, bwin.to);
+    const row = rows.find((r) => r.bookingId === "bk-1115");
+    expect(row?.movementId).toBe(mv.id); // correlated by booking id, not order id
+    expect(row?.paymentMethod).toBe("wix_unreconciled"); // "Pay in Person" → no provider method yet
+
+    await appendTagEvent({ targetId: mv.id, method: "exclu", note: "Doublon", taggedBy: "team" });
+    rows = await bookingsByServiceDate(bwin.from, bwin.to);
+    expect(rows.find((r) => r.bookingId === "bk-1115")?.paymentExcluded).toBe(true);
+  });
+});

@@ -1,5 +1,43 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Lien booking↔paiement Wix par les lignes de commande (16 août 2026)
+
+**Suite de la vue paiements.** La corrélation booking↔mouvement de
+`bookingsByServiceDate` joignait sur `wix_booking_records.wix_order_id` — or ce
+champ est **null pour les 5 752 lignes du miroir** (le payload Wix Bookings ne
+porte pas l'id de commande eCom). La jointure ne se déclenchait donc jamais : une
+ligne Wix restait « Paiement Wix non rapproché »/« À qualifier » même après
+requalification/exclusion côté comptable.
+
+**Vérifié en prod (cas Awa Ba)** : la commande eCom `3f488d52` porte
+`lineItems[].catalogReference` avec `appId` = app Wix Bookings (`13d21c63-…`) et
+`catalogItemId` = **l'id du booking** (`275fef96` = son créneau 11h15 survivant).
+C'est le **seul lien fiable** : la commande le porte, le booking non.
+
+**Correctif** (petit, ciblé, identifiants explicites seulement) :
+- `syncWixPayments` tient déjà l'objet commande complet pendant la pagination
+  (il n'en gardait qu'un libellé). `extractBookingIds(order)` en tire les
+  `catalogItemId` des lignes de l'app Bookings et les persiste sur le mouvement
+  (`wix_payment_movements.wix_booking_ids text[]`). **Zéro appel réseau
+  supplémentaire.**
+- `booking_ids_synced_at` = sentinelle convergente (null → déclenche une passe
+  complète ; timestamp + tableau vide = analysé, aucune ligne cours → ne
+  redéclenche plus), même patron que `buyer_identity_synced_at`. Le backfill
+  historique est donc **gratuit** : la passe complète (déclenchée au boot par la
+  sentinelle nulle) re-parcourt toutes les commandes depuis le début du ledger
+  et peuple l'historique, sans script.
+- `bookingsByServiceDate` corrèle désormais sur
+  `r.booking_id = any(m.wix_booking_ids)` **OU** l'ancien id de commande (les
+  deux = identifiants explicites, aucun rapprochement flou). Index GIN sur
+  `wix_booking_ids`.
+
+Effet : la méthode / « Exclu » s'affiche enfin sur la vue réservation pour les
+paiements Wix (historiques et nouveaux). Sur la carte d'Awa Ba, son créneau
+11h15 montrera « Exclu · écarté des totaux » au lieu de « Paiement Wix non
+rapproché ». Tests : `extractBookingIds` (unit) + intégration (le sync peuple
+`wix_booking_ids`, corrélation par id de booking sans id de commande, résolution
+méthode puis exclu).
+
 ## UX /admin/paiements : recherche cliente + requalification depuis la vue réservation (16 août 2026)
 
 **Déclencheur** : deux frictions vécues en prod. (1) Impossible de **chercher

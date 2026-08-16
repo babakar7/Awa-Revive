@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { csvCell, renderPaymentsPage } from "../src/admin/paiementsPage.js";
 import { dakarDay } from "../src/domain/paymentsLedger.js";
-import { normalizeWixProviderMethod, wixOrderBuyer } from "../src/domain/wixPaymentSync.js";
+import { extractBookingIds, normalizeWixProviderMethod, wixOrderBuyer } from "../src/domain/wixPaymentSync.js";
 import { bookingPaymentLabel } from "../src/lib/paymentMethod.js";
 
 describe("payments ledger pure rules", () => {
@@ -13,6 +13,21 @@ describe("payments ledger pure rules", () => {
 
   it("uses the Dakar calendar day", () => {
     expect(dakarDay(new Date("2026-08-10T23:45:00Z"))).toBe("2026-08-10");
+  });
+
+  it("extracts booking ids from an order's Bookings-app line items only", () => {
+    const bookingsApp = "13d21c63-b5ec-5912-8397-c3a5ddb27a97";
+    const order = {
+      lineItems: [
+        { productName: { original: "Sculpt" }, catalogReference: { appId: bookingsApp, catalogItemId: "bk-1" } },
+        { productName: { original: "Café" }, catalogReference: { appId: "some-store-app", catalogItemId: "prod-9" } },
+        { catalogReference: { appId: bookingsApp, catalogItemId: "bk-2" } },
+        { catalogReference: { appId: bookingsApp, catalogItemId: "bk-1" } }, // dup
+      ],
+    };
+    expect(extractBookingIds(order)).toEqual(["bk-1", "bk-2"]);
+    expect(extractBookingIds({})).toEqual([]);
+    expect(extractBookingIds({ lineItems: [{ catalogReference: { appId: bookingsApp } }] })).toEqual([]);
   });
 
   it("normalizes known providers and leaves generic offline payments untagged", () => {
