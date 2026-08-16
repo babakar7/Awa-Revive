@@ -24,7 +24,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v11";
+const ASSET_VERSION = "v12";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -168,6 +168,7 @@ background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:
 .searchctl{display:none;min-width:3rem;height:2.75rem;border:1px solid var(--border);border-radius:var(--radius);background:#fff;
 color:var(--plum-700);font-weight:750;padding:0 .65rem}
 .search-summary{display:none;align-items:center;gap:.4rem;min-height:2rem;margin:-.15rem 3rem .35rem 0;color:var(--ink-600);font-size:.82rem;font-weight:700}
+.search-summary .summary-action{appearance:none;border:0;background:none;padding:.2rem 0;color:var(--plum-700);font:inherit;text-decoration:underline;text-underline-offset:.15rem;cursor:pointer}
 .search-summary .dotsep{color:var(--ink-300)}
 .browsebar{display:block}.browsebar .chips{width:100%}
 .chips{display:flex;gap:.4rem;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:.2rem;scrollbar-width:none}
@@ -621,7 +622,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
 
     // Compact search header keeps the two decisions visible over the keyboard.
     var searchSummary=el('div','search-summary');
-    summarySpot=el('span',null,'Espace à choisir'); summaryMode=el('span',null,'Sur place');
+    summarySpot=el('button','summary-action','Espace à choisir'); summarySpot.type='button'; summarySpot.setAttribute('aria-label','Choisir ou modifier l’espace'); summaryMode=el('span',null,'Sur place');
     searchSummary.appendChild(summarySpot); searchSummary.appendChild(el('span','dotsep','·')); searchSummary.appendChild(summaryMode);
     searchCart=el('button','chip cart','Panier (0)'); searchCart.type='button'; searchSummary.appendChild(searchCart); sh.appendChild(searchSummary);
 
@@ -633,6 +634,11 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     var doneSearch=el('button','searchctl','Terminé'); doneSearch.type='button';
     function enterSearch(){ if(state.cartOnly)state.cartOnly=false; state.searching=true; sh.classList.add('searching'); renderList(); fitViewport(); }
     function finishSearch(){ state.searching=false; sh.classList.remove('searching'); try{search.blur();}catch(e){} renderList(); fitViewport(); }
+    function revealSpotPicker(){
+      state.q=''; search.value=''; finishSearch();
+      setTimeout(function(){ if(spotPicker.scrollIntoView)spotPicker.scrollIntoView({block:'start'}); if(spotButtons.length){try{spotButtons[0].focus();}catch(e){}} },0);
+    }
+    summarySpot.onclick=revealSpotPicker;
     search.onfocus=enterSearch;
     search.oninput=function(){ state.q=search.value; state.cartOnly=false; renderList(); };
     clearSearch.onpointerdown=function(e){e.preventDefault();};
@@ -746,7 +752,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     var foot=el('div','foot'); totalEl=el('div','total'); foot.appendChild(totalEl);
     go=el('button','go','Ajouter des articles');
     go.onclick=function(){
-      if(!state.spotId){ setError('Choisissez d’abord un espace ci-dessus.'); return; }
+      if(!state.spotId){ setError('Choisissez d’abord un espace.'); revealSpotPicker(); return; }
       var miss=null; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0 && !miss){ var it=findItem(id); if(it&&it.choices&&it.choices.length&&!d.choice) miss=it; } });
       if(miss){ setError('Choisissez « '+(miss.optionLabel||'option')+' » pour '+miss.name+'.'); state.cartOnly=true; state.q=''; search.value=''; finishSearch(); renderList();
         var r=listEl.querySelector('[data-id="'+miss.id+'"]'); if(r&&r.scrollIntoView) r.scrollIntoView({block:'center'}); return; }

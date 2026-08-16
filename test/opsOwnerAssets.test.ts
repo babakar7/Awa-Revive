@@ -61,6 +61,14 @@ describe("owner supervision PWA assets", () => {
     expect(ownerBoardPage()).toContain(".spotbtn.sel .check");
   });
 
+  it("lets the supervisor return to the space picker after adding an item through search", () => {
+    expect(OWNER_APP_JS).toContain("summarySpot=el('button','summary-action','Espace à choisir')");
+    expect(OWNER_APP_JS).toContain("summarySpot.onclick=revealSpotPicker");
+    expect(OWNER_APP_JS).toContain("if(!state.spotId){ setError('Choisissez d’abord un espace.'); revealSpotPicker(); return; }");
+    expect(OWNER_APP_JS).toContain("spotPicker.scrollIntoView({block:'start'})");
+    expect(ownerBoardPage()).toContain(".search-summary .summary-action");
+  });
+
   it("has a selected-items cart, collapsed optional details, and contextual sticky footer", () => {
     expect(OWNER_APP_JS).toContain("document.createElement('details')");
     expect(OWNER_APP_JS).toContain("Détails optionnels");
@@ -128,7 +136,7 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v11");
+    expect(version).toBe("v12");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 
