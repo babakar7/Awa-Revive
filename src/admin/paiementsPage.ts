@@ -43,7 +43,7 @@ function rangeHref(from: string, to: string, d: PaymentsPageData): string {
   const q = new URLSearchParams({
     from,
     to,
-    ...(bookings ? { view: "bookings" } : {}),
+    view: bookings ? "bookings" : "payments",
     ...(!bookings && d.method ? { method: d.method } : {}),
     ...(!bookings && d.source ? { source: d.source } : {}),
     ...(!bookings && d.type ? { type: d.type } : {}),
@@ -84,7 +84,7 @@ function rangeBar(d: PaymentsPageData): string {
     return `<a class="${active.trim()}" href="${esc(rangeHref(p.from, p.to, d))}">${esc(p.label)}</a>`;
   }).join("");
   const hidden = [
-    bookings ? `<input type="hidden" name="view" value="bookings">` : "",
+    `<input type="hidden" name="view" value="${bookings ? "bookings" : "payments"}">`,
     !bookings && d.method ? `<input type="hidden" name="method" value="${esc(d.method)}">` : "",
     !bookings && d.source ? `<input type="hidden" name="source" value="${esc(d.source)}">` : "",
     !bookings && d.type ? `<input type="hidden" name="type" value="${esc(d.type)}">` : "",
@@ -100,7 +100,7 @@ function rangeBar(d: PaymentsPageData): string {
 
 function viewSwitch(d: PaymentsPageData): string {
   const paymentQuery = new URLSearchParams({
-    from: d.from, to: d.to,
+    view: "payments", from: d.from, to: d.to,
     ...(d.method ? { method: d.method } : {}),
     ...(d.source ? { source: d.source } : {}),
     ...(d.type ? { type: d.type } : {}),
@@ -112,35 +112,61 @@ function viewSwitch(d: PaymentsPageData): string {
   </nav>`;
 }
 
+function bookingSettlement(row: BookingByServiceDate): string {
+  if (row.planName) return `<b>${esc(row.planName)}</b><div class="muted">0 F · Séance décomptée</div>`;
+  if (row.paymentMethod === "membership") {
+    return `<b>Abonnement</b><div class="muted">0 F · Séance décomptée</div>`;
+  }
+  const amount = row.amountXof > 0 ? fmtFcfa(row.amountXof) : "Inclus";
+  if (row.paymentMethod === "wix_unreconciled") {
+    return `<b>Paiement Wix non rapproché</b><div class="muted">${amount}</div>`;
+  }
+  if (!row.paymentMethod) {
+    return `<b>${row.source === "wix" ? "À qualifier" : "—"}</b><div class="muted">${amount}</div>`;
+  }
+  const paid = row.paidAt ? `Réglé le ${fmtDate(row.paidAt)}` : "Date non enregistrée";
+  return `<b>${esc(paymentMethodLabel(row.paymentMethod))}</b><div class="muted">${amount} · ${esc(paid)}</div>`;
+}
+
+function sourceBadge(source: "awa" | "wix"): string {
+  return source === "wix"
+    ? `<span class="badge badge--amber">Wix</span>`
+    : `<span class="badge badge--gray">Awa</span>`;
+}
+
 function bookingClientGroups(rows: BookingByServiceDate[]): string {
   if (!rows.length) {
-    return `<div class="empty"><b>Aucune réservation confirmée</b><p>Aucun client n’a de réservation enregistrée par Awa sur cette période.</p></div>`;
+    return `<div class="empty"><b>Aucune réservation confirmée</b><p>Aucun client n’a de réservation studio (Awa ou Wix) sur cette période.</p></div>`;
   }
   const groups = new Map<string, BookingByServiceDate[]>();
   for (const row of rows) {
-    const existing = groups.get(row.clientId);
+    const existing = groups.get(row.groupKey);
     if (existing) existing.push(row);
-    else groups.set(row.clientId, [row]);
+    else groups.set(row.groupKey, [row]);
   }
   return `<div class="booking-client-grid">${[...groups.values()].map((clientRows) => {
     const client = clientRows[0];
     const places = clientRows.reduce((total, row) => total + row.participants, 0);
+    const anyWix = clientRows.some((row) => row.source === "wix");
     const rowsHtml = clientRows.map((row) => {
-      const amount = row.amountXof > 0 ? fmtFcfa(row.amountXof) : "Inclus";
-      const paid = row.paidAt ? `Réglé le ${fmtDate(row.paidAt)}` : row.paymentMethod === "membership" ? "Séance décomptée" : "Date non enregistrée";
-      return `<tr><td data-label="Horaire"><b>${fmtDate(row.slotStart)}</b></td><td data-label="Cours">${esc(row.serviceName)}</td><td data-label="Places">${row.participants}</td><td data-label="Règlement"><b>${esc(paymentMethodLabel(row.paymentMethod))}</b><div class="muted">${amount} · ${esc(paid)}</div></td></tr>`;
+      return `<tr><td data-label="Horaire"><b>${fmtDate(row.slotStart)}</b> ${sourceBadge(row.source)}</td><td data-label="Cours">${esc(row.serviceName)}</td><td data-label="Places">${row.participants}</td><td data-label="Règlement">${bookingSettlement(row)}</td></tr>`;
     }).join("");
-    return `<article class="card booking-client-card"><div class="section-header"><div><h3><a href="/admin/conversations/${esc(client.clientId)}">${esc(client.clientName ?? "Client")}</a></h3><p class="muted">${esc(client.clientPhone ?? "Téléphone non renseigné")}</p></div><span class="badge badge--gray">${places} place${places > 1 ? "s" : ""}</span></div><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Horaire</th><th>Cours</th><th>Places</th><th>Règlement</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></article>`;
+    const name = esc(client.clientName ?? "Client Wix");
+    const heading = client.clientId
+      ? `<a href="/admin/conversations/${esc(client.clientId)}">${name}</a>`
+      : `${name} <span class="muted">(non rattachée)</span>`;
+    return `<article class="card booking-client-card"><div class="section-header"><div><h3>${heading}</h3><p class="muted">${esc(client.clientPhone ?? "Téléphone non renseigné")}</p></div><span class="badge ${anyWix ? "badge--amber" : "badge--gray"}">${places} place${places > 1 ? "s" : ""}</span></div><div class="table-wrap"><table class="responsive-table"><thead><tr><th>Horaire</th><th>Cours</th><th>Places</th><th>Règlement</th></tr></thead><tbody>${rowsHtml}</tbody></table></div></article>`;
   }).join("")}</div>`;
 }
 
 function bookingsView(d: PaymentsPageData): string {
-  const clientCount = new Set(d.bookings.map((row) => row.clientId)).size;
+  const clientCount = new Set(d.bookings.map((row) => row.groupKey)).size;
   const places = d.bookings.reduce((total, row) => total + row.participants, 0);
+  const wixCount = d.bookings.filter((row) => row.source === "wix").length;
   const period = d.from === d.to ? `du ${esc(d.from)}` : `du ${esc(d.from)} au ${esc(d.to)}`;
   return `<section class="anchor-target" id="pay-reservations">
-    <div class="card"><div class="section-header"><div><span class="eyebrow">Date du cours</span><h2>Clients ayant une réservation ${period}</h2></div></div>${rangeBar(d)}<p class="muted">Cette vue suit la date de la séance, quelle que soit la date du paiement. Seules les réservations confirmées enregistrées par Awa sont affichées.</p></div>
-    <div class="payment-booking-stats"><article><span>Clients</span><b>${clientCount}</b></article><article><span>Réservations</span><b>${d.bookings.length}</b></article><article><span>Places</span><b>${places}</b></article></div>
+    <div class="card"><div class="section-header"><div><span class="eyebrow">Date du cours</span><h2>Clients ayant une réservation ${period}</h2></div></div>${rangeBar(d)}<p class="muted">Cette vue suit la date de la séance, quelle que soit la date du paiement. Réservations confirmées du studio (Awa et Wix). <a href="/admin/paiements?view=payments&from=${esc(d.from)}&to=${esc(d.to)}">Voir la vue comptable →</a></p></div>
+    <div class="payment-booking-stats"><article><span>Clients</span><b>${clientCount}</b></article><article><span>Réservations</span><b>${d.bookings.length}</b></article><article><span>dont Wix</span><b>${wixCount}</b></article><article><span>Places</span><b>${places}</b></article></div>
     ${bookingClientGroups(d.bookings)}
   </section>`;
 }
@@ -258,13 +284,14 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
   ${qualifier(d.untagged)}
   <section class="grid-2 anchor-target" id="pay-totaux">${totalCards("Mois en cours", d.currentMonth)}${totalCards("Mois précédent", d.previousMonth)}</section>
   <section class="card anchor-target" id="pay-filtres"><h2>Filtrer</h2><form method="get" action="/admin/paiements" class="form-grid">
+    <input type="hidden" name="view" value="payments">
     <label>Du<input type="date" name="from" value="${esc(d.from)}" min="${esc(d.startDate)}"></label><label>Au<input type="date" name="to" value="${esc(d.to)}"></label>
     <label>Méthode<select name="method"><option value="">Toutes</option><option value="untagged">À qualifier</option>${METHODS.map((m) => `<option value="${m}"${d.method===m?" selected":""}>${esc(paymentMethodLabel(m))}</option>`).join("")}</select></label>
     <label>Source<select name="source"><option value="">Toutes</option>${["booking","plan","cafe","delivery","manual","wix_ecom","wix_plan"].map((s) => `<option value="${s}"${d.source===s?" selected":""}>${esc(s)}</option>`).join("")}</select></label>
     <label>Type<select name="type"><option value="">Tous</option><option value="payment"${d.type==="payment"?" selected":""}>Encaissements</option><option value="refund"${d.type==="refund"?" selected":""}>Remboursements</option></select></label>
     <button class="act" type="submit">Afficher</button><a class="act act--ghost" href="/admin/paiements/export.csv?${esc(filterQuery)}">Exporter CSV</a></form></section>
   <section class="card anchor-target" id="pay-journaliers"><h2>Totaux journaliers</h2>${dailyTable(d.daily, d)}</section>
-  ${d.refundNeeded.length ? `<section class="card anchor-target" id="pay-remboursements"><h2>Remboursements bookings à pointer</h2>${d.refundNeeded.map((b) => `<form class="row between" method="post" action="/admin/bookings/${esc(b.id)}/refund-done"><input type="hidden" name="return_to" value="/admin/paiements"><span><b>${esc(b.service_name)}</b> · ${esc(b.client_name ?? "Client")} · ${fmtFcfa(b.amount_xof)}</span><button class="act act--sm" type="submit">Remboursement effectué</button></form>`).join("")}</section>` : ""}
+  ${d.refundNeeded.length ? `<section class="card anchor-target" id="pay-remboursements"><h2>Remboursements bookings à pointer</h2>${d.refundNeeded.map((b) => `<form class="row between" method="post" action="/admin/bookings/${esc(b.id)}/refund-done"><input type="hidden" name="return_to" value="/admin/paiements?view=payments"><span><b>${esc(b.service_name)}</b> · ${esc(b.client_name ?? "Client")} · ${fmtFcfa(b.amount_xof)}</span><button class="act act--sm" type="submit">Remboursement effectué</button></form>`).join("")}</section>` : ""}
   ${d.owner ? manualForm() : ""}`;
 }
 

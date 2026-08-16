@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pool } from "../../src/db/index.js";
 import { syncAttendanceLeaderboard } from "../../src/domain/attendanceLeaderboard.js";
 import { upsertPlanOrderFromWebhook } from "../../src/domain/wixBookingSync.js";
+import { bookingsByServiceDate } from "../../src/domain/paymentsLedger.js";
 import { makeFetchMock, truncateAll, type FetchMock } from "./helpers.js";
 
 let mock: FetchMock;
@@ -84,6 +85,22 @@ describe("Wix booking mirror", () => {
     });
     expect(String(row.matched_client_id)).toBe(clientId);
     expect(row.invalidated_at).toBeNull();
+  });
+
+  it("surfaces the Wix-manual booking in the by-reservation-date view (Rova acceptance)", async () => {
+    await createClient("Rova Rajaonah", "221771234567");
+    mock.wix.bookings = [
+      bookingFixture({ id: "rova2", phone: "+221771234567", name: "Rova", start: "2026-08-16T09:00:00Z" }),
+    ];
+    await syncAttendanceLeaderboard(true);
+
+    const from = new Date("2026-08-16T00:00:00Z");
+    const to = new Date("2026-08-17T00:00:00Z");
+    const rows = await bookingsByServiceDate(from, to);
+    const rova = rows.find((r) => r.bookingId === "rova2");
+    expect(rova).toBeDefined();
+    expect(rova).toMatchObject({ source: "wix", serviceName: "Bébé nageurs" });
+    expect(rova?.clientName).toContain("Rova");
   });
 
   it("keeps a canonical single row when an Awa booking has the same wix_booking_id", async () => {

@@ -50,7 +50,8 @@ export interface MethodTotal {
 
 export interface BookingByServiceDate {
   bookingId: string;
-  clientId: string;
+  /** Local client id when known; null for an unmatched Wix-manual booking. */
+  clientId: string | null;
   clientName: string | null;
   clientPhone: string | null;
   serviceName: string;
@@ -59,6 +60,12 @@ export interface BookingByServiceDate {
   amountXof: number;
   paymentMethod: string;
   paidAt: Date | null;
+  /** 'awa' = booked through Awa; 'wix' = made directly in Wix (reception). */
+  source: "awa" | "wix";
+  /** Exact plan name for a subscription-paid booking, else null. */
+  planName: string | null;
+  /** Stable grouping key (client id, or a Wix identity when unmatched). */
+  groupKey: string;
 }
 
 const FINAL_WIX_STATUSES = ["APPROVED", "SUCCESSFUL", "COMPLETED", "SUCCEEDED"];
@@ -224,26 +231,64 @@ export function periodMethodTotals(filters: LedgerFilters): Promise<MethodTotal[
 }
 
 /** Confirmed Awa bookings selected by class date, independently of payment date. */
+/**
+ * Every confirmed STUDIO booking on a service date, Awa and Wix-manual unified.
+ * A Wix booking already represented by an Awa booking (same wix_booking_id) is
+ * shown once (the Awa row wins, it carries the real payment method). A
+ * Wix-manual booking's payment is enriched from the correlated eCommerce
+ * movement, joined only on an explicit order id — never guessed — and used for
+ * display only; the accounting view still counts the movement exactly once.
+ */
 export async function bookingsByServiceDate(
   from: Date,
   to: Date,
   limit = 1_000,
 ): Promise<BookingByServiceDate[]> {
   const res = await pool.query(
-    `select b.id booking_id, b.client_id, c.name client_name, c.wa_phone client_phone,
-            b.service_name, b.slot_start, b.participants, b.amount_xof,
-            b.payment_method, b.paid_at
-       from pending_bookings b
-       join clients c on c.id=b.client_id
-      where b.status='BOOKED' and not c.is_test
-        and b.slot_start >= $1 and b.slot_start < $2
-      order by lower(coalesce(c.name,c.wa_phone)), c.wa_phone, b.slot_start, b.id
-      limit $3`,
+    `select * from (
+       select b.id::text booking_id, b.client_id::text client_id,
+              c.name client_name, c.wa_phone client_phone,
+              b.service_name, b.slot_start, b.participants, b.amount_xof,
+              b.payment_method, b.paid_at,
+              'awa'::text source, b.membership_plan_name plan_name,
+              b.client_id::text group_key,
+              lower(coalesce(c.name,c.wa_phone)) sort_name
+         from pending_bookings b
+         join clients c on c.id=b.client_id
+        where b.status='BOOKED' and not c.is_test
+          and b.slot_start >= $1 and b.slot_start < $2
+       union all
+       select r.booking_id, r.matched_client_id::text,
+              coalesce(cl.name, r.client_name), coalesce(cl.wa_phone, r.client_phone),
+              coalesce(r.service_name, 'Cours'), r.session_start,
+              coalesce(r.number_of_participants, 1),
+              coalesce(mv.amount_xof, 0),
+              coalesce(mv.method, case when r.payment_status='PAID' then 'wix_unreconciled' else '' end),
+              mv.occurred_at,
+              'wix'::text, null,
+              coalesce(r.matched_client_id::text, 'wix:' || coalesce(r.wix_contact_id, r.booking_id)),
+              lower(coalesce(cl.name, r.client_name, r.booking_id))
+         from wix_booking_records r
+         left join clients cl on cl.id = r.matched_client_id
+         left join lateral (
+            select m.provider_method method, m.amount_xof, m.occurred_at
+              from wix_payment_movements m
+             where r.wix_order_id is not null and m.wix_order_id = r.wix_order_id
+               and m.movement_type='payment' and m.invalidated_at is null
+             order by m.occurred_at asc limit 1
+         ) mv on true
+        where r.status='CONFIRMED' and r.invalidated_at is null
+          and r.session_start >= $1 and r.session_start < $2
+          and not exists (select 1 from pending_bookings pb where pb.wix_booking_id = r.booking_id)
+          and (cl.id is null or not cl.is_test)
+     ) rows
+     order by sort_name, group_key, slot_start, booking_id
+     limit $3`,
     [from, to, limit],
   );
   return res.rows.map((row) => ({
     bookingId: row.booking_id,
-    clientId: row.client_id,
+    clientId: row.client_id ?? null,
     clientName: row.client_name,
     clientPhone: row.client_phone,
     serviceName: row.service_name,
@@ -252,6 +297,9 @@ export async function bookingsByServiceDate(
     amountXof: Number(row.amount_xof),
     paymentMethod: row.payment_method,
     paidAt: row.paid_at ? new Date(row.paid_at) : null,
+    source: row.source,
+    planName: row.plan_name,
+    groupKey: row.group_key,
   }));
 }
 

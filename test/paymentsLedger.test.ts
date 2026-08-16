@@ -113,7 +113,7 @@ describe("payments ledger pure rules", () => {
     expect(movements).toMatch(/2026-08-10<\/b>[^<]*· 2 transactions · net 30/);
     expect(movements).not.toContain("129 999");
     // daily total drills into that single day's itemised list
-    expect(html).toContain("from=2026-08-11&amp;to=2026-08-11#pay-mouvements");
+    expect(html).toContain("from=2026-08-11&amp;to=2026-08-11&amp;view=payments#pay-mouvements");
   });
 
   it("scopes movements to the day with Today/Yesterday/7-day chips", () => {
@@ -141,13 +141,19 @@ describe("payments ledger pure rules", () => {
     const booking = (overrides: Partial<{
       bookingId: string; clientId: string; clientName: string; clientPhone: string;
       serviceName: string; slotStart: Date; participants: number; amountXof: number;
-      paymentMethod: string; paidAt: Date | null;
-    }> = {}) => ({
-      bookingId: "booking-1", clientId: "11111111-1111-4111-8111-111111111111",
-      clientName: "Awa Ndiaye", clientPhone: "221770000001", serviceName: "Reformer",
-      slotStart: new Date("2026-08-11T09:00:00Z"), participants: 1, amountXof: 12000,
-      paymentMethod: "wave", paidAt: new Date("2026-08-03T12:00:00Z"), ...overrides,
-    });
+      paymentMethod: string; paidAt: Date | null; source: "awa" | "wix";
+      planName: string | null; groupKey: string;
+    }> = {}) => {
+      const base = {
+        bookingId: "booking-1", clientId: "11111111-1111-4111-8111-111111111111",
+        clientName: "Awa Ndiaye", clientPhone: "221770000001", serviceName: "Reformer",
+        slotStart: new Date("2026-08-11T09:00:00Z"), participants: 1, amountXof: 12000,
+        paymentMethod: "wave", paidAt: new Date("2026-08-03T12:00:00Z"),
+        source: "awa" as const, planName: null,
+      };
+      const merged = { ...base, ...overrides };
+      return { ...merged, groupKey: overrides.groupKey ?? merged.clientId };
+    };
     const html = renderPaymentsPage({
       from: "2026-08-11", to: "2026-08-11", today: "2026-08-11", startDate: "2026-07-01",
       view: "bookings", rows: [], bookings: [

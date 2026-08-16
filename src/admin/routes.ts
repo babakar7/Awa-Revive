@@ -621,7 +621,9 @@ export function registerAdmin(app: FastifyInstance): void {
       // ---------- Rapprochement des paiements ----------
       admin.get("/paiements", async (req, reply) => {
         const query = req.query as Record<string, string | undefined>;
-        const view = query.view === "bookings" ? "bookings" : "payments";
+        // Default view is now "by reservation date" (studio bookings, Awa +
+        // Wix); the accounting ledger is reached explicitly via ?view=payments.
+        const view = query.view === "payments" ? "payments" : "bookings";
         const startDate = config.PAYMENTS_LEDGER_START_DATE;
         const today = new Date().toISOString().slice(0, 10);
         const monthStart = `${today.slice(0, 7)}-01`;
@@ -638,7 +640,7 @@ export function registerAdmin(app: FastifyInstance): void {
         to.setUTCDate(to.getUTCDate() + 1);
         if (!(from < to)) {
           const errorQuery = new URLSearchParams({
-            ...(view === "bookings" ? { view } : {}),
+            ...(view === "payments" ? { view } : {}),
             err: "Période invalide.",
           });
           return reply.redirect(`/admin/paiements?${errorQuery.toString()}`, 303);
@@ -699,9 +701,9 @@ export function registerAdmin(app: FastifyInstance): void {
             targetId: String(body.target_id ?? ""), method: String(body.method ?? ""),
             note: body.note, taggedBy: req.adminUser ?? "?",
           });
-          return reply.redirect(`/admin/paiements?done=${encodeURIComponent("Méthode enregistrée.")}`, 303);
+          return reply.redirect(`/admin/paiements?view=payments&done=${encodeURIComponent("Méthode enregistrée.")}`, 303);
         } catch (error) {
-          return reply.redirect(`/admin/paiements?err=${encodeURIComponent(error instanceof Error ? error.message : "Tag impossible.")}`, 303);
+          return reply.redirect(`/admin/paiements?view=payments&err=${encodeURIComponent(error instanceof Error ? error.message : "Tag impossible.")}`, 303);
         }
       });
 
@@ -727,12 +729,12 @@ export function registerAdmin(app: FastifyInstance): void {
             reversesMovementId: body.reverses_movement_id || undefined,
             idempotencyKey: body.idempotency_key,
           });
-          return reply.redirect(`/admin/paiements?done=${encodeURIComponent(created ? "Mouvement enregistré." : "Mouvement déjà enregistré.")}`, 303);
+          return reply.redirect(`/admin/paiements?view=payments&done=${encodeURIComponent(created ? "Mouvement enregistré." : "Mouvement déjà enregistré.")}`, 303);
         } catch (error: any) {
           const message = error?.code === "23505"
             ? "Cette référence fournisseur existe déjà."
             : error instanceof Error ? error.message : "Mouvement impossible.";
-          return reply.redirect(`/admin/paiements?err=${encodeURIComponent(message)}`, 303);
+          return reply.redirect(`/admin/paiements?view=payments&err=${encodeURIComponent(message)}`, 303);
         }
       });
 
@@ -3670,7 +3672,11 @@ ${photoSection}
             "Refund-done rejected (booking not in REFUND_NEEDED)",
           );
         }
-        reply.redirect(body.return_to === "/admin/paiements" ? "/admin/paiements" : "/admin", 303);
+        const returnTo =
+          body.return_to === "/admin/paiements?view=payments" || body.return_to === "/admin/paiements"
+            ? body.return_to
+            : "/admin";
+        reply.redirect(returnTo, 303);
       });
 
       admin.post("/plan-orders/:id/activated", async (req, reply) => {
