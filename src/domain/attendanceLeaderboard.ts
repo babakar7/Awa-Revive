@@ -1,13 +1,11 @@
 import { pool } from "../db/index.js";
+import { canonicalPhoneKey } from "../lib/phoneKey.js";
 import {
   getWixAttendanceBookingSnapshots,
-  listWixConfirmedBookingSnapshots,
   listWixAttendanceRecords,
   type WixAttendanceBookingSnapshot,
 } from "../lib/wix.js";
-
-const SYNC_LOCK = 8_337_201;
-const STALE_AFTER_MS = 60 * 60 * 1_000;
+import { syncWixBookings } from "./wixBookingSync.js";
 
 export type AttendancePeriod = "all" | "month" | "30" | "90" | "year";
 
@@ -43,40 +41,8 @@ export interface AttendanceDetail {
   sessions: AttendanceSession[];
 }
 
-async function upsertConfirmedBookingRows(rows: WixAttendanceBookingSnapshot[]): Promise<void> {
-  for (const row of rows) {
-    const session = row.sessionStart ? new Date(row.sessionStart) : null;
-    await pool.query(
-      `insert into wix_confirmed_booking_records
-        (booking_id, wix_contact_id, client_name, client_phone, client_phone_key,
-         service_id, service_name, session_start, synced_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,now())
-       on conflict (booking_id) do update set
-         wix_contact_id=excluded.wix_contact_id,
-         client_name=excluded.client_name,
-         client_phone=excluded.client_phone,
-         client_phone_key=excluded.client_phone_key,
-         service_id=excluded.service_id,
-         service_name=excluded.service_name,
-         session_start=excluded.session_start,
-         synced_at=now()`,
-      [
-        row.bookingId,
-        row.contactId,
-        row.clientName,
-        row.clientPhone,
-        phoneKey(row.clientPhone),
-        row.serviceId,
-        row.serviceName,
-        session && !Number.isNaN(session.getTime()) ? session : null,
-      ],
-    );
-  }
-}
-
 function phoneKey(value: string | null | undefined): string | null {
-  const digits = String(value ?? "").replace(/\D/g, "");
-  return digits.length >= 8 ? digits : null;
+  return canonicalPhoneKey(value);
 }
 
 function dateForPeriod(period: AttendancePeriod): Date | null {
@@ -142,75 +108,42 @@ async function upsertAttendanceRows(
   }
 }
 
-/** Full, crash-safe Wix reconciliation. The advisory lock makes it safe on deploy overlap. */
+/**
+ * Refresh the Wix attendance MARKS (ATTENDED/NOT_ATTENDED) into
+ * wix_attendance_records. Full-replace is fine here — the table is small and
+ * marks can be corrected in Wix. Called by the general booking sync on full
+ * passes; the booking rows themselves live in wix_booking_records now.
+ */
+export async function refreshAttendanceMarks(startedAt: Date): Promise<void> {
+  const attendance = await listWixAttendanceRecords();
+  const snapshots = await getWixAttendanceBookingSnapshots([
+    ...new Set(attendance.map((row) => row.bookingId)),
+  ]);
+  const byBooking = new Map(snapshots.map((snapshot) => [snapshot.bookingId, snapshot]));
+  await upsertAttendanceRows(
+    attendance.map((row) => ({
+      attendanceId: row.id,
+      bookingId: row.bookingId,
+      eventId: row.eventId,
+      status: row.status,
+      numberOfAttendees: row.numberOfAttendees,
+      snapshot: byBooking.get(row.bookingId),
+    })),
+  );
+  await pool.query(`delete from wix_attendance_records where synced_at < $1`, [startedAt]);
+}
+
+/**
+ * Kept as the stable entry point (boot + 5-min loop + tests) now that it
+ * delegates to the general Wix booking/plan-order mirror. Returns the same
+ * shape callers expect; recordCount is the live booking count.
+ */
 export async function syncAttendanceLeaderboard(force = false): Promise<{
   ran: boolean;
   recordCount: number;
 }> {
-  const db = await pool.connect();
-  try {
-    const locked = (await db.query(`select pg_try_advisory_lock($1) as locked`, [SYNC_LOCK])).rows[0]
-      ?.locked;
-    if (!locked) return { ran: false, recordCount: 0 };
-    const current = (await db.query(`select * from wix_attendance_sync_state where singleton=true`)).rows[0] as AttendanceSyncState;
-    const hasConfirmedBookingCache = (
-      await db.query(`select exists(select 1 from wix_confirmed_booking_records) as exists`)
-    ).rows[0]?.exists;
-    if (
-      !force &&
-      hasConfirmedBookingCache &&
-      current?.last_succeeded_at &&
-      Date.now() - new Date(current.last_succeeded_at).getTime() < STALE_AFTER_MS
-    ) {
-      return { ran: false, recordCount: current.record_count };
-    }
-    await db.query(
-      `update wix_attendance_sync_state set last_started_at=now(), last_error=null where singleton=true`,
-    );
-    const startedAt = new Date();
-    const [attendance, confirmedBookings] = await Promise.all([
-      listWixAttendanceRecords(),
-      listWixConfirmedBookingSnapshots(),
-    ]);
-    const snapshots = await getWixAttendanceBookingSnapshots(
-      [...new Set(attendance.map((row) => row.bookingId))],
-    );
-    const byBooking = new Map(snapshots.map((snapshot) => [snapshot.bookingId, snapshot]));
-    await upsertAttendanceRows(
-      attendance.map((row) => ({
-        attendanceId: row.id,
-        bookingId: row.bookingId,
-        eventId: row.eventId,
-        status: row.status,
-        numberOfAttendees: row.numberOfAttendees,
-        snapshot: byBooking.get(row.bookingId),
-      })),
-    );
-    await upsertConfirmedBookingRows(confirmedBookings);
-    // Delete only after Wix pagination + booking enrichment completed without error.
-    await db.query(`delete from wix_attendance_records where synced_at < $1`, [startedAt]);
-    await db.query(`delete from wix_confirmed_booking_records where synced_at < $1`, [startedAt]);
-    await db.query(
-      `update wix_attendance_sync_state
-          set last_succeeded_at=now(), last_error=null, record_count=$1
-        where singleton=true`,
-      [confirmedBookings.length],
-    );
-    return { ran: true, recordCount: confirmedBookings.length };
-  } catch (error) {
-    await db.query(
-      `update wix_attendance_sync_state set last_error=$1 where singleton=true`,
-      [String(error instanceof Error ? error.message : error).slice(0, 500)],
-    );
-    throw error;
-  } finally {
-    try {
-      await db.query(`select pg_advisory_unlock($1)`, [SYNC_LOCK]);
-    } catch {
-      // Connection cleanup releases a session-level advisory lock as a fallback.
-    }
-    db.release();
-  }
+  const result = await syncWixBookings({}, force);
+  return { ran: result.ran, recordCount: result.bookingCount };
 }
 
 export async function attendanceSyncState(): Promise<AttendanceSyncState> {
@@ -241,9 +174,11 @@ export async function attendanceLeaders(args: {
          case when a.status='ATTENDED' then 1 else 0 end as marked_attended,
          case when coalesce(r.client_phone_key, '') <> '' then 'phone:' || r.client_phone_key
               else 'contact:' || coalesce(r.wix_contact_id, r.booking_id) end as client_key
-       from wix_confirmed_booking_records r
+       from wix_booking_records r
        left join wix_attendance_records a on a.booking_id=r.booking_id
        where true
+         and (r.status is null or r.status = 'CONFIRMED')
+         and r.invalidated_at is null
          and (r.session_start is null or r.session_start <= now())
          ${periodWhere}
          and not exists (
@@ -287,20 +222,21 @@ export async function attendanceDetail(args: {
     : `r.wix_contact_id=$1`;
   if (key) params.push(key);
   const periodWhere = attendanceWhere(args.period, params);
-  const base = `(r.session_start is null or r.session_start <= now()) and ${identity} ${periodWhere}`;
+  const base = `(r.status is null or r.status = 'CONFIRMED') and r.invalidated_at is null
+    and (r.session_start is null or r.session_start <= now()) and ${identity} ${periodWhere}`;
   const [summary, services, sessions] = await Promise.all([
     pool.query(
       `select count(*)::int as session_count,
               count(a.attendance_id) filter (where a.status='ATTENDED')::int as marked_attended_count,
               max(r.session_start) as last_attended_at
-         from wix_confirmed_booking_records r
+         from wix_booking_records r
          left join wix_attendance_records a on a.booking_id=r.booking_id
         where ${base}`,
       params,
     ),
     pool.query(
       `select coalesce(r.service_name, 'Cours') as service_name, count(*)::int as attended_count
-         from wix_confirmed_booking_records r
+         from wix_booking_records r
          left join wix_attendance_records a on a.booking_id=r.booking_id
         where ${base}
         group by coalesce(r.service_name, 'Cours') order by attended_count desc, service_name asc`,
@@ -309,7 +245,7 @@ export async function attendanceDetail(args: {
     pool.query(
       `select coalesce(r.service_name, 'Cours') as service_name, r.session_start,
               (a.status='ATTENDED') as marked_attended
-         from wix_confirmed_booking_records r
+         from wix_booking_records r
          left join wix_attendance_records a on a.booking_id=r.booking_id
         where ${base}
         order by r.session_start desc nulls last limit 12`,

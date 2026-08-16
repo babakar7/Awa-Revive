@@ -102,4 +102,10 @@ describe("appendPhoneItems", () => {
     const items = appendPhoneItems([], "+33767182228");
     expect(items).toEqual([{ tag: "MOBILE", phone: "+33767182228" }]);
   });
+
+  it("ambiguous local foreign number → no-op (fail-closed, never guessed)", () => {
+    // No country context: canonicalPhoneKey returns null, so the number is not
+    // added to the fiche rather than being mis-keyed onto a Senegalese one.
+    expect(appendPhoneItems([], "612345678")).toBeNull();
+  });
 });

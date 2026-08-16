@@ -1,4 +1,5 @@
 import { config } from "../config.js";
+import { canonicalPhoneKey } from "./phoneKey.js";
 
 /**
  * CRM hygiene audit, shared by `npm run crm:audit` (email to reception) and
@@ -51,11 +52,14 @@ function toAuditContact(c: any): AuditContact {
   };
 }
 
-/** Normalize any spelling to comparable digits (senegalese → last 9 digits). */
+/**
+ * Normalize any spelling to a comparable key. Delegates to the shared
+ * canonical normalizer (senegalese → `221` + 9 national digits; ambiguous
+ * foreign → no key), so CRM audit, the Wix mirrors and client matching all key
+ * the same way. See [[wix-admin-unification]].
+ */
 export function phoneKey(spelling: string): string | null {
-  const digits = spelling.replace(/\D/g, "");
-  if (digits.length < 7) return null;
-  return digits.length >= 9 ? digits.slice(-9) : digits;
+  return canonicalPhoneKey(spelling);
 }
 
 export async function fetchAllContacts(): Promise<any[]> {

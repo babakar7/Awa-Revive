@@ -93,11 +93,12 @@ async function main() {
   }, 10_000);
   omVerificationSweeper.unref();
 
-  // Attendance is a read-only Wix projection for the admin leaderboard. Do
-  // not delay boot on a long historical import; the durable cache is filled in
-  // the background and every later run is capped to once per hour.
+  // General Wix booking + plan-order mirror (read-only projection for the
+  // admin). Boot runs the one-time backfill / weekly full pass in the
+  // background under an advisory lock; the 5-min loop runs the incremental
+  // watermark pass. Never delay boot on the historical import.
   void syncAttendanceLeaderboard().catch((err) =>
-    app.log.warn({ err }, "Initial Wix attendance sync failed"),
+    app.log.warn({ err }, "Initial Wix booking mirror sync failed"),
   );
   void syncAdInsights().catch((err) =>
     app.log.warn({ err }, "Initial Meta Ads sync failed"),

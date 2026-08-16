@@ -715,6 +715,25 @@ create table if not exists crm_dismissed_duplicates (
   dismissed_at timestamptz not null default now(),
   primary key (phone_key, group_signature)
 );
+-- Migrate legacy last-9-digit keys to the shared canonical form (221 + 9). The
+-- group signature is a hash of the contact-id set, independent of the key
+-- format, so re-keying a Senegalese group preserves its dismissal exactly.
+-- Foreign last-9 keys can't be reconstructed to full international; they are
+-- left as dead keys that simply never match a current canonical group, so
+-- those groups reappear in the audit — the deliberate, safe outcome.
+do $$
+begin
+  if to_regclass('public.crm_dismissed_duplicates') is not null then
+    update crm_dismissed_duplicates d
+       set phone_key = '221' || d.phone_key
+     where d.phone_key ~ '^7[0-9]{8}$'
+       and not exists (
+         select 1 from crm_dismissed_duplicates e
+          where e.phone_key = '221' || d.phone_key
+            and e.group_signature = d.group_signature
+       );
+  end if;
+end $$;
 
 -- Boucle de résultat (§4.31) : chaque conversation retombée au silence (>45
 -- min) est classée par un appel LLM — le client a-t-il obtenu ce qu'il
@@ -2019,10 +2038,24 @@ create index if not exists idx_wix_attendance_contact
 create index if not exists idx_wix_attendance_phone
   on wix_attendance_records (client_phone_key);
 
--- The leaderboard's main total is past, non-cancelled confirmed bookings.
--- Attendance marks remain alongside it as an audit/breakdown, since older
--- sessions were not consistently marked ATTENDED in Wix.
-create table if not exists wix_confirmed_booking_records (
+-- General Wix booking mirror (renamed from wix_confirmed_booking_records,
+-- which only held CONFIRMED rows for the leaderboard). It now mirrors EVERY
+-- status so reception-made bookings surface in the admin; the attendance
+-- leaderboard keeps filtering to confirmed rows. A cancellation becomes a
+-- status update, never a delete; invalidated_at tombstones a row only after a
+-- complete, non-truncated full scan proves it is really gone from Wix.
+do $$
+begin
+  if to_regclass('public.wix_confirmed_booking_records') is not null
+     and to_regclass('public.wix_booking_records') is null then
+    alter table wix_confirmed_booking_records rename to wix_booking_records;
+    alter index if exists idx_wix_confirmed_booking_rank rename to idx_wix_booking_rank;
+    alter index if exists idx_wix_confirmed_booking_contact rename to idx_wix_booking_contact;
+    alter index if exists idx_wix_confirmed_booking_phone rename to idx_wix_booking_phone;
+  end if;
+end $$;
+
+create table if not exists wix_booking_records (
   booking_id text primary key,
   wix_contact_id text,
   client_name text,
@@ -2033,12 +2066,78 @@ create table if not exists wix_confirmed_booking_records (
   session_start timestamptz,
   synced_at timestamptz not null default now()
 );
-create index if not exists idx_wix_confirmed_booking_rank
-  on wix_confirmed_booking_records (session_start desc);
-create index if not exists idx_wix_confirmed_booking_contact
-  on wix_confirmed_booking_records (wix_contact_id);
-create index if not exists idx_wix_confirmed_booking_phone
-  on wix_confirmed_booking_records (client_phone_key);
+-- Enrichment for the unified admin (idempotent — also fills a table that was
+-- renamed in from the confirmed-only shape).
+alter table wix_booking_records add column if not exists status text;
+alter table wix_booking_records add column if not exists payment_status text;
+alter table wix_booking_records add column if not exists number_of_participants integer;
+alter table wix_booking_records add column if not exists created_date timestamptz;
+alter table wix_booking_records add column if not exists updated_date timestamptz;
+alter table wix_booking_records add column if not exists wix_order_id text;
+alter table wix_booking_records add column if not exists plan_order_id text;
+alter table wix_booking_records add column if not exists membership_plan_name text;
+alter table wix_booking_records add column if not exists benefit_transaction_id text;
+alter table wix_booking_records add column if not exists matched_client_id uuid references clients(id);
+alter table wix_booking_records add column if not exists match_basis text;
+alter table wix_booking_records drop constraint if exists wix_booking_records_match_basis_check;
+alter table wix_booking_records add constraint wix_booking_records_match_basis_check
+  check (match_basis is null or match_basis in ('awa_booking','contact_id','phone'));
+alter table wix_booking_records add column if not exists last_seen_at timestamptz;
+alter table wix_booking_records add column if not exists invalidated_at timestamptz;
+alter table wix_booking_records add column if not exists raw jsonb;
+
+create index if not exists idx_wix_booking_rank
+  on wix_booking_records (session_start desc);
+create index if not exists idx_wix_booking_contact
+  on wix_booking_records (wix_contact_id);
+create index if not exists idx_wix_booking_phone
+  on wix_booking_records (client_phone_key);
+create index if not exists idx_wix_booking_status
+  on wix_booking_records (status, session_start desc);
+create index if not exists idx_wix_booking_matched_client
+  on wix_booking_records (matched_client_id) where matched_client_id is not null;
+create index if not exists idx_wix_booking_order
+  on wix_booking_records (wix_order_id) where wix_order_id is not null;
+
+-- General mirror of Wix Pricing Plans orders (subscriptions/Keys bought
+-- directly in Wix, no Awa involvement). Keyed by order id; updated_date guards
+-- upserts against a stale webhook overwriting a fresher sync.
+create table if not exists wix_plan_order_records (
+  order_id text primary key,
+  plan_id text,
+  plan_name text,
+  member_id text,
+  wix_contact_id text,
+  buyer_name text,
+  buyer_phone text,
+  buyer_phone_key text,
+  amount_xof integer,
+  currency text,
+  payment_status text,
+  order_status text,
+  start_date timestamptz,
+  end_date timestamptz,
+  created_date timestamptz,
+  updated_date timestamptz,
+  wix_pay_order_id text,
+  matched_client_id uuid references clients(id),
+  match_basis text,
+  last_seen_at timestamptz,
+  invalidated_at timestamptz,
+  raw jsonb,
+  synced_at timestamptz not null default now()
+);
+alter table wix_plan_order_records drop constraint if exists wix_plan_order_records_match_basis_check;
+alter table wix_plan_order_records add constraint wix_plan_order_records_match_basis_check
+  check (match_basis is null or match_basis in ('awa_order','contact_id','phone'));
+create index if not exists idx_wix_plan_order_created
+  on wix_plan_order_records (created_date desc);
+create index if not exists idx_wix_plan_order_contact
+  on wix_plan_order_records (wix_contact_id);
+create index if not exists idx_wix_plan_order_matched_client
+  on wix_plan_order_records (matched_client_id) where matched_client_id is not null;
+create index if not exists idx_wix_plan_order_pay_order
+  on wix_plan_order_records (wix_pay_order_id) where wix_pay_order_id is not null;
 
 create table if not exists wix_attendance_sync_state (
   singleton boolean primary key default true check (singleton),
@@ -2050,6 +2149,16 @@ create table if not exists wix_attendance_sync_state (
 insert into wix_attendance_sync_state (singleton)
   values (true)
   on conflict (singleton) do nothing;
+-- Watermark + backfill state for the general bookings/plan-orders sync.
+alter table wix_attendance_sync_state add column if not exists last_incremental_at timestamptz;
+alter table wix_attendance_sync_state add column if not exists last_incremental_error text;
+alter table wix_attendance_sync_state add column if not exists last_updated_date_seen timestamptz;
+alter table wix_attendance_sync_state add column if not exists last_full_reconciled_at timestamptz;
+alter table wix_attendance_sync_state add column if not exists last_truncated_at timestamptz;
+alter table wix_attendance_sync_state add column if not exists booking_record_count integer not null default 0;
+alter table wix_attendance_sync_state add column if not exists plan_order_count integer not null default 0;
+alter table wix_attendance_sync_state add column if not exists backfill_started_at timestamptz;
+alter table wix_attendance_sync_state add column if not exists backfill_completed_at timestamptz;
 
 -- Unified accounting ledger. Awa rows remain projections of their source
 -- tables; only Wix transactions and genuinely manual movements are persisted.
@@ -2112,6 +2221,11 @@ create index if not exists idx_wix_payment_occurred
 -- after this migration (existing rows start with a null sync timestamp).
 alter table wix_payment_movements add column if not exists buyer_contact_id text;
 alter table wix_payment_movements add column if not exists buyer_identity_synced_at timestamptz;
+-- Canonical phone key of the buyer, for unified client matching in the admin.
+-- Backfilled from buyer_phone by the payment sync's next full pass.
+alter table wix_payment_movements add column if not exists buyer_phone_key text;
+create index if not exists idx_wix_payment_buyer_phone_key
+  on wix_payment_movements (buyer_phone_key) where buyer_phone_key is not null;
 
 create table if not exists wix_payment_sync_diagnostics (
   fingerprint text primary key,

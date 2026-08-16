@@ -68,6 +68,78 @@ async function wixGet(path: string): Promise<any> {
   return res.json();
 }
 
+// ---------- bounded retry for idempotent read endpoints ----------
+
+const WIX_MAX_RETRIES = process.env.NODE_ENV === "test" ? 0 : 4;
+
+/** Retry-After header → milliseconds. Accepts delta-seconds or an HTTP date. */
+export function parseRetryAfterMs(
+  header: string | null | undefined,
+  now = Date.now(),
+): number | null {
+  const s = String(header ?? "").trim();
+  if (!s) return null;
+  if (/^\d+$/.test(s)) return Math.max(0, Number(s) * 1000);
+  const at = Date.parse(s);
+  return Number.isNaN(at) ? null : Math.max(0, at - now);
+}
+
+/**
+ * Bounded backoff for a 429/5xx retry. `attempt` is 0-based. Honors a
+ * Retry-After hint when present (never waiting less than the server asked),
+ * otherwise exponential with a ceiling; always capped so a wedged endpoint
+ * can't stall a sync indefinitely.
+ */
+export function wixBackoffMs(attempt: number, retryAfterMs: number | null): number {
+  const base = Math.min(8_000, 500 * 2 ** Math.max(0, attempt));
+  if (retryAfterMs == null) return base;
+  return Math.min(30_000, Math.max(retryAfterMs, base));
+}
+
+function shouldRetryWixStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+/**
+ * fetch() for idempotent Wix reads, with bounded Retry-After/backoff on
+ * 429/5xx and transient network errors. Only ever used for GET/query reads —
+ * never for a write, where a retry could double-create.
+ */
+async function wixReadFetch(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
+    } catch (error) {
+      if (attempt >= WIX_MAX_RETRIES) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, wixBackoffMs(attempt, null)));
+      continue;
+    }
+    if (shouldRetryWixStatus(res.status) && attempt < WIX_MAX_RETRIES) {
+      const delay = wixBackoffMs(attempt, parseRetryAfterMs(res.headers.get("retry-after")));
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      continue;
+    }
+    return res;
+  }
+}
+
+async function wixPostRetry(path: string, body: unknown): Promise<any> {
+  const res = await wixReadFetch(`${WIX_API}${path}`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Wix ${path} failed (${res.status}): ${await res.text()}`);
+  return res.json();
+}
+
+async function wixGetRetry(path: string): Promise<any> {
+  const res = await wixReadFetch(`${WIX_API}${path}`, { method: "GET", headers: headers() });
+  if (!res.ok) throw new Error(`Wix ${path} failed (${res.status}): ${await res.text()}`);
+  return res.json();
+}
+
 // ---------- Calendar Events V3 (historical coach compensation) ----------
 
 export interface WixCalendarEvent {
@@ -771,6 +843,189 @@ export async function listWixConfirmedBookingSnapshots(): Promise<WixAttendanceB
     if (batch.length < 100) break;
   }
   return out;
+}
+
+// ---------- general Wix booking mirror (all statuses) ----------
+
+export interface WixBookingSnapshot {
+  bookingId: string;
+  status: string;
+  paymentStatus: string | null;
+  contactId: string | null;
+  clientName: string | null;
+  clientPhone: string | null;
+  serviceId: string | null;
+  serviceName: string | null;
+  sessionStart: string | null;
+  numberOfParticipants: number | null;
+  createdDate: string | null;
+  updatedDate: string | null;
+  wixOrderId: string | null;
+  benefitTransactionId: string | null;
+  raw: unknown;
+}
+
+function pickString(...candidates: unknown[]): string | null {
+  for (const c of candidates) {
+    const s = String(c ?? "").trim();
+    if (s) return s;
+  }
+  return null;
+}
+
+function bookingSnapshotFromExtended(entry: any): WixBookingSnapshot | null {
+  const booking = entry?.booking ?? entry;
+  if (!booking?.id) return null;
+  const slot = booking?.bookedEntity?.slot ?? booking?.bookedEntity?.schedule ?? {};
+  const contact = booking?.contactDetails ?? {};
+  const name = [contact.firstName, contact.lastName]
+    .map((part: unknown) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const participantsRaw = Number(
+    booking?.numberOfParticipants ??
+      booking?.totalParticipants ??
+      booking?.participantsChoices?.total ??
+      entry?.attendance?.numberOfAttendees,
+  );
+  const pd = booking?.paymentDetails ?? {};
+  return {
+    bookingId: String(booking.id),
+    status: String(booking?.status ?? "UNKNOWN").toUpperCase(),
+    paymentStatus: booking?.paymentStatus ? String(booking.paymentStatus).toUpperCase() : null,
+    contactId: contact.contactId ? String(contact.contactId) : null,
+    clientName: name || null,
+    clientPhone: contact.phone ? String(contact.phone) : null,
+    serviceId: slot.serviceId ? String(slot.serviceId) : null,
+    serviceName: booking?.bookedEntity?.title ? String(booking.bookedEntity.title) : null,
+    sessionStart: slot.startDate ?? slot.firstSessionStart ?? null,
+    numberOfParticipants:
+      Number.isFinite(participantsRaw) && participantsRaw > 0 ? Math.round(participantsRaw) : null,
+    createdDate: booking?.createdDate ?? null,
+    updatedDate: booking?.updatedDate ?? null,
+    wixOrderId: pickString(pd?.orderId, booking?.orderId, pd?.wixPayOrderId),
+    benefitTransactionId: pickString(
+      pd?.benefitTransactionId,
+      pd?.membershipDetails?.transactionId,
+      booking?.benefitTransactionId,
+    ),
+    raw: booking,
+  };
+}
+
+export interface WixBookingSnapshotPage {
+  snapshots: WixBookingSnapshot[];
+  truncated: boolean;
+}
+
+/**
+ * Mirror reader for EVERY Wix booking, all statuses. `updatedAfter` runs the
+ * cheap incremental pass (filter by updatedDate, same idiom as the eCom search
+ * proven live); omit it for the full reconciliation. `truncated` is true when
+ * the `max` guard cut the scan short — the caller must then NOT invalidate
+ * anything, since absence no longer proves deletion.
+ */
+export async function listWixBookingSnapshots(
+  args: { updatedAfter?: Date; max?: number } = {},
+): Promise<WixBookingSnapshotPage> {
+  const max = args.max ?? 50_000;
+  const pageSize = 100;
+  const out: WixBookingSnapshot[] = [];
+  let truncated = false;
+  for (let offset = 0; ; offset += pageSize) {
+    if (offset >= max) {
+      truncated = true;
+      break;
+    }
+    const query: any = {
+      paging: { limit: pageSize, offset },
+      sort: [{ fieldName: "updatedDate", order: "ASC" }],
+    };
+    if (args.updatedAfter) {
+      query.filter = { updatedDate: { $gte: args.updatedAfter.toISOString() } };
+    }
+    const data = await wixPostRetry("/_api/bookings-reader/v2/extended-bookings/query", { query });
+    const batch: any[] = Array.isArray(data?.extendedBookings) ? data.extendedBookings : [];
+    for (const entry of batch) {
+      const snap = bookingSnapshotFromExtended(entry);
+      if (snap) out.push(snap);
+    }
+    if (batch.length < pageSize) break;
+  }
+  return { snapshots: out, truncated };
+}
+
+// ---------- general Wix pricing-plan order mirror ----------
+
+export interface WixPlanOrderPage {
+  orders: any[];
+  truncated: boolean;
+}
+
+/**
+ * Every pricing-plan order for the general mirror, capped. `truncated` is true
+ * when the cap was hit while Wix still reported more — the caller must then
+ * skip invalidation for that scan (same rule as the bookings mirror).
+ */
+export async function listWixPlanOrdersForMirror(max = 5_000): Promise<WixPlanOrderPage> {
+  const orders: any[] = [];
+  let truncated = false;
+  for (let offset = 0; offset < max; offset += 50) {
+    const data = await wixGetRetry(`/pricing-plans/v2/orders?limit=50&offset=${offset}`);
+    orders.push(...(data?.orders ?? []));
+    if (!data?.pagingMetadata?.hasNext) return { orders, truncated: false };
+    if (offset + 50 >= max) truncated = true;
+  }
+  return { orders, truncated };
+}
+
+/**
+ * Exact pricing-plan name a membership booking consumed, resolved through the
+ * Benefit Programs transaction (the eligibility index is broken per-beneficiary
+ * and must not be used). Returns null when no single non-generic name is
+ * provable. Ported from scripts/backfill-membership-booking-names.ts.
+ */
+export async function resolvePlanNameFromBenefitTransaction(
+  transactionId: string,
+): Promise<string | null> {
+  const clean = (value: unknown): string | null => {
+    const name = String(value ?? "").trim();
+    if (!name || /^(abonnement|membership)$/i.test(name)) return null;
+    return name;
+  };
+  const txnData = await wixGetRetry(
+    `/benefit-programs/v1/transactions/${encodeURIComponent(transactionId)}`,
+  );
+  const transaction = txnData?.transaction;
+  const poolId = pickString(transaction?.pool?.id, transaction?.pool?._id, transaction?.poolId);
+  if (!poolId) return null;
+  const direct = new Set(
+    [
+      transaction?.pool?.displayName,
+      transaction?.pool?.name,
+      transaction?.poolInfo?.displayName,
+      transaction?.poolInfo?.name,
+    ]
+      .map(clean)
+      .filter((n): n is string => Boolean(n)),
+  );
+  if (direct.size === 1) return [...direct][0];
+  if (direct.size > 1) return null;
+  const itemData = await wixPostRetry("/benefit-programs/v1/pool-items/query", {
+    query: { filter: { poolId: { $eq: poolId } }, cursorPaging: { limit: 100 } },
+  });
+  const names = new Set<string>(
+    (Array.isArray(itemData?.poolItems) ? itemData.poolItems : [])
+      .filter(
+        (item: any) =>
+          String(item?.poolId ?? "") === poolId &&
+          (!item?.namespace || String(item.namespace) === "@wix/pricing-plans"),
+      )
+      .flatMap((item: any) => [item?.pool?.displayName, item?.pool?.name])
+      .map(clean)
+      .filter((n: string | null): n is string => Boolean(n)),
+  );
+  return names.size === 1 ? [...names][0] : null;
 }
 
 // ---------- Booking contact repair (cas « A »/Amy Ndiaye, PROGRESS §6.6bis) ----------

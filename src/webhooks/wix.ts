@@ -14,6 +14,7 @@ import {
   type WixWebhookEvent,
 } from "../lib/wixWebhook.js";
 import * as wix from "../lib/wix.js";
+import { upsertPlanOrderFromWebhook } from "../domain/wixBookingSync.js";
 
 function orderFromEvent(event: WixWebhookEvent): any {
   return event.actionEvent?.body?.order ?? null;
@@ -92,6 +93,18 @@ export function registerWixWebhook(app: FastifyInstance): void {
       return reply.code(401).send("Invalid authentication");
     }
     try {
+      // General plan-order mirror: upsert every pricing-plan purchase into the
+      // admin mirror immediately, independent of Key automation and never
+      // failing the strict Key path below. A missed event is repaired by the
+      // weekly full reconciliation.
+      if (event.entityFqdn === "wix.pricing_plans.v2.order" && event.slug === "purchased") {
+        const mirrorOrder = orderFromEvent(event);
+        if (mirrorOrder) {
+          await upsertPlanOrderFromWebhook(mirrorOrder).catch((err) =>
+            req.log.warn({ err, eventId: event.id }, "Wix plan-order mirror upsert failed (non-fatal)"),
+          );
+        }
+      }
       if (!config.KEYS_AUTOMATION_ENABLED) return reply.code(200).send("OK");
       if (
         event.entityFqdn !== "wix.pricing_plans.v2.order" ||

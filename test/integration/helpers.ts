@@ -98,6 +98,8 @@ export interface WixState {
   attendanceBookings: Record<string, any>;
   /** Confirmed historical booking fixtures used by the leaderboard total. */
   confirmedBookings: any[];
+  /** All-status extended-booking fixtures for the general mirror reader. */
+  bookings: any[];
 }
 
 /**
@@ -230,6 +232,7 @@ export function makeFetchMock(): FetchMock {
     attendanceRecords: [],
     attendanceBookings: {},
     confirmedBookings: [],
+    bookings: [],
   };
 
   let failEmail = false;
@@ -431,6 +434,21 @@ export function makeFetchMock(): FetchMock {
       }
       if (ids.length === 0 && body?.query?.filter?.status?.$eq === "CONFIRMED") {
         return json(200, { extendedBookings: wix.confirmedBookings });
+      }
+      // General mirror reader: no id filter, no status filter — page through
+      // the all-status booking fixtures, honoring an optional updatedDate gate.
+      if (ids.length === 0 && !body?.query?.filter?.status) {
+        const paging = body?.query?.paging ?? {};
+        const offset = Number(paging.offset ?? 0);
+        const limit = Number(paging.limit ?? 100);
+        const gteRaw = body?.query?.filter?.updatedDate?.$gte;
+        const gte = gteRaw ? Date.parse(gteRaw) : null;
+        const all = wix.bookings.filter((entry) => {
+          if (gte == null) return true;
+          const u = Date.parse(entry?.booking?.updatedDate ?? "");
+          return Number.isNaN(u) ? true : u >= gte;
+        });
+        return json(200, { extendedBookings: all.slice(offset, offset + limit) });
       }
       return json(200, {
         extendedBookings: ids.map((id) => wix.attendanceBookings[id] ?? ({
@@ -868,6 +886,7 @@ export function makeFetchMock(): FetchMock {
       wix.attendanceRecords = [];
       wix.attendanceBookings = {};
       wix.confirmedBookings = [];
+      wix.bookings = [];
       failEmail = false;
       waTemplateFailures.clear();
       const d = defaultOmState();

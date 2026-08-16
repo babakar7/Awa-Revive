@@ -20,16 +20,20 @@ const contact = (id: string, first: string, phones: any[], email?: string) => ({
 });
 
 describe("phoneKey", () => {
-  it("normalizes any spelling of a senegalese number to its last 9 digits", () => {
-    expect(phoneKey("+221774446666")).toBe("774446666");
-    expect(phoneKey("774446666")).toBe("774446666");
-    expect(phoneKey("77 444 66 66")).toBe("774446666");
-    expect(phoneKey("00221774446666")).toBe("774446666");
+  it("normalizes any spelling of a senegalese number to 221 + 9 national digits", () => {
+    expect(phoneKey("+221774446666")).toBe("221774446666");
+    expect(phoneKey("774446666")).toBe("221774446666");
+    expect(phoneKey("77 444 66 66")).toBe("221774446666");
+    expect(phoneKey("00221774446666")).toBe("221774446666");
   });
 
   it("rejects strings that are not phone numbers", () => {
     expect(phoneKey("abc")).toBeNull();
     expect(phoneKey("12")).toBeNull();
+  });
+
+  it("refuses an ambiguous local foreign number (fail-closed)", () => {
+    expect(phoneKey("612345678")).toBeNull();
   });
 });
 
@@ -44,7 +48,7 @@ describe("auditContacts", () => {
     expect(audit.total).toBe(4);
     expect(audit.noPhone.map((c) => c.id)).toEqual(["a"]);
     expect(audit.duplicates).toHaveLength(1);
-    expect(audit.duplicates[0].key).toBe("774446666");
+    expect(audit.duplicates[0].key).toBe("221774446666");
     expect(audit.duplicates[0].contacts.map((c) => c.id).sort()).toEqual(["b", "c"]);
     expect(audit.duplicates[0].contacts.find((c) => c.id === "b")?.hasE164).toBe(true);
     expect(audit.duplicates[0].contacts.find((c) => c.id === "c")?.hasE164).toBe(false);

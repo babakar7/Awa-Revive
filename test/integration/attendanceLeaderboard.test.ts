@@ -54,7 +54,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await truncateAll();
-  await pool.query(`delete from wix_attendance_records; delete from wix_confirmed_booking_records; delete from wix_attendance_sync_state; insert into wix_attendance_sync_state (singleton) values (true);`);
+  await pool.query(`delete from wix_attendance_records; delete from wix_booking_records; delete from wix_plan_order_records; delete from wix_attendance_sync_state; insert into wix_attendance_sync_state (singleton) values (true);`);
   mock.reset();
 });
 
@@ -76,7 +76,7 @@ describe("client attendance leaderboard", () => {
       b4: booking({ id: "b4", contactId: "c4", firstName: "Future", phone: "+221773334455", service: "Pilates", start: future }),
       b5: booking({ id: "b5", contactId: "c1", firstName: "Awa", phone: "+221771112233", service: "Pilates", start: past }),
     };
-    mock.wix.confirmedBookings = ["b1", "b2", "b3", "b4", "b5"].map((id) => mock.wix.attendanceBookings[id]);
+    mock.wix.bookings = ["b1", "b2", "b3", "b4", "b5"].map((id) => mock.wix.attendanceBookings[id]);
 
     await syncAttendanceLeaderboard(true);
 
@@ -99,7 +99,7 @@ describe("client attendance leaderboard", () => {
     mock.wix.attendanceBookings = {
       b1: booking({ id: "b1", contactId: "c1", firstName: "Awa", phone: "+221771112233", service: "Pilates", start: past }),
     };
-    mock.wix.confirmedBookings = [mock.wix.attendanceBookings.b1];
+    mock.wix.bookings = [mock.wix.attendanceBookings.b1];
     mock.wix.contacts = [
       { id: "c1", info: { name: { first: "Awa", last: "Ndiaye" }, phones: { items: [{ phone: "+221771112233", primary: true }] } }, primaryInfo: { phone: "+221771112233" } },
       { id: "c0", info: { name: { first: "Soxna", last: "Ba" }, phones: { items: [{ phone: "+221779998877", primary: true }] } }, primaryInfo: { phone: "+221779998877" } },
