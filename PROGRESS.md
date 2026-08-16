@@ -1,5 +1,22 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Commandes salle différées 30/50 min + notes après recherche (16 août 2026)
+
+- Les composeurs **Salle** et **Supervision** gardent la commande immédiate par
+  défaut et proposent « Pour plus tard » avec exactement deux choix : **30 min**
+  ou **50 min**. Le serveur refuse toute autre valeur.
+- Une commande différée est enregistrée immédiatement dans la session (subtotal
+  et annulation restent fiables), mais reste hors de l'écran Cuisine jusqu'à sa
+  fenêtre de préparation, **15 min avant l'heure promise**. Salle/Supervision la
+  voient comme « Prévue pour HH:MM » et peuvent l'annuler ou la faire partir via
+  « Préparer maintenant ». L'activation atomique est reprise par le sweep 60 s.
+- Les temps de préparation, alertes « Cuisine non confirmée », KPI en cours et
+  auto-clôture partent de l'activation, jamais de la prise de commande initiale.
+- Correctif connexe : ajouter un article ordinaire depuis la recherche quitte
+  désormais la vue compacte et révèle immédiatement sa **note par article**.
+  Avant, seuls les matchas semblaient accepter une note car leurs choix requis
+  forçaient l'affichage du bloc complémentaire.
+
 ## Miroir Wix des réservations & abonnements manuels dans l'admin (16 août 2026)
 
 **Problème déclencheur** : une réservation faite à la main dans Wix par la

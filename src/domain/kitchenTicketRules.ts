@@ -52,6 +52,21 @@ export function isOpenStatus(status: KitchenTicketStatus): boolean {
 export const CUISINE_CHANNEL = "cuisine";
 export const ACCUEIL_CHANNEL = "accueil";
 
+/** The only future-ready delays offered by the Salle/Supervision composers. */
+export const TABLE_ORDER_READY_DELAYS = [30, 50] as const;
+export type TableOrderReadyDelay = (typeof TABLE_ORDER_READY_DELAYS)[number];
+
+/** Wake Cuisine shortly before the promised ready time, not when staff takes the order. */
+export const TABLE_ORDER_PREP_LEAD_MINUTES = 15;
+
+export function parseTableOrderReadyDelay(value: unknown): TableOrderReadyDelay | null | "invalid" {
+  if (value === undefined || value === null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return TABLE_ORDER_READY_DELAYS.includes(n as TableOrderReadyDelay)
+    ? (n as TableOrderReadyDelay)
+    : "invalid";
+}
+
 export type OpsEventKind =
   | "ticket_new"
   | "ticket_update"
@@ -79,6 +94,10 @@ export interface KitchenTicketView {
   /** Secondary line: address (delivery) or space + first name (table). */
   subheading: string | null;
   created_at: Date | string;
+  /** Requested ready time for a future TABLE order. NULL = ordinary immediate order. */
+  scheduled_for?: Date | string | null;
+  /** When the ticket became visible/actionable in Cuisine. NULL = still scheduled. */
+  activated_at?: Date | string | null;
   /** When the kitchen marked it READY — freezes the prep timer on the card. */
   ready_at: Date | string | null;
   /** When the cuisine iPad first rendered this ticket. NULL = never displayed →

@@ -24,7 +24,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v12";
+const ASSET_VERSION = "v13";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -111,6 +111,8 @@ button.act.cancelx{background:none;border:1px solid var(--danger-border);color:v
 .cuis.warn{font-size:.8rem;font-weight:700;color:var(--danger)}
 /* "Prête" pending its local undo grace (same 3s pattern as the cuisine board). */
 .card.pending{border-color:var(--warn);border-left-color:var(--warn);box-shadow:0 0 0 3px var(--warn-bg)}
+.card.scheduled{border-color:var(--plum-300);border-left-color:var(--plum-400);background:var(--plum-50)}
+.timing{align-self:flex-start;font-size:.78rem;font-weight:800;color:var(--plum-700);background:#fff;border:1px solid var(--plum-200);border-radius:999px;padding:.2rem .55rem}
 /* Confirm dialog (verb-labeled buttons — native OK/Annuler is ambiguous when the
    question IS « Annuler ? »). Same pattern as the salle PWA. */
 .ov.center{align-items:center;padding:1rem}
@@ -158,6 +160,12 @@ border:1px solid var(--border-strong);background:var(--surface-raised);color:var
 background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:.95rem}
 .modeseg .mode.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 .modeseg .mode.away.sel{background:var(--info);border-color:var(--info);color:#fff}
+.later-picker{margin:0 0 .55rem;padding:.5rem;border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--surface-raised)}
+.later-toggle{width:100%;min-height:2.65rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:#fff;color:var(--ink-700);font-weight:750;font-size:.95rem}
+.later-toggle.sel{border-color:var(--plum-600);background:var(--plum-50);color:var(--plum-700)}
+.later-options{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-top:.45rem}.later-options[hidden]{display:none}
+.later-delay{min-height:2.65rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:#fff;color:var(--ink-700);font-weight:750}
+.later-delay.sel{border-color:var(--plum-600);background:var(--plum-600);color:#fff}
 .optional{border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--surface-raised);margin-bottom:.55rem}
 .optional summary{padding:.65rem .75rem;cursor:pointer;font-weight:700;color:var(--ink-600);font-size:.88rem}
 .optional-fields{padding:0 .65rem .1rem}
@@ -221,7 +229,7 @@ color:var(--ink-500);margin-bottom:.4rem;text-transform:uppercase;letter-spacing
 max-width:calc(100% - 2rem);padding:.75rem 1rem;border-radius:999px;background:var(--ok-strong);color:#fff;font-weight:750;
 box-shadow:var(--shadow-2);animation:pop .2s var(--ease);white-space:nowrap}
 /* Search focus spends the keyboard-reduced viewport on dense results. */
-.sheet.searching .sheet-title,.sheet.searching .spot-picker,.sheet.searching .modeseg,.sheet.searching .optional,.sheet.searching .browsebar{display:none}
+.sheet.searching .sheet-title,.sheet.searching .spot-picker,.sheet.searching .modeseg,.sheet.searching .later-picker,.sheet.searching .optional,.sheet.searching .browsebar{display:none}
 .sheet.searching::before{display:none}
 .sheet.searching .search-summary,.sheet.searching .searchctl{display:flex}
 .sheet.searching .searchbar>.cart{display:none}
@@ -328,6 +336,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   function betweenSecs(a,b){ return (new Date(b).getTime()-new Date(a).getTime())/1000; }
   function elapsedMins(iso){ return (Date.now()-new Date(iso).getTime())/60000; }
   function ageClass(iso){ var m=elapsedMins(iso); return m>=10?'age late':m>=5?'age warn':'age'; }
+  function hhmm(iso){ var d=new Date(iso); return (d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); }
   function ago(iso){ if(!iso) return 'jamais'; var s=Math.floor((Date.now()-new Date(iso).getTime())/1000);
     if(s<60) return 'il y a '+s+' s'; if(s<3600) return 'il y a '+Math.floor(s/60)+' min';
     if(s<86400) return 'il y a '+Math.floor(s/3600)+' h'; return 'il y a '+Math.floor(s/86400)+' j'; }
@@ -377,11 +386,12 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
 
   // A still-NEW ticket the cuisine tablet never acknowledged past a short grace =
   // the reception→cuisine anomaly, mirrored on the supervisor's board.
-  function unconfirmed(t){ return t.status==='NEW' && !t.ipad_ack_at && elapsedMins(t.created_at)>=0.17; }
+  function unconfirmed(t){ return t.status==='NEW' && t.activated_at && !t.ipad_ack_at && elapsedMins(t.activated_at)>=0.17; }
 
   function card(t){
+    var waiting=!!(t.scheduled_for&&!t.activated_at);
     var isPending=!!pendingReady[t.id];
-    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(isPending?' pending':'')+(t.is_test?' test':'')+(t.urgent?' urgent':'')+(unconfirmed(t)?' unconfirmed':''));
+    var c=el('div','card src-'+(t.source==='TABLE'?'table':t.source==='BAR'?'bar':'delivery')+(t.status==='READY'?' ready':'')+(waiting?' scheduled':'')+(isPending?' pending':'')+(t.is_test?' test':'')+(t.urgent?' urgent':'')+(unconfirmed(t)?' unconfirmed':''));
     c.dataset.id=t.id;
     var top=el('div','top');
     if(t.urgent) top.appendChild(el('span','badge urgent','⚡ URGENT'));
@@ -393,8 +403,10 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     top.appendChild(b);
     if(t.is_test) top.appendChild(el('span','badge test','Test'));
     var a;
-    if(t.status==='READY' && t.ready_at){ a=el('span','age done','✓ '+fmtSecs(betweenSecs(t.created_at,t.ready_at))); }
-    else { a=el('span',ageClass(t.created_at),fmtElapsed(t.created_at)); a.dataset.age=t.created_at; }
+    var ageStart=t.activated_at||t.created_at;
+    if(waiting){ a=el('span','age','Prévue'); }
+    else if(t.status==='READY' && t.ready_at){ a=el('span','age done','✓ '+fmtSecs(betweenSecs(ageStart,t.ready_at))); }
+    else { a=el('span',ageClass(ageStart),fmtElapsed(ageStart)); a.dataset.age=ageStart; }
     top.appendChild(a);
     c.appendChild(top);
     c.appendChild(el('div','heading',t.heading||'—'));
@@ -404,13 +416,17 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       li.appendChild(document.createTextNode(l.name+(l.choice?' ('+l.choice+')':''))); ul.appendChild(li); });
     c.appendChild(ul);
     if(t.note) c.appendChild(el('div','note','📝 '+t.note));
+    if(t.scheduled_for)c.appendChild(el('div','timing','⏰ '+(waiting?'Prévue pour ':'Pour ')+hhmm(t.scheduled_for)));
     if(unconfirmed(t)) c.appendChild(el('div','cuis warn','⚠︎ Cuisine non confirmée — vérifiez la tablette'));
-    var stTxt=t.status==='READY'?'Prête':t.status==='PREPARING'?'En préparation':'Nouveau';
+    var stTxt=waiting?'Commande prévue':t.status==='READY'?'Prête':t.status==='PREPARING'?'En préparation':'Nouveau';
     c.appendChild(el('span','pill '+t.status.toLowerCase(), stTxt));
     // Full control: cuisine verbs (Commencer/Prête/Terminée) + salle verbs
     // (Servie/urgent/annuler). DELIVERY departures stay on /admin/livraisons.
     var acts=el('div','actions');
-    if(t.status==='READY'){
+    if(waiting){
+      var pn=el('button','act prep','Préparer maintenant');pn.onclick=function(){act(pn,'/tickets/'+t.id+'/prepare-now');};acts.appendChild(pn);
+      var pc=el('button','act cancelx','✕');pc.setAttribute('aria-label','Annuler cette commande prévue');pc.onclick=function(){askConfirm('Annuler cette commande prévue ?','Oui, annuler la commande','Non, garder la commande',function(){act(pc,'/tickets/'+t.id+'/cancel',{reason:'commande prévue annulée (supervision)'});});};acts.appendChild(pc);
+    } else if(t.status==='READY'){
       if(t.source==='TABLE'){ var sv=el('button','act serve','🙋 Servie'); sv.onclick=function(){act(sv,'/tickets/'+t.id+'/served');}; acts.appendChild(sv); }
       else if(t.source==='BAR'){ var dn=el('button','act ready','Terminée'); dn.onclick=function(){act(dn,'/tickets/'+t.id+'/complete');}; acts.appendChild(dn); }
     } else if(isPending){
@@ -439,7 +455,8 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   function render(){
     var list=Array.from(model.values()).sort(function(x,y){
       var u=(y.urgent?1:0)-(x.urgent?1:0);
-      return u || (new Date(x.created_at)-new Date(y.created_at));
+      var sx=x.scheduled_for&&!x.activated_at?1:0,sy=y.scheduled_for&&!y.activated_at?1:0;
+      return u || (sx-sy) || (new Date((sx?x.scheduled_for:x.activated_at)||x.created_at)-new Date((sy?y.scheduled_for:y.activated_at)||y.created_at));
     });
     board.textContent='';
     if(!list.length){ board.appendChild(el('p','empty', booted?'Aucune commande en cours':'Chargement…')); }
@@ -559,8 +576,8 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true'); sh.setAttribute('aria-label','Prendre une commande');
     var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
     var draft={};
-    var state={takeaway:false,cat:'__ALL__',q:'',cartOnly:false,searching:false,spotId:'',sending:false};
-    var spotButtons=[]; var totalEl,cartChip,searchCart,listEl,go,msg,search,summarySpot,summaryMode;
+    var state={takeaway:false,cat:'__ALL__',q:'',cartOnly:false,readyIn:0,searching:false,spotId:'',sending:false};
+    var spotButtons=[]; var totalEl,cartChip,searchCart,listEl,go,msg,search,summarySpot,summaryMode,summaryWhen;
     function cartCount(){ var n=0; Object.keys(draft).forEach(function(id){ if(draft[id].qty>0)n+=draft[id].qty; }); return n; }
     function chosenSpot(){ for(var i=0;i<SPOTS.length;i++){if(SPOTS[i].id===state.spotId)return SPOTS[i];} return null; }
     function closeSheet(){
@@ -612,6 +629,18 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     mAway.onclick=function(){ state.takeaway=true; paintMode(); };
     modeseg.appendChild(mHere); modeseg.appendChild(mAway); sh.appendChild(modeseg);
 
+    var laterPicker=el('div','later-picker');
+    var laterToggle=el('button','later-toggle','⏰ Pour plus tard'); laterToggle.type='button'; laterToggle.setAttribute('aria-pressed','false');
+    var laterOptions=el('div','later-options'); laterOptions.hidden=true; var delayButtons=[];
+    function clockAfter(mins){var d=new Date(Date.now()+mins*60000);return (d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes();}
+    function paintTiming(){var on=state.readyIn===30||state.readyIn===50;laterToggle.classList.toggle('sel',on);laterToggle.setAttribute('aria-pressed',on?'true':'false');
+      laterToggle.textContent=on?'⏰ Pour plus tard · '+state.readyIn+' min':'⏰ Pour plus tard';laterOptions.hidden=!on;
+      delayButtons.forEach(function(b){var sel=+b.dataset.delay===state.readyIn;b.classList.toggle('sel',sel);b.setAttribute('aria-pressed',sel?'true':'false');b.textContent=b.dataset.delay+' min · '+clockAfter(+b.dataset.delay);});
+      if(summaryWhen)summaryWhen.textContent=on?'Dans '+state.readyIn+' min':'Maintenant';if(go)recompute();}
+    laterToggle.onclick=function(){state.readyIn=state.readyIn?0:50;paintTiming();};
+    [30,50].forEach(function(mins){var b=el('button','later-delay');b.type='button';b.dataset.delay=String(mins);b.setAttribute('aria-pressed','false');b.onclick=function(){state.readyIn=mins;paintTiming();};delayButtons.push(b);laterOptions.appendChild(b);});
+    laterPicker.appendChild(laterToggle);laterPicker.appendChild(laterOptions);sh.appendChild(laterPicker);
+
     // Optional customer details yield vertical room to the menu by default.
     var optional=document.createElement('details'); optional.className='optional';
     var optionalSummary=document.createElement('summary'); optionalSummary.textContent='Détails optionnels'; optional.appendChild(optionalSummary);
@@ -624,6 +653,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     var searchSummary=el('div','search-summary');
     summarySpot=el('button','summary-action','Espace à choisir'); summarySpot.type='button'; summarySpot.setAttribute('aria-label','Choisir ou modifier l’espace'); summaryMode=el('span',null,'Sur place');
     searchSummary.appendChild(summarySpot); searchSummary.appendChild(el('span','dotsep','·')); searchSummary.appendChild(summaryMode);
+    searchSummary.appendChild(el('span','dotsep','·')); summaryWhen=el('span',null,'Maintenant'); searchSummary.appendChild(summaryWhen);
     searchCart=el('button','chip cart','Panier (0)'); searchCart.type='button'; searchSummary.appendChild(searchCart); sh.appendChild(searchSummary);
 
     // ── sticky toolbar: focused search + browse/category/cart shortcuts ──
@@ -667,7 +697,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       var n=cartCount(); totalEl.textContent=''; totalEl.appendChild(document.createTextNode(n+' article'+(n>1?'s':'')+' · '+tot+' F')); totalEl.appendChild(el('small',null,'Total indicatif'));
       cartChip.textContent='Panier ('+n+')'; searchCart.textContent='Panier ('+n+')';
       cartChip.classList.toggle('sel',state.cartOnly); searchCart.classList.toggle('sel',state.cartOnly);
-      if(!state.spotId)go.textContent='Choisir un espace'; else if(!n)go.textContent='Ajouter des articles'; else go.textContent='Envoyer en cuisine';
+      if(!state.spotId)go.textContent='Choisir un espace'; else if(!n)go.textContent='Ajouter des articles'; else go.textContent=state.readyIn?'Programmer · '+state.readyIn+' min':'Envoyer en cuisine';
     }
 
     function itemRow(it){
@@ -689,11 +719,8 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       minus.onpointerdown=function(e){ if(state.searching)e.preventDefault(); };
       plus.onpointerdown=function(e){ if(state.searching&&!needsChoice)e.preventDefault(); };
       minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0)renderList(); };
-      plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; var wasEmpty=dd.qty===0; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync();
-        if(state.searching){
-          state.q=''; search.value=''; renderList();
-          if(needsChoice&&wasEmpty){ try{search.blur();}catch(e){} setTimeout(function(){var fresh=listEl.querySelector('[data-id="'+it.id+'"]');if(fresh&&fresh.scrollIntoView)fresh.scrollIntoView({block:'center'});},50); }
-        } };
+      plus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.min(10,dd.qty+1); draft[it.id]=dd; sync();
+        if(state.searching){state.q='';search.value='';finishSearch();setTimeout(function(){var fresh=listEl.querySelector('[data-id="'+it.id+'"]');if(fresh&&fresh.scrollIntoView)fresh.scrollIntoView({block:'center'});},50);} };
       stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
       if(needsChoice){
         creq=el('div','creq'); var optionName=it.optionLabel||'Choix';
@@ -759,17 +786,17 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
       if(!items.length){ setError('Ajoutez au moins un article au panier.'); return; }
       state.sending=true; go.disabled=true; go.textContent='Envoi…'; msg.hidden=true;
-      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway}; if(fn.value) body.first_name=fn.value;
+      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway};if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn.value) body.first_name=fn.value;
       var sentSpot=chosenSpot();
       postJSON('/spots/'+state.spotId+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.ok){ closeSheet(); showOwnerNotice('Commande envoyée — '+(sentSpot?sentSpot.label:'Espace')); }
+        if(j&&j.ok){ closeSheet(); showOwnerNotice(j.scheduled_for?'Commande programmée — '+(sentSpot?sentSpot.label:'Espace')+' · '+hhmm(j.scheduled_for):'Commande envoyée — '+(sentSpot?sentSpot.label:'Espace')); }
         else { state.sending=false; go.disabled=false; recompute(); setError((j&&j.message)||'Commande refusée. Corrigez les choix puis réessayez.'); }
       }).catch(function(){ state.sending=false; go.disabled=false; recompute(); setError('Envoi impossible. Vérifiez la connexion puis réessayez.'); });
     };
     foot.appendChild(go); sh.appendChild(foot);
     ov.appendChild(sh); document.body.appendChild(ov);
     if(window.visualViewport){ window.visualViewport.addEventListener('resize',fitViewport); window.visualViewport.addEventListener('scroll',fitViewport); }
-    window.addEventListener('resize',fitViewport); fitViewport(); paintMode(); paintSpot(); renderList(); recompute();
+    window.addEventListener('resize',fitViewport); fitViewport(); paintMode(); paintTiming(); paintSpot(); renderList(); recompute();
     if(spotButtons.length){try{spotButtons[0].focus();}catch(e){}}
   }
   if(takeBtn) takeBtn.onclick=openComposer;

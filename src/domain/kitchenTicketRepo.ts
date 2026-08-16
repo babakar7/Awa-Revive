@@ -4,6 +4,7 @@ import { recordOpsEvent } from "./opsEvents.js";
 import {
   ACCUEIL_CHANNEL,
   CUISINE_CHANNEL,
+  TABLE_ORDER_PREP_LEAD_MINUTES,
   isOpenStatus,
   type KitchenTicketStatus,
   type KitchenTicketSource,
@@ -55,6 +56,8 @@ export interface KitchenTicket {
   serve_claimed_at: Date | null;
   serve_escalated_at: Date | null;
   created_at: Date;
+  scheduled_for: Date | null;
+  activated_at: Date | null;
   updated_at: Date;
 }
 
@@ -72,6 +75,8 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
     heading: t.heading,
     subheading: t.subheading,
     created_at: t.created_at,
+    scheduled_for: t.scheduled_for,
+    activated_at: t.activated_at,
     ready_at: t.ready_at,
     ipad_ack_at: t.ipad_ack_at,
     serve_by: t.serve_by,
@@ -89,6 +94,8 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
  */
 async function emitTicket(kind: "ticket_new" | "ticket_update", t: KitchenTicket): Promise<void> {
   const view = kitchenTicketView(t);
+  // Cuisine's client ignores not-yet-activated TABLE rows; keeping the durable
+  // event on this shared channel lets Supervision show the scheduled order now.
   await recordOpsEvent(CUISINE_CHANNEL, kind, view);
   await recordOpsEvent(ACCUEIL_CHANNEL, kind, view);
 }
@@ -96,6 +103,12 @@ async function emitRemoved(t: KitchenTicket): Promise<void> {
   const payload = { id: t.id, status: t.status };
   await recordOpsEvent(CUISINE_CHANNEL, "ticket_removed", payload);
   await recordOpsEvent(ACCUEIL_CHANNEL, "ticket_removed", payload);
+}
+
+async function emitTableActivation(t: KitchenTicket): Promise<void> {
+  const view = kitchenTicketView(t);
+  await recordOpsEvent(CUISINE_CHANNEL, "ticket_new", view);
+  await recordOpsEvent(ACCUEIL_CHANNEL, "ticket_update", view);
 }
 
 // ---------- create (delivery → ticket) ----------
@@ -171,6 +184,8 @@ export interface TableTicketInput {
   isTest: boolean;
   /** Guest is seated but wants this order packaged to-go (absent/false = sur place). */
   takeaway?: boolean;
+  /** Requested ready time; NULL/absent keeps the existing immediate flow. */
+  scheduledFor?: Date | null;
 }
 
 /**
@@ -185,8 +200,9 @@ export async function createTableTicket(
   const res = await pool.query(
     `insert into kitchen_tickets
        (source, session_id, client_request_id, items_json, note, amount_xof,
-        heading, subheading, is_test, takeaway)
-     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8, $9)
+        heading, subheading, is_test, takeaway, scheduled_for, activated_at)
+     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+             case when $10::timestamptz is null then now() else null end)
      on conflict (client_request_id) where client_request_id is not null do nothing
      returning *`,
     [
@@ -199,6 +215,7 @@ export async function createTableTicket(
       input.subheading,
       input.isTest,
       input.takeaway ?? false,
+      input.scheduledFor ?? null,
     ],
   );
   const inserted = res.rows[0] as KitchenTicket | undefined;
@@ -208,6 +225,38 @@ export async function createTableTicket(
   }
   const existing = await ticketByClientRequest(input.clientRequestId);
   return { ticket: existing as KitchenTicket, created: false };
+}
+
+/** Activate due scheduled TABLE orders exactly once and introduce them to Cuisine. */
+export async function activateDueTableTickets(): Promise<KitchenTicket[]> {
+  const res = await pool.query(
+    `update kitchen_tickets
+        set activated_at=scheduled_for - make_interval(mins => $1), updated_at=now()
+      where source='TABLE' and status='NEW' and scheduled_for is not null
+        and activated_at is null
+        and scheduled_for <= now() + make_interval(mins => $1)
+      returning *`,
+    [TABLE_ORDER_PREP_LEAD_MINUTES],
+  );
+  const rows = res.rows as KitchenTicket[];
+  for (const row of rows) await emitTableActivation(row);
+  return rows;
+}
+
+/** Reception/owner override when a client finishes early: expose it to Cuisine now. */
+export async function activateTableTicketNow(id: string): Promise<KitchenTicket | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update kitchen_tickets
+        set activated_at=now(), updated_at=now()
+      where id=$1 and source='TABLE' and status='NEW'
+        and scheduled_for is not null and activated_at is null
+      returning *`,
+    [id],
+  );
+  const ticket = (res.rows[0] as KitchenTicket) ?? null;
+  if (ticket) await emitTableActivation(ticket);
+  return ticket;
 }
 
 export interface BarTicketInput {
@@ -301,6 +350,7 @@ export async function setTicketUrgent(id: string, urgent: boolean, _by: string |
     `update kitchen_tickets
         set urgent_at = ${urgent ? "now()" : "null"}, updated_at = now()
       where id = $1 and source = 'TABLE' and status in ('NEW','PREPARING','READY')
+        and activated_at is not null
       returning *`,
     [id],
   );
@@ -367,7 +417,8 @@ export async function autoCloseStaleTickets(maxAgeMinutes: number): Promise<Kitc
             serve_by = coalesce(serve_by, 'auto'),
             updated_at = now()
       where source in ('TABLE','BAR') and status in ('NEW','PREPARING','READY')
-        and created_at < now() - make_interval(mins => $1)
+        and activated_at is not null
+        and coalesce(activated_at,created_at) < now() - make_interval(mins => $1)
       returning *`,
     [Math.max(1, Math.floor(maxAgeMinutes))],
   );
@@ -433,7 +484,7 @@ export async function advanceTicketByCuisine(
             ready_at = case when $2 = 'READY' then now() else ready_at end,
             claimed_by = coalesce(claimed_by, $3),
             updated_at = now()
-      where id = $1 and status = any($4)
+      where id = $1 and status = any($4) and activated_at is not null
       returning *`,
     [id, to, by, froms],
   );
@@ -765,8 +816,8 @@ export async function ticketStatsToday(): Promise<TicketStatsToday> {
     `select
        count(*) filter (where created_at::date = current_date)                          as total_today,
        count(*) filter (where created_at::date = current_date and urgent_at is not null) as urgent_today,
-       count(*) filter (where status in ('NEW','PREPARING','READY'))                     as in_progress,
-       avg(extract(epoch from (ready_at - created_at)))
+       count(*) filter (where status in ('NEW','PREPARING','READY') and activated_at is not null) as in_progress,
+       avg(extract(epoch from (ready_at - coalesce(activated_at,created_at))))
          filter (where ready_at is not null and created_at::date = current_date)         as avg_prep_secs
      from kitchen_tickets
      where not is_test`,

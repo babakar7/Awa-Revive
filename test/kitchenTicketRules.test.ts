@@ -4,6 +4,7 @@ import {
   fallbackIsDue,
   isOpenStatus,
   parseInternalNotifyMode,
+  parseTableOrderReadyDelay,
   ticketItemsSummary,
   type KitchenTicketStatus,
 } from "../src/domain/kitchenTicketRules.js";
@@ -54,6 +55,16 @@ describe("parseInternalNotifyMode", () => {
     expect(parseInternalNotifyMode("")).toBe("parallel");
     expect(parseInternalNotifyMode(undefined)).toBe("parallel");
     expect(parseInternalNotifyMode("nonsense")).toBe("parallel");
+  });
+});
+
+describe("parseTableOrderReadyDelay", () => {
+  it("accepts only the two staff presets and treats absence as immediate", () => {
+    expect(parseTableOrderReadyDelay(30)).toBe(30);
+    expect(parseTableOrderReadyDelay("50")).toBe(50);
+    expect(parseTableOrderReadyDelay(undefined)).toBeNull();
+    expect(parseTableOrderReadyDelay(0)).toBe("invalid");
+    expect(parseTableOrderReadyDelay(45)).toBe("invalid");
   });
 });
 

@@ -25,9 +25,10 @@ import {
   topOrderedItemIds,
   ticketsForSession,
   listRecentClosedTickets,
+  activateTableTicketNow,
 } from "../domain/kitchenTicketRepo.js";
 import { onOpsEvent, opsEventsSince, latestOpsEventId, type OpsEvent } from "../domain/opsEvents.js";
-import { ACCUEIL_CHANNEL, CUISINE_CHANNEL } from "../domain/kitchenTicketRules.js";
+import { ACCUEIL_CHANNEL, CUISINE_CHANNEL, parseTableOrderReadyDelay } from "../domain/kitchenTicketRules.js";
 import { listActiveSpots } from "../domain/serviceSpotRepo.js";
 import {
   openSessionAtSpot,
@@ -143,7 +144,7 @@ async function cuisineBootData(): Promise<{ cursor: number; tickets: unknown[] }
     listOpenKitchenTickets(),
     latestOpsEventId(CUISINE_CHANNEL),
   ]);
-  return { cursor, tickets: tickets.map(kitchenTicketView) };
+  return { cursor, tickets: tickets.filter((t) => t.activated_at != null).map(kitchenTicketView) };
 }
 
 /** Host-aware redirect for cuisine.revive.sn "/" → the PWA scope. */
@@ -478,6 +479,11 @@ async function createSpotOrder(
   if (!result.ok) {
     return { code: 400, body: { ok: false, message: result.message } };
   }
+  const readyDelay = parseTableOrderReadyDelay(b.ready_in_minutes);
+  if (readyDelay === "invalid") {
+    return { code: 400, body: { ok: false, message: "Choisissez 30 ou 50 minutes pour une commande différée." } };
+  }
+  const scheduledFor = readyDelay === null ? null : new Date(Date.now() + readyDelay * 60_000);
   // Now open the spot's session (or reuse the open one).
   let session = await getOpenSessionBySpot(spotId);
   if (!session) {
@@ -505,11 +511,12 @@ async function createSpotOrder(
     clientRequestId,
     isTest,
     takeaway,
+    scheduledFor,
   });
   // Refresh the spot's live subtotal on the reception boards (aggregate isn't
   // carried by the ticket event). Best-effort — never fails the order.
   await publishOpenSessionUpdate(session.id).catch(() => {});
-  return { code: 200, body: { ok: true, session_id: session.id, id: ticket.id } };
+  return { code: 200, body: { ok: true, session_id: session.id, id: ticket.id, scheduled_for: ticket.scheduled_for } };
 }
 
 function registerServiceRoutes(app: FastifyInstance): void {
@@ -617,6 +624,13 @@ function registerServiceRoutes(app: FastifyInstance): void {
     const reason = typeof (req.body as any)?.reason === "string" ? (req.body as any).reason.slice(0, 200) : null;
     const t = await cancelTableTicket((req.params as any).id, reason);
     if (t) await autoCloseIfEmpty(t.session_id, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${SERVICE_BASE}/tickets/:id/prepare-now`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const t = await activateTableTicketNow((req.params as any).id);
     return reply.type("application/json").send({ ok: !!t });
   });
 
@@ -808,7 +822,8 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     return reply.type("application/json").send({ stats, devices });
   });
 
-  // Live stream: the cuisine channel carries every ticket event (both sources).
+  // Live stream: scheduled tickets share this durable channel for Supervision;
+  // the Cuisine client ignores them until activation.
   app.get(`${OWNER_BASE}/events`, async (req, reply) => {
     const device = await deviceFromReq(req, "owner");
     if (!device) return reply.code(401).send({ error: "unpaired" });
@@ -907,6 +922,13 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     const reason = typeof (req.body as any)?.reason === "string" ? (req.body as any).reason.slice(0, 200) : null;
     const t = await cancelTableTicket((req.params as any).id, reason);
     if (t) await autoCloseIfEmpty(t.session_id, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  app.post(`${OWNER_BASE}/tickets/:id/prepare-now`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const t = await activateTableTicketNow((req.params as any).id);
     return reply.type("application/json").send({ ok: !!t });
   });
 

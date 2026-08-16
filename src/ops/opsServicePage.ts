@@ -30,7 +30,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v25";
+const ASSET_VERSION = "v26";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -91,6 +91,9 @@ padding:.2rem .55rem;border-radius:999px}
 .tk .tnote{font-size:.82rem;color:var(--warn);margin-top:.25rem}
 .tk .away{display:inline-block;font-size:.75rem;font-weight:800;color:#fff;background:var(--info);
 border-radius:999px;padding:.15rem .5rem;margin-top:.3rem;letter-spacing:.02em}
+.tk .timing{display:inline-block;font-size:.78rem;font-weight:800;color:var(--plum-700);background:var(--plum-50);
+border:1px solid var(--plum-200);border-radius:999px;padding:.2rem .55rem;margin-top:.35rem}
+.tk.scheduled{border-color:var(--plum-300);background:var(--plum-50)}
 .tk.urgent{border-color:var(--danger);box-shadow:0 0 0 2px var(--danger-bg)}
 .tk .urg{display:inline-block;font-size:.75rem;font-weight:800;color:#fff;background:var(--danger);
 border-radius:999px;padding:.15rem .5rem;margin-top:.3rem;letter-spacing:.02em}
@@ -176,6 +179,12 @@ padding:.75rem .8rem;padding-bottom:calc(.55rem + env(safe-area-inset-bottom));a
 background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:.95rem}
 .modeseg .mode.sel{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
 .modeseg .mode.away.sel{background:var(--info);border-color:var(--info);color:#fff}
+.later-picker{margin:0 0 .55rem;padding:.5rem;border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--surface-raised)}
+.later-toggle{width:100%;min-height:2.65rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:#fff;color:var(--ink-700);font-weight:750;font-size:.95rem}
+.later-toggle.sel{border-color:var(--plum-600);background:var(--plum-50);color:var(--plum-700)}
+.later-options{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-top:.45rem}.later-options[hidden]{display:none}
+.later-delay{min-height:2.65rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:#fff;color:var(--ink-700);font-weight:750}
+.later-delay.sel{border-color:var(--plum-600);background:var(--plum-600);color:#fff}
 /* Test-order toggle: quiet when off, loud (danger) when on so it's never sent by accident. */
 .testrow{display:flex;align-items:center;gap:.6rem;margin:0 0 .6rem;padding:.6rem .7rem;border-radius:var(--radius);
 border:1px dashed var(--border-strong);background:var(--surface-raised);color:var(--ink-500);font-size:.9rem;font-weight:600}
@@ -245,7 +254,7 @@ font-weight:800;font-size:1.02rem;box-shadow:var(--shadow-1)}
 max-width:calc(100% - 2rem);padding:.75rem 1rem;border-radius:999px;background:var(--ok-strong);color:#fff;font-weight:750;
 box-shadow:var(--shadow-2);animation:pop .2s var(--ease);white-space:nowrap}
 /* Focused search spends the keyboard-reduced viewport on dense menu rows. */
-.sheet.searching .sheet-title,.sheet.searching .modeseg,.sheet.searching .optional,.sheet.searching .browsebar{display:none}
+.sheet.searching .sheet-title,.sheet.searching .modeseg,.sheet.searching .later-picker,.sheet.searching .optional,.sheet.searching .browsebar{display:none}
 .sheet.searching::before{display:none}.sheet.searching .search-summary,.sheet.searching .searchctl{display:flex}
 .sheet.searching .searchbar>.cart{display:none}.sheet.searching{padding-top:.55rem}.sheet.searching .toolbar{padding-bottom:.15rem}
 .sheet.searching .mi{padding:.35rem .2rem;gap:.35rem;flex-wrap:wrap}.sheet.searching .mi .nm{font-size:.94rem;min-width:7rem}
@@ -350,7 +359,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   function uuid(){ try{ return crypto.randomUUID(); }catch(e){ return 'r-'+Date.now()+'-'+Math.round(Math.random()*1e9); } }
   function findItem(id){ for(var i=0;i<MENU.length;i++){ for(var j=0;j<MENU[i].items.length;j++){ if(MENU[i].items[j].id===id) return MENU[i].items[j]; } } return null; }
   function sessionForSpot(spotId){ var found=null; sessions.forEach(function(s){ if(s.spot_id===spotId) found=s; }); return found; }
-  function ticketsOf(sid){ var out=[]; tickets.forEach(function(t){ if(t.session_id===sid) out.push(t); }); return out.sort(function(a,b){return new Date(a.created_at)-new Date(b.created_at);}); }
+  function ticketsOf(sid){ var out=[]; tickets.forEach(function(t){ if(t.session_id===sid) out.push(t); }); return out.sort(function(a,b){var sa=a.scheduled_for&&!a.activated_at?1:0,sb=b.scheduled_for&&!b.activated_at?1:0;return (sa-sb)||(new Date((sa?a.scheduled_for:a.activated_at)||a.created_at)-new Date((sb?b.scheduled_for:b.activated_at)||b.created_at));}); }
   function capLabel(sp){ if(sp.capacity==null) return ''; return sp.capacity_max? sp.capacity+'–'+sp.capacity_max+' pers.' : sp.capacity+' pers.'; }
 
   // ---- sound & voice (unlocked on first gesture; iOS requirement) ----
@@ -408,7 +417,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     if(s){ for(var i=0;i<SPOTS.length;i++){ if(SPOTS[i].id===s.spot_id) return SPOTS[i].label; } }
     return t.subheading||t.heading||''; }
   function newSpeech(t){ var w=spotSpeech(t); var it=itemsSpeech(t);
-    return 'Nouvelle commande'+(t.takeaway?' à emporter':'')+(w?', '+w:'')+(it?'. '+it:''); }
+    return (t.scheduled_for?'Commande prévue pour '+hhmm(t.scheduled_for):'Nouvelle commande')+(t.takeaway?' à emporter':'')+(w?', '+w:'')+(it?'. '+it:''); }
   // A dish going READY is the moment a server must act on — hit it harder than a
   // new order: triple bip + vibration (no-op on iOS but free) + a spoken cue.
   function vibrate(pattern){ try{ if(navigator.vibrate) navigator.vibrate(pattern); }catch(e){} }
@@ -418,26 +427,34 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   function post(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
 
   function ticketCard(t){
-    var d=el('div','tk'+(t.urgent?' urgent':'')); d.dataset.id=t.id;
+    var waiting=!!(t.scheduled_for&&!t.activated_at);
+    var d=el('div','tk'+(waiting?' scheduled':'')+(t.urgent?' urgent':'')); d.dataset.id=t.id;
     (t.items||[]).forEach(function(l,i){ var ln=el('div','line');
       ln.appendChild(el('span','q',l.qty+'×'));
       ln.appendChild(document.createTextNode(' '+l.name+(l.choice?' ('+l.choice+')':'')));
-      if(i===0){ var st=el('span','st '+t.status.toLowerCase(), t.status==='READY'?'Prête':t.status==='PREPARING'?'En prépa':'Envoyée'); ln.appendChild(st); }
+      if(i===0){ var st=el('span','st '+t.status.toLowerCase(), waiting?'Prévue':t.status==='READY'?'Prête':t.status==='PREPARING'?'En prépa':'Envoyée'); ln.appendChild(st); }
       d.appendChild(ln);
       if(l.note) d.appendChild(el('div','tnote','• '+l.note));
     });
     if(t.note) d.appendChild(el('div','tnote','📝 '+t.note));
     if(t.takeaway) d.appendChild(el('div','away','📦 À emporter'));
+    if(t.scheduled_for) d.appendChild(el('div','timing','⏰ '+(waiting?'Prévue pour ':'Pour ')+hhmm(t.scheduled_for)));
     if(t.urgent) d.appendChild(el('div','urg','⚡ Urgent'));
     // Cuisine confirmation for orders THIS phone sent: "Envoi…" → auto "Reçue ✓" on
     // the tablet's ACK → "non confirmée" only if the authoritative state still has
     // no ack after 10s. Never shown once READY (the order clearly reached the kitchen).
-    if(t.status!=='READY'){
+    if(t.status!=='READY'&&!waiting){
       if(t.ipad_ack_at){ d.appendChild(el('div','cuis ok','✓ Reçue par Cuisine')); }
       else if(overdue[t.id]){ d.appendChild(el('div','cuis warn','⚠︎ Cuisine non confirmée — vérifiez la tablette')); }
       else if(sentAt[t.id]!=null){ d.appendChild(el('div','cuis send','Envoi à Cuisine…')); }
     }
-    if(t.status==='READY'){
+    if(waiting){
+      var futureActs=el('div','tacts');
+      var now=el('button','act take','Préparer maintenant'); now.onclick=function(){ now.disabled=true; post('/tickets/'+t.id+'/prepare-now',{}).then(function(r){if(!r.ok)now.disabled=false;}).catch(function(){now.disabled=false;}); }; futureActs.appendChild(now);
+      var futureCx=el('button','act cancel','✕'); futureCx.setAttribute('aria-label','Annuler cette commande prévue');
+      futureCx.onclick=function(){ askConfirm('Annuler cette commande prévue ?','Oui, annuler la commande','Non, garder la commande',function(){ futureCx.disabled=true; post('/tickets/'+t.id+'/cancel',{reason:'commande prévue annulée en salle'}).then(function(r){if(!r.ok)futureCx.disabled=false;}).catch(function(){futureCx.disabled=false;}); }); };
+      futureActs.appendChild(futureCx); d.appendChild(futureActs);
+    } else if(t.status==='READY'){
       var acts=el('div','tacts');
       // ONE tap: the server takes the ready order to the client. It both claims and
       // completes the ticket (the /served endpoint completes any READY ticket), so
@@ -543,8 +560,8 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     sh.setAttribute('aria-label','Nouvelle commande — '+sp.label);
     var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
     var draft={};
-    var state={cat:'__ALL__',q:'',cartOnly:false,takeaway:false,test:false,searching:false,sending:false};
-    var totalEl,cartChip,searchCart,listEl,go,msg,search,summaryMode;
+    var state={cat:'__ALL__',q:'',cartOnly:false,takeaway:false,test:false,readyIn:0,searching:false,sending:false};
+    var totalEl,cartChip,searchCart,listEl,go,msg,search,summaryMode,summaryWhen;
     function returnFocus(){ var t=trigger;
       if(!t||!t.isConnected){ var host=board.querySelector('[data-spot="'+sp.id+'"]');
         t=host&&host.tagName==='BUTTON'?host:(host?host.querySelector('button'):null); }
@@ -572,6 +589,23 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     mHere.onclick=function(){state.takeaway=false;paintMode();}; mAway.onclick=function(){state.takeaway=true;paintMode();};
     modeseg.appendChild(mHere); modeseg.appendChild(mAway); sh.appendChild(modeseg);
 
+    // Immediate remains the quiet default. "Pour plus tard" exposes exactly the
+    // two operational presets requested by the team — no free-form time entry.
+    var laterPicker=el('div','later-picker');
+    var laterToggle=el('button','later-toggle','⏰ Pour plus tard'); laterToggle.type='button'; laterToggle.setAttribute('aria-pressed','false');
+    var laterOptions=el('div','later-options'); laterOptions.hidden=true;
+    var delayButtons=[];
+    function clockAfter(mins){ var d=new Date(Date.now()+mins*60000); return (d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); }
+    function paintTiming(){ var on=state.readyIn===30||state.readyIn===50;
+      laterToggle.classList.toggle('sel',on); laterToggle.setAttribute('aria-pressed',on?'true':'false');
+      laterToggle.textContent=on?'⏰ Pour plus tard · '+state.readyIn+' min':'⏰ Pour plus tard'; laterOptions.hidden=!on;
+      delayButtons.forEach(function(b){var sel=+b.dataset.delay===state.readyIn;b.classList.toggle('sel',sel);b.setAttribute('aria-pressed',sel?'true':'false');b.textContent=b.dataset.delay+' min · '+clockAfter(+b.dataset.delay);});
+      if(summaryWhen)summaryWhen.textContent=on?'Dans '+state.readyIn+' min':'Maintenant'; if(go)recompute(); }
+    laterToggle.onclick=function(){ state.readyIn=state.readyIn?0:50; paintTiming(); };
+    [30,50].forEach(function(mins){ var b=el('button','later-delay');b.type='button';b.dataset.delay=String(mins);b.setAttribute('aria-pressed','false');
+      b.onclick=function(){state.readyIn=mins;paintTiming();};delayButtons.push(b);laterOptions.appendChild(b); });
+    laterPicker.appendChild(laterToggle);laterPicker.appendChild(laterOptions);sh.appendChild(laterPicker);
+
     // Prénom, note générale and the service-only test flag are intentionally
     // collapsed so the menu receives most of the phone viewport.
     var optional=document.createElement('details'); optional.className='optional';
@@ -587,6 +621,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
 
     var searchSummary=el('div','search-summary'); searchSummary.appendChild(el('span',null,sp.label));
     searchSummary.appendChild(el('span','dotsep','·')); summaryMode=el('span',null,'Sur place'); searchSummary.appendChild(summaryMode);
+    searchSummary.appendChild(el('span','dotsep','·')); summaryWhen=el('span',null,'Maintenant'); searchSummary.appendChild(summaryWhen);
     searchCart=el('button','chip cart','Panier (0)'); searchCart.type='button'; searchSummary.appendChild(searchCart); sh.appendChild(searchSummary);
 
     function cartCount(){ var n=0; Object.keys(draft).forEach(function(id){ if(draft[id].qty>0) n+=draft[id].qty; }); return n; }
@@ -595,7 +630,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       var tot=0; Object.keys(draft).forEach(function(id){ var it=findItem(id); if(it&&draft[id].qty>0) tot+=it.price*draft[id].qty; });
       var n=cartCount();totalEl.textContent='';totalEl.appendChild(document.createTextNode(n+' article'+(n>1?'s':'')+' · '+tot+' F'));totalEl.appendChild(el('small',null,'Total indicatif'));
       cartChip.textContent='Panier ('+n+')';searchCart.textContent='Panier ('+n+')';cartChip.classList.toggle('sel',state.cartOnly);searchCart.classList.toggle('sel',state.cartOnly);
-      go.textContent=n?'Envoyer en cuisine':'Ajouter des articles';
+      go.textContent=n?(state.readyIn?'Programmer · '+state.readyIn+' min':'Envoyer en cuisine'):'Ajouter des articles';
     }
 
     // Search mode keeps the keyboard-open viewport focused on dense results.
@@ -644,7 +679,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       minus.onpointerdown=function(e){if(state.searching)e.preventDefault();};plus.onpointerdown=function(e){if(state.searching&&!needsChoice)e.preventDefault();};
       minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0) renderList(); };
       plus.onclick=function(){var dd=draft[it.id]||{qty:0,choice:'',note:''};var wasEmpty=dd.qty===0;dd.qty=Math.min(10,dd.qty+1);draft[it.id]=dd;sync();
-        if(state.searching){state.q='';search.value='';renderList();if(needsChoice&&wasEmpty){try{search.blur();}catch(e){}setTimeout(function(){var fresh=listEl.querySelector('[data-id="'+it.id+'"]');if(fresh&&fresh.scrollIntoView)fresh.scrollIntoView({block:'center'});},50);}}};
+        if(state.searching){state.q='';search.value='';finishSearch();setTimeout(function(){var fresh=listEl.querySelector('[data-id="'+it.id+'"]');if(fresh&&fresh.scrollIntoView)fresh.scrollIntoView({block:'center'});},50);}};
       stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
       if(needsChoice){
         creq=el('div','creq');var optionName=it.optionLabel||'Choix';var choiceLabel=el('button','clab');choiceLabel.type='button';creq.appendChild(choiceLabel);
@@ -721,16 +756,16 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
       if(!items.length){setError('Ajoutez au moins un article au panier.');return;}
       state.sending=true;go.disabled=true;go.textContent='Envoi…';msg.hidden=true;
-      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,test:state.test}; if(fn&&fn.value) body.first_name=fn.value;
+      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,test:state.test}; if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn&&fn.value) body.first_name=fn.value;
       post('/spots/'+sp.id+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.ok){if(j.id)trackSend(j.id);closeSheet();showServiceNotice('Commande envoyée — '+sp.label);}
+        if(j&&j.ok){if(j.id&&!j.scheduled_for)trackSend(j.id);closeSheet();showServiceNotice(j.scheduled_for?'Commande programmée — '+sp.label+' · '+hhmm(j.scheduled_for):'Commande envoyée — '+sp.label);}
         else{state.sending=false;go.disabled=false;recompute();setError((j&&j.message)||'Commande refusée. Corrigez les choix puis réessayez.');}
       }).catch(function(){state.sending=false;go.disabled=false;recompute();setError('Envoi impossible. Vérifiez la connexion puis réessayez.');});
     };
     foot.appendChild(go); sh.appendChild(foot);
     ov.appendChild(sh); document.body.appendChild(ov);
     if(window.visualViewport){window.visualViewport.addEventListener('resize',fitViewport);window.visualViewport.addEventListener('scroll',fitViewport);}
-    window.addEventListener('resize',fitViewport);fitViewport();paintMode();renderList();recompute();try{search.focus();}catch(e){}
+    window.addEventListener('resize',fitViewport);fitViewport();paintMode();paintTiming();renderList();recompute();try{search.focus();}catch(e){}
   }
 
   // The SSE stream blips routinely (phone backgrounding, screen lock, network

@@ -1708,6 +1708,18 @@ create index if not exists idx_kitchen_tickets_fallback_due
 -- minute (42703, colonne heading manquante). Ces alter idempotents rattrapent
 -- l'écart. NE PAS retirer.
 alter table kitchen_tickets add column if not exists heading text not null default '';
+-- Future on-site orders are recorded immediately for the table/session subtotal,
+-- but stay out of Cuisine until the 15-minute preparation window. Existing and
+-- ordinary immediate tickets are backfilled/created as activated.
+alter table kitchen_tickets add column if not exists scheduled_for timestamptz;
+alter table kitchen_tickets add column if not exists activated_at timestamptz;
+update kitchen_tickets
+   set activated_at=created_at
+ where activated_at is null and scheduled_for is null;
+alter table kitchen_tickets alter column activated_at set default now();
+create index if not exists idx_kitchen_tickets_table_activation
+  on kitchen_tickets (scheduled_for)
+  where source='TABLE' and status='NEW' and scheduled_for is not null and activated_at is null;
 alter table kitchen_tickets add column if not exists subheading text;
 
 -- Appareils appairés (iPad cuisine, téléphones accueil, propriétaire). Le token

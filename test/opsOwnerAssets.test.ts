@@ -51,6 +51,21 @@ describe("owner supervision PWA assets", () => {
     expect(ownerBoardPage()).toContain('id="take"');
   });
 
+  it("offers only 30/50-minute scheduling and keeps scheduled orders actionable", () => {
+    expect(OWNER_APP_JS).toContain("[30,50].forEach");
+    expect(OWNER_APP_JS).toContain("body.ready_in_minutes=state.readyIn");
+    expect(OWNER_APP_JS).toContain("Préparer maintenant");
+    expect(OWNER_APP_JS).toContain("/prepare-now");
+    expect(OWNER_APP_JS).toContain("Commande programmée — ");
+    expect(ownerBoardPage()).toContain(".later-options");
+  });
+
+  it("reveals ordinary-item notes after adding from search", () => {
+    expect(OWNER_APP_JS).toContain("state.q='';search.value='';finishSearch()");
+    expect(OWNER_APP_JS).toContain("Note (optionnel)");
+    expect(OWNER_APP_JS).toContain("e.note=d.note");
+  });
+
   it("uses persistent accessible space buttons instead of a native select", () => {
     expect(OWNER_APP_JS).not.toContain("createElement('select')");
     expect(OWNER_APP_JS).toContain("SPOTS.forEach(function(sp)");
@@ -78,7 +93,7 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).not.toContain("browsebar.appendChild(cartChip)");
     expect(OWNER_APP_JS).toContain("draft[it.id]&&draft[it.id].qty>0");
     expect(OWNER_APP_JS).toContain("n+' article'");
-    expect(OWNER_APP_JS).toContain("go.textContent='Envoyer en cuisine'");
+    expect(OWNER_APP_JS).toContain("'Envoyer en cuisine'");
     expect(ownerBoardPage()).toContain(".foot{position:sticky");
   });
 
@@ -136,7 +151,7 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v12");
+    expect(version).toBe("v13");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 

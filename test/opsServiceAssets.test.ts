@@ -22,7 +22,7 @@ describe("service PWA assets", () => {
 
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
     const version = serviceBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v25");
+    expect(version).toBe("v26");
     expect(SERVICE_SW).toContain(`service-${version}`);
   });
 
@@ -64,9 +64,24 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("window.visualViewport");
     expect(SERVICE_APP_JS).toContain("vv.height");
     expect(SERVICE_APP_JS).toContain("if(state.searching&&!needsChoice)e.preventDefault()");
-    expect(SERVICE_APP_JS).toContain("state.q='';search.value='';renderList()");
+    expect(SERVICE_APP_JS).toContain("state.q='';search.value='';finishSearch()");
     expect(serviceBoardPage()).toContain(".sheet.searching .mi");
     expect(serviceBoardPage()).toContain(".sheet.searching .optional");
+  });
+
+  it("reveals the note field after adding any searched item", () => {
+    expect(SERVICE_APP_JS).toContain("state.q='';search.value='';finishSearch()");
+    expect(SERVICE_APP_JS).toContain("Note (optionnel)");
+    expect(SERVICE_APP_JS).toContain("e.note=d.note");
+  });
+
+  it("offers only 30/50-minute future orders and identifies scheduled tickets", () => {
+    expect(SERVICE_APP_JS).toContain("[30,50].forEach");
+    expect(SERVICE_APP_JS).toContain("body.ready_in_minutes=state.readyIn");
+    expect(SERVICE_APP_JS).toContain("Préparer maintenant");
+    expect(SERVICE_APP_JS).toContain("/prepare-now");
+    expect(SERVICE_APP_JS).toContain("Commande programmée — ");
+    expect(serviceBoardPage()).toContain(".later-options");
   });
 
   it("collapses completed choices, refocuses search, and keeps choices editable", () => {

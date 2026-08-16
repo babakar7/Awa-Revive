@@ -53,6 +53,13 @@ describe("cuisine PWA assets", () => {
     expect(CUISINE_APP_JS).toContain("t.takeaway");
   });
 
+  it("holds future table orders until activation and labels their ready time", () => {
+    expect(CUISINE_APP_JS).toContain("if(!t.activated_at)return");
+    expect(CUISINE_APP_JS).toContain("⏰ Pour ");
+    expect(CUISINE_APP_JS).toContain("t.scheduled_for");
+    expect(CUISINE_APP_JS).toContain("t.activated_at||t.created_at");
+  });
+
   it("bubbles urgent tickets to the top and announces the board by voice", () => {
     // Urgent-first sort + strong badge.
     expect(CUISINE_APP_JS).toContain("y.urgent");

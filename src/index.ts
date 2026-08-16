@@ -12,7 +12,7 @@ import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { sweepStaffNotifications } from "./domain/notificationSweep.js";
 import { sweepDeliveries } from "./domain/deliveryNotify.js";
 import { sweepServeEscalations } from "./domain/opsEscalation.js";
-import { autoCloseStaleTickets } from "./domain/kitchenTicketRepo.js";
+import { activateDueTableTickets, autoCloseStaleTickets } from "./domain/kitchenTicketRepo.js";
 import { closeEmptyOpenSessions } from "./domain/serviceSessionRepo.js";
 import { expireStaleDeliveryPaymentAttempts } from "./domain/deliveryRepo.js";
 import { reconcileStuckBookings } from "./webhooks/wave.js";
@@ -182,6 +182,14 @@ async function main() {
       if (escalated > 0) app.log.info({ escalated }, "Room serve escalations sent to owner");
     } catch (err) {
       app.log.error({ err }, "Serve-escalation sweep failed");
+    }
+    // Future TABLE orders enter Cuisine only when their 15-minute preparation
+    // window opens. The DB claim is atomic, so overlapping instances emit once.
+    try {
+      const activated = await activateDueTableTickets();
+      if (activated.length > 0) app.log.info({ activated: activated.length }, "Scheduled table orders activated");
+    } catch (err) {
+      app.log.error({ err }, "Scheduled table-order activation failed");
     }
     // Kitchen board self-cleaning: an open TABLE/BAR ticket older than
     // OPS_TICKET_AUTOCLOSE_MINUTES has in reality long been handled — mark it

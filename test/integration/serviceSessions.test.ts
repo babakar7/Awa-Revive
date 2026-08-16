@@ -34,6 +34,8 @@ import {
   claimStaleServeEscalations,
   topOrderedItemIds,
   __resetTopCache,
+  activateDueTableTickets,
+  activateTableTicketNow,
 } from "../../src/domain/kitchenTicketRepo.js";
 import {
   savePushSubscription,
@@ -155,6 +157,36 @@ describe("createTableTicket", () => {
     expect((t.items_json as any[])[0].note).toBe("sans sucre");
     expect((await opsEventsSince("cuisine", beforeCuisine)).some((e) => e.kind === "ticket_new")).toBe(true);
     expect((await opsEventsSince("accueil", beforeAccueil)).some((e) => e.kind === "ticket_new")).toBe(true);
+  });
+
+  it("holds a future TABLE ticket until its preparation window, then activates once", async () => {
+    const s = await seat(canapeSpot);
+    const scheduledFor = new Date(Date.now() + 10 * 60_000); // already inside the 15-min prep window
+    const { ticket } = await createTableTicket({
+      sessionId: s.id, heading: s.short_code, subheading: "Canapé", lines: LINES,
+      amountXof: 6000, note: null, clientRequestId: reqId(), isTest: false, scheduledFor,
+    });
+    expect(ticket.scheduled_for).not.toBeNull();
+    expect(ticket.activated_at).toBeNull();
+    expect(await advanceTicketByCuisine(ticket.id, "PREPARING", "Cuisine")).toBeNull();
+
+    const before = await latestOpsEventId("cuisine");
+    const activated = await activateDueTableTickets();
+    expect(activated.map((t) => t.id)).toContain(ticket.id);
+    expect(activated[0].activated_at).not.toBeNull();
+    expect((await opsEventsSince("cuisine", before)).some((e) => e.kind === "ticket_new")).toBe(true);
+    expect(await activateDueTableTickets()).toHaveLength(0);
+  });
+
+  it("can release a future TABLE ticket to Cuisine immediately", async () => {
+    const s = await seat(canapeSpot);
+    const { ticket } = await createTableTicket({
+      sessionId: s.id, heading: s.short_code, subheading: "Canapé", lines: LINES,
+      amountXof: 6000, note: null, clientRequestId: reqId(), isTest: false,
+      scheduledFor: new Date(Date.now() + 50 * 60_000),
+    });
+    expect((await activateTableTicketNow(ticket.id))?.activated_at).not.toBeNull();
+    expect(await activateTableTicketNow(ticket.id)).toBeNull();
   });
 
   it("is idempotent on client_request_id (double-tap → one ticket)", async () => {
@@ -557,6 +589,41 @@ describe("service PWA over HTTP", () => {
       payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-test-1", test: true },
     });
     expect((await getKitchenTicket(JSON.parse(test.body).id))?.is_test).toBe(true);
+  });
+
+  it("schedules only 30/50-minute orders, shows them to staff, and withholds them from Cuisine", async () => {
+    const accueil = await pairAccueil();
+    const cuisine = await pairCuisine();
+    const ordered = await app.inject({
+      method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, headers: { cookie: accueil },
+      payload: { items: [{ item_id: "JANTBI", qty: 1, note: "sans glace" }], client_request_id: "req-future-50", ready_in_minutes: 50 },
+    });
+    expect(ordered.statusCode).toBe(200);
+    const created = JSON.parse(ordered.body);
+    expect(created.scheduled_for).toBeTruthy();
+    const ticket = await getKitchenTicket(created.id);
+    expect(ticket?.activated_at).toBeNull();
+
+    const serviceState = JSON.parse((await app.inject({ method: "GET", url: "/ops/service/state", headers: { cookie: accueil } })).body);
+    expect(serviceState.tickets.some((t: any) => t.id === created.id && t.scheduled_for && !t.activated_at)).toBe(true);
+    const cuisineState = JSON.parse((await app.inject({ method: "GET", url: "/ops/cuisine/state", headers: { cookie: cuisine } })).body);
+    expect(cuisineState.tickets.some((t: any) => t.id === created.id)).toBe(false);
+
+    const released = await app.inject({ method: "POST", url: `/ops/service/tickets/${created.id}/prepare-now`, headers: { cookie: accueil } });
+    expect(released.statusCode).toBe(200);
+    expect(JSON.parse(released.body).ok).toBe(true);
+    const cuisineAfter = JSON.parse((await app.inject({ method: "GET", url: "/ops/cuisine/state", headers: { cookie: cuisine } })).body);
+    expect(cuisineAfter.tickets.some((t: any) => t.id === created.id && t.activated_at)).toBe(true);
+  });
+
+  it("rejects any future delay other than 30 or 50 before opening the table", async () => {
+    const cookie = await pairAccueil();
+    const bad = await app.inject({
+      method: "POST", url: `/ops/service/spots/${pergolaSpot}/orders`, headers: { cookie },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-future-45", ready_in_minutes: 45 },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(await getOpenSessionBySpot(pergolaSpot)).toBeNull();
   });
 
   it("redirects the service host root into the PWA scope", async () => {

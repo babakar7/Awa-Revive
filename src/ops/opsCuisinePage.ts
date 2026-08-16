@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v20";
+const ASSET_VERSION = "v21";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -73,6 +73,7 @@ padding:.22rem .6rem;border-radius:999px;background:var(--info-bg);color:var(--i
 .badge.table{background:var(--rose);color:var(--plum-700)}
 .badge.test{background:var(--danger-bg);color:var(--danger)}
 .badge.away{background:var(--info);color:#fff}
+.badge.scheduled{background:var(--plum-50);color:var(--plum-700);border:1px solid var(--plum-200)}
 .badge.urgent{background:var(--danger);color:#fff;animation:pulse 1.2s ease-in-out infinite}
 .age{margin-left:auto;font-size:1.5rem;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.01em;color:var(--ok-strong)}
 .age.warn{color:var(--warn)}
@@ -296,7 +297,7 @@ export const CUISINE_APP_JS = String.raw`(function(){
     var it=itemsSpeech(t);
     // The ticket-level note (champ texte libre) carries instructions the cook
     // must hear — items and per-line notes alone would silently drop it.
-    return lead+(w?', '+w:'')+(it?'. '+it:'')+(t.note?'. Note, '+t.note:''); }
+    return lead+(t.scheduled_for?' pour '+hhmm(t.scheduled_for):'')+(w?', '+w:'')+(it?'. '+it:'')+(t.note?'. Note, '+t.note:''); }
   function urgentSpeech(t){ return 'Commande urgente'+(t.heading?', '+t.heading:''); }
   function cancelSpeech(t){ var it=itemsSpeech(t); return 'Commande annulée'+(t.heading?', '+t.heading:'')+(it?'. '+it:''); }
 
@@ -358,13 +359,15 @@ export const CUISINE_APP_JS = String.raw`(function(){
     else if(t.takeaway) b=el('span','badge away','📦 À emporter');
     else b=el('span','badge table','🍽️ Sur place');
     top.appendChild(b);
+    if(t.scheduled_for)top.appendChild(el('span','badge scheduled','⏰ Pour '+hhmm(t.scheduled_for)));
     if(t.is_test) top.appendChild(el('span','badge test','Test'));
     var a;
+    var ageStart=t.activated_at||t.created_at;
     if(t.status==='READY' && t.ready_at){
       // Frozen prep duration — no data-age, so the ticking interval skips it.
-      a=el('span','age done','✓ '+fmtSecs(betweenSecs(t.created_at,t.ready_at)));
+      a=el('span','age done','✓ '+fmtSecs(betweenSecs(ageStart,t.ready_at)));
     } else {
-      a=el('span',ageClass(t.created_at),fmtElapsed(t.created_at)); a.dataset.age=t.created_at;
+      a=el('span',ageClass(ageStart),fmtElapsed(ageStart)); a.dataset.age=ageStart;
     }
     top.appendChild(a);
     c.appendChild(top);
@@ -428,7 +431,7 @@ export const CUISINE_APP_JS = String.raw`(function(){
     // Urgents first (accueil-escalated), then oldest-first within each group.
     var list=Array.from(model.values()).sort(function(x,y){
       var u=(y.urgent?1:0)-(x.urgent?1:0);
-      return u || (new Date(x.created_at)-new Date(y.created_at));
+      return u || (new Date(x.scheduled_for||x.activated_at||x.created_at)-new Date(y.scheduled_for||y.activated_at||y.created_at));
     });
     board.textContent='';
     var groups=batchGroups(list);
@@ -573,8 +576,8 @@ export const CUISINE_APP_JS = String.raw`(function(){
       if(firstOpen){ firstOpen=false; } else { resync(); } };
     es.onerror=function(){setOnline(false);};
     es.addEventListener('ping',beat);
-    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); var isNew=!model.has(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); if(isNew){beep(); speak(newSpeech(t),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
-    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); if(e.lastEventId)cursor=+e.lastEventId; render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(urgentSpeech(t),true); } });
+    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); if(e.lastEventId)cursor=+e.lastEventId; if(!t.activated_at)return; var isNew=!model.has(t.id); model.set(t.id,t); render(); if(isNew){beep(); speak(newSpeech(t),false); var c=board.querySelector('[data-id="'+t.id+'"]'); if(c)c.classList.add('flash'); ack(t.id);} });
+    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); if(e.lastEventId)cursor=+e.lastEventId; if(!t.activated_at){model.delete(t.id);render();return;} var prev=model.get(t.id); var becameReady=t.status==='READY'&&(!prev||prev.status!=='READY'); var becameUrgent=t.urgent&&(!prev||!prev.urgent); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); render(); var c2=board.querySelector('[data-id="'+t.id+'"]'); if(becameReady){ var pill=c2&&c2.querySelector('.pill.ready'); if(pill)pill.classList.add('just-ready'); } if(becameUrgent){ if(c2)c2.classList.add('flash'); beep(); speak(urgentSpeech(t),true); } });
     es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); var prev=model.get(d.id); clearPendingReady(d.id); model.delete(d.id); if(e.lastEventId)cursor=+e.lastEventId; render(); if(d.status==='CANCELLED'){ beep(); speak(cancelSpeech(prev||{heading:''}),true); } });
     // The tablet's own ACK, echoed back: keep the model's ipad_ack_at fresh (the
     // reception board reads it) — no card change, no sound.
