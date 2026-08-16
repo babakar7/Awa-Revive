@@ -2,8 +2,15 @@ import { describe, expect, it } from "vitest";
 import { csvCell, renderPaymentsPage } from "../src/admin/paiementsPage.js";
 import { dakarDay } from "../src/domain/paymentsLedger.js";
 import { normalizeWixProviderMethod, wixOrderBuyer } from "../src/domain/wixPaymentSync.js";
+import { bookingPaymentLabel } from "../src/lib/paymentMethod.js";
 
 describe("payments ledger pure rules", () => {
+  it("uses the exact plan name as the payment label for membership bookings", () => {
+    expect(bookingPaymentLabel("membership", "La Résidente")).toBe("La Résidente");
+    expect(bookingPaymentLabel("membership", null)).toBe("Abonnement");
+    expect(bookingPaymentLabel("orange_money", "La Résidente")).toBe("Orange Money");
+  });
+
   it("uses the Dakar calendar day", () => {
     expect(dakarDay(new Date("2026-08-10T23:45:00Z"))).toBe("2026-08-10");
   });

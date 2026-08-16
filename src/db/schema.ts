@@ -74,6 +74,12 @@ alter table pending_bookings
 alter table pending_bookings
   add column if not exists benefit_transaction_id text;
 
+-- Exact pricing-plan name whose credit paid for a membership booking. Keep the
+-- snapshot on the booking: the client's active plans can change later, so the
+-- admin must not infer this label from today's Wix memberships.
+alter table pending_bookings
+  add column if not exists membership_plan_name text;
+
 -- Bar order bundled into the booking payment. extras_json is the
 -- server-resolved snapshot (names + unit prices frozen at order time);
 -- amount_xof stays the GRAND total (class + extras).
@@ -484,6 +490,15 @@ alter table pending_plan_orders add column if not exists slot_end timestamptz;
 alter table pending_plan_orders add column if not exists wix_booking_id text;
 alter table pending_plan_orders add column if not exists benefit_transaction_id text;
 alter table pending_plan_orders add column if not exists linked_booking_id uuid references pending_bookings(id);
+-- Backfill the subset of historical membership bookings that was created as
+-- the initial class of a locally sold plan. Other historical redemptions did
+-- not persist their plan identity and intentionally keep the safe fallback.
+update pending_bookings b
+   set membership_plan_name=p.plan_name
+  from pending_plan_orders p
+ where p.linked_booking_id=b.id
+   and b.payment_method='membership'
+   and nullif(b.membership_plan_name,'') is null;
 alter table pending_plan_orders add column if not exists discovery_booking_status text;
 alter table pending_plan_orders add column if not exists discovery_booking_error text;
 -- Generic initial-session fulfillment (the historical discovery_* columns are

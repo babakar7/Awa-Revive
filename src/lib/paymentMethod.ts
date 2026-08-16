@@ -25,6 +25,13 @@ export function paymentMethodLabel(raw: unknown): string {
   }
 }
 
+/** Payment label for a booking, including the exact plan used when applicable. */
+export function bookingPaymentLabel(raw: unknown, membershipPlanName?: unknown): string {
+  const method = String(raw ?? "").trim().toLowerCase();
+  const planName = String(membershipPlanName ?? "").trim();
+  return method === "membership" && planName ? planName : paymentMethodLabel(raw);
+}
+
 export interface PaymentMethodOption {
   id: "pay_wave" | "pay_om" | "pay_maxit";
   method: "wave" | "orange_money" | "maxit";

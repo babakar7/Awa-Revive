@@ -1470,6 +1470,7 @@ async function createProtectedBenefitBooking(args: {
         slotEnd: args.fresh.endDate ?? null,
         wixBookingId,
         benefitTransactionId: redemption.transactionId || null,
+        membershipPlanName: args.benefit.planName,
         participants: 1,
       });
     } catch (error) {
@@ -4042,6 +4043,7 @@ export async function executeTool(
           slotEnd: fresh.endDate ?? null,
           wixBookingId,
           benefitTransactionId: redemption.transactionId || null,
+          membershipPlanName: benefit.planName,
           participants,
         });
         try {

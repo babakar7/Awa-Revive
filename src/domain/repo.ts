@@ -59,6 +59,7 @@ export interface PendingBooking {
   refund_amount_xof: number | null;
   forfeited_at: Date | null;
   benefit_transaction_id: string | null;
+  membership_plan_name: string | null;
   extras_json: unknown;
   extras_amount_xof: number;
   order_note: string | null;
@@ -1391,15 +1392,18 @@ export async function createMembershipBooking(args: {
   slotEnd: string | null;
   wixBookingId: string;
   benefitTransactionId?: string | null;
+  membershipPlanName: string;
   /** Spots booked on this plan in one go (group booking). Defaults to 1. */
   participants?: number;
 }): Promise<PendingBooking> {
   const res = await pool.query(
     `insert into pending_bookings
        (client_id, service_id, service_name, event_id, slot_json, slot_start, slot_end,
-        amount_xof, participants, status, payment_method, wix_booking_id, benefit_transaction_id)
-     values ($1, $2, $3, $4, $5, $6, $7, 0, $10, 'BOOKED', 'membership', $8, $9)
-     on conflict (wix_booking_id) do update set wix_booking_id=excluded.wix_booking_id
+        amount_xof, participants, status, payment_method, wix_booking_id,
+        benefit_transaction_id, membership_plan_name)
+     values ($1, $2, $3, $4, $5, $6, $7, 0, $10, 'BOOKED', 'membership', $8, $9, $11)
+     on conflict (wix_booking_id) do update set
+       membership_plan_name=coalesce(nullif(excluded.membership_plan_name,''),pending_bookings.membership_plan_name)
      returning *`,
     [
       args.clientId,
@@ -1412,6 +1416,7 @@ export async function createMembershipBooking(args: {
       args.wixBookingId,
       args.benefitTransactionId ?? null,
       Math.max(1, Math.floor(args.participants ?? 1)),
+      args.membershipPlanName.trim(),
     ],
   );
   return res.rows[0];

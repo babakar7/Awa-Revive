@@ -233,12 +233,13 @@ describe("booking funnel persistence", () => {
 
     expect(result).toMatchObject({ booked: true, participants: 2, sessions_deducted: 2 });
     const booking = await pool.query(
-      `select status, payment_method, participants, benefit_transaction_id from pending_bookings where id=$1`,
+      `select status, payment_method, membership_plan_name, participants, benefit_transaction_id from pending_bookings where id=$1`,
       [result.booking_id],
     );
     expect(booking.rows[0]).toMatchObject({
       status: "BOOKED",
       payment_method: "membership",
+      membership_plan_name: "Pack Reformer",
       participants: 2,
     });
     expect(booking.rows[0].benefit_transaction_id).toBeTruthy();

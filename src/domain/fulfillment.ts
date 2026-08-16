@@ -1053,6 +1053,7 @@ async function fulfillInitialPlanBooking(
       slotEnd: fresh.endDate ?? null,
       wixBookingId,
       benefitTransactionId: transactionId,
+      membershipPlanName: order.plan_name,
     });
     await repo.finishDiscoveryPlanBooking({
       planOrderId: order.id,

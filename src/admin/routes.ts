@@ -6,6 +6,7 @@ import { pool } from "../db/index.js";
 import { transition } from "../domain/stateMachine.js";
 import * as repo from "../domain/repo.js";
 import { extrasFromJson, getCafeMenu, computeExtras, formatExtrasOneLine } from "../lib/cafeMenu.js";
+import { bookingPaymentLabel, paymentMethodLabel } from "../lib/paymentMethod.js";
 import {
   adminAuthHook,
   clearSessionCookieHeader,
@@ -1173,7 +1174,8 @@ export function registerAdmin(app: FastifyInstance): void {
             return `<tr>
 <td data-label="Créée">${fmtDate(b.created_at)}</td>
 <td data-label="Client"><a href="/admin/conversations/${b.client_id}">${escapeHtml(b.client_name ?? "?")}</a></td>
-<td data-label="Cours"><b>${escapeHtml(b.service_name)}</b><div class="muted">${fmtDate(b.slot_start)} · ${b.participants} pl. · ${escapeHtml(b.payment_method)}</div>${extras}</td>
+<td data-label="Cours"><b>${escapeHtml(b.service_name)}</b><div class="muted">${fmtDate(b.slot_start)} · ${b.participants} pl.</div>${extras}</td>
+<td data-label="Paiement">${escapeHtml(bookingPaymentLabel(b.payment_method, b.membership_plan_name))}</td>
 <td data-label="Montant"><b>${fmtFcfa(b.amount_xof)}</b></td>
 <td data-label="Statut">${badge(b.status)}</td>
 </tr>`;
@@ -1185,6 +1187,7 @@ export function registerAdmin(app: FastifyInstance): void {
 <td data-label="Créé">${fmtDate(p.created_at)}</td>
 <td data-label="Client"><a href="/admin/conversations/${p.client_id}">${escapeHtml(p.client_name ?? "?")}</a></td>
 <td data-label="Formule"><b>${escapeHtml(p.plan_name)}</b></td>
+<td data-label="Paiement">${escapeHtml(paymentMethodLabel(p.payment_method))}</td>
 <td data-label="Montant"><b>${fmtFcfa(p.amount_xof)}</b></td>
 <td data-label="Statut">${badge(p.status)}</td>
 </tr>`,
@@ -1202,9 +1205,9 @@ export function registerAdmin(app: FastifyInstance): void {
 <nav class="filters" aria-label="Filtrer par période"><a href="/admin/bookings${status ? `?status=${status}` : ""}" class="${!period ? "active" : ""}">Toutes dates</a>${(["today", "7", "30"] as const).map((value) => `<a href="/admin/bookings?${new URLSearchParams({ ...(status ? { status } : {}), period: value }).toString()}" class="${period === value ? "active" : ""}">${value === "today" ? "Aujourd’hui" : `${value} jours`}</a>`).join("")}</nav>
 <nav class="filters" aria-label="Filtrer par statut">${filters}</nav>
 <div class="section-header"><h2>Réservations</h2><span class="badge badge--gray">${bookings.length}</span></div>
-<div class="card">${bookingRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créée</th><th>Client</th><th>Cours</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${bookingRows}</tbody></table></div>` : `<div class="empty"><b>Aucune réservation</b><p>Aucune réservation ne correspond à ce filtre.</p></div>`}</div>
+<div class="card">${bookingRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créée</th><th>Client</th><th>Cours</th><th>Paiement</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${bookingRows}</tbody></table></div>` : `<div class="empty"><b>Aucune réservation</b><p>Aucune réservation ne correspond à ce filtre.</p></div>`}</div>
 <div class="section-header"><h2>Abonnements vendus</h2><span class="badge badge--gray">${planOrders.length}</span></div>
-<div class="card">${planRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créé</th><th>Client</th><th>Formule</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${planRows}</tbody></table></div>` : `<div class="empty"><b>Aucun abonnement</b><p>Aucune vente d’abonnement ne correspond à ce filtre.</p></div>`}</div>`;
+<div class="card">${planRows ? `<div class="table-wrap"><table class="responsive-table"><thead><tr><th>Créé</th><th>Client</th><th>Formule</th><th>Paiement</th><th>Montant</th><th>Statut</th></tr></thead><tbody>${planRows}</tbody></table></div>` : `<div class="empty"><b>Aucun abonnement</b><p>Aucune vente d’abonnement ne correspond à ce filtre.</p></div>`}</div>`;
         reply.type("text/html").send(await layout("Réservations", "/admin/bookings", body, { subtitle: status ? statusLabels[status] ?? status : "Toutes les activités", contentWidth: "wide" }));
       });
 

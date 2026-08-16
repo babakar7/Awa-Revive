@@ -196,4 +196,40 @@ describe("payment ledger persistence", () => {
     expect((await post(owner)).statusCode).toBe(303);
     expect(Number((await pool.query(`select count(*) n from manual_payment_movements`)).rows[0].n)).toBe(1);
   });
+
+  it("shows the plan name and payment rail on payment and reservation pages", async () => {
+    const client = await seedClient({ name: "Aminata Diallo" });
+    await seedBooking(client.id, {
+      amount_xof: 0,
+      status: "BOOKED",
+      payment_method: "membership",
+      membership_plan_name: "La Résidente",
+      wix_booking_id: "wix-membership-booking-1",
+      wave_session_id: null,
+      payment_link: null,
+      link_expires_at: null,
+    });
+    await pool.query(
+      `insert into pending_plan_orders
+         (client_id,plan_id,plan_name,amount_xof,status,payment_method,paid_at)
+       values ($1,'plan-residente','La Résidente',90000,'PAID','maxit',now())`,
+      [client.id],
+    );
+    const login = await app.inject({ method: "POST", url: "/admin/login",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: new URLSearchParams({ username: "revive", password: "revive@5000", next: "/admin/paiements" }).toString() });
+    const cookie = String(login.headers["set-cookie"]).split(";")[0];
+
+    const payments = await app.inject({ method: "GET", url: "/admin/paiements", headers: { cookie } });
+    expect(payments.statusCode).toBe(200);
+    expect(payments.body).toContain("La Résidente");
+    expect(payments.body).toContain("Max It");
+
+    const bookings = await app.inject({ method: "GET", url: "/admin/bookings", headers: { cookie } });
+    expect(bookings.statusCode).toBe(200);
+    expect(bookings.body).toContain("La Résidente");
+    expect(bookings.body).toContain('data-label="Paiement">La Résidente');
+    expect(bookings.body).toContain('data-label="Paiement">Max It');
+    expect(bookings.body).not.toContain("· membership");
+  });
 });
