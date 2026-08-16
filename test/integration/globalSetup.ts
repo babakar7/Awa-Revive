@@ -25,9 +25,11 @@ export async function setup(): Promise<void> {
   // Sweep only EXITED leftovers from crashed runs. Label-scoped and
   // status-filtered so a container from a concurrent live run is never killed
   // (the host port is already randomized, so a stray orphan is otherwise inert).
+  // `-v` also drops each container's anonymous data volume, so a crashed run
+  // can't leave an orphan volume behind either.
   try {
     execSync(
-      `docker ps -aq --filter label=${LABEL} --filter status=exited | xargs docker rm -f`,
+      `docker ps -aq --filter label=${LABEL} --filter status=exited | xargs docker rm -fv`,
       { stdio: "ignore", shell: "/bin/bash" },
     );
   } catch {
@@ -132,8 +134,12 @@ export async function setup(): Promise<void> {
 }
 
 export async function teardown(): Promise<void> {
+  // `-v` removes the container's anonymous data volume too. Without it, every
+  // integration run leaked one ~130MB Postgres volume until the Docker VM
+  // filled and containers stopped becoming ready (misleading "did not become
+  // ready" failures). Container-scoped — never a global volume prune.
   try {
-    execSync(`docker rm -f ${CONTAINER}`, { stdio: "ignore" });
+    execSync(`docker rm -fv ${CONTAINER}`, { stdio: "ignore" });
   } catch {
     /* already gone */
   }
