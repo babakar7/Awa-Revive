@@ -92,6 +92,16 @@ describe("notifications admin — the form (on demand)", () => {
     expect(html).not.toContain("fixed_schedule");
   });
 
+  it("pre-fills a default message on a NEW alert, keeps the rule's own message on edit", () => {
+    const fresh = render({ showNewForm: true });
+    expect(fresh).toContain(
+      "Bonjour {coach}, rappel pour le cours {class_name} du {date} à {start_time} : {booked_count} inscrit(s).",
+    );
+    const edit = render({ editRule: makeRule() });
+    expect(edit).toContain("{class_name} : {booked_count} inscrit(s)");
+    expect(edit).not.toContain("Bonjour {coach}, rappel pour le cours");
+  });
+
   it("pre-checks the exact course of an edited service_ids rule", () => {
     const html = render({ editRule: makeRule(), showNewForm: false });
     expect(html).toContain('value="svc-aqua-intermediate" checked');

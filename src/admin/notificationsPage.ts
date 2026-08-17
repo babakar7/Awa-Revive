@@ -187,6 +187,10 @@ const LEAD_PRESETS: Array<{ v: number; label: string }> = [
   { v: 360, label: "6 h" },
 ];
 
+/** Pre-filled message for a NEW alert — editable, shows the variables in action. */
+const DEFAULT_MESSAGE =
+  "Bonjour {coach}, rappel pour le cours {class_name} du {date} à {start_time} : {booked_count} inscrit(s).";
+
 function ruleForm(
   edit: NotificationRuleRow | null,
   serviceOptions: NotificationServiceOption[],
@@ -253,7 +257,7 @@ function ruleForm(
   </fieldset>
 
   <label>Message
-    <textarea name="message_template" id="msg-input" rows="3" placeholder="Bonjour {coach}, rappel {class_name} du {date} à {start_time} : {booked_count} inscrit(s).">${v(edit?.message_template)}</textarea>
+    <textarea name="message_template" id="msg-input" rows="3">${v(edit ? edit.message_template : DEFAULT_MESSAGE)}</textarea>
   </label>
   <p class="muted" style="margin:.1rem 0">Variables : <code>{class_name} {date} {start_time} {end_time} {coach} {booked_count} {open_spots} {total_spots}</code>. La signature « ${esc("merci de ne pas répondre")} » est ajoutée automatiquement.</p>
   <div class="internal-note" id="msg-preview" style="white-space:pre-wrap"></div>
