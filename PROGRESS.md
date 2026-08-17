@@ -3,7 +3,7 @@
 ## Annulation automatique des cours vides (17 août 2026)
 
 **Quoi.** Awa annule automatiquement l'occurrence d'un cours collectif Wix restée
-**vide** (0 participant confirmé, capacité valide) 15 min après son cutoff, et
+**vide** (0 participant confirmé, capacité valide) à partir de son cutoff, et
 prévient par WhatsApp le coach du cours, le owner et le manager. Seule l'occurrence
 est annulée, jamais la série. Piloté depuis **/admin/notifications** (section
 « Annulation automatique des cours vides »). Plan complet + gate de faisabilité :
@@ -12,11 +12,24 @@ est annulée, jamais la série. Piloté depuis **/admin/notifications** (section
 **Règles produit.** Une règle vise **un ou plusieurs services Wix** (`service_ids
 text[]`, multi-sélection par cases dans l'admin — ex : tous les niveaux Reformer
 sous une seule règle ; ajout 17/08 après la v1 mono-cours). Cutoff : cours ≤ 09:15
-→ éligible dès 23:00 la veille ; sinon start − 3 h. Vide en continu 15 min (le
-timer redémarre sur participant, paiement actif, ou trou d'observation > 2 min =
-deploy/redémarrage). Préavis minimum **120 min** (`AUTO_CANCEL_MIN_NOTICE_MINUTES`,
-décision Babakar). Fail-closed partout : capacité inconnue, destinataire
-manquant/muet, ou lecture Wix en échec → on n'annule pas.
+→ éligible dès 23:00 la veille ; sinon start − 3 h.
+
+**Deux régimes de vide (précision Babakar 18/08, `isCancellableNow`).** Les 15 min
+ne sont PAS un délai systématique — elles ne couvrent que le cas où un cours perd
+sa dernière inscrite (notamment la réception qui retire une participante pour la
+recréer avec le bon abonnement) :
+- **vide dès le cutoff** (aucun participant ni paiement actif jamais observé, et
+  le snapshot du cutoff est fiable) → **annulation immédiate**, pas d'attente ;
+- **devenu vide après le cutoff** (quelqu'un a été vu puis est parti) OU **pas de
+  snapshot fiable au cutoff** (deploy/panne/trou d'observation) → **15 min de vide
+  continu** requises.
+
+Le fait « a déjà eu quelqu'un » est persisté en `auto_cancel_ledger.last_protected_at`
+(sticky, jamais effacé). Le timer de vide continu (`first_empty_at`) redémarre sur
+participant, paiement actif, ou trou d'observation > 2 min (deploy/redémarrage).
+Préavis minimum **120 min** (`AUTO_CANCEL_MIN_NOTICE_MINUTES`, décision Babakar).
+Fail-closed partout : capacité inconnue, destinataire manquant/muet, ou lecture
+Wix en échec → on n'annule pas.
 
 **Gate Wix RÉUSSI (probe live 17/08).** `POST /calendar/v3/events/{id}/cancel`
 annule la seule occurrence, la retire des disponibilités (source d'Awa + widget),
@@ -66,9 +79,10 @@ visible (2 contacts fixes distincts actifs + coach dynamique), journal des
 annulations, pause globale.
 
 **Rollout.** Globalement désactivé tant qu'aucune règle n'est activée. Chaque règle
-s'active individuellement. Tests : `autoCancelRules` (18) + `autoCancelSweep` (7,
-Wix mocké) unitaires ; `integration/autoCancel` (8, verrou/ledger/garde/cache/CRUD).
-Build + 1372 unitaires + 436 intégration verts.
+s'active individuellement. Tests : `autoCancelRules` (24, dont la porte à deux
+régimes) + `autoCancelSweep` (13, Wix mocké) unitaires ; `integration/autoCancel`
+(verrou/ledger/garde/cache/CRUD + persistance sticky `last_protected_at`).
+Build + 1410 unitaires verts.
 
 ## Refonte UX des alertes staff : /admin/notifications (17 août 2026)
 

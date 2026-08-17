@@ -169,6 +169,33 @@ describe("occurrence ledger", () => {
     const bySession = await acrepo.getLedgerBySession("sess-1");
     expect(bySession?.state).toBe("CANCELLED");
   });
+
+  it("sets last_protected_at when a participant/payment is seen and never clears it", async () => {
+    const t0 = new Date();
+    // First observation: empty, nobody yet → last_protected_at stays null.
+    await acrepo.recordObservation({
+      eventId: "ev-p", sessionId: "sess-p", ruleId: null, serviceId: "svc-1",
+      startAt: t0.toISOString(), firstEmptyAt: t0, now: t0, protectedNow: false,
+    });
+    expect((await acrepo.getLedger("ev-p"))?.last_protected_at).toBeNull();
+
+    // Someone shows up → sticky stamp is set (timer cleared).
+    const t1 = new Date(t0.getTime() + 60_000);
+    await acrepo.recordObservation({
+      eventId: "ev-p", sessionId: "sess-p", ruleId: null, serviceId: "svc-1",
+      startAt: t0.toISOString(), firstEmptyAt: null, now: t1, protectedNow: true,
+    });
+    const stamped = (await acrepo.getLedger("ev-p"))?.last_protected_at;
+    expect(stamped).not.toBeNull();
+
+    // They leave → last_protected_at is preserved (sticky), timer restarts.
+    const t2 = new Date(t0.getTime() + 120_000);
+    await acrepo.recordObservation({
+      eventId: "ev-p", sessionId: "sess-p", ruleId: null, serviceId: "svc-1",
+      startAt: t0.toISOString(), firstEmptyAt: t2, now: t2, protectedNow: false,
+    });
+    expect((await acrepo.getLedger("ev-p"))?.last_protected_at).toBe(stamped);
+  });
 });
 
 describe("active-payment protection", () => {

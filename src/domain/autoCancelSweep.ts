@@ -7,12 +7,13 @@ import { phoneDigits } from "./notificationRepo.js";
 import {
   cancelConfigAlertDedupKey,
   cancelNotifyDedupKey,
+  isCancellableNow,
   isEmpty,
-  isEmptyLongEnough,
   isMorningClass,
   isWithinWindow,
   matchesRule,
   nextEmptyTimer,
+  OBSERVATION_GAP_MAX_MS,
   planningWeekdayOf,
   type AutoCancelRule,
 } from "./autoCancelRules.js";
@@ -21,8 +22,10 @@ import {
  * Empty-class auto-cancellation engine (runs in the 60s loop, its own guarded
  * section). Reads enabled rules, finds occurrences inside their cancellation
  * window on FRESH Wix data (its own availability call — never the notification
- * 5-min cache), and cancels an occurrence that has been continuously empty for
- * 15 min via Calendar V3 (AUTO-CANCEL-EMPTY-CLASSES-PLAN.md). Fail-closed
+ * 5-min cache), and cancels an empty occurrence via Calendar V3 — immediately if
+ * it was already empty at the cutoff, or after 15 continuous empty minutes if it
+ * emptied out after having someone (isCancellableNow; the grace covers reception
+ * re-booking a participant). See AUTO-CANCEL-EMPTY-CLASSES-PLAN.md. Fail-closed
  * everywhere: capacity unknown, a resolvable-recipient gap, or any Wix read
  * failure means we do NOT cancel.
  *
@@ -255,10 +258,26 @@ async function performCancellation(candidate: Candidate, log: SweepLog): Promise
       if (await acrepo.hasActivePaymentForSession(candidate.sessionId)) return false;
       const ledger = await acrepo.getLedgerTx(client, candidate.eventId);
       if (!ledger || ledger.state !== "OBSERVING") return false;
-      if (!ledger.first_empty_at || !ledger.last_observed_at) return false;
-      const now = Date.now();
-      if (now - new Date(ledger.last_observed_at).getTime() > 2 * 60_000) return false;
-      if (now - new Date(ledger.first_empty_at).getTime() < 15 * 60_000) return false;
+      if (!ledger.first_empty_at || !ledger.last_observed_at || !ledger.start_at) return false;
+      const now = new Date();
+      // Observation continuity: a stale ledger (deploy/crash gap) can't be trusted.
+      if (now.getTime() - new Date(ledger.last_observed_at).getTime() > OBSERVATION_GAP_MAX_MS) {
+        return false;
+      }
+      // Same two-tier gate as evaluateCandidate, re-checked under the lock on the
+      // committed ledger (fresh.participantCount === 0 and no active payment above).
+      if (
+        !isCancellableNow({
+          startIso: String(ledger.start_at),
+          now,
+          empty: true,
+          hasActivePayment: false,
+          firstEmptyAt: new Date(ledger.first_empty_at),
+          everProtected: ledger.last_protected_at != null,
+        })
+      ) {
+        return false;
+      }
       await acrepo.markCancellingTx(client, candidate.eventId); // committed on lock release
       return true;
     },
@@ -426,8 +445,15 @@ async function evaluateCandidate(
   if (occ.status !== "CONFIRMED") return 0;
 
   const empty = isEmpty(occ);
+  // A known, non-zero participant count means the class currently HAS someone;
+  // capacity-unknown (null) is neither empty nor protected — just unknown.
+  const hasParticipant = occ.participantCount != null && occ.participantCount > 0;
   const hasActivePayment = await acrepo.hasActivePaymentForSession(candidate.sessionId);
+  const protectedNow = hasParticipant || hasActivePayment;
   const led = await acrepo.getLedger(candidate.eventId);
+  // Sticky "someone was here at some point" — decided from the ledger BEFORE this
+  // observation (a currently-protected occurrence exits at the `!empty` guard below).
+  const everProtected = led?.last_protected_at != null;
   const priorFirstEmptyAt = led?.first_empty_at ? new Date(led.first_empty_at) : null;
   const priorLastObservedAt = led?.last_observed_at ? new Date(led.last_observed_at) : null;
   const firstEmptyAt = nextEmptyTimer({
@@ -446,10 +472,23 @@ async function evaluateCandidate(
     startAt: candidate.startIso,
     firstEmptyAt,
     now,
+    protectedNow,
   });
 
   if (!empty || hasActivePayment) return 0;
-  if (!isEmptyLongEnough(firstEmptyAt, now)) return 0;
+  // Two-tier gate: empty at the cutoff → cancel now; emptied out after the cutoff
+  // (or no reliable cutoff snapshot) → require 15 continuous empty minutes.
+  if (
+    !isCancellableNow({
+      startIso: candidate.startIso,
+      now,
+      empty,
+      hasActivePayment,
+      firstEmptyAt,
+      everProtected,
+    })
+  )
+    return 0;
 
   // Resolve recipients BEFORE mutating Wix; a gap blocks the cancel (fail-closed).
   const resolved = await resolveRecipients(rule, candidate);

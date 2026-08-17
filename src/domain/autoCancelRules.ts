@@ -191,6 +191,47 @@ export function isEmptyLongEnough(firstEmptyAt: Date | null, now: Date): boolean
   return now.getTime() - firstEmptyAt.getTime() >= EMPTY_REQUIRED_MS;
 }
 
+/**
+ * Final timing gate: may this occurrence be cancelled at `now`? Encodes the
+ * two-tier rule (AUTO-CANCEL-EMPTY-CLASSES-PLAN.md §1, Babakar 17/08/2026) —
+ * the 15-minute grace only ever covers a class that HAD someone and lost them,
+ * never a class that was empty from the cutoff:
+ *
+ *  - not empty / a payment in flight / no empty timer → never cancel.
+ *  - **born empty at the cutoff** — no participant or active payment was EVER
+ *    observed on this occurrence (`everProtected` false) AND the continuous-empty
+ *    streak started within OBSERVATION_GAP_MAX_MS of the eligibility cutoff → the
+ *    class was already empty when the decision window opened → cancel IMMEDIATELY.
+ *  - **emptied out after the cutoff** — someone (participant or active payment)
+ *    was seen then left (`everProtected` true), OR our first empty observation
+ *    landed well after the cutoff (deploy / outage / observation gap, so no
+ *    reliable "already empty at cutoff" snapshot) → require 15 continuous empty
+ *    minutes. This is the grace that covers reception removing a participant to
+ *    re-book her with the right subscription.
+ *
+ * `firstEmptyAt` is the start of the current continuous-empty streak (already
+ * reset on participant / active payment / >2 min observation gap by
+ * nextEmptyTimer). `everProtected` is the ledger's sticky last_protected_at.
+ */
+export function isCancellableNow(args: {
+  startIso: string;
+  now: Date;
+  empty: boolean;
+  hasActivePayment: boolean;
+  firstEmptyAt: Date | null;
+  everProtected: boolean;
+}): boolean {
+  const { startIso, now, empty, hasActivePayment, firstEmptyAt, everProtected } = args;
+  if (!empty || hasActivePayment || firstEmptyAt == null) return false;
+  if (!everProtected) {
+    // Never had anyone. If our first empty look landed at the cutoff, the class
+    // was already empty when the window opened → no reason to hold it 15 min.
+    const cutoffMs = eligibilityStart(startIso).getTime();
+    if (firstEmptyAt.getTime() <= cutoffMs + OBSERVATION_GAP_MAX_MS) return true;
+  }
+  return isEmptyLongEnough(firstEmptyAt, now);
+}
+
 /** Recipient-scoped dedup key for one cancellation notification. */
 export function cancelNotifyDedupKey(eventId: string, phoneDigits: string): string {
   return `autocancel:notify:${eventId}:${phoneDigits}`;

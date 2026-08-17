@@ -116,13 +116,17 @@ beforeEach(() => {
   mocks.claimOrReclaim.mockResolvedValue(true);
   mocks.finishLog.mockResolvedValue(undefined);
   mocks.sendWhatsAppNotification.mockResolvedValue("sent");
-  // Ledger: already empty 16 min, last observed 30s ago → continuous & long enough.
+  const start = inWindowStartIso();
+  // Ledger: empty 16 min, last observed 30s ago, never had anyone → continuous &
+  // long enough (emptied out after the cutoff path). start_at matches the slot.
   const led = {
     event_id: "ev-1",
     session_id: "sess-1",
     state: "OBSERVING",
+    start_at: start,
     first_empty_at: new Date(Date.now() - 16 * 60_000).toISOString(),
     last_observed_at: new Date(Date.now() - 30_000).toISOString(),
+    last_protected_at: null,
   };
   mocks.getLedger.mockResolvedValue(led);
   mocks.getLedgerTx.mockResolvedValue(led);
@@ -132,7 +136,6 @@ beforeEach(() => {
     value: await fn({}),
   }));
 
-  const start = inWindowStartIso();
   mocks.queryAvailabilityMulti.mockResolvedValue([
     {
       eventId: "sess-1",
@@ -166,6 +169,59 @@ describe("sweepAutoCancellations", () => {
     // Three distinct recipients.
     expect(mocks.sendWhatsAppNotification).toHaveBeenCalledTimes(3);
     expect(mocks.purgeSlotCacheForSession).toHaveBeenCalledWith("sess-1");
+  });
+
+  it("cancels immediately a class already empty at the cutoff (no 15-min wait)", async () => {
+    // Slot 2h50 ahead → the cutoff (start-3h) was 10 min ago; empty since then,
+    // never had anyone. Only 10 min of emptiness — the old rule would still wait.
+    const start = new Date(Date.now() + 170 * 60_000).toISOString();
+    mocks.queryAvailabilityMulti.mockResolvedValue([
+      {
+        eventId: "sess-1", rescheduleEventId: "ev-1", serviceId: "svc-1", startDate: start,
+        endDate: new Date(Date.parse(start) + 30 * 60_000).toISOString(),
+        openSpots: 8, totalSpots: 8, coach: "Alou", coachId: "c1", raw: {},
+      },
+    ]);
+    const led = {
+      event_id: "ev-1", session_id: "sess-1", state: "OBSERVING", start_at: start,
+      first_empty_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+      last_observed_at: new Date(Date.now() - 30_000).toISOString(),
+      last_protected_at: null,
+    };
+    mocks.getLedger.mockResolvedValue(led);
+    mocks.getLedgerTx.mockResolvedValue(led);
+    mocks.getCalendarOccurrence.mockResolvedValue({ status: "CONFIRMED", participantCount: 0, serviceName: "R" });
+    mocks.cancelClassOccurrence.mockResolvedValue({ status: "CANCELLED" });
+
+    const n = await sweepAutoCancellations(log);
+    expect(n).toBe(1);
+    expect(mocks.cancelClassOccurrence).toHaveBeenCalledWith("ev-1");
+  });
+
+  it("still waits when a formerly-occupied class emptied only 10 min ago", async () => {
+    // Same short-window slot, but someone WAS here (last_protected_at set) and
+    // left 10 min ago → the re-booking grace holds; no cancel yet.
+    const start = new Date(Date.now() + 170 * 60_000).toISOString();
+    mocks.queryAvailabilityMulti.mockResolvedValue([
+      {
+        eventId: "sess-1", rescheduleEventId: "ev-1", serviceId: "svc-1", startDate: start,
+        endDate: new Date(Date.parse(start) + 30 * 60_000).toISOString(),
+        openSpots: 8, totalSpots: 8, coach: "Alou", coachId: "c1", raw: {},
+      },
+    ]);
+    const led = {
+      event_id: "ev-1", session_id: "sess-1", state: "OBSERVING", start_at: start,
+      first_empty_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+      last_observed_at: new Date(Date.now() - 30_000).toISOString(),
+      last_protected_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+    };
+    mocks.getLedger.mockResolvedValue(led);
+    mocks.getLedgerTx.mockResolvedValue(led);
+    mocks.getCalendarOccurrence.mockResolvedValue({ status: "CONFIRMED", participantCount: 0, serviceName: "R" });
+
+    const n = await sweepAutoCancellations(log);
+    expect(n).toBe(0);
+    expect(mocks.cancelClassOccurrence).not.toHaveBeenCalled();
   });
 
   it("recovers a stuck CANCELLING row: finalizes + notifies when Wix confirms CANCELLED", async () => {

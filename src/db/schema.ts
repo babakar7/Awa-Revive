@@ -990,6 +990,13 @@ create table if not exists auto_cancel_ledger (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- last_protected_at : STICKY. Estampille la 1ʳᵉ fois où un participant OU un
+-- paiement local actif a été observé sur cette occurrence, et n'est JAMAIS
+-- effacé. Distingue « cours né vide au cutoff » (annulation immédiate) de
+-- « devenu vide après avoir eu du monde » (grâce de 15 min, ex : réception qui
+-- retire une participante pour la recréer avec le bon abonnement). Voir
+-- isCancellableNow (autoCancelRules.ts).
+alter table auto_cancel_ledger add column if not exists last_protected_at timestamptz;
 -- Lookup par session_id pour le garde-fou des chemins de réservation.
 create index if not exists idx_auto_cancel_ledger_session
   on auto_cancel_ledger (session_id);

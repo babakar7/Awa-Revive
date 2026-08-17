@@ -4,6 +4,7 @@ import {
   cancelNotifyDedupKey,
   dakarWeekday,
   eligibilityStart,
+  isCancellableNow,
   isEmpty,
   isEmptyLongEnough,
   isMorningClass,
@@ -169,6 +170,68 @@ describe("empty-timer continuity", () => {
     const start2 = new Date("2026-08-24T15:15:00.000Z"); // exactly 15 min ago
     expect(isEmptyLongEnough(start2, now)).toBe(true);
     expect(isEmptyLongEnough(null, now)).toBe(false);
+  });
+});
+
+describe("two-tier cancellation gate (isCancellableNow)", () => {
+  // Daytime class at 18:00 → eligibility cutoff 15:00.
+  const startIso = "2026-08-24T18:00:00.000Z";
+
+  it("cancels IMMEDIATELY a class empty at the cutoff (never had anyone)", () => {
+    // First empty look right at the cutoff; only 5 min of emptiness so far, yet
+    // there is no reason to hold an already-empty class.
+    const firstEmptyAt = new Date("2026-08-24T15:00:30.000Z");
+    const now = new Date("2026-08-24T15:05:30.000Z");
+    expect(
+      isCancellableNow({ startIso, now, empty: true, hasActivePayment: false, firstEmptyAt, everProtected: false }),
+    ).toBe(true);
+  });
+
+  it("holds a class that emptied out AFTER the cutoff for the full 15 minutes", () => {
+    // Someone was here (everProtected) then left at 15:40 — the re-booking grace.
+    const firstEmptyAt = new Date("2026-08-24T15:40:00.000Z");
+    expect(
+      isCancellableNow({
+        startIso,
+        now: new Date("2026-08-24T15:45:00.000Z"), // 5 min → wait
+        empty: true, hasActivePayment: false, firstEmptyAt, everProtected: true,
+      }),
+    ).toBe(false);
+    expect(
+      isCancellableNow({
+        startIso,
+        now: new Date("2026-08-24T15:55:00.000Z"), // 15 min → cancel
+        empty: true, hasActivePayment: false, firstEmptyAt, everProtected: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats a late first observation (no reliable cutoff snapshot) conservatively", () => {
+    // Nobody ever seen, but our first empty look landed 20 min after the cutoff
+    // (deploy/outage) → not 'born empty' → still require the full 15 min.
+    const firstEmptyAt = new Date("2026-08-24T15:20:00.000Z");
+    expect(
+      isCancellableNow({
+        startIso,
+        now: new Date("2026-08-24T15:25:00.000Z"), // 5 min
+        empty: true, hasActivePayment: false, firstEmptyAt, everProtected: false,
+      }),
+    ).toBe(false);
+    expect(
+      isCancellableNow({
+        startIso,
+        now: new Date("2026-08-24T15:35:00.000Z"), // 15 min
+        empty: true, hasActivePayment: false, firstEmptyAt, everProtected: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("never cancels when not empty, a payment is active, or the timer is unset", () => {
+    const firstEmptyAt = new Date("2026-08-24T15:00:30.000Z");
+    const now = new Date("2026-08-24T15:30:00.000Z");
+    expect(isCancellableNow({ startIso, now, empty: false, hasActivePayment: false, firstEmptyAt, everProtected: false })).toBe(false);
+    expect(isCancellableNow({ startIso, now, empty: true, hasActivePayment: true, firstEmptyAt, everProtected: false })).toBe(false);
+    expect(isCancellableNow({ startIso, now, empty: true, hasActivePayment: false, firstEmptyAt: null, everProtected: false })).toBe(false);
   });
 });
 

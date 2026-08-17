@@ -268,6 +268,8 @@ export interface LedgerRow {
   start_at: string | null;
   first_empty_at: string | null;
   last_observed_at: string | null;
+  /** Sticky: when a participant/active payment was last seen (null = never). */
+  last_protected_at: string | null;
   state: LedgerState;
   cancelled_at: string | null;
   error: string | null;
@@ -307,11 +309,17 @@ export async function recordObservation(args: {
   startAt: string;
   firstEmptyAt: Date | null;
   now: Date;
+  /** True when this observation saw a participant OR an active local payment.
+   *  Sets the sticky last_protected_at, which is NEVER cleared afterwards. */
+  protectedNow?: boolean;
 }): Promise<void> {
+  // last_protected_at is sticky: coalesce($8, existing) writes it the first
+  // (and every) time a protection is seen, and keeps it forever otherwise.
+  const protectedAt = args.protectedNow ? args.now.toISOString() : null;
   await pool.query(
     `insert into auto_cancel_ledger
-       (event_id, session_id, rule_id, service_id, start_at, first_empty_at, last_observed_at, state)
-     values ($1,$2,$3,$4,$5,$6,$7,'OBSERVING')
+       (event_id, session_id, rule_id, service_id, start_at, first_empty_at, last_observed_at, last_protected_at, state)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,'OBSERVING')
      on conflict (event_id) do update set
        session_id = excluded.session_id,
        rule_id = excluded.rule_id,
@@ -319,6 +327,7 @@ export async function recordObservation(args: {
        start_at = excluded.start_at,
        first_empty_at = excluded.first_empty_at,
        last_observed_at = excluded.last_observed_at,
+       last_protected_at = coalesce($8, auto_cancel_ledger.last_protected_at),
        updated_at = now()
      where auto_cancel_ledger.state = 'OBSERVING'`,
     [
@@ -329,6 +338,7 @@ export async function recordObservation(args: {
       args.startAt,
       args.firstEmptyAt ? args.firstEmptyAt.toISOString() : null,
       args.now.toISOString(),
+      protectedAt,
     ],
   );
 }
