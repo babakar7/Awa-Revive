@@ -1,4 +1,5 @@
 import pg from "pg";
+import { config } from "../config.js";
 import { pool } from "../db/index.js";
 import { phoneDigits } from "./notificationRepo.js";
 import type { AutoCancelRule } from "./autoCancelRules.js";
@@ -155,42 +156,45 @@ export interface FixedContact {
   muted: boolean;
 }
 
-/** The two fixed recipients (owner + manager) referenced by a rule. */
-export async function fixedContactsForRule(
-  rule: AutoCancelRuleRow,
-): Promise<{ owner: FixedContact | null; manager: FixedContact | null }> {
-  const ids = [rule.owner_contact_id, rule.manager_contact_id].filter(Boolean) as string[];
-  if (ids.length === 0) return { owner: null, manager: null };
+/**
+ * The « owner » recipient is always the studio owner (config.OWNER_PHONE) — never
+ * a per-rule choice (Babakar: "le owner c'est moi par défaut"). Null only if
+ * OWNER_PHONE is somehow unset/invalid.
+ */
+export function ownerRecipient(): { name: string; phone: string } | null {
+  const phone = config.OWNER_PHONE;
+  if (!phone || phoneDigits(phone).length < 8) return null;
+  return { name: "Propriétaire", phone };
+}
+
+/** The rule's manager contact (the one fixed recipient still chosen per rule). */
+export async function managerContactForRule(rule: AutoCancelRuleRow): Promise<FixedContact | null> {
+  if (!rule.manager_contact_id) return null;
   const res = await pool.query(
-    `select id, name, phone, muted from staff_contacts where id = any($1::uuid[])`,
-    [ids],
+    `select id, name, phone, muted from staff_contacts where id = $1`,
+    [rule.manager_contact_id],
   );
-  const byId = new Map<string, FixedContact>(res.rows.map((r: any) => [r.id, r]));
-  return {
-    owner: rule.owner_contact_id ? byId.get(rule.owner_contact_id) ?? null : null,
-    manager: rule.manager_contact_id ? byId.get(rule.manager_contact_id) ?? null : null,
-  };
+  return (res.rows[0] as FixedContact) ?? null;
 }
 
 /**
  * Activation gate (also used by the admin page to show a visible error rather
- * than a silent no-op): an enabled rule needs two DISTINCT fixed contacts, both
- * active (unmuted) with a valid phone. The dynamic class coach is resolved live
- * at cancellation time (Wix directory), not validated here.
+ * than a silent no-op). Recipients = the dynamic class coach (resolved live at
+ * cancellation time) + the owner (config.OWNER_PHONE, implicit) + the rule's
+ * manager, which must be active (unmuted), have a valid phone, and differ from
+ * the owner's number.
  */
 export async function ruleActivationError(rule: AutoCancelRuleRow): Promise<string | null> {
   if (rule.service_ids.length === 0) return "aucun cours sélectionné";
-  if (!rule.owner_contact_id || !rule.manager_contact_id) {
-    return "il faut deux destinataires fixes (owner + manager)";
-  }
-  if (rule.owner_contact_id === rule.manager_contact_id) {
-    return "les deux destinataires fixes doivent être distincts";
-  }
-  const { owner, manager } = await fixedContactsForRule(rule);
-  for (const [who, c] of [["owner", owner], ["manager", manager]] as const) {
-    if (!c) return `destinataire ${who} introuvable`;
-    if (c.muted) return `destinataire ${who} en muet (${c.name})`;
-    if (phoneDigits(c.phone).length < 8) return `numéro ${who} invalide (${c.name})`;
+  const owner = ownerRecipient();
+  if (!owner) return "numéro propriétaire non configuré (OWNER_PHONE)";
+  if (!rule.manager_contact_id) return "choisis un manager (2ᵉ destinataire)";
+  const manager = await managerContactForRule(rule);
+  if (!manager) return "manager introuvable";
+  if (manager.muted) return `manager en muet (${manager.name})`;
+  if (phoneDigits(manager.phone).length < 8) return `numéro manager invalide (${manager.name})`;
+  if (phoneDigits(manager.phone) === phoneDigits(owner.phone)) {
+    return "le manager doit être différent de toi (propriétaire)";
   }
   return null;
 }

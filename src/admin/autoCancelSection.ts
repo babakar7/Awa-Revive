@@ -51,7 +51,6 @@ export interface AutoCancelRuleView {
   activationError: string | null;
   /** Resolved names for each targeted service id (unknown id → null placeholder). */
   serviceNames: Array<{ id: string; name: string | null }>;
-  ownerName: string | null;
   managerName: string | null;
 }
 
@@ -185,15 +184,10 @@ function ruleForm(
     from.addEventListener('input',upd); to.addEventListener('input',upd); upd();
   })();
   </script>
-  <div class="row">
-    <label style="flex:1;min-width:180px">Destinataire « owner »
-      <select name="owner_contact_id" required>${contactOptions(edit?.owner_contact_id ?? null)}</select>
-    </label>
-    <label style="flex:1;min-width:180px">Destinataire « manager »
-      <select name="manager_contact_id" required>${contactOptions(edit?.manager_contact_id ?? null)}</select>
-    </label>
-  </div>
-  <p class="muted" style="margin:0">Le coach du cours est prévenu automatiquement (numéro Wix). Owner et manager doivent être deux contacts <b>distincts</b>, actifs, avec un numéro valide — sinon la règle ne peut pas être activée.</p>
+  <label style="max-width:340px">Manager (2ᵉ destinataire)
+    <select name="manager_contact_id" required>${contactOptions(edit?.manager_contact_id ?? null)}</select>
+  </label>
+  <p class="muted" style="margin:0">Prévenus automatiquement : le <b>coach du cours</b> (numéro Wix) et <b>toi, le propriétaire</b>${config.OWNER_PHONE ? ` (+${esc(config.OWNER_PHONE.replace(/^\+/, ""))})` : ` <span class="danger-text">— OWNER_PHONE non configuré</span>`}. Choisis juste le manager (différent de toi, actif).</p>
   <label class="chip-check" style="align-self:flex-start"><input type="checkbox" name="enabled" value="1"${edit?.enabled ? " checked" : ""}> Activer cette règle</label>
   <div class="cluster">
     <button class="act" type="submit">${edit ? "Enregistrer" : "Créer la règle"}</button>
@@ -233,7 +227,7 @@ export function renderAutoCancelSection(d: AutoCancelSectionData): string {
   <div class="task-copy">
     <div class="cluster">${stateBadge}${svc}</div>
     <b>${esc(r.label)}</b>
-    <p class="muted">${esc(weekdaysSummary(r.weekdays))} · ${esc(timeRangeSummary(r.start_min_from, r.start_min_to))} → coach + ${esc(view.ownerName ?? "owner ?")} + ${esc(view.managerName ?? "manager ?")}</p>
+    <p class="muted">${esc(weekdaysSummary(r.weekdays))} · ${esc(timeRangeSummary(r.start_min_from, r.start_min_to))} → coach + toi (propriétaire) + ${esc(view.managerName ?? "manager ?")}</p>
     ${errLine}
   </div>
   <div class="task-action">

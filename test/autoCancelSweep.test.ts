@@ -22,7 +22,8 @@ const mocks = vi.hoisted(() => ({
   markCancelledByEvent: vi.fn(),
   markFailed: vi.fn(),
   purgeSlotCacheForSession: vi.fn(),
-  fixedContactsForRule: vi.fn(),
+  ownerRecipient: vi.fn(),
+  managerContactForRule: vi.fn(),
   withOccurrenceLock: vi.fn(),
   staleCancellingRows: vi.fn(),
   revertToObserving: vi.fn(),
@@ -42,7 +43,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/config.js", () => ({
-  config: { TIMEZONE: "Africa/Dakar", AUTO_CANCEL_MIN_NOTICE_MINUTES: 120 },
+  config: { TIMEZONE: "Africa/Dakar", AUTO_CANCEL_MIN_NOTICE_MINUTES: 120, OWNER_PHONE: "+221774982711" },
 }));
 vi.mock("../src/lib/wix.js", () => ({
   queryAvailabilityMulti: mocks.queryAvailabilityMulti,
@@ -98,9 +99,12 @@ beforeEach(() => {
   mocks.staleCancellingRows.mockResolvedValue([]);
   mocks.revertToObserving.mockResolvedValue(undefined);
   mocks.getRule.mockResolvedValue(RULE);
-  mocks.fixedContactsForRule.mockResolvedValue({
-    owner: { id: "o1", name: "Owner", phone: "+221771112201", muted: false },
-    manager: { id: "m1", name: "Manager", phone: "+221771112202", muted: false },
+  mocks.ownerRecipient.mockReturnValue({ name: "Propriétaire", phone: "+221774982711" });
+  mocks.managerContactForRule.mockResolvedValue({
+    id: "m1",
+    name: "Manager",
+    phone: "+221771112202",
+    muted: false,
   });
   mocks.findStaffByName.mockResolvedValue(null);
   mocks.listStaffResources.mockResolvedValue([{ id: "c1", name: "Alou", phone: "+221770000009", email: null }]);

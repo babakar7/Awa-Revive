@@ -45,8 +45,7 @@ async function seedRule(over: Partial<acrepo.RuleInput> = {}): Promise<string> {
 }
 
 describe("auto-cancel rule CRUD + activation", () => {
-  it("round-trips a rule and validates activation requirements", async () => {
-    const owner = await seedContact("Owner", "+221771112201");
+  it("round-trips a rule; owner is implicit (OWNER_PHONE), only the manager is chosen", async () => {
     const manager = await seedContact("Manager", "+221771112202");
     const id = await seedRule({
       label: "reformer matin",
@@ -54,7 +53,6 @@ describe("auto-cancel rule CRUD + activation", () => {
       weekdays: [1, 2, 3],
       start_min_from: 7 * 60,
       start_min_to: 10 * 60,
-      owner_contact_id: owner,
       manager_contact_id: manager,
       enabled: true,
     });
@@ -62,25 +60,28 @@ describe("auto-cancel rule CRUD + activation", () => {
     expect(rule.service_ids).toEqual(["reformer-foundation", "reformer-intense"]);
     expect(rule.weekdays).toEqual([1, 2, 3]);
     expect(rule.start_min_from).toBe(420);
+    // No owner contact was chosen; activation still passes (owner = OWNER_PHONE).
+    expect(acrepo.ownerRecipient()).not.toBeNull();
     expect(await acrepo.ruleActivationError(rule)).toBeNull();
   });
 
-  it("blocks activation on missing / identical / muted / invalid contacts", async () => {
-    const owner = await seedContact("Owner", "+221771112201");
+  it("blocks activation on missing / muted / owner-equal manager", async () => {
     const muted = await seedContact("Muted", "+221771112203", true);
+    const ownerPhone = acrepo.ownerRecipient()!.phone;
+    const clashing = await seedContact("Clash", ownerPhone);
 
-    const noRecip = (await acrepo.getRule(await seedRule({ label: "a" })))!;
-    expect(await acrepo.ruleActivationError(noRecip)).toMatch(/deux destinataires/);
-
-    const same = (await acrepo.getRule(
-      await seedRule({ label: "b", owner_contact_id: owner, manager_contact_id: owner }),
-    ))!;
-    expect(await acrepo.ruleActivationError(same)).toMatch(/distincts/);
+    const noManager = (await acrepo.getRule(await seedRule({ label: "a" })))!;
+    expect(await acrepo.ruleActivationError(noManager)).toMatch(/manager/);
 
     const mutedRule = (await acrepo.getRule(
-      await seedRule({ label: "c", owner_contact_id: owner, manager_contact_id: muted }),
+      await seedRule({ label: "c", manager_contact_id: muted }),
     ))!;
     expect(await acrepo.ruleActivationError(mutedRule)).toMatch(/muet/);
+
+    const clashRule = (await acrepo.getRule(
+      await seedRule({ label: "d", manager_contact_id: clashing }),
+    ))!;
+    expect(await acrepo.ruleActivationError(clashRule)).toMatch(/différent de toi/);
   });
 });
 

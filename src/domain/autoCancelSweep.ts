@@ -89,16 +89,17 @@ async function resolveRecipients(
   candidate: Candidate,
 ): Promise<{ recipients: Recipient[] } | { missing: string; resolvable: Recipient[] }> {
   const coach = await resolveCoachPhone(candidate.coachId, candidate.coach);
-  const { owner, manager } = await acrepo.fixedContactsForRule(rule);
+  // Owner is always the studio owner (config.OWNER_PHONE) — not a per-rule pick.
+  const owner = acrepo.ownerRecipient();
+  const manager = await acrepo.managerContactForRule(rule);
   const resolvable: Recipient[] = [];
-  if (owner && !owner.muted && phoneDigits(owner.phone).length >= 8) {
-    resolvable.push({ role: "owner", name: owner.name, phone: owner.phone });
-  }
+  if (owner) resolvable.push({ role: "owner", name: owner.name, phone: owner.phone });
   if (manager && !manager.muted && phoneDigits(manager.phone).length >= 8) {
     resolvable.push({ role: "manager", name: manager.name, phone: manager.phone });
   }
   if (!coach) return { missing: `coach "${candidate.coach ?? "?"}"`, resolvable };
-  if (resolvable.length < 2) return { missing: "owner/manager", resolvable };
+  if (!owner) return { missing: "propriétaire (OWNER_PHONE)", resolvable };
+  if (!manager || manager.muted) return { missing: "manager", resolvable };
   return { recipients: [{ role: "coach", ...coach }, ...resolvable] };
 }
 
@@ -485,12 +486,12 @@ async function deliverNoticesForRow(row: acrepo.LedgerRow, log: SweepLog): Promi
   const recipients: Recipient[] = [];
   const coach = await resolveCoachPhone(candidate.coachId, candidate.coach);
   if (coach) recipients.push({ role: "coach", ...coach });
+  const owner = acrepo.ownerRecipient();
+  if (owner) recipients.push({ role: "owner", name: owner.name, phone: owner.phone });
   if (rule) {
-    const { owner, manager } = await acrepo.fixedContactsForRule(rule);
-    for (const [role, c] of [["owner", owner], ["manager", manager]] as const) {
-      if (c && !c.muted && phoneDigits(c.phone).length >= 8) {
-        recipients.push({ role, name: c.name, phone: c.phone });
-      }
+    const manager = await acrepo.managerContactForRule(rule);
+    if (manager && !manager.muted && phoneDigits(manager.phone).length >= 8) {
+      recipients.push({ role: "manager", name: manager.name, phone: manager.phone });
     }
   }
   const body = cancelMessage(occ?.serviceName ?? "le cours", candidate, rule?.label ?? "annulation auto");

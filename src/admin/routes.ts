@@ -3664,7 +3664,6 @@ ${photoSection}
             rule: r,
             activationError: r.enabled ? await acrepo.ruleActivationError(r) : null,
             serviceNames: r.service_ids.map((id) => ({ id, name: serviceNameById.get(id) ?? null })),
-            ownerName: r.owner_contact_id ? contactNameById.get(r.owner_contact_id) ?? null : null,
             managerName: r.manager_contact_id ? contactNameById.get(r.manager_contact_id) ?? null : null,
           })),
         );
@@ -3846,7 +3845,6 @@ ${photoSection}
           const min = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
           return min >= 0 && min < 24 * 60 ? min : null;
         };
-        const ownerId = String(body.owner_contact_id ?? "").trim() || null;
         const managerId = String(body.manager_contact_id ?? "").trim() || null;
         return {
           label,
@@ -3854,7 +3852,8 @@ ${photoSection}
           weekdays,
           start_min_from: hhmmToMin(body.start_from),
           start_min_to: hhmmToMin(body.start_to),
-          owner_contact_id: ownerId,
+          // Owner is always the studio owner (OWNER_PHONE), never a per-rule pick.
+          owner_contact_id: null,
           manager_contact_id: managerId,
           enabled: body.enabled === "1",
         };
