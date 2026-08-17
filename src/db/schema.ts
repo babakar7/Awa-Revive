@@ -883,7 +883,7 @@ alter table notification_rules
   add column if not exists service_ids text[];
 
 -- Journal de tout envoi. source ∈ rule | reception | owner_alert | new_chat | technical |
--- delivery | invoice | gift_card | staff_planning | ops_ticket | test.
+-- delivery | invoice | gift_card | staff_planning | ops_ticket | auto_cancel | test.
 -- new_chat = ping owner (NEW_CHAT_NOTIFY_PHONE) uniquement — ne pas confondre
 -- avec reception. owner_alert = copie OWNER_PHONE d'une alerte réception qui
 -- demande une intervention humaine (domain/ownerAlertRules.ts).
@@ -922,6 +922,62 @@ create index if not exists idx_notification_log_created
 -- règle quand le planning Wix ne renvoie plus la séance précédente (déjà commencée).
 create index if not exists idx_notification_log_rule_event
   on notification_log (rule_id, event_start);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Annulation automatique des cours vides (AUTO-CANCEL-EMPTY-CLASSES-PLAN.md).
+-- Une occurrence Wix restée VIDE (0 participant confirmé, capacité valide) 15 min
+-- après son cutoff est annulée (occurrence seule, jamais la série) et le coach,
+-- le owner et le manager sont prévenus par WhatsApp. Tout est décidé côté serveur ;
+-- le modèle n'intervient jamais. Fail-closed : au moindre doute, on n'annule pas.
+
+-- Règles éditables depuis /admin/notifications. AUCUN nom de cours en dur : la
+-- cible est un service_id Wix exact (le catalogue vit dans Wix). weekdays :
+-- convention JS getUTCDay (0=dimanche … 6=samedi ; Dakar == UTC), [] = tous les
+-- jours. start_min_from/to : minutes depuis minuit Dakar (bornes incluses),
+-- NULL = pas de borne. owner_contact_id/manager_contact_id : deux contacts fixes
+-- distincts du répertoire staff_contacts (le coach est résolu dynamiquement
+-- depuis Wix au moment de l'annulation).
+create table if not exists auto_cancel_rules (
+  id uuid primary key default gen_random_uuid(),
+  label text not null,
+  enabled boolean not null default false,
+  service_id text not null,
+  weekdays int[] not null default '{}',
+  start_min_from int,
+  start_min_to int,
+  owner_contact_id uuid references staff_contacts(id) on delete set null,
+  manager_contact_id uuid references staff_contacts(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Registre d'occurrences, clé GLOBALE = event id Calendar V3 (court, slot.eventId)
+-- de l'occurrence. L'unicité globale empêche toute double annulation entre règles
+-- chevauchantes, redémarrages et sweeps concurrents. session_id = sessionId de
+-- disponibilité (long) : clé du verrou consultatif partagé avec les chemins de
+-- réservation. state : OBSERVING → CANCELLING → CANCELLED | FAILED. first_empty_at
+-- porte le début de la période de vide continu ; il redémarre sur participant,
+-- paiement actif ou trou d'observation > 2 min (deploy/redémarrage).
+create table if not exists auto_cancel_ledger (
+  event_id text primary key,
+  session_id text not null,
+  rule_id uuid references auto_cancel_rules(id) on delete set null,
+  service_id text,
+  start_at timestamptz,
+  first_empty_at timestamptz,
+  last_observed_at timestamptz,
+  state text not null default 'OBSERVING'
+    check (state in ('OBSERVING','CANCELLING','CANCELLED','FAILED')),
+  cancelled_at timestamptz,
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+-- Lookup par session_id pour le garde-fou des chemins de réservation.
+create index if not exists idx_auto_cancel_ledger_session
+  on auto_cancel_ledger (session_id);
+create index if not exists idx_auto_cancel_ledger_state
+  on auto_cancel_ledger (state);
 
 -- Commandes bar LIVRAISON : la réception saisit une commande passée au téléphone,
 -- la cuisine est notifiée (WhatsApp + lien magique « ✅ prête »), un SLA déclenche

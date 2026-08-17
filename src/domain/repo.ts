@@ -2245,7 +2245,10 @@ export async function cacheSlots(
   }
 }
 
-/** Look up a served slot by its full event_id OR by its short choice_key. */
+/** Look up a served slot by its full event_id OR by its short choice_key.
+ *  Excludes any occurrence the empty-class engine has auto-cancelled: a stale
+ *  WhatsApp selection ("oui pour 7h15") must miss the cache and trigger a fresh
+ *  availability search rather than walk the client into a failing booking. */
 export async function getCachedSlot(
   clientId: string,
   eventIdOrKey: string,
@@ -2253,7 +2256,10 @@ export async function getCachedSlot(
   const res = await pool.query(
     `select event_id, service_id, slot_json from slot_cache
       where client_id = $1 and (event_id = $2 or choice_key = $2)
-        and cached_at > now() - interval '2 hours'`,
+        and cached_at > now() - interval '2 hours'
+        and event_id not in (
+          select session_id from auto_cancel_ledger where state in ('CANCELLING','CANCELLED')
+        )`,
     [clientId, eventIdOrKey],
   );
   return res.rows[0] ?? null;

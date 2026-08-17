@@ -47,6 +47,7 @@ import { planNamesConflict } from "../domain/planNameGuard.js";
 import { resolveServiceAlias } from "../domain/serviceAlias.js";
 import { lintOutboundReply } from "./outboundLint.js";
 import { recordWixOrderForBooking, type PaymentLog } from "../domain/fulfillment.js";
+import { guardBooking, OccurrenceCancelledError } from "../domain/autoCancelGuard.js";
 import * as keyRepo from "../domain/keyRepo.js";
 import {
   dakarDateKey,
@@ -1441,14 +1442,16 @@ async function createProtectedBenefitBooking(args: {
   let wixBookingId: string | null = null;
   let redeemed = false;
   try {
-    wixBookingId = await wix.createBookingRaw({
-      slot: args.fresh.raw,
-      name: args.bookingName,
-      phone,
-      participants: 1,
-      paymentOption: "MEMBERSHIP",
-      resolvedContact: args.contact,
-    });
+    wixBookingId = await guardBooking(args.resolvedEventId, () =>
+      wix.createBookingRaw({
+        slot: args.fresh.raw,
+        name: args.bookingName,
+        phone,
+        participants: 1,
+        paymentOption: "MEMBERSHIP",
+        resolvedContact: args.contact,
+      }),
+    );
     const redemption = await wix.redeemMembershipForBooking({
       wixBookingId,
       serviceId: args.serviceId,
@@ -1530,6 +1533,12 @@ async function createProtectedBenefitBooking(args: {
       } catch (cleanupError) {
         console.error(`Could not decline protected-benefit booking ${wixBookingId}:`, cleanupError);
       }
+    }
+    // Occurrence auto-cancelled (empty) just before we could book it: surface a
+    // clean slot-unavailable so the model offers another slot (the credit was
+    // never consumed — createBookingRaw threw before the redeem).
+    if (error instanceof OccurrenceCancelledError) {
+      return { error: "initial_slot_unavailable" };
     }
     throw error;
   }
@@ -4002,15 +4011,27 @@ export async function executeTool(
       // 2. Booking (CREATED) → 3. deduct one credit per spot → 4. confirm in calendar.
       let wixBookingId: string;
       try {
-        wixBookingId = await wix.createBookingRaw({
-          slot: fresh.raw,
-          name: bookingName,
-          phone,
-          participants,
-          paymentOption: "MEMBERSHIP",
-          resolvedContact: contact,
-        });
-      } catch {
+        wixBookingId = await guardBooking(resolvedEventId, () =>
+          wix.createBookingRaw({
+            slot: fresh.raw,
+            name: bookingName,
+            phone,
+            participants,
+            paymentOption: "MEMBERSHIP",
+            resolvedContact: contact,
+          }),
+        );
+      } catch (bookErr) {
+        if (bookErr instanceof OccurrenceCancelledError) {
+          // Occurrence auto-cancelled (empty) just before booking — the credit
+          // was never touched. Ask the model to offer another slot.
+          return JSON.stringify({
+            error: "slot_unavailable",
+            message:
+              "That class was just cancelled (no one was booked in). The plan credit was NOT used. " +
+              "Offer the client another available slot.",
+          });
+        }
         await trackFunnel({
           clientId: client.id,
           stage: "technical_failure",

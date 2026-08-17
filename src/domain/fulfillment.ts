@@ -20,6 +20,7 @@ import {
 } from "../lib/receptionContact.js";
 import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { backfillBookingContacts } from "./bookingContactBackfill.js";
+import { guardBooking, isSessionAutoCancelled, OccurrenceCancelledError } from "./autoCancelGuard.js";
 import * as deliveries from "./deliveryRepo.js";
 import { normalizeDeliveryPhone } from "./deliveryRules.js";
 import type { CafeServiceMode } from "./repo.js";
@@ -202,10 +203,18 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
 
     const fresh = await wix.findSlot(booking.service_id, booking.event_id, slotStartIso);
     if (!fresh || fresh.openSpots < participants) {
-      await markRefund(booking.id, client, lang, log, {
-        requested: participants,
-        remaining: fresh?.openSpots ?? 0,
-      });
+      // A slot that vanished because the empty-class engine cancelled it gets an
+      // honest reason instead of "that spot was taken" (findSlot returns null on
+      // a cancelled occurrence — verified: Wix drops it from availability).
+      const autoCancelled = await isSessionAutoCancelled(booking.event_id);
+      await markRefund(
+        booking.id,
+        client,
+        lang,
+        log,
+        autoCancelled ? undefined : { requested: participants, remaining: fresh?.openSpots ?? 0 },
+        autoCancelled ? "class_auto_cancelled" : "slot_taken",
+      );
       return;
     }
 
@@ -218,13 +227,26 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
       client.name = contact.fullName;
     }
 
-    wixBookingId = await wix.createBooking({
-      slot: fresh.raw ?? booking.slot_json,
-      name: bookingName,
-      phone,
-      participants,
-      resolvedContact: contact,
-    });
+    try {
+      // Serialize with the empty-class cancel engine on this occurrence: a
+      // cancel in flight makes the guard throw before we create a Wix booking
+      // against a dying slot.
+      wixBookingId = await guardBooking(booking.event_id, () =>
+        wix.createBooking({
+          slot: fresh.raw ?? booking.slot_json,
+          name: bookingName,
+          phone,
+          participants,
+          resolvedContact: contact,
+        }),
+      );
+    } catch (guardErr) {
+      if (guardErr instanceof OccurrenceCancelledError) {
+        await markRefund(booking.id, client, lang, log, undefined, "class_auto_cancelled");
+        return;
+      }
+      throw guardErr;
+    }
 
     await transition(pool, booking.id, "BOOKED", { wix_booking_id: wixBookingId });
     log.info({ bookingId: booking.id, wixBookingId, participants }, "Booking confirmed in Wix");
@@ -1006,16 +1028,30 @@ async function fulfillInitialPlanBooking(
   }
 
   let wixBookingId: string | null = order.wix_booking_id;
+  // Occurrence auto-cancelled (empty) while the plan payment was pending → keep
+  // the plan active and offer another slot via the existing deferred-slot flow.
+  if (!wixBookingId && (await isSessionAutoCancelled(order.event_id))) {
+    await repo.deferDiscoveryPlanBooking(order.id, "SLOT_UNAVAILABLE", "occurrence auto-cancelled (empty)");
+    const msg = applyFrenchRegister(
+      `✅ Ton abonnement ${order.plan_name} est actif. Le créneau choisi a été annulé (personne d'inscrit). Nous allons te proposer ici un nouveau créneau, sans nouveau paiement.`,
+      lang === "fr" && client?.fr_register === "vous",
+    );
+    await sendText(client.wa_phone, msg).catch(() => undefined);
+    await repo.addTurn(order.client_id, "assistant", msg).catch(() => undefined);
+    return;
+  }
   try {
     if (!wixBookingId) {
-      wixBookingId = await wix.createBookingRaw({
-        slot: fresh.raw,
-        name: contact.fullName || client?.name || "Client Revive",
-        phone,
-        participants: 1,
-        paymentOption: "MEMBERSHIP",
-        resolvedContact: contact,
-      });
+      wixBookingId = await guardBooking(order.event_id, () =>
+        wix.createBookingRaw({
+          slot: fresh.raw,
+          name: contact.fullName || client?.name || "Client Revive",
+          phone,
+          participants: 1,
+          paymentOption: "MEMBERSHIP",
+          resolvedContact: contact,
+        }),
+      );
       await repo.saveInitialPlanBookingWixId(order.id, wixBookingId);
     }
     let transactionId = order.benefit_transaction_id;
@@ -1083,6 +1119,18 @@ async function fulfillInitialPlanBooking(
     }
     log.info({ planOrderId: order.id, wixBookingId }, "Initial plan class activated and booked with membership");
   } catch (err) {
+    if (err instanceof OccurrenceCancelledError) {
+      // Lost the race: the empty-class engine cancelled the occurrence between
+      // our pre-check and the create. Plan stays active; offer another slot.
+      await repo.deferDiscoveryPlanBooking(order.id, "SLOT_UNAVAILABLE", "occurrence auto-cancelled (empty)");
+      const msg = applyFrenchRegister(
+        `✅ Ton abonnement ${order.plan_name} est actif. Le créneau choisi a été annulé (personne d'inscrit). Nous allons te proposer ici un nouveau créneau, sans nouveau paiement.`,
+        lang === "fr" && client?.fr_register === "vous",
+      );
+      await sendText(client.wa_phone, msg).catch(() => undefined);
+      await repo.addTurn(order.client_id, "assistant", msg).catch(() => undefined);
+      return;
+    }
     await failInitialPlanBooking(order, client, "initial_booking", err, log);
   }
 }
@@ -1439,9 +1487,11 @@ async function markRefund(
     failureCode:
       reason === "class_started"
         ? "slot_already_started"
-        : reason === "slot_taken"
-          ? "slot_unavailable"
-          : "wix_booking_failed",
+        : reason === "class_auto_cancelled"
+          ? "class_auto_cancelled"
+          : reason === "slot_taken"
+            ? "slot_unavailable"
+            : "wix_booking_failed",
     idempotencyKey: `booking:${bookingId}:refund-needed`,
     metadata: {
       refund_required: true,
@@ -1580,7 +1630,11 @@ export function confirmationMessage(
   }
 }
 
-export type RefundReason = "slot_taken" | "technical" | "class_started";
+export type RefundReason =
+  | "slot_taken"
+  | "technical"
+  | "class_started"
+  | "class_auto_cancelled";
 
 export function refundMessage(
   lang: string,
@@ -1613,6 +1667,11 @@ export function refundMessage(
           `We're so sorry 😔 — your payment arrived after the class had already started, so we couldn't confirm your spot. ` +
           `You will be refunded within 24h. Reply here if you'd like to book an upcoming class! 🙏🏾`
         );
+      if (reason === "class_auto_cancelled")
+        return (
+          `We're so sorry 😔 — that class was cancelled (no one was booked in), so we couldn't confirm your spot. ` +
+          `You will be refunded within 24h. Reply here and I'll find you another slot! 🙏🏾`
+        );
       if (reason === "technical")
         return (
           `We're so sorry 😔 — a technical issue prevented us from finalizing your booking. ` +
@@ -1634,6 +1693,11 @@ export function refundMessage(
           `Baal ma — sa fey bi ñëw na ginnaaw bi cours bi tàmbalee, kon mënuma woon confirmer sa palass. ` +
           `Dinañu la delloo sa xaalis balaa 24 waxtu. Bindal ma fii su la neexee ma wut la beneen palass! 🙏🏾`
         );
+      if (reason === "class_auto_cancelled")
+        return (
+          `Baal ma — cours bi ñu ko neenal (kenn bindu ci woon), kon mënuma woon confirmer sa palass. ` +
+          `Dinañu la delloo sa xaalis balaa 24 waxtu. Bindal ma fii ma wut la beneen palass! 🙏🏾`
+        );
       if (reason === "technical")
         return (
           `Baal ma — am na jafe-jafe technique bu tere réservation bi sotti. ` +
@@ -1654,6 +1718,11 @@ export function refundMessage(
         return (
           `Désolé 😔 — ton paiement est arrivé après le début du cours, je n'ai donc pas pu confirmer ta place. ` +
           `Tu seras remboursé(e) sous 24h. Écris-moi ici si tu veux réserver un prochain créneau ! 🙏🏾`
+        );
+      if (reason === "class_auto_cancelled")
+        return (
+          `Désolé 😔 — ce cours a été annulé (personne n'était inscrit), je n'ai donc pas pu confirmer ta place. ` +
+          `Tu seras remboursé(e) sous 24h. Écris-moi ici et je te trouve un autre créneau ! 🙏🏾`
         );
       if (reason === "technical")
         return (

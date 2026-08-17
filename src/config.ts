@@ -121,6 +121,14 @@ export const config = {
   // le tableau ne doit jamais accumuler de cartes rassies. 0 = désactivé.
   OPS_TICKET_AUTOCLOSE_MINUTES: parseInt(optional("OPS_TICKET_AUTOCLOSE_MINUTES", "120"), 10),
 
+  // Préavis minimum (minutes) avant le début d'un cours en-deçà duquel l'annulation
+  // automatique des cours vides n'est plus tentée — le coach est déjà en route/au
+  // studio (décision Babakar 17/08/2026 : 120 min ; cf. AUTO-CANCEL-EMPTY-CLASSES-PLAN.md §1).
+  AUTO_CANCEL_MIN_NOTICE_MINUTES: parseInt(
+    optional("AUTO_CANCEL_MIN_NOTICE_MINUTES", "120"),
+    10,
+  ),
+
   // Wix
   WIX_API_KEY: required("WIX_API_KEY"),
   WIX_SITE_ID: required("WIX_SITE_ID"),

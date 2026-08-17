@@ -148,7 +148,9 @@ import * as links from "../domain/linkRequests.js";
 import * as reviews from "../domain/conversationReview.js";
 import { renderTestChecklist } from "./testChecklist.js";
 import { renderNotificationsPage } from "./notificationsPage.js";
+import { renderAutoCancelSection } from "./autoCancelSection.js";
 import * as nrepo from "../domain/notificationRepo.js";
+import * as acrepo from "../domain/autoCancelRepo.js";
 import { cachedCoachNames } from "../domain/notificationSweep.js";
 import { renderMessage, STAFF_FOOTER } from "../domain/notificationRules.js";
 import {
@@ -3646,7 +3648,37 @@ ${photoSection}
           testPhone: config.NOTIF_TEST_PHONE,
           alertsPaused,
         });
-        reply.type("text/html").send(await layout("Notifications", "/admin/notifications", body, { subtitle: "Alertes coachs, contacts et journal", contentWidth: "full" }));
+
+        // Auto-cancellation section (empty classes). Same page, appended below.
+        const acEditId = (req.query as any)?.ac_edit as string | undefined;
+        const acNew = (req.query as any)?.ac_new === "1";
+        const [acRules, acLedger, acPaused] = await Promise.all([
+          acrepo.listAllRules(),
+          acrepo.recentLedger(30),
+          acrepo.isAutoCancelPaused(),
+        ]);
+        const serviceNameById = new Map(serviceOptions.map((s) => [s.id, s.name]));
+        const contactNameById = new Map(contacts.map((c) => [c.id, c.name]));
+        const acViews = await Promise.all(
+          acRules.map(async (r) => ({
+            rule: r,
+            activationError: r.enabled ? await acrepo.ruleActivationError(r) : null,
+            serviceName: serviceNameById.get(r.service_id) ?? null,
+            ownerName: r.owner_contact_id ? contactNameById.get(r.owner_contact_id) ?? null : null,
+            managerName: r.manager_contact_id ? contactNameById.get(r.manager_contact_id) ?? null : null,
+          })),
+        );
+        const acSection = renderAutoCancelSection({
+          views: acViews,
+          ledger: acLedger,
+          serviceOptions,
+          contacts: contacts.map((c) => ({ id: c.id, name: c.name, muted: c.muted })),
+          paused: acPaused,
+          editRule: acEditId ? (acRules.find((r) => r.id === acEditId) ?? null) : null,
+          showNewForm: acNew,
+        });
+
+        reply.type("text/html").send(await layout("Notifications", "/admin/notifications", body + acSection, { subtitle: "Alertes coachs, contacts, annulations auto et journal", contentWidth: "full" }));
       });
 
       admin.post("/notifications/pause", async (req, reply) => {
@@ -3786,6 +3818,89 @@ ${photoSection}
         const { id } = req.params as { id: string };
         await nrepo.deleteContact(id);
         return reply.redirect("/admin/notifications?done=contact-deleted", 303);
+      });
+
+      // ---------- Annulation automatique des cours vides ----------
+      function parseAutoCancelInput(
+        body: Record<string, unknown>,
+      ): acrepo.RuleInput | { error: string } {
+        const label = String(body.label ?? "").trim();
+        if (!label) return { error: "nom requis" };
+        const serviceId = String(body.service_id ?? "").trim();
+        if (!serviceId) return { error: "cours requis" };
+        // Checkboxes: absent → undefined, one → string, several → string[].
+        const raw = body.weekdays;
+        const weekdayList = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+        const weekdays = [
+          ...new Set(
+            weekdayList
+              .map((d) => parseInt(String(d), 10))
+              .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6),
+          ),
+        ];
+        const hhmmToMin = (s: unknown): number | null => {
+          const m = /^(\d{1,2}):(\d{2})$/.exec(String(s ?? "").trim());
+          if (!m) return null;
+          const min = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+          return min >= 0 && min < 24 * 60 ? min : null;
+        };
+        const ownerId = String(body.owner_contact_id ?? "").trim() || null;
+        const managerId = String(body.manager_contact_id ?? "").trim() || null;
+        return {
+          label,
+          service_id: serviceId,
+          weekdays,
+          start_min_from: hhmmToMin(body.start_from),
+          start_min_to: hhmmToMin(body.start_to),
+          owner_contact_id: ownerId,
+          manager_contact_id: managerId,
+          enabled: body.enabled === "1",
+        };
+      }
+
+      admin.post("/notifications/autocancel/pause", async (req, reply) => {
+        const paused = String((req.body as any)?.value ?? "") === "1";
+        await acrepo.setAutoCancelPaused(paused);
+        req.log.info({ paused, by: req.adminUser }, "Auto-cancel master switch toggled");
+        return reply.redirect(
+          `/admin/notifications?done=${paused ? "ac_paused" : "ac_resumed"}#autocancel`,
+          303,
+        );
+      });
+
+      admin.post("/notifications/autocancel/rules", async (req, reply) => {
+        const parsed = parseAutoCancelInput((req.body ?? {}) as Record<string, unknown>);
+        if ("error" in parsed) {
+          return reply.redirect(`/admin/notifications?ac_new=1&err=${encodeURIComponent(parsed.error)}#autocancel-form`, 303);
+        }
+        await acrepo.createRule(parsed);
+        req.log.info({ by: req.adminUser, label: parsed.label }, "Auto-cancel rule created");
+        return reply.redirect("/admin/notifications?done=created#autocancel", 303);
+      });
+
+      admin.post("/notifications/autocancel/rules/:id/update", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const parsed = parseAutoCancelInput((req.body ?? {}) as Record<string, unknown>);
+        if ("error" in parsed) {
+          return reply.redirect(`/admin/notifications?ac_edit=${id}&err=${encodeURIComponent(parsed.error)}#autocancel-form`, 303);
+        }
+        await acrepo.updateRule(id, parsed);
+        req.log.info({ by: req.adminUser, ruleId: id }, "Auto-cancel rule updated");
+        return reply.redirect("/admin/notifications?done=updated#autocancel", 303);
+      });
+
+      admin.post("/notifications/autocancel/rules/:id/toggle", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const rule = await acrepo.getRule(id);
+        if (rule) await acrepo.setRuleEnabled(id, !rule.enabled);
+        return reply.redirect("/admin/notifications?done=toggled#autocancel", 303);
+      });
+
+      admin.post("/notifications/autocancel/rules/:id/delete", async (req, reply) => {
+        const { id } = req.params as { id: string };
+        await acrepo.deleteRule(id);
+        req.log.info({ by: req.adminUser, ruleId: id }, "Auto-cancel rule deleted");
+        return reply.redirect("/admin/notifications?done=deleted#autocancel", 303);
       });
 
       // ---------- Actions de pointage (aucune action monétaire) ----------

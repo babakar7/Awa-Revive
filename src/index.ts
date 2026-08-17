@@ -10,6 +10,7 @@ import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { sweepStaffNotifications } from "./domain/notificationSweep.js";
+import { sweepAutoCancellations } from "./domain/autoCancelSweep.js";
 import { sweepDeliveries } from "./domain/deliveryNotify.js";
 import { sweepServeEscalations } from "./domain/opsEscalation.js";
 import { activateDueTableTickets, autoCloseStaleTickets } from "./domain/kitchenTicketRepo.js";
@@ -165,6 +166,16 @@ async function main() {
       if (notified > 0) app.log.info({ notified }, "Staff notifications sent");
     } catch (err) {
       app.log.error({ err }, "Staff-notification sweep failed");
+    }
+    // Empty-class auto-cancellation. Own try/catch: a Wix hiccup must never
+    // block the sweeps around it, and vice-versa. Needs ≤1-min granularity for
+    // the 15-min empty timer + min-notice floor → the 60s loop. Fresh Wix reads
+    // (never the notif 5-min cache). Globally disabled until an admin enables a rule.
+    try {
+      const cancelled = await sweepAutoCancellations(app.log);
+      if (cancelled > 0) app.log.info({ cancelled }, "Empty classes auto-cancelled");
+    } catch (err) {
+      app.log.error({ err }, "Auto-cancel sweep failed");
     }
     // Delivery orders: retry pending kitchen/client notifications (crash-safe)
     // and fire one-shot SLA "late" alerts to reception. Own try/catch. Needs

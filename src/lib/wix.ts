@@ -2886,6 +2886,44 @@ export async function cancelBooking(
 }
 
 /**
+ * Read one Calendar V3 occurrence (public shape for the auto-cancel engine).
+ * Fail-closed by construction: participantCount is null unless Wix exposed a
+ * valid total+remaining capacity (see calendarEventFromRaw).
+ */
+export async function getCalendarOccurrence(eventId: string): Promise<WixCalendarEvent> {
+  return getCalendarEventV3(eventId);
+}
+
+/**
+ * Cancel a SINGLE class occurrence via Calendar V3 Cancel Event — the endpoint
+ * proven live on 17/08/2026 (throwaway "Pilates Fusion", cf.
+ * AUTO-CANCEL-EMPTY-CLASSES-PLAN.md §2): it cancels only this occurrence (never
+ * the recurring MASTER), removes it from availability, and makes a later
+ * booking 428 SLOT_NOT_AVAILABLE. `notifyParticipants` is false — Awa owns all
+ * messaging; besides, we only ever cancel verified-empty occurrences.
+ *
+ * The single mutation door for the auto-cancel engine. Uses the SHORT Calendar
+ * event id (slot.eventId / WixSlot.rescheduleEventId), never the long
+ * availability sessionId. Returns the occurrence's status after cancellation so
+ * the caller can confirm CANCELLED before recording success.
+ */
+export async function cancelClassOccurrence(eventId: string): Promise<{ status: string }> {
+  const id = String(eventId ?? "").trim();
+  // The Calendar event id is a GUID (~36 chars). A long availability sessionId
+  // (100+ chars, Kadiatou incident) must never reach this write endpoint.
+  if (!id || id.length > 250) {
+    throw new Error(
+      `Invalid Wix Calendar event id for cancellation (${id ? `${id.length} chars` : "missing"})`,
+    );
+  }
+  const data = await wixPost(`/calendar/v3/events/${encodeURIComponent(id)}/cancel`, {
+    participantNotification: { notifyParticipants: false },
+  });
+  const status = String(data?.event?.status ?? "").toUpperCase();
+  return { status };
+}
+
+/**
  * Wix can restore a pricing-plan benefit after a cancellation while leaving
  * the cancelled booking's paymentStatus as PAID. That makes the Wix dashboard
  * show the stale pre-refund state even though the Benefit Programs ledger is

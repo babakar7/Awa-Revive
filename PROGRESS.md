@@ -1,5 +1,61 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Annulation automatique des cours vides (17 août 2026)
+
+**Quoi.** Awa annule automatiquement l'occurrence d'un cours collectif Wix restée
+**vide** (0 participant confirmé, capacité valide) 15 min après son cutoff, et
+prévient par WhatsApp le coach du cours, le owner et le manager. Seule l'occurrence
+est annulée, jamais la série. Piloté depuis **/admin/notifications** (section
+« Annulation automatique des cours vides »). Plan complet + gate de faisabilité :
+[AUTO-CANCEL-EMPTY-CLASSES-PLAN.md](AUTO-CANCEL-EMPTY-CLASSES-PLAN.md).
+
+**Règles produit.** Cutoff : cours ≤ 09:15 → éligible dès 23:00 la veille ; sinon
+start − 3 h. Vide en continu 15 min (le timer redémarre sur participant, paiement
+actif, ou trou d'observation > 2 min = deploy/redémarrage). Préavis minimum
+**120 min** (`AUTO_CANCEL_MIN_NOTICE_MINUTES`, décision Babakar). Fail-closed
+partout : capacité inconnue, destinataire manquant/muet, ou lecture Wix en échec →
+on n'annule pas.
+
+**Gate Wix RÉUSSI (probe live 17/08).** `POST /calendar/v3/events/{id}/cancel`
+annule la seule occurrence, la retire des disponibilités (source d'Awa + widget),
+et un booking ultérieur reçoit 428 `SLOT_NOT_AVAILABLE`. `notifyParticipants=false`
+par défaut (Awa garde la main sur les messages). Clé actuelle « Toutes les
+autorisations de site » suffit. Script conservé :
+[scripts/probe-cancel-event.ts](scripts/probe-cancel-event.ts).
+
+**Architecture.** Moteur dans le sweeper 60 s ([src/domain/autoCancelSweep.ts](src/domain/autoCancelSweep.ts)),
+logique pure testée à part ([src/domain/autoCancelRules.ts](src/domain/autoCancelRules.ts)).
+Registre d'occurrences `auto_cancel_ledger` (clé = event id Calendar) + règles
+`auto_cancel_rules`. **Annulation en 2 phases** : phase A sous verrou consultatif
+transactionnel (`pg_advisory_xact_lock`, clé = session id de disponibilité) →
+vérifie tout sur données Wix fraîches + marque `CANCELLING` (commit) ; phase B
+(hors verrou) → cancel Wix + confirme + `CANCELLED`. Le garde-fou des chemins de
+réservation ([src/domain/autoCancelGuard.ts](src/domain/autoCancelGuard.ts)) rejette
+sur `CANCELLING`/`CANCELLED` pendant la fenêtre d'appel Wix. Récupération des
+`CANCELLING` bloqués > 2 min (crash/deploy) : re-check Wix → finalise (+ notifie,
+seul endroit qui rattrape un crash post-cancel car l'occurrence a quitté la
+dispo) ou revert `OBSERVING` (timer remis à zéro).
+
+**Chemins de réservation protégés** (verrou partagé + garde) : payé
+([fulfillment.ts](src/domain/fulfillment.ts)), abonnement initial, redemptions
+directes Clé/bonus/invitation + abonnement ([tools.ts](src/agent/tools.ts)).
+Paiement mobile-money tardif sur occurrence annulée → `REFUND_NEEDED` raison
+**`class_auto_cancelled`** (message client honnête, alerte réception). Plan tardif
+→ reste actif + flux deferred-slot. `slot_cache` exclut/purge les sessions
+annulées (une réponse WhatsApp périmée redéclenche une recherche fraîche).
+
+**Notifications.** Réutilisent la machinerie `notificationSweep` (template-first,
+131047, retries, journal) via `notification_log` source `auto_cancel`, dedup par
+(occurrence, numéro). Alerte config unique/occurrence quand un destinataire requis
+manque (le cours n'est PAS annulé). Admin : CRUD règles, contrôle d'activation
+visible (2 contacts fixes distincts actifs + coach dynamique), journal des
+annulations, pause globale.
+
+**Rollout.** Globalement désactivé tant qu'aucune règle n'est activée. Chaque règle
+s'active individuellement. Tests : `autoCancelRules` (18) + `autoCancelSweep` (7,
+Wix mocké) unitaires ; `integration/autoCancel` (8, verrou/ledger/garde/cache/CRUD).
+Build + 1372 unitaires + 436 intégration verts.
+
 ## Refonte UX des alertes staff : /admin/notifications (17 août 2026)
 
 **Pourquoi.** Babakar trouvait la page d'alertes coachs mauvaise : un formulaire géant

@@ -1002,6 +1002,7 @@ export async function truncateAll(): Promise<void> {
               coach_payment_profiles, coach_payment_statements, coach_payment_send_log,
               coach_payment_holidays,
               multi_session_commitments, multi_session_commitment_items,
+              auto_cancel_rules, auto_cancel_ledger,
               app_state, ad_insights_daily cascade`,
   );
 }
