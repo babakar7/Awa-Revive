@@ -13,6 +13,7 @@ import {
   isWithinWindow,
   matchesRule,
   nextEmptyTimer,
+  planningWeekdayOf,
   type AutoCancelRule,
 } from "./autoCancelRules.js";
 
@@ -57,17 +58,19 @@ interface Recipient {
   phone: string;
 }
 
-/** Resolve the optional « accueil / ouverture » recipient — only for a morning
- *  (≤09:15) occurrence, only if the rule set one and it's active. Never blocks.
- *  Exported for unit tests (morning-gating is time-of-day dependent). */
+/** Resolve the « accueil / ouverture » recipient — only for a morning (≤09:15)
+ *  occurrence, only if the rule's alert_opener flag is on. WHO is resolved
+ *  automatically from the published staff planning (the day's earliest accueil
+ *  shift). Never blocks the cancellation. Exported for unit tests. */
 export async function openingRecipientFor(
   rule: acrepo.AutoCancelRuleRow,
   candidate: { startIso: string },
 ): Promise<{ role: "opening"; name: string; phone: string } | null> {
+  if (!rule.alert_opener) return null;
   if (!isMorningClass(candidate.startIso)) return null;
-  const c = await acrepo.openingContactForRule(rule);
-  if (!c || c.muted || phoneDigits(c.phone).length < 8) return null;
-  return { role: "opening", name: c.name, phone: c.phone };
+  const opener = await acrepo.openerForWeekday(planningWeekdayOf(candidate.startIso));
+  if (!opener) return null;
+  return { role: "opening", name: opener.name, phone: opener.phone };
 }
 
 async function resolveCoachPhone(
@@ -364,7 +367,7 @@ function ruleToPure(r: acrepo.AutoCancelRuleRow): AutoCancelRule {
     weekdays: r.weekdays,
     start_min_from: r.start_min_from,
     start_min_to: r.start_min_to,
-    opening_contact_id: r.opening_contact_id,
+    alert_opener: r.alert_opener,
   };
 }
 

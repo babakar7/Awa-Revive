@@ -2,6 +2,7 @@ import pg from "pg";
 import { config } from "../config.js";
 import { pool } from "../db/index.js";
 import { phoneDigits } from "./notificationRepo.js";
+import { getPublishedSchedule } from "./staffPlanningRepo.js";
 import type { AutoCancelRule } from "./autoCancelRules.js";
 
 type PoolClient = pg.PoolClient;
@@ -42,7 +43,7 @@ export interface AutoCancelRuleRow extends AutoCancelRule {
 }
 
 const RULE_COLUMNS = `id, label, enabled, service_id, service_ids, weekdays, start_min_from, start_min_to,
-  owner_contact_id, manager_contact_id, opening_contact_id, created_at, updated_at`;
+  owner_contact_id, manager_contact_id, alert_opener, created_at, updated_at`;
 
 function rowToRule(r: any): AutoCancelRuleRow {
   // service_ids is the source of truth; fall back to a legacy single service_id.
@@ -62,7 +63,7 @@ function rowToRule(r: any): AutoCancelRuleRow {
     start_min_to: r.start_min_to,
     owner_contact_id: r.owner_contact_id,
     manager_contact_id: r.manager_contact_id,
-    opening_contact_id: r.opening_contact_id ?? null,
+    alert_opener: r.alert_opener === true,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -93,7 +94,7 @@ export interface RuleInput {
   start_min_to: number | null;
   owner_contact_id: string | null;
   manager_contact_id: string | null;
-  opening_contact_id: string | null;
+  alert_opener: boolean;
   enabled: boolean;
 }
 
@@ -102,7 +103,7 @@ export async function createRule(input: RuleInput): Promise<void> {
   await pool.query(
     `insert into auto_cancel_rules
        (label, enabled, service_ids, weekdays, start_min_from, start_min_to,
-        owner_contact_id, manager_contact_id, opening_contact_id)
+        owner_contact_id, manager_contact_id, alert_opener)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [
       input.label,
@@ -113,7 +114,7 @@ export async function createRule(input: RuleInput): Promise<void> {
       input.start_min_to,
       input.owner_contact_id,
       input.manager_contact_id,
-      input.opening_contact_id,
+      input.alert_opener,
     ],
   );
 }
@@ -123,7 +124,7 @@ export async function updateRule(id: string, input: RuleInput): Promise<void> {
   await pool.query(
     `update auto_cancel_rules set
        label=$2, enabled=$3, service_ids=$4, service_id=null, weekdays=$5, start_min_from=$6,
-       start_min_to=$7, owner_contact_id=$8, manager_contact_id=$9, opening_contact_id=$10, updated_at=now()
+       start_min_to=$7, owner_contact_id=$8, manager_contact_id=$9, alert_opener=$10, updated_at=now()
      where id=$1`,
     [
       id,
@@ -135,7 +136,7 @@ export async function updateRule(id: string, input: RuleInput): Promise<void> {
       input.start_min_to,
       input.owner_contact_id,
       input.manager_contact_id,
-      input.opening_contact_id,
+      input.alert_opener,
     ],
   );
 }
@@ -181,14 +182,31 @@ export async function managerContactForRule(rule: AutoCancelRuleRow): Promise<Fi
   return (res.rows[0] as FixedContact) ?? null;
 }
 
-/** The rule's optional « accueil / ouverture » contact (morning cancellations only). */
-export async function openingContactForRule(rule: AutoCancelRuleRow): Promise<FixedContact | null> {
-  if (!rule.opening_contact_id) return null;
+/**
+ * The day's OPENER, resolved from the published staff planning: the « accueil »
+ * employee whose shift starts earliest on `planningWeekday` (0=Monday…6=Sunday,
+ * the staff_shifts convention). This is the person who comes to open the studio.
+ * Null when no schedule is published, nobody at accueil that day, the opener is
+ * muted, or has no valid phone. Used only for morning cancellations.
+ */
+export async function openerForWeekday(
+  planningWeekday: number,
+): Promise<{ name: string; phone: string } | null> {
+  const published = await getPublishedSchedule();
+  if (!published) return null;
   const res = await pool.query(
-    `select id, name, phone, muted from staff_contacts where id = $1`,
-    [rule.opening_contact_id],
+    `select c.name, c.phone
+       from staff_shifts s
+       join staff_contacts c on c.id = s.staff_id
+      where s.schedule_id = $1 and s.weekday = $2
+        and c.role = 'accueil' and c.muted = false
+      order by s.start_min asc
+      limit 1`,
+    [published.id, planningWeekday],
   );
-  return (res.rows[0] as FixedContact) ?? null;
+  const row = res.rows[0];
+  if (!row || phoneDigits(row.phone).length < 8) return null;
+  return { name: row.name, phone: row.phone };
 }
 
 /**

@@ -52,9 +52,9 @@ export interface AutoCancelRule {
   /** Inclusive start-of-day-minutes range the class start must fall in. null = any. */
   start_min_from: number | null;
   start_min_to: number | null;
-  /** Optional « accueil / ouverture » contact, notified IN ADDITION for morning
-   *  (≤09:15) cancellations only. null = none. Never gates the cancellation. */
-  opening_contact_id: string | null;
+  /** When true, ALSO notify the day's opener (resolved from the published staff
+   *  planning) for morning (≤09:15) cancellations. Never gates the cancellation. */
+  alert_opener: boolean;
 }
 
 /** A concrete occurrence observed from Wix, normalized for the engine. */
@@ -83,6 +83,12 @@ export function dakarMinutesOfDay(startIso: string): number {
 /** JS getUTCDay weekday (0=Sun … 6=Sat) for an ISO instant (Dakar == UTC). */
 export function dakarWeekday(startIso: string): number {
   return new Date(startIso).getUTCDay();
+}
+
+/** Staff-planning weekday (0=Monday … 6=Sunday — the grid convention used by
+ *  staff_shifts, NOT getUTCDay's 0=Sunday) for an ISO instant (Dakar == UTC). */
+export function planningWeekdayOf(startIso: string): number {
+  return (new Date(startIso).getUTCDay() + 6) % 7;
 }
 
 /** True when the class starts at or before 09:15 Dakar (the morning rule). */

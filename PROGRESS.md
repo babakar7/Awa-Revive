@@ -46,12 +46,17 @@ Paiement mobile-money tardif sur occurrence annulée → `REFUND_NEEDED` raison
 → reste actif + flux deferred-slot. `slot_cache` exclut/purge les sessions
 annulées (une réponse WhatsApp périmée redéclenche une recherche fraîche).
 
-**Accueil / ouverture (ajout 17/08).** Chaque règle a un destinataire OPTIONNEL
-« accueil » (`opening_contact_id`), prévenu EN PLUS du coach/owner/manager mais
-UNIQUEMENT pour les annulations de cours du matin (`isMorningClass` ≤ 09:15) —
-pour que la personne qui fait l'ouverture sache si elle peut venir plus tard.
-Facultatif : absent/muet = simplement ignoré, ne bloque jamais l'annulation. Son
-message porte une ligne dédiée « si aucun autre cours tôt, tu peux venir plus tard ».
+**Accueil / ouverture (ajout 17/08).** Chaque règle a une simple case
+`alert_opener`. Quand cochée, pour les annulations de cours du matin
+(`isMorningClass` ≤ 09:15) uniquement, on prévient EN PLUS la personne qui fait
+l'ouverture — résolue AUTOMATIQUEMENT depuis le planning staff publié :
+`openerForWeekday()` = l'employé·e de rôle **`accueil`** dont le créneau commence
+le plus tôt ce jour-là (`staff_shifts`, grille Lundi=0 ≠ getUTCDay, conversion
+`planningWeekdayOf`). Plus de contact fixe à choisir. Facultatif et fail-open :
+pas de planning publié / personne à l'accueil / muet / sans numéro = ignoré, ne
+bloque jamais l'annulation. Message dédié « si aucun autre cours tôt, tu peux
+venir plus tard ». (La 1ʳᵉ version choisissait un contact fixe `opening_contact_id`
+— colonne conservée mais plus lue/écrite.)
 
 **Notifications.** Réutilisent la machinerie `notificationSweep` (template-first,
 131047, retries, journal) via `notification_log` source `auto_cancel`, dedup par

@@ -10,6 +10,7 @@ import {
   isWithinWindow,
   matchesRule,
   nextEmptyTimer,
+  planningWeekdayOf,
   windowEnd,
   type AutoCancelRule,
 } from "../src/domain/autoCancelRules.js";
@@ -24,7 +25,7 @@ const rule = (over: Partial<AutoCancelRule> = {}): AutoCancelRule => ({
   weekdays: [],
   start_min_from: null,
   start_min_to: null,
-  opening_contact_id: null,
+  alert_opener: false,
   ...over,
 });
 
@@ -98,6 +99,15 @@ describe("rule matching", () => {
   it("empty weekdays = every day, null time range = any hour", () => {
     const r = rule();
     expect(matchesRule(r, { serviceId: "svc-1", startIso: "2026-08-25T22:00:00.000Z" })).toBe(true);
+  });
+
+  it("planningWeekdayOf maps to the staff-grid Monday=0 convention", () => {
+    // 2026-08-24 is a Monday → getUTCDay 1 → planning 0.
+    expect(planningWeekdayOf("2026-08-24T07:00:00.000Z")).toBe(0);
+    // Sunday 2026-08-23 → getUTCDay 0 → planning 6.
+    expect(planningWeekdayOf("2026-08-23T07:00:00.000Z")).toBe(6);
+    // Saturday 2026-08-22 → getUTCDay 6 → planning 5.
+    expect(planningWeekdayOf("2026-08-22T07:00:00.000Z")).toBe(5);
   });
 
   it("matches ANY of several targeted services (multi-service rule)", () => {

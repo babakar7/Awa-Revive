@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   purgeSlotCacheForSession: vi.fn(),
   ownerRecipient: vi.fn(),
   managerContactForRule: vi.fn(),
-  openingContactForRule: vi.fn(),
+  openerForWeekday: vi.fn(),
   withOccurrenceLock: vi.fn(),
   staleCancellingRows: vi.fn(),
   revertToObserving: vi.fn(),
@@ -78,7 +78,7 @@ const RULE = {
   start_min_to: null,
   owner_contact_id: "o1",
   manager_contact_id: "m1",
-  opening_contact_id: "op1",
+  alert_opener: true,
 };
 
 /** A slot 2.5h ahead → inside the daytime [start-3h, start-2h] window now. */
@@ -108,9 +108,9 @@ beforeEach(() => {
     phone: "+221771112202",
     muted: false,
   });
-  // Default: no opening contact (keeps the full-sweep tests at 3 recipients,
+  // Default: no opener resolved (keeps the full-sweep tests at 3 recipients,
   // independent of the real wall-clock morning/daytime split).
-  mocks.openingContactForRule.mockResolvedValue(null);
+  mocks.openerForWeekday.mockResolvedValue(null);
   mocks.findStaffByName.mockResolvedValue(null);
   mocks.listStaffResources.mockResolvedValue([{ id: "c1", name: "Alou", phone: "+221770000009", email: null }]);
   mocks.claimOrReclaim.mockResolvedValue(true);
@@ -240,26 +240,32 @@ describe("sweepAutoCancellations", () => {
   });
 });
 
-describe("openingRecipientFor (accueil/ouverture, morning-only)", () => {
-  const MORNING = { startIso: "2026-08-24T07:00:00.000Z" }; // 07:00 ≤ 09:15
+describe("openingRecipientFor (opener from planning, morning-only)", () => {
+  const MORNING = { startIso: "2026-08-24T07:00:00.000Z" }; // Monday 07:00 ≤ 09:15
   const DAYTIME = { startIso: "2026-08-24T18:00:00.000Z" };
-  const contact = { id: "op1", name: "Accueil Fatou", phone: "+221770001122", muted: false };
+  const opener = { name: "Accueil Fatou", phone: "+221770001122" };
 
-  it("adds the opening recipient for a morning class", async () => {
-    mocks.openingContactForRule.mockResolvedValue(contact);
+  it("adds the day's opener for a morning class when alert_opener is on", async () => {
+    mocks.openerForWeekday.mockResolvedValue(opener);
     const r = await openingRecipientFor(RULE as any, MORNING);
     expect(r).toEqual({ role: "opening", name: "Accueil Fatou", phone: "+221770001122" });
+    // Resolved for the staff-grid weekday (Monday=0), not getUTCDay.
+    expect(mocks.openerForWeekday).toHaveBeenCalledWith(0);
   });
 
-  it("does NOT add it for a later (daytime) class even if configured", async () => {
-    mocks.openingContactForRule.mockResolvedValue(contact);
+  it("does NOT add it for a later (daytime) class", async () => {
+    mocks.openerForWeekday.mockResolvedValue(opener);
     expect(await openingRecipientFor(RULE as any, DAYTIME)).toBeNull();
   });
 
-  it("skips a muted or unset opening contact", async () => {
-    mocks.openingContactForRule.mockResolvedValue({ ...contact, muted: true });
-    expect(await openingRecipientFor(RULE as any, MORNING)).toBeNull();
-    mocks.openingContactForRule.mockResolvedValue(null);
+  it("does nothing when the flag is off", async () => {
+    mocks.openerForWeekday.mockResolvedValue(opener);
+    expect(await openingRecipientFor({ ...RULE, alert_opener: false } as any, MORNING)).toBeNull();
+    expect(mocks.openerForWeekday).not.toHaveBeenCalled();
+  });
+
+  it("skips when the planning yields no opener (no schedule / nobody at accueil)", async () => {
+    mocks.openerForWeekday.mockResolvedValue(null);
     expect(await openingRecipientFor(RULE as any, MORNING)).toBeNull();
   });
 });
