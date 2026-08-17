@@ -5,10 +5,7 @@ import * as nrepo from "./notificationRepo.js";
 import {
   buildChain,
   classDedupKey,
-  dakarDateStr,
   dueClassReminders,
-  fixedDedupKey,
-  isFixedScheduleDue,
   normalizeName,
   renderMessage,
   STAFF_FOOTER,
@@ -248,53 +245,30 @@ async function runClassRule(
   return sent;
 }
 
-async function runFixedRule(rule: NotificationRule, now: Date, log: SweepLog): Promise<number> {
-  if (!isFixedScheduleDue(rule, now)) return 0;
-  const dedupKey = fixedDedupKey(rule.id, dakarDateStr(now));
-  if (!(await nrepo.claimOrReclaim(dedupKey, rule.id, null))) return 0;
-
-  const phone = rule.recipient_phone;
-  if (!phone) {
-    await nrepo.finishLog(dedupKey, "failed", { error: "règle sans numéro destinataire" });
-    return 0;
-  }
-  if (await nrepo.isMutedPhone(phone)) {
-    await nrepo.finishLog(dedupKey, "suppressed", { body: "destinataire muet" });
-    return 0;
-  }
-  const body = withFooter(renderMessage(rule.message_template, {}));
-  return (await deliver(dedupKey, phone, rule.label, body, log)) ? 1 : 0;
-}
-
 // ---------- entry point (called from the 60s loop) ----------
 
 export async function sweepStaffNotifications(log: SweepLog): Promise<number> {
   // Global kill switch (admin button) — trumps every rule, nothing is claimed
   // or logged while paused (the occurrences are simply skipped, not queued).
   if (await nrepo.areStaffAlertsPaused()) return 0;
-  const rules = await nrepo.listEnabledRules();
+  const rules = await nrepo.listEnabledRules(); // class_reminder only (filtered in SQL)
   if (rules.length === 0) return 0;
 
   const now = new Date();
-  const needsSchedule = rules.some((r) => r.kind === "class_reminder");
-  let slots: SlotWithName[] = [];
-  if (needsSchedule) {
-    try {
-      slots = await getSchedule(log);
-    } catch (err) {
-      // No schedule this tick → skip class rules, still run fixed_schedule rules.
-      log.error({ err }, "notif: no schedule available this tick");
-    }
+  let slots: SlotWithName[];
+  try {
+    slots = await getSchedule(log);
+  } catch (err) {
+    // No schedule this tick → nothing to evaluate; try again next minute.
+    log.error({ err }, "notif: no schedule available this tick");
+    return 0;
   }
+  if (slots.length === 0) return 0;
 
   let sent = 0;
   for (const rule of rules) {
     try {
-      if (rule.kind === "class_reminder") {
-        if (slots.length > 0) sent += await runClassRule(rule, slots, now, log);
-      } else if (rule.kind === "fixed_schedule") {
-        sent += await runFixedRule(rule, now, log);
-      }
+      sent += await runClassRule(rule, slots, now, log);
     } catch (err) {
       log.error({ err, ruleId: rule.id }, "notif: rule evaluation failed");
     }

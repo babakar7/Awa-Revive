@@ -838,14 +838,16 @@ create table if not exists staff_contacts (
   created_at timestamptz not null default now()
 );
 
--- Règles de notification. kind :
---   'class_reminder'  → X min avant chaque cours dont le nom contient
---                       class_pattern (vide = tous), au gardien (phone) ou au
---                       coach du cours (recipient_kind). suppress_gap_minutes :
---                       ne pas notifier si un cours du même motif s'est terminé
---                       <= N min avant (enchaînement dos à dos).
---   'fixed_schedule'  → chaque jour de days_of_week (CSV 0-6, 0=dimanche) à
---                       send_time (HH:MM, Dakar = UTC toute l'année).
+-- Règles de notification (kind = 'class_reminder' uniquement depuis la refonte
+-- UX 2026 ; l'ancien 'fixed_schedule' n'est plus créé). X min avant chaque
+-- cours ciblé, au gardien (phone) ou au coach du cours (recipient_kind).
+-- suppress_gap_minutes : ne pas notifier si un cours du même motif s'est terminé
+-- <= N min avant (enchaînement dos à dos).
+-- Ciblage des cours : service_ids (tableau d'ids Wix) est la source moderne.
+--   NULL = tous les cours (nouvelles règles) OU règle héritée dont on lit encore
+--   service_id puis class_pattern/exclude_pattern. Les colonnes héritées ne sont
+--   plus écrites par l'admin ; une règle rééditée bascule sur service_ids et les
+--   nulle (migration à l'enregistrement). days_of_week/send_time : legacy inerte.
 create table if not exists notification_rules (
   id uuid primary key default gen_random_uuid(),
   label text not null,
@@ -875,6 +877,10 @@ alter table notification_rules
   add column if not exists exclude_pattern text;
 alter table notification_rules
   add column if not exists service_id text;
+-- Ciblage multi-cours (refonte UX 2026) : tableau d'ids de services Wix.
+-- NULL = tous les cours, ou règle héritée (voir le bloc ci-dessus).
+alter table notification_rules
+  add column if not exists service_ids text[];
 
 -- Journal de tout envoi. source ∈ rule | reception | owner_alert | new_chat | technical |
 -- delivery | invoice | gift_card | staff_planning | ops_ticket | test.

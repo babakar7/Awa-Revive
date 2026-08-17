@@ -1,5 +1,47 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Refonte UX des alertes staff : /admin/notifications (17 août 2026)
+
+**Pourquoi.** Babakar trouvait la page d'alertes coachs mauvaise : un formulaire géant
+en haut, deux types de règles mélangés (affichés/masqués en JS), et surtout un ciblage
+des cours par UN seul cours exact OU des filtres texte fragiles (« contenant aquabike »,
+« exclure reformer »). Impossible de viser plusieurs cours précis simplement.
+
+**Ce qui change (UX).**
+- **Cartes d'abord** : les alertes vivantes s'affichent en premier (cartes lisibles
+  quoi→quand→à qui, badge Active/En pause, dernier envoi, actions). Le formulaire
+  n'apparaît qu'au clic sur « + Nouvelle alerte » (`?new=1`) ou « Éditer » (`?edit=<id>`).
+- **Multi-sélection visuelle des cours** : cases à cocher sur le vrai catalogue Wix,
+  plus une bascule « Tous les cours ». Fini les filtres texte dans l'UI. Délai via
+  raccourcis (15/30 min…1 h…6 h), destinataire par radios (coach du cours par défaut /
+  numéro fixe), aperçu du message en direct, options avancées repliées (regroupement
+  dos-à-dos reformulé, cours collectifs).
+- Répertoire staff + journal repliés en `<details>` sous les alertes.
+- **Type « fixed_schedule » supprimé** (UI + moteur + tests) : 0 règle de ce type en prod.
+
+**Modèle de données.** Nouvelle colonne `notification_rules.service_ids text[]` (additive).
+NULL = tous les cours (nouvelles règles) OU règle héritée dont on lit encore `service_id`
+puis `class_pattern`/`exclude_pattern` — `matchesRuleService` garde ce repli, donc rien ne
+casse en plein déploiement. Les colonnes héritées ne sont plus écrites ; **une règle
+rééditée bascule sur `service_ids` et nulle les anciennes colonnes** (migration à
+l'enregistrement). Une carte de règle héritée non migrée affiche un badge violet
+« filtre « … » · à migrer ».
+
+**Piège corrigé au passage.** Le parseur `application/x-www-form-urlencoded`
+(`src/server.ts`) faisait `Object.fromEntries(new URLSearchParams(body))` → il **écrasait
+les champs répétés** (ne gardait que le dernier). Les cases `service_ids` multiples
+n'auraient rien renvoyé. Désormais un champ répété devient un tableau, un champ unique
+reste une string (aucun autre handler admin n'utilise de champ répété → sans risque).
+
+**Fichiers.** `src/server.ts`, `src/db/schema.ts`, `src/domain/notificationRules.ts`
+(types + `matchesRuleService`, suppression `isFixedScheduleDue`/`fixedDedupKey`/`dakarDateStr`),
+`src/domain/notificationRepo.ts` (`RuleInput`, create/update migratrice),
+`src/admin/queries.ts`, `src/domain/notificationSweep.ts`, `src/admin/routes.ts`
+(`parseRuleInput` réécrit + `showNewForm`/`openSection`), `src/admin/notificationsPage.ts`
+(réécriture), `src/admin/adminStyles.ts` (`.svc-grid`/`.chip-check`). Tests :
+`notificationRules`, `adminNotificationsPage`, `integration/notificationClaim`. Build +
+1349 tests unitaires + intégration `notificationClaim` verts.
+
 ## Silence périmé + trace interne après listes de créneaux (17 août 2026)
 
 - **Incident Coura Thiam** : après deux listes Sculpt correctement envoyées

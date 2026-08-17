@@ -39,8 +39,8 @@ export interface StaffContact {
   muted: boolean;
 }
 
-const RULE_COLUMNS = `id, label, kind, enabled, service_id, class_pattern, exclude_pattern, lead_minutes,
-  suppress_gap_minutes, recipient_kind, recipient_phone, days_of_week, send_time,
+const RULE_COLUMNS = `id, label, kind, enabled, service_ids, service_id, class_pattern, exclude_pattern,
+  lead_minutes, suppress_gap_minutes, recipient_kind, recipient_phone,
   message_template, group_only`;
 
 function rowToRule(r: any): NotificationRule {
@@ -49,6 +49,8 @@ function rowToRule(r: any): NotificationRule {
     label: r.label,
     kind: r.kind,
     enabled: r.enabled,
+    // node-pg maps a text[] column to a string[] (or null).
+    service_ids: r.service_ids ?? null,
     service_id: r.service_id,
     class_pattern: r.class_pattern,
     exclude_pattern: r.exclude_pattern,
@@ -56,8 +58,6 @@ function rowToRule(r: any): NotificationRule {
     suppress_gap_minutes: r.suppress_gap_minutes,
     recipient_kind: r.recipient_kind,
     recipient_phone: r.recipient_phone,
-    days_of_week: r.days_of_week,
-    send_time: r.send_time,
     message_template: r.message_template,
     group_only: r.group_only,
   };
@@ -67,23 +67,20 @@ function rowToRule(r: any): NotificationRule {
 
 export async function listEnabledRules(): Promise<NotificationRule[]> {
   const res = await pool.query(
-    `select ${RULE_COLUMNS} from notification_rules where enabled = true order by created_at`,
+    `select ${RULE_COLUMNS} from notification_rules
+      where enabled = true and kind = 'class_reminder' order by created_at`,
   );
   return res.rows.map(rowToRule);
 }
 
 export interface RuleInput {
   label: string;
-  kind: "class_reminder" | "fixed_schedule";
-  service_id: string | null;
-  class_pattern: string | null;
-  exclude_pattern: string | null;
-  lead_minutes: number | null;
+  /** null = tous les cours ; sinon la liste explicite d'ids de services Wix. */
+  service_ids: string[] | null;
+  lead_minutes: number;
   suppress_gap_minutes: number | null;
   recipient_kind: "phone" | "coach";
   recipient_phone: string | null;
-  days_of_week: string | null;
-  send_time: string | null;
   message_template: string;
   group_only: boolean;
 }
@@ -91,21 +88,16 @@ export interface RuleInput {
 export async function createRule(input: RuleInput): Promise<void> {
   await pool.query(
     `insert into notification_rules
-       (label, kind, service_id, class_pattern, exclude_pattern, lead_minutes, suppress_gap_minutes,
-        recipient_kind, recipient_phone, days_of_week, send_time, message_template, group_only)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+       (label, kind, service_ids, lead_minutes, suppress_gap_minutes,
+        recipient_kind, recipient_phone, message_template, group_only)
+     values ($1,'class_reminder',$2,$3,$4,$5,$6,$7,$8)`,
     [
       input.label,
-      input.kind,
-      input.service_id,
-      input.class_pattern,
-      input.exclude_pattern,
+      input.service_ids,
       input.lead_minutes,
       input.suppress_gap_minutes,
       input.recipient_kind,
       input.recipient_phone,
-      input.days_of_week,
-      input.send_time,
       input.message_template,
       input.group_only,
     ],
@@ -113,25 +105,25 @@ export async function createRule(input: RuleInput): Promise<void> {
 }
 
 export async function updateRule(id: string, input: RuleInput): Promise<void> {
+  // Saving from the new UI migrates the row onto service_ids and clears every
+  // legacy targeting column (service_id / patterns / days / time), so a rule
+  // touched here never falls back to the old matching path again.
   await pool.query(
     `update notification_rules set
-       label=$2, kind=$3, service_id=$4, class_pattern=$5, exclude_pattern=$6, lead_minutes=$7,
-       suppress_gap_minutes=$8, recipient_kind=$9, recipient_phone=$10, days_of_week=$11,
-       send_time=$12, message_template=$13, group_only=$14, updated_at=now()
+       label=$2, kind='class_reminder', service_ids=$3,
+       service_id=null, class_pattern=null, exclude_pattern=null,
+       days_of_week=null, send_time=null,
+       lead_minutes=$4, suppress_gap_minutes=$5, recipient_kind=$6,
+       recipient_phone=$7, message_template=$8, group_only=$9, updated_at=now()
      where id=$1`,
     [
       id,
       input.label,
-      input.kind,
-      input.service_id,
-      input.class_pattern,
-      input.exclude_pattern,
+      input.service_ids,
       input.lead_minutes,
       input.suppress_gap_minutes,
       input.recipient_kind,
       input.recipient_phone,
-      input.days_of_week,
-      input.send_time,
       input.message_template,
       input.group_only,
     ],

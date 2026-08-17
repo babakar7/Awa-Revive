@@ -3531,77 +3531,78 @@ ${photoSection}
         return "";
       }
 
-      /** Build a RuleInput from a posted form, normalizing per-kind fields. */
+      // Repeated form fields (e.g. several `service_ids` checkboxes) reach us as
+      // an array; a single one as a string. Normalize to a trimmed string list.
+      function multiValues(v: unknown): string[] {
+        const arr = Array.isArray(v) ? v : v == null || v === "" ? [] : [v];
+        return arr.map((x) => String(x).trim()).filter(Boolean);
+      }
+
+      /**
+       * Build a RuleInput from the posted alert form. Only class-reminder rules
+       * exist now: label, the courses concerned (explicit multi-select or "all"),
+       * the lead time, the recipient, and the message. `existing` lets an edit
+       * keep a course that has since vanished from the Wix catalogue.
+       */
       async function parseRuleInput(
-        b: Record<string, string>,
+        b: Record<string, unknown>,
+        existing?: { service_ids: string[] | null; service_id: string | null } | null,
       ): Promise<nrepo.RuleInput | { error: string }> {
         const label = String(b.label ?? "").trim();
-        const kind = b.kind === "fixed_schedule" ? "fixed_schedule" : "class_reminder";
         const message = String(b.message_template ?? "").trim();
         if (!label) return { error: "le nom de la règle est obligatoire" };
         if (!message) return { error: "le message est obligatoire" };
-        const intOrNull = (v: unknown) => {
-          const n = parseInt(String(v ?? "").trim(), 10);
-          return Number.isFinite(n) ? n : null;
-        };
-        const recipientKind = b.recipient_kind === "coach" ? "coach" : "phone";
-        const phone = String(b.recipient_phone ?? "").trim() || null;
 
-        if (kind === "class_reminder") {
-          if (intOrNull(b.lead_minutes) === null)
-            return { error: "les minutes avant le cours sont obligatoires" };
-          if (recipientKind === "phone" && !phone)
-            return { error: "un numéro destinataire est requis (ou choisir « coach »)" };
-          const selectedServiceId = String(b.service_id ?? "").trim() || null;
-          if (selectedServiceId) {
-            let selectedService;
+        const lead = parseInt(String(b.lead_minutes ?? "").trim(), 10);
+        if (!Number.isFinite(lead) || lead < 0 || lead > 1440)
+          return { error: "les minutes avant le cours sont obligatoires (0 à 1440)" };
+
+        const recipientKind = b.recipient_kind === "phone" ? "phone" : "coach";
+        const phone = String(b.recipient_phone ?? "").trim() || null;
+        if (recipientKind === "phone" && !phone)
+          return { error: "un numéro destinataire est requis (ou choisir « le coach du cours »)" };
+
+        // Targeting: "Tous les cours" toggle, else the checked course ids.
+        let serviceIds: string[] | null;
+        if (b.all_services === "1") {
+          serviceIds = null;
+        } else {
+          const ids = [...new Set(multiValues(b.service_ids))];
+          if (ids.length === 0)
+            return { error: "sélectionnez au moins un cours, ou cochez « Tous les cours »" };
+          // Validate against the live catalogue, but never reject an id the rule
+          // already carried (a course deleted from Wix stays editable).
+          const known = new Set(
+            existing?.service_ids ?? (existing?.service_id ? [existing.service_id] : []),
+          );
+          const toCheck = ids.filter((id) => !known.has(id));
+          if (toCheck.length > 0) {
+            let services;
             try {
-              selectedService = (await listServices()).find((s) => s.id === selectedServiceId);
+              services = await listServices();
             } catch {
-              return { error: "catalogue Wix indisponible — réessayer avant de sélectionner ce cours" };
+              return { error: "catalogue Wix indisponible — réessayer avant d'enregistrer" };
             }
-            if (!selectedService || selectedService.type === "APPOINTMENT") {
-              return { error: "cours Wix sélectionné invalide ou indisponible" };
+            const byId = new Map(services.map((s) => [s.id, s]));
+            for (const id of toCheck) {
+              const svc = byId.get(id);
+              if (!svc || svc.type === "APPOINTMENT")
+                return { error: "un cours sélectionné est invalide ou indisponible" };
             }
           }
-          return {
-            label,
-            kind,
-            service_id: selectedServiceId,
-            // Exact selection and pattern mode are mutually exclusive. Clear
-            // stale filters server-side too (never trust disabled form fields).
-            class_pattern: selectedServiceId ? null : String(b.class_pattern ?? "").trim() || null,
-            exclude_pattern: selectedServiceId ? null : String(b.exclude_pattern ?? "").trim() || null,
-            lead_minutes: intOrNull(b.lead_minutes),
-            suppress_gap_minutes: intOrNull(b.suppress_gap_minutes),
-            recipient_kind: recipientKind,
-            recipient_phone: recipientKind === "coach" ? null : phone,
-            days_of_week: null,
-            send_time: null,
-            message_template: message,
-            group_only: b.group_only === "1",
-          };
+          serviceIds = ids;
         }
-        // fixed_schedule
-        const days = String(b.days_of_week ?? "").trim();
-        const time = String(b.send_time ?? "").trim();
-        if (!days) return { error: "les jours sont obligatoires (ex : 6 pour samedi)" };
-        if (!/^\d{1,2}:\d{2}$/.test(time)) return { error: "heure invalide (format HH:MM)" };
-        if (!phone) return { error: "un numéro destinataire est requis" };
+
+        const gap = parseInt(String(b.suppress_gap_minutes ?? "").trim(), 10);
         return {
           label,
-          kind,
-          service_id: null,
-          class_pattern: null,
-          exclude_pattern: null,
-          lead_minutes: null,
-          suppress_gap_minutes: null,
-          recipient_kind: "phone",
-          recipient_phone: phone,
-          days_of_week: days,
-          send_time: time,
+          service_ids: serviceIds,
+          lead_minutes: lead,
+          suppress_gap_minutes: Number.isFinite(gap) ? gap : null,
+          recipient_kind: recipientKind,
+          recipient_phone: recipientKind === "coach" ? null : phone,
           message_template: message,
-          group_only: false,
+          group_only: b.group_only === "1",
         };
       }
 
@@ -3609,6 +3610,9 @@ ${photoSection}
         const editId = (req.query as any)?.edit as string | undefined;
         const done = (req.query as any)?.done as string | undefined;
         const err = (req.query as any)?.err as string | undefined;
+        const showNewForm = (req.query as any)?.new === "1";
+        // Reopen the relevant collapsed section after a contact action.
+        const openSection = done && done.startsWith("contact-") ? "contacts" : null;
         const [rules, contacts, log, lastByRule, alertsPaused, serviceOptions] = await Promise.all([
           q.listNotificationRules(),
           q.listStaffContacts(),
@@ -3636,11 +3640,13 @@ ${photoSection}
           coachHints: cachedCoachNames(),
           serviceOptions,
           editRule,
+          showNewForm,
+          openSection,
           banner: banner(done, err),
           testPhone: config.NOTIF_TEST_PHONE,
           alertsPaused,
         });
-        reply.type("text/html").send(await layout("Notifications", "/admin/notifications", body, { subtitle: "Règles, destinataires et journal", contentWidth: "full" }));
+        reply.type("text/html").send(await layout("Notifications", "/admin/notifications", body, { subtitle: "Alertes coachs, contacts et journal", contentWidth: "full" }));
       });
 
       admin.post("/notifications/pause", async (req, reply) => {
@@ -3654,9 +3660,10 @@ ${photoSection}
       });
 
       admin.post("/notifications/rules", async (req, reply) => {
-        const parsed = await parseRuleInput((req.body ?? {}) as Record<string, string>);
+        const parsed = await parseRuleInput((req.body ?? {}) as Record<string, unknown>);
         if ("error" in parsed) {
-          return reply.redirect(`/admin/notifications?err=${encodeURIComponent(parsed.error)}`, 303);
+          // Reopen the create form so the message shows in context.
+          return reply.redirect(`/admin/notifications?new=1&err=${encodeURIComponent(parsed.error)}`, 303);
         }
         await nrepo.createRule(parsed);
         req.log.info({ by: req.adminUser, label: parsed.label }, "Notification rule created");
@@ -3665,7 +3672,8 @@ ${photoSection}
 
       admin.post("/notifications/rules/:id/update", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const parsed = await parseRuleInput((req.body ?? {}) as Record<string, string>);
+        const existing = await nrepo.getRule(id);
+        const parsed = await parseRuleInput((req.body ?? {}) as Record<string, unknown>, existing);
         if ("error" in parsed) {
           return reply.redirect(`/admin/notifications?edit=${id}&err=${encodeURIComponent(parsed.error)}`, 303);
         }

@@ -13,21 +13,27 @@
 export interface NotificationRule {
   id: string;
   label: string;
-  kind: "class_reminder" | "fixed_schedule";
+  kind: "class_reminder";
   enabled: boolean;
-  /** Exact Wix service target. When set, it takes precedence over name filters. */
+  /**
+   * Modern targeting: explicit Wix service ids the rule fires for. Non-empty →
+   * takes precedence over every legacy field below. `null` → "all classes" for
+   * rules saved by the new UI, or a legacy rule still read via service_id /
+   * patterns (see matchesRuleService).
+   */
+  service_ids: string[] | null;
+  /** Legacy exact Wix service target (read-only fallback; the UI no longer writes it). */
   service_id: string | null;
+  /** Legacy name substring filter (read-only fallback). */
   class_pattern: string | null;
-  /** Substring to EXCLUDE (e.g. "reformer") — matched slots are dropped. */
+  /** Legacy substring to EXCLUDE, e.g. "reformer" (read-only fallback). */
   exclude_pattern: string | null;
   lead_minutes: number | null;
   suppress_gap_minutes: number | null;
   recipient_kind: "phone" | "coach";
   recipient_phone: string | null;
-  days_of_week: string | null;
-  send_time: string | null;
   message_template: string;
-  /** class_reminder only: restrict to group classes (skip 1-on-1 appointments). */
+  /** Restrict to group classes (skip 1-on-1 appointments). */
   group_only: boolean;
 }
 
@@ -92,11 +98,19 @@ export function excludes(serviceName: string, pattern: string | null): boolean {
 }
 
 /**
- * Exact service selection wins over the legacy name-pattern mode. Service ids
- * come from the live Wix catalogue selected in /admin/notifications; matching
- * by id keeps the rule stable if the course is renamed.
+ * Which slots a rule fires for. Priority:
+ *   1. service_ids (modern multi-select) — membership test by Wix id, stable
+ *      across course renames. A non-empty array is authoritative.
+ *   2. legacy service_id — single exact target (pre-refonte rules).
+ *   3. legacy class_pattern / exclude_pattern — substring filters.
+ * A rule with service_ids null AND all legacy targeting empty matches every
+ * class ("Tous les cours"). The legacy fallbacks keep pre-refonte rows (and any
+ * still un-migrated during a deploy) working untouched.
  */
 export function matchesRuleService(rule: NotificationRule, slot: SlotWithName): boolean {
+  if (rule.service_ids && rule.service_ids.length > 0) {
+    return rule.service_ids.includes(slot.serviceId);
+  }
   const serviceId = rule.service_id?.trim();
   if (serviceId) return slot.serviceId === serviceId;
   return (
@@ -235,29 +249,6 @@ export function buildChain(
 }
 
 /**
- * Is a fixed_schedule rule due at `now`? True when today's weekday is in
- * days_of_week AND the local time has reached send_time. The per-day dedup key
- * makes it fire once; a late boot still fires the same day (never the next).
- */
-export function isFixedScheduleDue(rule: NotificationRule, now: Date): boolean {
-  const days = (rule.days_of_week ?? "")
-    .split(",")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
-  if (days.length === 0) return false;
-  if (!days.includes(now.getUTCDay())) return false;
-
-  const m = (rule.send_time ?? "").match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return false;
-  const h = parseInt(m[1], 10);
-  const min = parseInt(m[2], 10);
-  if (h > 23 || min > 59) return false;
-
-  const nowMins = now.getUTCHours() * 60 + now.getUTCMinutes();
-  return nowMins >= h * 60 + min;
-}
-
-/**
  * Fill {placeholders} in a rule message. Provided keys are replaced; any
  * {unknown} placeholder is left visible so the owner spots the typo in the
  * admin test-send. Values are plain strings (the sweep pre-formats times in
@@ -269,17 +260,7 @@ export function renderMessage(template: string, vars: Record<string, string>): s
   );
 }
 
-/** Deterministic YYYY-MM-DD for `now` in Dakar (== UTC). */
-export function dakarDateStr(now: Date): string {
-  return now.toISOString().slice(0, 10);
-}
-
 /** Claim key for a class occurrence: one send per (rule, class event). */
 export function classDedupKey(ruleId: string, eventId: string): string {
   return `rule:${ruleId}:event:${eventId}`;
-}
-
-/** Claim key for a fixed rule: one send per (rule, local day). */
-export function fixedDedupKey(ruleId: string, dateStr: string): string {
-  return `rule:${ruleId}:day:${dateStr}`;
 }

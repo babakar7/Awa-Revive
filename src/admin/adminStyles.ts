@@ -249,6 +249,13 @@ tr.rowlink:focus-within{box-shadow:inset 3px 0 var(--brand)}
 .badge--amber{background:var(--warn-bg);border-color:var(--warn-border);color:var(--warn)}
 .badge--blue{background:var(--info-bg);border-color:var(--info-border);color:var(--info)}
 .badge--green{background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok)}
+/* Multi-select course picker (staff-alert form) */
+.svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.4rem;margin-top:.2rem}
+.svc-grid.is-disabled{opacity:.45;pointer-events:none}
+.chip-check{display:inline-flex;align-items:center;gap:.45rem;border:1px solid var(--border-strong);border-radius:999px;padding:.4rem .75rem;cursor:pointer;font-size:.875rem;font-weight:500;background:var(--surface-raised);line-height:1.3}
+.chip-check:hover{border-color:var(--brand-border)}
+.chip-check:has(input:checked){border-color:var(--brand);background:var(--brand-soft);font-weight:650;color:var(--ink-900)}
+.chip-check input{margin:0}
 .muted{color:var(--ink-500);font-size:.875rem;line-height:1.55}
 .ok{color:var(--ok);font-weight:650}
 .danger-text{color:var(--danger);font-weight:650}

@@ -39,32 +39,48 @@ beforeEach(async () => {
 });
 
 describe("claimOrReclaim (notification dedup)", () => {
-  it("persists an exact Wix service target on create and update", async () => {
+  it("persists service_ids on create and migrates legacy targeting on update", async () => {
     const input = {
-      label: "specific service persistence",
-      kind: "class_reminder" as const,
-      service_id: "svc-aquabike-intermediate",
-      class_pattern: null,
-      exclude_pattern: null,
+      label: "multi service persistence",
+      service_ids: ["svc-aquabike-intermediate", "svc-step"],
       lead_minutes: 180,
       suppress_gap_minutes: 30,
       recipient_kind: "coach" as const,
       recipient_phone: null,
-      days_of_week: null,
-      send_time: null,
       message_template: "{class_name}: {booked_count}",
       group_only: true,
     };
+    // Seed with legacy targeting columns set, to prove the update clears them.
     await createRule(input);
     const created = await pool.query<{ id: string }>(
       `select id from notification_rules where label=$1`,
       [input.label],
     );
     const id = created.rows[0].id;
-    expect((await getRule(id))?.service_id).toBe("svc-aquabike-intermediate");
+    await pool.query(
+      `update notification_rules set service_id='old', class_pattern='aquabike', days_of_week='6' where id=$1`,
+      [id],
+    );
+    expect((await getRule(id))?.service_ids).toEqual([
+      "svc-aquabike-intermediate",
+      "svc-step",
+    ]);
 
-    await updateRule(id, { ...input, service_id: "svc-aquabike-advanced" });
-    expect((await getRule(id))?.service_id).toBe("svc-aquabike-advanced");
+    // Saving from the new UI rewrites service_ids AND nulls every legacy column.
+    await updateRule(id, { ...input, service_ids: ["svc-yoga"] });
+    const after = await getRule(id);
+    expect(after?.service_ids).toEqual(["svc-yoga"]);
+    expect(after?.service_id).toBeNull();
+    expect(after?.class_pattern).toBeNull();
+    const legacy = await pool.query<{ days_of_week: string | null }>(
+      `select days_of_week from notification_rules where id=$1`,
+      [id],
+    );
+    expect(legacy.rows[0].days_of_week).toBeNull();
+
+    // "Tous les cours" round-trips as NULL.
+    await updateRule(id, { ...input, service_ids: null });
+    expect((await getRule(id))?.service_ids).toBeNull();
     await deleteRule(id);
   });
 

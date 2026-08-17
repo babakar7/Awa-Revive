@@ -1135,6 +1135,9 @@ export interface NotificationRuleRow {
   label: string;
   kind: string;
   enabled: boolean;
+  /** Modern multi-course targeting (null = all courses, or a legacy row). */
+  service_ids: string[] | null;
+  /** Legacy single-course target — still read for pre-refonte rows. */
   service_id: string | null;
   class_pattern: string | null;
   exclude_pattern: string | null;
@@ -1142,16 +1145,14 @@ export interface NotificationRuleRow {
   suppress_gap_minutes: number | null;
   recipient_kind: string;
   recipient_phone: string | null;
-  days_of_week: string | null;
-  send_time: string | null;
   message_template: string;
   group_only: boolean;
 }
 
 export async function listNotificationRules(): Promise<NotificationRuleRow[]> {
   const res = await pool.query(
-    `select id, label, kind, enabled, service_id, class_pattern, exclude_pattern, lead_minutes,
-            suppress_gap_minutes, recipient_kind, recipient_phone, days_of_week, send_time,
+    `select id, label, kind, enabled, service_ids, service_id, class_pattern, exclude_pattern,
+            lead_minutes, suppress_gap_minutes, recipient_kind, recipient_phone,
             message_template, group_only
        from notification_rules order by created_at`,
   );

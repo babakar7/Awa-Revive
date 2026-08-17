@@ -2,11 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildChain,
   classDedupKey,
-  dakarDateStr,
   dueClassReminders,
   excludes,
-  fixedDedupKey,
-  isFixedScheduleDue,
   matchesPattern,
   matchesRuleService,
   normalizeName,
@@ -20,6 +17,7 @@ const baseRule: NotificationRule = {
   label: "Aquabikes à l'eau",
   kind: "class_reminder",
   enabled: true,
+  service_ids: null,
   service_id: null,
   class_pattern: "aquabike",
   exclude_pattern: null,
@@ -27,8 +25,6 @@ const baseRule: NotificationRule = {
   suppress_gap_minutes: 15,
   recipient_kind: "phone",
   recipient_phone: "+224620955130",
-  days_of_week: null,
-  send_time: null,
   message_template: "L'aquabike de {start_time} — {booked_count} inscrits",
   group_only: false,
 };
@@ -124,6 +120,58 @@ describe("exact Wix service targeting", () => {
       new Date("2026-07-15T09:45:00Z"),
     );
     expect(due.map((d) => d.slot.eventId)).toEqual(["selected"]);
+  });
+});
+
+describe("service_ids multi-select targeting", () => {
+  const s1 = slot({ eventId: "a", serviceId: "svc-a", serviceName: "Aquabike" });
+  const s2 = slot({ eventId: "b", serviceId: "svc-b", serviceName: "Pilates Mat" });
+  const s3 = slot({ eventId: "c", serviceId: "svc-c", serviceName: "Step" });
+
+  it("matches only the listed service ids (by id, rename-proof)", () => {
+    const rule = { ...baseRule, service_ids: ["svc-a", "svc-b"] };
+    expect(matchesRuleService(rule, s1)).toBe(true);
+    expect(matchesRuleService(rule, s2)).toBe(true);
+    expect(matchesRuleService(rule, s3)).toBe(false);
+  });
+
+  it("takes precedence over legacy service_id and patterns", () => {
+    // Legacy fields point elsewhere; the array must win.
+    const rule = {
+      ...baseRule,
+      service_ids: ["svc-a"],
+      service_id: "svc-c",
+      class_pattern: "step",
+      exclude_pattern: "aquabike",
+    };
+    expect(matchesRuleService(rule, s1)).toBe(true); // only svc-a
+    expect(matchesRuleService(rule, s3)).toBe(false);
+  });
+
+  it("null service_ids still honors a legacy exact service_id (mid-deploy safety)", () => {
+    const rule = { ...baseRule, service_ids: null, service_id: "svc-b", class_pattern: null };
+    expect(matchesRuleService(rule, s2)).toBe(true);
+    expect(matchesRuleService(rule, s1)).toBe(false);
+  });
+
+  it("null service_ids + legacy patterns keeps the old substring behavior", () => {
+    const rule = { ...baseRule, service_ids: null, class_pattern: "aquabike", exclude_pattern: "mat" };
+    expect(matchesRuleService(rule, s1)).toBe(true);
+    expect(matchesRuleService(rule, s2)).toBe(false); // Pilates Mat excluded
+  });
+
+  it("everything null (no targeting) matches every course — « Tous les cours »", () => {
+    const rule = { ...baseRule, service_ids: null, service_id: null, class_pattern: null, exclude_pattern: null };
+    expect(matchesRuleService(rule, s1)).toBe(true);
+    expect(matchesRuleService(rule, s2)).toBe(true);
+    expect(matchesRuleService(rule, s3)).toBe(true);
+  });
+
+  it("an empty service_ids array falls through to the legacy path", () => {
+    // Guard: [] must not mean "match nothing"; the engine treats it as unset.
+    const rule = { ...baseRule, service_ids: [], class_pattern: "aquabike" };
+    expect(matchesRuleService(rule, s1)).toBe(true);
+    expect(matchesRuleService(rule, s3)).toBe(false);
   });
 });
 
@@ -269,37 +317,6 @@ describe("coach chaining (one message for consecutive same-coach classes)", () =
   });
 });
 
-describe("isFixedScheduleDue", () => {
-  // 2026-07-18 is a Saturday (getUTCDay() === 6).
-  const rule: NotificationRule = {
-    ...baseRule,
-    kind: "fixed_schedule",
-    class_pattern: null,
-    lead_minutes: null,
-    suppress_gap_minutes: null,
-    days_of_week: "6",
-    send_time: "10:00",
-    message_template: "Mettre les vélos à l'eau",
-  };
-
-  it("is due on the right weekday at/after the time", () => {
-    expect(isFixedScheduleDue(rule, new Date("2026-07-18T10:00:00Z"))).toBe(true);
-    expect(isFixedScheduleDue(rule, new Date("2026-07-18T14:00:00Z"))).toBe(true); // late boot, same day
-  });
-
-  it("is not due before the time, or on another weekday", () => {
-    expect(isFixedScheduleDue(rule, new Date("2026-07-18T09:59:00Z"))).toBe(false);
-    expect(isFixedScheduleDue(rule, new Date("2026-07-17T12:00:00Z"))).toBe(false); // Friday
-  });
-
-  it("handles multi-day CSV and rejects malformed time/days", () => {
-    const multi = { ...rule, days_of_week: "1,3,6" };
-    expect(isFixedScheduleDue(multi, new Date("2026-07-15T10:30:00Z"))).toBe(true); // Wed
-    expect(isFixedScheduleDue({ ...rule, send_time: "" }, new Date("2026-07-18T10:00:00Z"))).toBe(false);
-    expect(isFixedScheduleDue({ ...rule, days_of_week: "" }, new Date("2026-07-18T10:00:00Z"))).toBe(false);
-  });
-});
-
 describe("renderMessage", () => {
   it("replaces known placeholders and leaves unknown ones visible", () => {
     const out = renderMessage("Cours {class_name} à {start_time} : {booked_count} inscrits {oops}", {
@@ -323,7 +340,5 @@ describe("renderMessage", () => {
 describe("dedup keys", () => {
   it("are stable and distinct per occurrence", () => {
     expect(classDedupKey("r1", "e1")).toBe("rule:r1:event:e1");
-    expect(fixedDedupKey("r1", "2026-07-18")).toBe("rule:r1:day:2026-07-18");
-    expect(dakarDateStr(new Date("2026-07-18T23:30:00Z"))).toBe("2026-07-18");
   });
 });

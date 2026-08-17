@@ -74,7 +74,17 @@ export function buildServer() {
     { parseAs: "string" },
     (_req, body: string, done) => {
       try {
-        done(null, Object.fromEntries(new URLSearchParams(body)));
+        // Keep repeated fields (e.g. several `service_ids` checkboxes) as an
+        // array; a single occurrence stays a plain string so every existing
+        // handler reads its fields unchanged.
+        const out: Record<string, string | string[]> = {};
+        for (const [key, value] of new URLSearchParams(body)) {
+          const current = out[key];
+          if (current === undefined) out[key] = value;
+          else if (Array.isArray(current)) current.push(value);
+          else out[key] = [current, value];
+        }
+        done(null, out);
       } catch (err) {
         done(err as Error, undefined);
       }
