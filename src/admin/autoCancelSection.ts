@@ -122,8 +122,23 @@ function ruleForm(
       `<label class="chip-check"><input type="checkbox" name="weekdays" value="${d.v}"${selectedDays.has(d.v) ? " checked" : ""}> ${d.label}</label>`,
   ).join("");
 
+  const fromV = minutesToHHMM(edit?.start_min_from ?? null);
+  const toV = minutesToHHMM(edit?.start_min_to ?? null);
+  // Predefined time buckets (data-from / data-to fill the precise inputs). The
+  // "Tôt le matin" bucket mirrors the ≤09:15 morning-class boundary Babakar cares
+  // about, so nobody has to type a time for the common case.
+  const TIME_PRESETS: Array<{ from: string; to: string; label: string }> = [
+    { from: "", to: "09:15", label: "Tôt le matin (jusqu'à 9h15)" },
+    { from: "09:15", to: "", label: "Reste de la journée (après 9h15)" },
+    { from: "", to: "", label: "Toute heure" },
+  ];
+  const presetBtns = TIME_PRESETS.map((p) => {
+    const active = (fromV || "") === p.from && (toV || "") === p.to;
+    return `<button type="button" class="act act--sm ac-time-preset ${active ? "act--ok" : "act--ghost"}" data-from="${p.from}" data-to="${p.to}">${esc(p.label)}</button>`;
+  }).join("");
+
   return `
-<form method="post" action="${action}" style="display:flex;flex-direction:column;gap:.9rem">
+<form method="post" action="${action}" id="ac-rule-form" style="display:flex;flex-direction:column;gap:.9rem">
   <label>Nom de la règle
     <input name="label" required value="${v(edit?.label)}" placeholder="Reformer matin — annuler si vide">
   </label>
@@ -135,15 +150,41 @@ function ruleForm(
     <legend class="muted">Jours concernés <span class="muted">(aucun coché = tous les jours)</span></legend>
     <div class="cluster">${dayChecks}</div>
   </fieldset>
-  <div class="row">
-    <label style="flex:1;min-width:150px">Heure de début — de
-      <input name="start_from" type="time" value="${minutesToHHMM(edit?.start_min_from ?? null)}">
-    </label>
-    <label style="flex:1;min-width:150px">à
-      <input name="start_to" type="time" value="${minutesToHHMM(edit?.start_min_to ?? null)}">
-    </label>
-  </div>
-  <p class="muted" style="margin:0">Vide = toute heure. La règle ne cible que les cours dont le début tombe dans cette plage.</p>
+  <fieldset style="display:flex;flex-direction:column;gap:.5rem">
+    <legend class="muted">Heure de début du cours</legend>
+    <div class="cluster">${presetBtns}</div>
+    <p class="muted" id="ac-time-summary" style="margin:.1rem 0"></p>
+    <details class="resolution-panel">
+      <summary class="act act--sm act--ghost" style="cursor:pointer;display:inline-flex">Plage précise (optionnel)</summary>
+      <div class="row" style="margin-top:.6rem">
+        <label style="flex:1;min-width:150px">de
+          <input name="start_from" type="time" value="${fromV}">
+        </label>
+        <label style="flex:1;min-width:150px">à
+          <input name="start_to" type="time" value="${toV}">
+        </label>
+      </div>
+    </details>
+  </fieldset>
+  <script>
+  (function(){
+    var f=document.getElementById('ac-rule-form'); if(!f) return;
+    var from=f.querySelector('[name=start_from]'), to=f.querySelector('[name=start_to]');
+    var sum=f.querySelector('#ac-time-summary'); if(!from||!to) return;
+    function label(){ var a=from.value, b=to.value;
+      if(!a && !b) return 'toute heure';
+      if(!a && b) return 'les cours qui commencent jusqu\\'à '+b;
+      if(a && !b) return 'les cours qui commencent à partir de '+a;
+      return 'les cours qui commencent entre '+a+' et '+b; }
+    function upd(){ if(sum) sum.textContent='Cible : '+label()+'.';
+      f.querySelectorAll('.ac-time-preset').forEach(function(btn){
+        var active=(btn.getAttribute('data-from')||'')===(from.value||'') && (btn.getAttribute('data-to')||'')===(to.value||'');
+        btn.classList.toggle('act--ok', active); btn.classList.toggle('act--ghost', !active); }); }
+    f.querySelectorAll('.ac-time-preset').forEach(function(btn){
+      btn.addEventListener('click',function(){ from.value=btn.getAttribute('data-from')||''; to.value=btn.getAttribute('data-to')||''; upd(); }); });
+    from.addEventListener('input',upd); to.addEventListener('input',upd); upd();
+  })();
+  </script>
   <div class="row">
     <label style="flex:1;min-width:180px">Destinataire « owner »
       <select name="owner_contact_id" required>${contactOptions(edit?.owner_contact_id ?? null)}</select>
