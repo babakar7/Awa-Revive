@@ -194,7 +194,9 @@ describe("occurrence ledger", () => {
       eventId: "ev-p", sessionId: "sess-p", ruleId: null, serviceId: "svc-1",
       startAt: t0.toISOString(), firstEmptyAt: t2, now: t2, protectedNow: false,
     });
-    expect((await acrepo.getLedger("ev-p"))?.last_protected_at).toBe(stamped);
+    // pg returns timestamptz as a Date; compare by instant, not by reference.
+    const after = (await acrepo.getLedger("ev-p"))?.last_protected_at;
+    expect(new Date(after!).getTime()).toBe(new Date(stamped!).getTime());
   });
 });
 
