@@ -20,7 +20,7 @@ const rule = (over: Partial<AutoCancelRule> = {}): AutoCancelRule => ({
   id: "r1",
   label: "test",
   enabled: true,
-  service_id: "svc-1",
+  service_ids: ["svc-1"],
   weekdays: [],
   start_min_from: null,
   start_min_to: null,
@@ -97,6 +97,13 @@ describe("rule matching", () => {
   it("empty weekdays = every day, null time range = any hour", () => {
     const r = rule();
     expect(matchesRule(r, { serviceId: "svc-1", startIso: "2026-08-25T22:00:00.000Z" })).toBe(true);
+  });
+
+  it("matches ANY of several targeted services (multi-service rule)", () => {
+    const r = rule({ service_ids: ["reformer-foundation", "reformer-intense", "reformer-sculpt"] });
+    expect(matchesRule(r, { serviceId: "reformer-intense", startIso: "2026-08-24T09:00:00.000Z" })).toBe(true);
+    expect(matchesRule(r, { serviceId: "reformer-sculpt", startIso: "2026-08-24T09:00:00.000Z" })).toBe(true);
+    expect(matchesRule(r, { serviceId: "aquabike", startIso: "2026-08-24T09:00:00.000Z" })).toBe(false);
   });
 });
 

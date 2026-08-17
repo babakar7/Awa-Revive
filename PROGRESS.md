@@ -9,12 +9,14 @@ est annulée, jamais la série. Piloté depuis **/admin/notifications** (section
 « Annulation automatique des cours vides »). Plan complet + gate de faisabilité :
 [AUTO-CANCEL-EMPTY-CLASSES-PLAN.md](AUTO-CANCEL-EMPTY-CLASSES-PLAN.md).
 
-**Règles produit.** Cutoff : cours ≤ 09:15 → éligible dès 23:00 la veille ; sinon
-start − 3 h. Vide en continu 15 min (le timer redémarre sur participant, paiement
-actif, ou trou d'observation > 2 min = deploy/redémarrage). Préavis minimum
-**120 min** (`AUTO_CANCEL_MIN_NOTICE_MINUTES`, décision Babakar). Fail-closed
-partout : capacité inconnue, destinataire manquant/muet, ou lecture Wix en échec →
-on n'annule pas.
+**Règles produit.** Une règle vise **un ou plusieurs services Wix** (`service_ids
+text[]`, multi-sélection par cases dans l'admin — ex : tous les niveaux Reformer
+sous une seule règle ; ajout 17/08 après la v1 mono-cours). Cutoff : cours ≤ 09:15
+→ éligible dès 23:00 la veille ; sinon start − 3 h. Vide en continu 15 min (le
+timer redémarre sur participant, paiement actif, ou trou d'observation > 2 min =
+deploy/redémarrage). Préavis minimum **120 min** (`AUTO_CANCEL_MIN_NOTICE_MINUTES`,
+décision Babakar). Fail-closed partout : capacité inconnue, destinataire
+manquant/muet, ou lecture Wix en échec → on n'annule pas.
 
 **Gate Wix RÉUSSI (probe live 17/08).** `POST /calendar/v3/events/{id}/cancel`
 annule la seule occurrence, la retire des disponibilités (source d'Awa + widget),

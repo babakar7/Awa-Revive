@@ -70,7 +70,7 @@ const RULE = {
   id: "rule-1",
   label: "reformer matin",
   enabled: true,
-  service_id: "svc-1",
+  service_ids: ["svc-1"],
   weekdays: [],
   start_min_from: null,
   start_min_to: null,

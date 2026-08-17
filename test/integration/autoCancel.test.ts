@@ -30,7 +30,7 @@ async function seedContact(name: string, phone: string, muted = false): Promise<
 async function seedRule(over: Partial<acrepo.RuleInput> = {}): Promise<string> {
   await acrepo.createRule({
     label: over.label ?? "test",
-    service_id: over.service_id ?? "svc-1",
+    service_ids: over.service_ids ?? ["svc-1"],
     weekdays: over.weekdays ?? [],
     start_min_from: over.start_min_from ?? null,
     start_min_to: over.start_min_to ?? null,
@@ -50,6 +50,7 @@ describe("auto-cancel rule CRUD + activation", () => {
     const manager = await seedContact("Manager", "+221771112202");
     const id = await seedRule({
       label: "reformer matin",
+      service_ids: ["reformer-foundation", "reformer-intense"],
       weekdays: [1, 2, 3],
       start_min_from: 7 * 60,
       start_min_to: 10 * 60,
@@ -58,6 +59,7 @@ describe("auto-cancel rule CRUD + activation", () => {
       enabled: true,
     });
     const rule = (await acrepo.getRule(id))!;
+    expect(rule.service_ids).toEqual(["reformer-foundation", "reformer-intense"]);
     expect(rule.weekdays).toEqual([1, 2, 3]);
     expect(rule.start_min_from).toBe(420);
     expect(await acrepo.ruleActivationError(rule)).toBeNull();

@@ -3663,7 +3663,7 @@ ${photoSection}
           acRules.map(async (r) => ({
             rule: r,
             activationError: r.enabled ? await acrepo.ruleActivationError(r) : null,
-            serviceName: serviceNameById.get(r.service_id) ?? null,
+            serviceNames: r.service_ids.map((id) => ({ id, name: serviceNameById.get(id) ?? null })),
             ownerName: r.owner_contact_id ? contactNameById.get(r.owner_contact_id) ?? null : null,
             managerName: r.manager_contact_id ? contactNameById.get(r.manager_contact_id) ?? null : null,
           })),
@@ -3826,9 +3826,11 @@ ${photoSection}
       ): acrepo.RuleInput | { error: string } {
         const label = String(body.label ?? "").trim();
         if (!label) return { error: "nom requis" };
-        const serviceId = String(body.service_id ?? "").trim();
-        if (!serviceId) return { error: "cours requis" };
         // Checkboxes: absent → undefined, one → string, several → string[].
+        const asList = (x: unknown): string[] =>
+          x === undefined ? [] : Array.isArray(x) ? x.map(String) : [String(x)];
+        const serviceIds = [...new Set(asList(body.service_ids).map((s) => s.trim()).filter(Boolean))];
+        if (serviceIds.length === 0) return { error: "au moins un cours requis" };
         const raw = body.weekdays;
         const weekdayList = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
         const weekdays = [
@@ -3848,7 +3850,7 @@ ${photoSection}
         const managerId = String(body.manager_contact_id ?? "").trim() || null;
         return {
           label,
-          service_id: serviceId,
+          service_ids: serviceIds,
           weekdays,
           start_min_from: hhmmToMin(body.start_from),
           start_min_to: hhmmToMin(body.start_to),

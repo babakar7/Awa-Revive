@@ -40,15 +40,22 @@ export interface AutoCancelRuleRow extends AutoCancelRule {
   updated_at: string;
 }
 
-const RULE_COLUMNS = `id, label, enabled, service_id, weekdays, start_min_from, start_min_to,
+const RULE_COLUMNS = `id, label, enabled, service_id, service_ids, weekdays, start_min_from, start_min_to,
   owner_contact_id, manager_contact_id, created_at, updated_at`;
 
 function rowToRule(r: any): AutoCancelRuleRow {
+  // service_ids is the source of truth; fall back to a legacy single service_id.
+  const ids: string[] =
+    r.service_ids && r.service_ids.length > 0
+      ? r.service_ids
+      : r.service_id
+        ? [r.service_id]
+        : [];
   return {
     id: r.id,
     label: r.label,
     enabled: r.enabled,
-    service_id: r.service_id,
+    service_ids: ids,
     weekdays: (r.weekdays ?? []).map((n: any) => Number(n)),
     start_min_from: r.start_min_from,
     start_min_to: r.start_min_to,
@@ -78,7 +85,7 @@ export async function getRule(id: string): Promise<AutoCancelRuleRow | null> {
 
 export interface RuleInput {
   label: string;
-  service_id: string;
+  service_ids: string[];
   weekdays: number[];
   start_min_from: number | null;
   start_min_to: number | null;
@@ -88,15 +95,16 @@ export interface RuleInput {
 }
 
 export async function createRule(input: RuleInput): Promise<void> {
+  // service_id (legacy single) is left null; service_ids is authoritative.
   await pool.query(
     `insert into auto_cancel_rules
-       (label, enabled, service_id, weekdays, start_min_from, start_min_to,
+       (label, enabled, service_ids, weekdays, start_min_from, start_min_to,
         owner_contact_id, manager_contact_id)
      values ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [
       input.label,
       input.enabled,
-      input.service_id,
+      input.service_ids,
       input.weekdays,
       input.start_min_from,
       input.start_min_to,
@@ -107,16 +115,17 @@ export async function createRule(input: RuleInput): Promise<void> {
 }
 
 export async function updateRule(id: string, input: RuleInput): Promise<void> {
+  // Saving from the UI migrates onto service_ids and clears the legacy single id.
   await pool.query(
     `update auto_cancel_rules set
-       label=$2, enabled=$3, service_id=$4, weekdays=$5, start_min_from=$6,
+       label=$2, enabled=$3, service_ids=$4, service_id=null, weekdays=$5, start_min_from=$6,
        start_min_to=$7, owner_contact_id=$8, manager_contact_id=$9, updated_at=now()
      where id=$1`,
     [
       id,
       input.label,
       input.enabled,
-      input.service_id,
+      input.service_ids,
       input.weekdays,
       input.start_min_from,
       input.start_min_to,
@@ -170,7 +179,7 @@ export async function fixedContactsForRule(
  * at cancellation time (Wix directory), not validated here.
  */
 export async function ruleActivationError(rule: AutoCancelRuleRow): Promise<string | null> {
-  if (!rule.service_id) return "aucun cours sélectionné";
+  if (rule.service_ids.length === 0) return "aucun cours sélectionné";
   if (!rule.owner_contact_id || !rule.manager_contact_id) {
     return "il faut deux destinataires fixes (owner + manager)";
   }

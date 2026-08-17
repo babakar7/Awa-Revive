@@ -293,7 +293,7 @@ async function gatherCandidates(
   now: Date,
   log: SweepLog,
 ): Promise<Array<{ rule: acrepo.AutoCancelRuleRow; candidate: Candidate }>> {
-  const serviceIds = [...new Set(rules.map((r) => r.service_id))];
+  const serviceIds = [...new Set(rules.flatMap((r) => r.service_ids))];
   const from = now.toISOString();
   const to = new Date(now.getTime() + HORIZON_MS).toISOString();
   const slots = await wix.queryAvailabilityMulti(serviceIds, from, to);
@@ -332,7 +332,7 @@ function ruleToPure(r: acrepo.AutoCancelRuleRow): AutoCancelRule {
     id: r.id,
     label: r.label,
     enabled: r.enabled,
-    service_id: r.service_id,
+    service_ids: r.service_ids,
     weekdays: r.weekdays,
     start_min_from: r.start_min_from,
     start_min_to: r.start_min_to,

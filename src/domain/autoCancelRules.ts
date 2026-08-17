@@ -44,8 +44,9 @@ export interface AutoCancelRule {
   id: string;
   label: string;
   enabled: boolean;
-  /** Exact Wix service id this rule targets (never a class name — catalogue is live). */
-  service_id: string;
+  /** Exact Wix service ids this rule targets (never class names — catalogue is
+   *  live). A rule can cover several courses at once, e.g. every Reformer level. */
+  service_ids: string[];
   /** Eligible weekdays, JS getUTCDay convention: 0=Sunday … 6=Saturday. Empty = every day. */
   weekdays: number[];
   /** Inclusive start-of-day-minutes range the class start must fall in. null = any. */
@@ -128,7 +129,7 @@ export function isWithinWindow(
 
 /** Does the occurrence's service / weekday / start-time match the rule? */
 export function matchesRule(rule: AutoCancelRule, occ: { serviceId: string; startIso: string }): boolean {
-  if (rule.service_id !== occ.serviceId) return false;
+  if (!rule.service_ids.includes(occ.serviceId)) return false;
   if (rule.weekdays.length > 0 && !rule.weekdays.includes(dakarWeekday(occ.startIso))) {
     return false;
   }

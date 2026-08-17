@@ -49,7 +49,8 @@ function minutesToHHMM(min: number | null): string {
 export interface AutoCancelRuleView {
   rule: AutoCancelRuleRow;
   activationError: string | null;
-  serviceName: string | null;
+  /** Resolved names for each targeted service id (unknown id → null placeholder). */
+  serviceNames: Array<{ id: string; name: string | null }>;
   ownerName: string | null;
   managerName: string | null;
 }
@@ -96,10 +97,16 @@ function ruleForm(
     ? `/admin/notifications/autocancel/rules/${edit.id}/update`
     : "/admin/notifications/autocancel/rules";
   const selectedDays = new Set(edit?.weekdays ?? []);
-  const svcOptions = serviceOptions
+  const selectedSvc = new Set(edit?.service_ids ?? []);
+  // Any targeted id absent from the live catalogue still gets a (checked) chip.
+  const knownIds = new Set(serviceOptions.map((s) => s.id));
+  const extraSvc = (edit?.service_ids ?? [])
+    .filter((id) => !knownIds.has(id))
+    .map((id) => ({ id, name: "Cours indisponible dans Wix" }));
+  const svcCheckboxes = [...serviceOptions, ...extraSvc]
     .map(
       (s) =>
-        `<option value="${v(s.id)}"${edit?.service_id === s.id ? " selected" : ""}>${v(s.name)}</option>`,
+        `<label class="chip-check"><input type="checkbox" name="service_ids" value="${v(s.id)}"${selectedSvc.has(s.id) ? " checked" : ""}> ${v(s.name)}</label>`,
     )
     .join("");
   const contactOptions = (selectedId: string | null) =>
@@ -120,9 +127,10 @@ function ruleForm(
   <label>Nom de la règle
     <input name="label" required value="${v(edit?.label)}" placeholder="Reformer matin — annuler si vide">
   </label>
-  <label>Cours (service Wix)
-    <select name="service_id" required>${serviceOptions.length ? svcOptions : `<option value="">Catalogue Wix indisponible</option>`}</select>
-  </label>
+  <fieldset style="display:flex;flex-direction:column;gap:.5rem">
+    <legend class="muted">Cours concernés <span class="muted">(coche un ou plusieurs — ex : tous les niveaux Reformer)</span></legend>
+    ${serviceOptions.length === 0 && extraSvc.length === 0 ? `<div class="card warn" style="margin:0">Catalogue Wix momentanément indisponible. Réessaie pour choisir des cours.</div>` : `<div class="svc-grid">${svcCheckboxes}</div>`}
+  </fieldset>
   <fieldset style="display:flex;flex-direction:column;gap:.5rem">
     <legend class="muted">Jours concernés <span class="muted">(aucun coché = tous les jours)</span></legend>
     <div class="cluster">${dayChecks}</div>
@@ -171,9 +179,15 @@ export function renderAutoCancelSection(d: AutoCancelSectionData): string {
       const errLine = view.activationError
         ? `<div class="danger-text">⚠️ ${esc(view.activationError)} — la règle n'annulera rien tant que ce n'est pas corrigé.</div>`
         : "";
-      const svc = view.serviceName
-        ? `<span class="badge">${esc(view.serviceName)}</span>`
-        : `<span class="badge badge--amber" title="${esc(r.service_id)}">cours supprimé de Wix</span>`;
+      const svc = view.serviceNames.length
+        ? view.serviceNames
+            .map((s) =>
+              s.name
+                ? `<span class="badge">${esc(s.name)}</span>`
+                : `<span class="badge badge--amber" title="${esc(s.id)}">cours supprimé de Wix</span>`,
+            )
+            .join(" ")
+        : `<span class="badge badge--amber">aucun cours ciblé</span>`;
       return `<article class="task-item${r.enabled && !view.activationError ? "" : " is-complete"}">
   <div class="task-copy">
     <div class="cluster">${stateBadge}${svc}</div>

@@ -931,17 +931,18 @@ create index if not exists idx_notification_log_rule_event
 -- le modèle n'intervient jamais. Fail-closed : au moindre doute, on n'annule pas.
 
 -- Règles éditables depuis /admin/notifications. AUCUN nom de cours en dur : la
--- cible est un service_id Wix exact (le catalogue vit dans Wix). weekdays :
--- convention JS getUTCDay (0=dimanche … 6=samedi ; Dakar == UTC), [] = tous les
--- jours. start_min_from/to : minutes depuis minuit Dakar (bornes incluses),
--- NULL = pas de borne. owner_contact_id/manager_contact_id : deux contacts fixes
--- distincts du répertoire staff_contacts (le coach est résolu dynamiquement
--- depuis Wix au moment de l'annulation).
+-- cible est une liste d'ids de services Wix exacts (service_ids ; le catalogue
+-- vit dans Wix). Une règle peut viser plusieurs cours à la fois (ex : tous les
+-- niveaux Reformer). weekdays : convention JS getUTCDay (0=dimanche … 6=samedi ;
+-- Dakar == UTC), [] = tous les jours. start_min_from/to : minutes depuis minuit
+-- Dakar (bornes incluses), NULL = pas de borne. owner_contact_id/manager_contact_id :
+-- deux contacts fixes distincts du répertoire staff_contacts (le coach est résolu
+-- dynamiquement depuis Wix au moment de l'annulation).
 create table if not exists auto_cancel_rules (
   id uuid primary key default gen_random_uuid(),
   label text not null,
   enabled boolean not null default false,
-  service_id text not null,
+  service_id text,
   weekdays int[] not null default '{}',
   start_min_from int,
   start_min_to int,
@@ -950,6 +951,10 @@ create table if not exists auto_cancel_rules (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- Multi-cours : une règle cible une LISTE d'ids de services Wix. Le service_id
+-- unique d'origine devient facultatif (repli legacy, plus écrit par l'UI).
+alter table auto_cancel_rules alter column service_id drop not null;
+alter table auto_cancel_rules add column if not exists service_ids text[] not null default '{}';
 
 -- Registre d'occurrences, clé GLOBALE = event id Calendar V3 (court, slot.eventId)
 -- de l'occurrence. L'unicité globale empêche toute double annulation entre règles
