@@ -223,6 +223,9 @@ mesure existants (réservés chacun à leur cliente, règle ci-dessus).
 - **« 2x Reformer 1x Yoga 1x Step »** : 16 séances sur 30 jours au choix entre
   Reformer (Foundation/Sculpt/Intense), Power Yoga et Step. Piscine **pendant
   toute la durée de la formule** (serviette comprise).
+- **« 2x Reformer 1x Step »** : 12 séances sur 30 jours au choix entre Reformer
+  (Foundation/Sculpt/Intense) et Step. Piscine **pendant toute la durée de la
+  formule** (serviette comprise).
 
 Les clientes qui détiennent encore un ancien abonnement couvrant le Reformer
 sont **Membres Fondatrices jusqu'à son échéance** : piscine les jours de séance,

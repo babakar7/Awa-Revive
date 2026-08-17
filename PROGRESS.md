@@ -1,5 +1,12 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Plan sur mesure « 2x Reformer 1x Step » (17 août 2026)
+
+- Nouveau plan Wix créé : **120 000 F · 12 séances · 30 jours** (`a3e4c40e-7088-42f7-b04e-49ff7bc9b192`), avec un seul pool de 12 crédits relié aux trois niveaux Reformer et au Step.
+- Avantages : piscine pendant toute la durée (serviette comprise), bibliothèque, massage membre à 25 000 F, prolongation de 7 jours et une invitation Reformer à 12h30 lun–ven. La référence réception et les règles Awa listent le plan comme sur-mesure dédié : jamais proposé spontanément.
+- Le plan doit figurer dans Railway dans `SUR_MESURE_PLAN_IDS`, `AWA_SELLABLE_PLAN_IDS` et `MASSAGE_MEMBER_PLAN_IDS`. Cela le fait bénéficier de l'invitation et de la mécanique existante : au premier renouvellement anticipé, Awa déverrouille l'invitation à réception de la capture de l'avis Google. La mise à jour Railway reste à faire si elle n'a pas encore été appliquée.
+- Provisionneur idempotent : `scripts/provision-custom-reformer-step-wix.ts` (sans argument = lecture seule ; `--apply` crée/raccorde le plan).
+
 ## Annulation automatique des cours vides (17 août 2026)
 
 **Quoi.** Awa annule automatiquement l'occurrence d'un cours collectif Wix restée

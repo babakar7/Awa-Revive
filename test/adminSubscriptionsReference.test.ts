@@ -20,11 +20,14 @@ describe("Abonnements — référence réception", () => {
     expect(html).toContain("Prolongation de 7 jours");
     expect(html).toContain("Membres Fondatrices");
     expect(html).toContain("Carnet de 10 Bébé nageur et Natation — 70 000 F");
-    // Both tailor-made plans, each with its own pool perk wording.
+    // Tailor-made plans, each with its own pool perk wording.
     expect(html).toContain("1x Reformer · 1x Mat · 1x Step");
     expect(html).toContain("2x Reformer · 1x Yoga · 1x Step");
+    expect(html).toContain("2x Reformer · 1x Step");
     expect(html).toContain("148 000 F · 16 séances · 30 j");
+    expect(html).toContain("120 000 F · 12 séances · 30 j");
     expect(html).toContain("Accès piscine pendant toute la durée de la formule");
+    expect(html).toContain("l’invitation s’active après l’avis Google envoyé à Awa");
     expect(html).not.toContain("Carnet de 10 Reformer");
     expect(html).not.toContain("Carnet de 10 Aquabike");
     expect(html).toContain("ne rien créer en double dans Wix");

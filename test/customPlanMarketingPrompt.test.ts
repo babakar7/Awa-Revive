@@ -12,9 +12,10 @@ describe("custom plan marketing guidance", () => {
     expect(prompt).toMatch(
       /Market the non-Reformer classes positively as directly included in the covered sessions/i,
     );
-    // Both bespoke plans are named, never proposed spontaneously.
+    // All bespoke plans are named, never proposed spontaneously.
     expect(prompt).toMatch(/1x Reformer 1x Mat 1x Step/);
     expect(prompt).toMatch(/2x Reformer 1x Yoga 1x Step/);
+    expect(prompt).toMatch(/2x Reformer 1x Step/);
     expect(prompt).not.toMatch(/sur-mesure plan has NO bonus/i);
     expect(prompt).not.toMatch(/grants no “cours en plus”/i);
   });
