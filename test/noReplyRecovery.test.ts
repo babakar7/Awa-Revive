@@ -4,6 +4,7 @@ import {
   classifyReplyOutcome,
   modelSilenceFallbackMessage,
   resolveSilenceRecovery,
+  shouldRetryUnexpectedSilenceWithTools,
   stripNoReplySentinel,
 } from "../src/agent/index.js";
 import { NO_REPLY_SENTINEL } from "../src/agent/tools.js";
@@ -65,6 +66,62 @@ describe("classifyReplyOutcome", () => {
     });
     expect(modelSilenceFallbackMessage("en")).toMatch(/^No problem/);
     expect(modelSilenceFallbackMessage("wo")).toMatch(/^Baax na/);
+  });
+
+  it("removes replay-only trace lines from a recovered answer", () => {
+    expect(
+      resolveSilenceRecovery(
+        "⟦trace⟧ check_availability({}) -> {slots}\nVoici les créneaux de jeudi.",
+        "fr",
+      ),
+    ).toEqual({
+      replyText: "Voici les créneaux de jeudi.",
+      usedFallback: false,
+    });
+    expect(resolveSilenceRecovery("⟦trace⟧ check_availability({}) -> {slots}", "fr")).toEqual({
+      replyText: modelSilenceFallbackMessage("fr"),
+      usedFallback: true,
+    });
+  });
+});
+
+describe("stale-silence retry with tools", () => {
+  it("re-enters the tool loop for Coura's no-action 'Jeudi ?' turn", () => {
+    expect(
+      shouldRetryUnexpectedSilenceWithTools({
+        replyText: NO_REPLY_SENTINEL,
+        interactiveSent: false,
+        toolExecuted: false,
+        alreadyRetried: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("never re-enables tools after an action or more than once", () => {
+    expect(
+      shouldRetryUnexpectedSilenceWithTools({
+        replyText: NO_REPLY_SENTINEL,
+        interactiveSent: false,
+        toolExecuted: true,
+        alreadyRetried: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryUnexpectedSilenceWithTools({
+        replyText: NO_REPLY_SENTINEL,
+        interactiveSent: false,
+        toolExecuted: false,
+        alreadyRetried: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryUnexpectedSilenceWithTools({
+        replyText: "Voici les créneaux de jeudi.",
+        interactiveSent: false,
+        toolExecuted: false,
+        alreadyRetried: false,
+      }),
+    ).toBe(false);
   });
 });
 

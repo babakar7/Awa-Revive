@@ -1,5 +1,25 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Silence périmé + trace interne après listes de créneaux (17 août 2026)
+
+- **Incident Coura Thiam** : après deux listes Sculpt correctement envoyées
+  (mardi puis mercredi), « Jeudi ? » a hérité du `<NO_REPLY>` d'un ancien
+  `present_options`. La relance sans outils a ensuite recopié le marqueur interne
+  `⟦trace⟧`; le lint sécurité l'a bloquée (`tool_syntax`) et a déclenché à tort
+  le message de panne, un handoff et une pause Awa de 12 h. Aucun outil, paiement
+  ni réservation n'avait été exécuté sur ce tour.
+- **Correctif** ([src/agent/index.ts](src/agent/index.ts)) : si une réponse est
+  silencieuse **avant tout outil/envoi du tour**, la boucle agent est retentée
+  une seule fois **avec ses outils** et une consigne explicite anti-sentinelle /
+  anti-trace. Elle peut donc vérifier une demande dynamique comme « jeudi » au
+  lieu d'être enfermée dans une réécriture sans outils. Dès qu'un outil a tourné,
+  la relance reste sans outils pour ne jamais répéter un effet de bord.
+- Défense finale : la relance de silence retire toute ligne `⟦trace⟧` recopiée ;
+  une réponse composée uniquement de traces tombe sur l'accusé déterministe,
+  jamais sur un faux incident technique. Régression dans
+  [test/noReplyRecovery.test.ts](test/noReplyRecovery.test.ts) avec le cas exact
+  « Jeudi ? », la borne une seule relance et la garde après effet de bord.
+
 ## Garde horaire : le combo « je confirme + autres dispos ? » ne bloque plus (16 août 2026)
 
 - **Incident (16/08, Fama +33664668226)** : message en deux parties — « Ok je

@@ -157,7 +157,18 @@ const UNEXPECTED_SILENCE_RECOVERY_INSTRUCTION =
   "Current-turn delivery guard: no interactive WhatsApp message was sent during this turn. " +
   "Respond now to the latest user with one natural, concise message. Do not output <NO_REPLY>. " +
   "If the latest message is only thanks or an acknowledgement, answer briefly and warmly. " +
-  "Do not repeat an earlier list and do not invent information.";
+  "Do not repeat an earlier list and do not invent information. Never quote or reproduce an " +
+  `internal ${TOOL_TRACE_MARKER} trace line.`;
+
+// If the first response is stale silence before Awa did anything in the current
+// turn, retrying the normal agent loop is side-effect safe and preserves tools.
+// That distinction matters for fresh dynamic questions (Coura 17/08: after two
+// slot lists, "Jeudi ?" inherited an old present_options <NO_REPLY>; the old
+// no-tools recovery could not check Thursday and copied an internal trace).
+const UNEXPECTED_SILENCE_TOOL_RETRY_INSTRUCTION =
+  UNEXPECTED_SILENCE_RECOVERY_INSTRUCTION +
+  " Tools are available on this retry: when the latest request needs live information, call the " +
+  "appropriate tool now and answer from its result.";
 
 /** Concatenate the text blocks of a model response into the reply string. */
 export function extractText(response: Anthropic.Message): string {
@@ -237,12 +248,39 @@ export function resolveSilenceRecovery(
   language: string | null | undefined,
   formal = false,
 ): SilenceRecoveryResolution {
-  const cleaned = stripNoReplySentinel(recoveredText);
+  // A recovery model can echo one of the replay-only trace lines it just saw.
+  // Drop those whole internal lines before the safety lint. Natural text on
+  // other lines survives; a trace-only response becomes the deterministic
+  // acknowledgement instead of a false technical outage + 12 h takeover.
+  const cleaned = stripNoReplySentinel(recoveredText)
+    .split(/\r?\n/)
+    .filter((line) => !line.includes(TOOL_TRACE_MARKER))
+    .join("\n")
+    .trim();
   if (cleaned) return { replyText: cleaned, usedFallback: false };
   return {
     replyText: modelSilenceFallbackMessage(language, formal),
     usedFallback: true,
   };
+}
+
+/**
+ * A stale silent response is safe to rerun with tools only before any tool or
+ * interactive delivery happened in this inbound turn. Once an action ran, the
+ * existing no-tools recovery remains the idempotent path.
+ */
+export function shouldRetryUnexpectedSilenceWithTools(args: {
+  replyText: string | null;
+  interactiveSent: boolean;
+  toolExecuted: boolean;
+  alreadyRetried: boolean;
+}): boolean {
+  return (
+    !args.alreadyRetried &&
+    !args.interactiveSent &&
+    !args.toolExecuted &&
+    classifyReplyOutcome(args.replyText, false) === "recover"
+  );
 }
 
 /**
@@ -1044,6 +1082,9 @@ export async function handleInboundText(args: {
   // (the Wave flow gets the same list from the webhook).
   let membershipBooked = false;
   let circuitTripped = false;
+  let toolExecutedThisTurn = false;
+  let silenceWithToolsRetried = false;
+  let agentSystem = system;
 
   let lastResponse: Anthropic.Message | null = null;
   let loopError: unknown = null;
@@ -1058,7 +1099,7 @@ export async function handleInboundText(args: {
             model: config.CLAUDE_MODEL,
             max_tokens: REPLY_MAX_TOKENS,
             output_config: { effort: "low" },
-            system,
+            system: agentSystem,
             tools: TOOL_DEFINITIONS,
             messages,
           }),
@@ -1080,7 +1121,7 @@ export async function handleInboundText(args: {
                 model: config.CLAUDE_MODEL,
                 max_tokens: REPLY_MAX_TOKENS_RETRY,
                 output_config: { effort: "low" },
-                system,
+                system: agentSystem,
                 tools: TOOL_DEFINITIONS,
                 messages,
               }),
@@ -1104,6 +1145,26 @@ export async function handleInboundText(args: {
             loopError = err;
           }
         }
+        if (
+          loopError == null &&
+          shouldRetryUnexpectedSilenceWithTools({
+            replyText,
+            interactiveSent,
+            toolExecuted: toolExecutedThisTurn,
+            alreadyRetried: silenceWithToolsRetried,
+          })
+        ) {
+          silenceWithToolsRetried = true;
+          replyText = null;
+          agentSystem = [
+            ...system,
+            { type: "text", text: UNEXPECTED_SILENCE_TOOL_RETRY_INSTRUCTION },
+          ];
+          console.warn(
+            "Model returned stale silence before any current-turn tool — retrying once with tools",
+          );
+          continue;
+        }
         break;
       }
 
@@ -1112,6 +1173,7 @@ export async function handleInboundText(args: {
       const results: Anthropic.ToolResultBlockParam[] = [];
       for (const block of response.content) {
         if (block.type !== "tool_use") continue;
+        toolExecutedThisTurn = true;
         let result: string;
         let isError = false;
         try {
@@ -1222,7 +1284,7 @@ export async function handleInboundText(args: {
             model: config.CLAUDE_MODEL,
             max_tokens: REPLY_MAX_TOKENS,
             output_config: { effort: "low" },
-            system,
+            system: agentSystem,
             messages,
           }),
         () => void sendTypingIndicator(args.waMessageId),
