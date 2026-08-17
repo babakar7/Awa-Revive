@@ -29,6 +29,7 @@ import * as commitments from "../domain/commitments.js";
 import * as closuresRepo from "../domain/closuresRepo.js";
 import * as faqRepo from "../domain/faqRepo.js";
 import * as keyRepo from "../domain/keyRepo.js";
+import * as links from "../domain/linkRequests.js";
 import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
 import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
@@ -754,6 +755,137 @@ async function maybeHandleDeliveryPaymentReply(args: {
   return true;
 }
 
+type VerificationCodeResult = {
+  status?: string;
+  attempts_left?: number;
+};
+
+export function verificationCodeReplyText(
+  client: repo.Client,
+  result: VerificationCodeResult,
+): string {
+  const english = client.language === "en";
+  let text: string;
+  switch (result.status) {
+    case "account_created":
+      text = english
+        ? "✅ All set! Your Revive account has been created successfully and linked to this WhatsApp number."
+        : "✅ C'est bon ! Ton compte Revive a été créé avec succès et relié à ce numéro WhatsApp.";
+      break;
+    case "verified":
+      text = english
+        ? "✅ All set! Your Revive account is now linked to this WhatsApp number."
+        : "✅ C'est bon ! Ton compte Revive est maintenant relié à ce numéro WhatsApp.";
+      break;
+    case "verified_pending_merge":
+      text = english
+        ? "✅ Your account is verified. The Revive team is finishing the last account update; you don't need to do anything."
+        : "✅ Ton compte est bien vérifié. L'équipe Revive termine la dernière mise à jour ; tu n'as rien à faire.";
+      break;
+    case "wrong_code": {
+      const left = Number(result.attempts_left);
+      const suffix = Number.isFinite(left)
+        ? english
+          ? ` (${left} attempt${left === 1 ? "" : "s"} left)`
+          : ` (${left} essai${left === 1 ? "" : "s"} restant${left === 1 ? "" : "s"})`
+        : "";
+      text = english
+        ? `That code doesn't match the latest email. Please check it and send it again${suffix}.`
+        : `Ce code ne correspond pas au dernier email. Envoie-le-moi de nouveau après vérification${suffix}.`;
+      break;
+    }
+    case "expired":
+      text = english
+        ? "That code has expired. Send me your email again here and I'll send you a new one."
+        : "Ce code a expiré. Envoie-moi ton email ici et l'équipe t'en enverra un nouveau.";
+      break;
+    case "too_many_attempts":
+    case "link_failed":
+      text = english
+        ? "The Revive team will finish setting up your account here. You don't need to call or do anything else."
+        : "L'équipe Revive va terminer la configuration de ton compte ici. Tu n'as pas besoin d'appeler ni de faire autre chose.";
+      break;
+    default:
+      text = english
+        ? "This verification is no longer active. Send me your email again here and I'll restart it."
+        : "Cette vérification n'est plus active. Envoie-moi ton email ici et je la relance.";
+  }
+  return applyFrenchRegister(text, !english && client.fr_register === "vous");
+}
+
+export interface VerificationCodeRoutingDeps {
+  getOpen: typeof links.getOpen;
+  execute: typeof executeTool;
+  send: typeof sendText;
+  addTurn: typeof repo.addTurn;
+  technicalFailure: typeof handleTechnicalFailure;
+}
+
+const verificationCodeRoutingDeps: VerificationCodeRoutingDeps = {
+  getOpen: links.getOpen,
+  execute: executeTool,
+  send: sendText,
+  addTurn: repo.addTurn,
+  technicalFailure: handleTechnicalFailure,
+};
+
+/**
+ * A fresh six-digit email code is server-owned input, not conversational text.
+ * Route it directly to the verification tool so a model lapse (prod 17/08:
+ * copied the private trace marker and never called submit_verification_code)
+ * cannot strand a client who supplied the code. Wrong/expired-code and abuse
+ * checks remain inside the tool and are therefore unchanged.
+ */
+export async function maybeHandleVerificationCode(
+  client: repo.Client,
+  text: string,
+  waMessageId: string,
+  deps: VerificationCodeRoutingDeps = verificationCodeRoutingDeps,
+): Promise<boolean> {
+  if (!links.looksLikeCode(text)) return false;
+  const request = await deps.getOpen(client.id);
+  if (!request || request.status !== "AWAITING_CODE" || !request.code_hash) return false;
+
+  const input = { code: text.trim() };
+  let resultText: string;
+  try {
+    resultText = await deps.execute(client, "submit_verification_code", input);
+  } catch (err) {
+    console.error("Deterministic verification-code routing failed:", err);
+    await deps.addTurn(
+      client.id,
+      "tool",
+      `submit_verification_code(${JSON.stringify(input)}) -> ${JSON.stringify({
+        error: "tool_failed",
+        message: describeLoopFailure(err),
+      })}`,
+    );
+    await deps.technicalFailure({
+      client,
+      waMessageId,
+      stage: "verification_code_tool",
+      cause: err,
+    });
+    return true;
+  }
+
+  await deps.addTurn(
+    client.id,
+    "tool",
+    `submit_verification_code(${JSON.stringify(input)}) -> ${resultText.slice(0, 2000)}`,
+  );
+  let result: VerificationCodeResult;
+  try {
+    result = JSON.parse(resultText) as VerificationCodeResult;
+  } catch {
+    result = {};
+  }
+  const reply = verificationCodeReplyText(client, result);
+  const wamid = await deps.send(client.wa_phone, reply);
+  await deps.addTurn(client.id, "assistant", reply, wamid ?? undefined);
+  return true;
+}
+
 export async function handleInboundText(args: {
   waPhone: string;
   text: string;
@@ -821,6 +953,11 @@ export async function handleInboundText(args: {
     notifyHumanTakeoverInbound(client, text);
     return;
   }
+
+  // Verification codes are deterministic protocol input. Process them before
+  // intent classification or the language model so the tool call cannot be
+  // replaced by a leaked trace/prose reply.
+  if (await maybeHandleVerificationCode(client, inboundText, args.waMessageId)) return;
 
   const signal = campaign.matched ? "revive_intent" : classifyConversationSignal(text);
 
