@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   coachPaymentCourseBuckets,
+  coachPaymentCourseNeedsReview,
   coachPaymentState,
 } from "../src/domain/coachPaymentRules.js";
 import { coachPaymentBanner, renderCoachPaymentsDashboard } from "../src/admin/coachPaymentsPage.js";
@@ -119,6 +120,36 @@ describe("coach payment course buckets", () => {
     ]);
     expect(buckets).toEqual({ manual: 1, mat: 1, reformer: 1, otherWix: 1, total: 4 });
     expect(buckets.manual + buckets.mat + buckets.reformer + buckets.otherWix).toBe(buckets.total);
+  });
+});
+
+describe("coach payment course review flag", () => {
+  const wix = (extra: Record<string, unknown>) =>
+    ({ source: "wix", service_name: "Reformer", included: true, wix_status: "CONFIRMED", ...extra }) as const;
+
+  it("flags cancelled, empty, no-show, incomplete and unavailable verdicts", () => {
+    expect(coachPaymentCourseNeedsReview(wix({ wix_status: "CANCELLED", included: false }))).toBe(true);
+    for (const attendance_category of ["empty", "all_no_show", "incomplete", "unavailable"] as const) {
+      expect(coachPaymentCourseNeedsReview(wix({ attendance_category }))).toBe(true);
+    }
+  });
+
+  it("does not flag an attended course, and honors the legacy 0-participant fallback", () => {
+    expect(coachPaymentCourseNeedsReview(wix({ attendance_category: "attended" }))).toBe(false);
+    // Legacy row with no verdict but zero calendar participants.
+    expect(coachPaymentCourseNeedsReview(wix({ attendance_category: null, participant_count: 0 }))).toBe(true);
+    expect(coachPaymentCourseNeedsReview(wix({ attendance_category: null, participant_count: 2 }))).toBe(false);
+  });
+
+  it("flags a manually excluded course regardless of source", () => {
+    expect(
+      coachPaymentCourseNeedsReview({
+        source: "manual",
+        service_name: "Remplacement",
+        included: false,
+        manual_decision: true,
+      }),
+    ).toBe(true);
   });
 });
 

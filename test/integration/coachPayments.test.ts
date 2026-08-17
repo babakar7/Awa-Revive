@@ -370,7 +370,7 @@ describe("monthly statement lifecycle", () => {
       url: `${BASE}/etats/${id}`,
       headers: { cookie },
     });
-    expect(page.body).toContain("1 séance à vérifier · 1 annulée · 0 vide");
+    expect(page.body).toContain("1 séance à vérifier · 1 annulée · 0 présence à vérifier");
     expect(page.body).toContain("Prêt à valider");
     const cockpit = await app.inject({
       method: "GET",
@@ -426,8 +426,8 @@ describe("monthly statement lifecycle", () => {
     expect(statement.course_count).toBe(2);
     expect(statement.total_xof).toBe(19_000);
     const draftPage = await app.inject({ method: "GET", url: `${BASE}/etats/${id}`, headers: { cookie } });
-    expect(draftPage.body).toContain("Séance vide");
-    expect(draftPage.body).toContain("2 participants");
+    expect(draftPage.body).toContain("Aucune réservation");
+    expect(draftPage.body).toContain("2 présent(s)");
 
     const wixCourse = (await pool.query(`select id from coach_payment_courses where statement_id=$1 order by starts_at limit 1`, [id])).rows[0];
     await post(`${BASE}/etats/${id}/cours/${wixCourse.id}/toggle`, {}, cookie);
@@ -517,14 +517,14 @@ describe("monthly statement lifecycle", () => {
       headers: { cookie },
     });
     expect(draftPage.body).toContain(
-      "4 séances à vérifier · 2 annulées · 2 vides",
+      "4 séances à vérifier · 2 annulées · 2 présences à vérifier",
     );
     expect(draftPage.body).toContain('<details class="card payment-panel" open>');
     expect(draftPage.body).toMatch(
       /<details class="card payment-panel"><summary><span><b>Autres séances/,
     );
     expect(draftPage.body).toContain("Séance annulée");
-    expect(draftPage.body).toContain("Séance vide · 0 participant");
+    expect(draftPage.body).toContain("Aucune réservation");
     expect(draftPage.body).toContain("Inclure exceptionnellement");
     const reviewStart = draftPage.body.indexOf("Séances à vérifier");
     const otherStart = draftPage.body.indexOf("Autres séances");
@@ -765,7 +765,7 @@ describe("monthly statement lifecycle", () => {
       headers: { cookie },
     });
     expect(openPage.body).toContain(
-      "Aucune séance annulée ou vide à vérifier",
+      "Aucune séance à vérifier",
     );
     const early = await post(`${BASE}/etats/${openId}/valider`, {}, cookie);
     expect(decodeURIComponent(String(early.headers.location))).toMatch(/fin du mois civil/i);
@@ -782,5 +782,74 @@ describe("monthly statement lifecycle", () => {
     expect(failed.course_count).toBe(0);
     const blocked = await post(`${BASE}/etats/${failedId}/valider`, {}, cookie);
     expect(decodeURIComponent(String(blocked.headers.location))).toMatch(/Wix indisponible/i);
+  });
+
+  it("flags an all-no-show session and, in alert-only mode, still counts it", async () => {
+    const cookie = await loginAsOwner();
+    const profileId = await configureYass();
+    // Two confirmed participants, both explicitly NOT_ATTENDED (numberOfAttendees
+    // 0), capacity consistent → all_no_show.
+    mock.wix.calendarEvents = [
+      calendarEvent("no-show", "2026-06-06T10:00:00", { totalCapacity: 10, remainingCapacity: 8 }),
+      calendarEvent("given", "2026-06-07T10:00:00"),
+    ];
+    mock.wix.eventBookings = {
+      "no-show": [
+        { booking: { id: "ns-b1", status: "CONFIRMED", numberOfParticipants: 1, bookedEntity: { slot: { eventId: "no-show" } } } },
+        { booking: { id: "ns-b2", status: "CONFIRMED", numberOfParticipants: 1, bookedEntity: { slot: { eventId: "no-show" } } } },
+      ],
+    };
+    mock.wix.eventAttendance = {
+      "no-show": [
+        { id: "ns-a1", bookingId: "ns-b1", eventId: "no-show", status: "NOT_ATTENDED", numberOfAttendees: 0 },
+        { id: "ns-a2", bookingId: "ns-b2", eventId: "no-show", status: "NOT_ATTENDED", numberOfAttendees: 0 },
+      ],
+    };
+
+    const id = await createJuneDraft(cookie, profileId);
+    const course = (await pool.query(
+      `select attendance_category, attendance_no_show_count, included
+         from coach_payment_courses where statement_id=$1 and wix_event_id='no-show'`,
+      [id],
+    )).rows[0];
+    expect(course.attendance_category).toBe("all_no_show");
+    expect(course.attendance_no_show_count).toBe(2);
+    // Alert-only (default): the verdict is recorded and shown but the course
+    // still counts, so the amount is unchanged until enforcement is enabled.
+    expect(course.included).toBe(true);
+    const statement = (await pool.query(`select course_count from coach_payment_statements where id=$1`, [id])).rows[0];
+    expect(statement.course_count).toBe(2);
+
+    const page = await app.inject({ method: "GET", url: `${BASE}/etats/${id}`, headers: { cookie } });
+    expect(page.body).toContain("Non-présentations uniquement");
+  });
+
+  it("keeps courses visible but blocks validation when attendance is unavailable", async () => {
+    const cookie = await loginAsOwner();
+    const profileId = await configureYass();
+    mock.wix.calendarEvents = [calendarEvent("proof-down", "2026-06-09T10:00:00")];
+    mock.wix.failAttendance = true;
+
+    const id = await createJuneDraft(cookie, profileId);
+    const statement = (await pool.query(`select * from coach_payment_statements where id=$1`, [id])).rows[0];
+    // Calendar succeeded, so the course is visible; the proof read failed, so
+    // the sync is degraded and validation must be refused.
+    expect(statement.sync_status).toBe("failed");
+    expect(statement.course_count).toBe(1);
+    const course = (await pool.query(
+      `select attendance_category, included from coach_payment_courses where statement_id=$1`,
+      [id],
+    )).rows[0];
+    expect(course.attendance_category).toBe("unavailable");
+    expect(course.included).toBe(true);
+
+    const blocked = await post(`${BASE}/etats/${id}/valider`, {}, cookie);
+    expect(decodeURIComponent(String(blocked.headers.location))).toMatch(/présences Wix indisponibles/i);
+
+    // Once attendance recovers, a resync clears the block.
+    mock.wix.failAttendance = false;
+    await post(`${BASE}/etats/${id}/synchroniser`, {}, cookie);
+    const healed = (await pool.query(`select sync_status from coach_payment_statements where id=$1`, [id])).rows[0];
+    expect(healed.sync_status).toBe("ok");
   });
 });

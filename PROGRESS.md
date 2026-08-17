@@ -42,6 +42,62 @@ reste une string (aucun autre handler admin n'utilise de champ répété → san
 `notificationRules`, `adminNotificationsPage`, `integration/notificationClaim`. Build +
 1349 tests unitaires + intégration `notificationClaim` verts.
 
+## Paiements coachs : exclure les cours réellement non donnés (chantier `coach-attendance`, 17 août 2026)
+
+- **Besoin (Babakar)** : un cours terminé ne doit pas être payé au coach s'il
+  n'a **aucune réservation** ou si **toutes** les réservations confirmées sont
+  explicitement marquées `NOT_ATTENDED`. Données incomplètes ⇒ payé mais
+  signalé ; toute panne Wix ⇒ validation bloquée (fail-closed sur la validation,
+  fail-open sur l'argent du coach).
+- **Étape 0 — sonde live des filtres (FAITE, PASS)** :
+  [scripts/probe-attendance-filters.ts](scripts/probe-attendance-filters.ts)
+  (`npm run wix:probe-attendance -- <moisEnArrière>`). Vérifié sur juillet 2026
+  (129 events) :
+  - Attendance `/bookings/bookings-attendance/query` **honore**
+    `filter: { eventId: { $in } }` — ✅ toutes les présences renvoyées
+    appartiennent aux events demandés.
+  - Bookings Reader `/extended-bookings/query` **honore**
+    `filter: { "bookedEntity.item.slot.eventId": { $in } }` — ✅.
+  - **Piège relevé** : le reader filtré remonte **tous les statuts** (22
+    bookings vs 17 CONFIRMED sur le même échantillon). La construction de
+    couverture doit donc **restreindre à CONFIRMED côté client** — ne jamais
+    supposer que le filtre eventId ne renvoie que du confirmé.
+  - Conclusion : collecte ciblée par event validée, **pas besoin** du repli
+    (sweep CONFIRMED + filtre client). Le repli reste documenté dans la sonde si
+    Wix régresse.
+- **Étape 0bis — validation métier (à la charge de Babakar, HORS code)** :
+  confirmer avec la propriétaire la règle « tous no-show ⇒ coach non payé » et le
+  cas des cours donnés hors Wix (walk-in) qui tomberaient en `empty`. En
+  attendant, **premier mois en mode alerte seule** : exclusion calculée et
+  affichée, montant **non** réduit (flag de config), activation de la réduction
+  après revue du premier mois.
+- **Livré (mode alerte, non enforce)** :
+  - Module pur [src/domain/coachAttendance.ts](src/domain/coachAttendance.ts) :
+    `classifyEventAttendance` + `classifyCourses`. Preuve NOT_ATTENDED = statut du
+    booking (jamais la somme de `numberOfAttendees`, qui vaut 0 en no-show).
+    `all_no_show` exige capacité connue ET cohérente avec les participants des
+    bookings confirmés ; sinon `incomplete` (payé + signalé).
+  - Collecte ciblée [src/lib/wix.ts](src/lib/wix.ts) :
+    `listWixAttendanceByEventIds` + `listWixEventBookingsByEventIds` (batch $in +
+    cursor ; toute page échouée jette → jamais de snapshot partiel).
+  - Colonnes idempotentes `attendance_category|_confirmed_count|_attended_count|`
+    `_no_show_count|_reason` sur `coach_payment_courses`.
+  - `insertCourses` : exclusion auto **recomputée** à chaque sync (jamais
+    convertie en `manual_decision` → réintégration auto si Wix corrige) ;
+    gate `config.COACH_PAYMENT_ATTENDANCE_ENFORCE`.
+  - Fail-closed : attendance/bookings indisponibles → `replaceWixSnapshot`
+    dégradé (`sync_status='failed'`, cours calendrier gardés visibles) →
+    validation bloquée (les routes create/sync/valider threadent l'erreur).
+  - UI détail + PDF : badges/raisons par catégorie, décomptes, « Inclure
+    exceptionnellement », ligne de preuve figée dans le PDF ; `anomaly_count`
+    SQL et `coachPaymentCourseNeedsReview` couvrent les 4 catégories à vérifier.
+  - Tests : `test/coachAttendance.test.ts` (16), cas ajoutés PDF/UX,
+    2 cas d'intégration (all_no_show alerte + attendance indisponible bloque).
+    `build` + `test` (1360) + `test:integration` (430) verts.
+- **Flag prod** : `COACH_PAYMENT_ATTENDANCE_ENFORCE` **laissé non défini**
+  (= alerte seule) tant que Babakar n'a pas validé la règle avec la propriétaire
+  sur un vrai mois. Passer à `true` (Railway var) pour activer la réduction.
+
 ## Silence périmé + trace interne après listes de créneaux (17 août 2026)
 
 - **Incident Coura Thiam** : après deux listes Sculpt correctement envoyées

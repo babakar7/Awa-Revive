@@ -100,6 +100,16 @@ export interface WixState {
   confirmedBookings: any[];
   /** All-status extended-booking fixtures for the general mirror reader. */
   bookings: any[];
+  /** Coach-payroll per-event booking fixtures keyed by calendar eventId. When a
+   * queried event is absent, the reader synthesizes CONFIRMED bookings from the
+   * calendar's filled capacity (default = class was full). */
+  eventBookings: Record<string, any[]>;
+  /** Coach-payroll per-event attendance fixtures keyed by calendar eventId. When
+   * absent, attendance is synthesized as everyone ATTENDED (the clean case). */
+  eventAttendance: Record<string, any[]>;
+  /** When true, the per-event attendance and bookings reads 503 (simulates an
+   * attendance-API outage: calendar succeeds, proof read fails). */
+  failAttendance: boolean;
 }
 
 /**
@@ -233,6 +243,9 @@ export function makeFetchMock(): FetchMock {
     attendanceBookings: {},
     confirmedBookings: [],
     bookings: [],
+    eventBookings: {},
+    eventAttendance: {},
+    failAttendance: false,
   };
 
   let failEmail = false;
@@ -417,13 +430,65 @@ export function makeFetchMock(): FetchMock {
       return json(200, { resources: wix.staffResources });
     }
 
-    // --- Wix attendance leaderboard ---
+    // --- Wix attendance (leaderboard, and coach-payroll per-event) ---
     if (url.includes("/bookings/bookings-attendance/query")) {
+      const eventIds: string[] | undefined = body?.query?.filter?.eventId?.$in;
+      if (eventIds) {
+        if (wix.failAttendance) return json(503, { message: "attendance unavailable" });
+        // Coach payroll: fixtures per event, else synthesize "everyone attended"
+        // from the calendar's filled capacity.
+        const out: any[] = [];
+        for (const evId of eventIds) {
+          if (wix.eventAttendance[evId]) {
+            out.push(...wix.eventAttendance[evId]);
+            continue;
+          }
+          const ev = wix.calendarEvents.find((e: any) => e.id === evId);
+          const filled = ev ? Number(ev.totalCapacity ?? 0) - Number(ev.remainingCapacity ?? 0) : 0;
+          for (let i = 0; i < Math.max(0, filled); i += 1) {
+            out.push({
+              id: `${evId}-a${i}`,
+              bookingId: `${evId}-b${i}`,
+              eventId: evId,
+              status: "ATTENDED",
+              numberOfAttendees: 1,
+            });
+          }
+        }
+        return json(200, { attendances: out, pagingMetadata: { cursors: {} } });
+      }
       return json(200, { attendances: wix.attendanceRecords, pagingMetadata: { cursors: {} } });
     }
 
     // --- Wix booking reader (revision required by cancel/reschedule) ---
     if (url.includes("/_api/bookings-reader/v2/extended-bookings/query")) {
+      const slotEventIds: string[] | undefined =
+        body?.query?.filter?.["bookedEntity.item.slot.eventId"]?.$in;
+      if (slotEventIds) {
+        if (wix.failAttendance) return json(503, { message: "bookings unavailable" });
+        // Coach payroll: fixtures per event, else synthesize CONFIRMED bookings
+        // matching the calendar's filled capacity (default = class was full).
+        const out: any[] = [];
+        for (const evId of slotEventIds) {
+          if (wix.eventBookings[evId]) {
+            out.push(...wix.eventBookings[evId]);
+            continue;
+          }
+          const ev = wix.calendarEvents.find((e: any) => e.id === evId);
+          const filled = ev ? Number(ev.totalCapacity ?? 0) - Number(ev.remainingCapacity ?? 0) : 0;
+          for (let i = 0; i < Math.max(0, filled); i += 1) {
+            out.push({
+              booking: {
+                id: `${evId}-b${i}`,
+                status: "CONFIRMED",
+                numberOfParticipants: 1,
+                bookedEntity: { slot: { eventId: evId, serviceId: wix.serviceId } },
+              },
+            });
+          }
+        }
+        return json(200, { extendedBookings: out, pagingMetadata: { cursors: {} } });
+      }
       const ids: string[] = body?.query?.filter?.id?.$in ?? [];
       if (ids.length === 0 && body?.query?.filter?.status?.$eq === "CANCELED") {
         const offset = Number(body?.query?.paging?.offset ?? 0);
@@ -887,6 +952,9 @@ export function makeFetchMock(): FetchMock {
       wix.attendanceBookings = {};
       wix.confirmedBookings = [];
       wix.bookings = [];
+      wix.eventBookings = {};
+      wix.eventAttendance = {};
+      wix.failAttendance = false;
       failEmail = false;
       waTemplateFailures.clear();
       const d = defaultOmState();

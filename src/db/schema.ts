@@ -1453,6 +1453,19 @@ alter table coach_payment_courses
 alter table coach_payment_courses add column if not exists wix_status text;
 alter table coach_payment_courses
   add column if not exists manual_decision boolean not null default false;
+-- Attendance-based exclusion (chantier coach-attendance, 17/08). category is the
+-- per-event verdict; the counts feed the cockpit/PDF display. Nullable: legacy
+-- rows and manual courses carry no Wix attendance verdict.
+alter table coach_payment_courses add column if not exists attendance_category text
+  check (attendance_category is null or attendance_category in
+    ('empty','all_no_show','attended','incomplete','unavailable'));
+alter table coach_payment_courses add column if not exists attendance_confirmed_count integer
+  check (attendance_confirmed_count is null or attendance_confirmed_count >= 0);
+alter table coach_payment_courses add column if not exists attendance_attended_count integer
+  check (attendance_attended_count is null or attendance_attended_count >= 0);
+alter table coach_payment_courses add column if not exists attendance_no_show_count integer
+  check (attendance_no_show_count is null or attendance_no_show_count >= 0);
+alter table coach_payment_courses add column if not exists attendance_reason text;
 create unique index if not exists idx_coach_payment_wix_event
   on coach_payment_courses (statement_id, wix_event_id)
   where source = 'wix' and wix_event_id is not null;

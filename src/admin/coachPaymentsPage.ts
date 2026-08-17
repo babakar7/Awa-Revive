@@ -1,5 +1,6 @@
 import type {
   CoachPaymentCockpitStatement,
+  CoachPaymentCourse,
   CoachPaymentHoliday,
   CoachPaymentProfile,
   StatementDetail,
@@ -71,6 +72,46 @@ function cockpitStatusBadge(status: CoachPaymentUiStatus): string {
           ? "badge--gray"
           : "badge--amber";
   return `<span class="badge ${cls}">${esc(status)}</span>`;
+}
+
+/** Attendance verdicts that pull a course into the "à vérifier" panel. */
+const ATTENTION_CATEGORIES = new Set(["empty", "all_no_show", "incomplete", "unavailable"]);
+
+/** True when a Wix course carries an attendance verdict the owner should see,
+ * with a legacy fallback for rows synced before classification existed. */
+function courseNeedsAttendanceReview(c: CoachPaymentCourse): boolean {
+  if (c.source !== "wix" || c.wix_status === "CANCELLED") return false;
+  if (c.attendance_category) return ATTENTION_CATEGORIES.has(c.attendance_category);
+  return c.participant_count === 0;
+}
+
+/** Participants/attendance cell for a course row: the Wix verdict plus counts. */
+function attendanceCell(c: CoachPaymentCourse): string {
+  if (c.source === "wix" && c.wix_status === "CANCELLED") {
+    return `<span class="badge badge--red">Séance annulée</span>`;
+  }
+  if (c.source === "manual") return `<span class="badge badge--gray">Manuel</span>`;
+  const confirmed = c.attendance_confirmed_count ?? 0;
+  const counts = `<div class="muted">${c.attendance_attended_count ?? 0} présent(s) · ${c.attendance_no_show_count ?? 0} no-show · ${confirmed} réservé(s)</div>`;
+  switch (c.attendance_category) {
+    case "empty":
+      return `<span class="badge badge--amber">Aucune réservation</span>`;
+    case "all_no_show":
+      return `<span class="badge badge--amber">Non-présentations uniquement</span>${counts}`;
+    case "attended":
+      return `<span class="badge badge--green">Présence confirmée</span>${counts}`;
+    case "incomplete":
+      return `<span class="badge badge--gray">Présences incomplètes</span>${counts}`;
+    case "unavailable":
+      return `<span class="badge badge--gray">Présences Wix indisponibles</span>`;
+    default:
+      // Legacy rows without a verdict: fall back to the calendar capacity.
+      return c.participant_count === 0
+        ? `<span class="badge badge--amber">Séance vide · 0 participant</span>`
+        : c.participant_count === null
+          ? `<span class="badge badge--gray">Participants inconnus</span>`
+          : `<span>${c.participant_count} participant${c.participant_count > 1 ? "s" : ""}</span>`;
+  }
 }
 
 function shiftedMonth(month: string, delta: number): string {
@@ -275,47 +316,42 @@ export function renderCoachPaymentStatement(args: {
   const cancelledCourses = courses
     .filter((c) => c.source === "wix" && c.wix_status === "CANCELLED")
     .sort(chronological);
-  const emptyCourses = courses
-    .filter(
-      (c) =>
-        c.source === "wix" &&
-        c.wix_status !== "CANCELLED" &&
-        c.participant_count === 0,
-    )
+  const attentionCourses = courses
+    .filter(courseNeedsAttendanceReview)
     .sort(chronological);
-  const alreadyPriority = new Set([...cancelledCourses, ...emptyCourses].map((c) => c.id));
+  const alreadyPriority = new Set([...cancelledCourses, ...attentionCourses].map((c) => c.id));
   const manuallyExcludedCourses = courses
     .filter((c) => c.manual_decision && !c.included && !alreadyPriority.has(c.id))
     .sort(chronological);
   const priorityIds = new Set([...alreadyPriority, ...manuallyExcludedCourses.map((c) => c.id)]);
-  const priorityCourses = [...cancelledCourses, ...emptyCourses, ...manuallyExcludedCourses];
+  const priorityCourses = [...cancelledCourses, ...attentionCourses, ...manuallyExcludedCourses];
   const otherCourses = courses.filter((c) => !priorityIds.has(c.id)).sort(chronological);
   const buckets = coachPaymentCourseBuckets(courses);
   const reviewCount = courses.filter(coachPaymentCourseNeedsReview).length;
   const courseRows = (rows: typeof courses, priority: boolean) => rows.map((c) => {
     const cancelled = c.source === "wix" && c.wix_status === "CANCELLED";
-    const attendance = cancelled
-      ? `<span class="badge badge--red">Séance annulée</span>`
-      : c.source === "manual"
-        ? `<span class="badge badge--gray">Manuel</span>`
-        : c.participant_count === 0
-          ? `<span class="badge badge--amber">Séance vide · 0 participant</span>`
-          : c.participant_count === null
-            ? `<span class="badge badge--gray">Participants inconnus</span>`
-            : `<span>${c.participant_count} participant${c.participant_count > 1 ? "s" : ""}</span>`;
-    const counted = cancelled && c.included
-      ? `<span class="badge badge--green">Incluse exceptionnellement</span>`
-      : c.included ? "Oui" : "Non";
-    const action = cancelled && !c.included
-      ? "Inclure exceptionnellement"
-      : c.included ? "Exclure" : "Inclure";
+    // A course excluded by the system (cancelled or an attendance verdict) can
+    // be re-included by the owner as an exception; a manual exclusion is undone
+    // with a plain "Inclure".
+    const autoExcludable =
+      cancelled ||
+      c.attendance_category === "empty" ||
+      c.attendance_category === "all_no_show";
+    const counted = c.included
+      ? c.manual_decision && autoExcludable
+        ? `<span class="badge badge--green">Incluse exceptionnellement</span>`
+        : "Oui"
+      : "Non";
+    const action = !c.included
+      ? autoExcludable ? "Inclure exceptionnellement" : "Inclure"
+      : "Exclure";
     const holidayBadge = c.holiday ? ` <span class="badge badge--amber">Férié +50 %</span>` : "";
-    return `<tr style="${!priority && !c.included ? "opacity:.55" : ""}"><td>${date(c.starts_at)}${holidayBadge}<div class="muted">${c.source === "manual" ? `Manuel · ${esc(c.manual_reason)}` : `Wix · ${esc(c.wix_event_id)}`}</div></td><td>${esc(c.service_name)}</td><td>${attendance}</td><td>${counted}</td>${draft ? `<td><form method="post" action="${BASE}/etats/${esc(statement.id)}/cours/${esc(c.id)}/toggle"><button class="act act--ghost act--sm" type="submit">${action}</button></form></td>` : ""}</tr>`;
+    return `<tr style="${!priority && !c.included ? "opacity:.55" : ""}"><td>${date(c.starts_at)}${holidayBadge}<div class="muted">${c.source === "manual" ? `Manuel · ${esc(c.manual_reason)}` : `Wix · ${esc(c.wix_event_id)}`}</div></td><td>${esc(c.service_name)}</td><td>${attendanceCell(c)}</td><td>${counted}</td>${draft ? `<td><form method="post" action="${BASE}/etats/${esc(statement.id)}/cours/${esc(c.id)}/toggle"><button class="act act--ghost act--sm" type="submit">${action}</button></form></td>` : ""}</tr>`;
   }).join("");
   const columns = draft ? 5 : 4;
   const reviewSummary = priorityCourses.length
-    ? `<div class="card warn"><b>${priorityCourses.length} séance${priorityCourses.length > 1 ? "s" : ""} à vérifier · ${cancelledCourses.length} annulée${cancelledCourses.length > 1 ? "s" : ""} · ${emptyCourses.length} vide${emptyCourses.length > 1 ? "s" : ""}${manuallyExcludedCourses.length ? ` · ${manuallyExcludedCourses.length} exclue${manuallyExcludedCourses.length > 1 ? "s" : ""} manuellement` : ""}</b><div class="muted">Ces alertes n’empêchent pas la validation de l’état.</div></div>`
-    : `<div class="card success"><span class="ok">✓ Aucune séance annulée ou vide à vérifier.</span></div>`;
+    ? `<div class="card warn"><b>${priorityCourses.length} séance${priorityCourses.length > 1 ? "s" : ""} à vérifier · ${cancelledCourses.length} annulée${cancelledCourses.length > 1 ? "s" : ""} · ${attentionCourses.length} présence${attentionCourses.length > 1 ? "s" : ""} à vérifier${manuallyExcludedCourses.length ? ` · ${manuallyExcludedCourses.length} exclue${manuallyExcludedCourses.length > 1 ? "s" : ""} manuellement` : ""}</b><div class="muted">Ces alertes n’empêchent pas la validation de l’état.</div></div>`
+    : `<div class="card success"><span class="ok">✓ Aucune séance à vérifier.</span></div>`;
   const priorityBlock = priorityCourses.length
     ? `<details class="card payment-panel" open><summary><span><b>Séances à vérifier</b><small>${priorityCourses.length} anomalie(s)</small></span></summary><div class="table-wrap"><table><thead><tr><th>Date</th><th>Séance</th><th>Participants Wix</th><th>Comptée</th>${draft ? "<th></th>" : ""}</tr></thead><tbody>${courseRows(priorityCourses, true)}</tbody></table></div></details>`
     : "";
@@ -350,8 +386,9 @@ export function renderCoachPaymentStatement(args: {
   const bucketSummary = `<div class="payment-buckets"><article><span>Manuel</span><b>${buckets.manual}</b></article><article><span>Pilates Mat</span><b>${buckets.mat}</b></article><article><span>Reformer</span><b>${buckets.reformer}</b></article><article><span>Autres Wix</span><b>${buckets.otherWix}</b></article></div>`;
   const exclusionReason = (c: typeof courses[number]): string => {
     if (c.source === "wix" && c.wix_status === "CANCELLED") return "Séance annulée";
-    if (c.source === "wix" && c.participant_count === 0) return "Séance vide (0 participant)";
     if (c.manual_decision) return "Exclue manuellement";
+    if (c.attendance_reason) return c.attendance_reason;
+    if (c.source === "wix" && c.participant_count === 0) return "Séance vide (0 participant)";
     return "Non comptée";
   };
   const excludedCourses = courses.filter((c) => !c.included).sort(chronological);

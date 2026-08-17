@@ -126,6 +126,13 @@ export const config = {
   WIX_SITE_ID: required("WIX_SITE_ID"),
   // Earliest date covered by the accounting ledger and Wix backfill.
   PAYMENTS_LEDGER_START_DATE: optional("PAYMENTS_LEDGER_START_DATE", "2026-07-01"),
+  // Coach payroll attendance exclusion (chantier coach-attendance). Default OFF =
+  // alert-only: courses with no reservation or all-no-show are computed and shown
+  // but still counted/paid, so the owner can validate the rule on a real month
+  // before it reduces any amount. Flip to "true" to actually drop those courses
+  // from pay. Cancelled courses are excluded regardless of this flag (unchanged).
+  COACH_PAYMENT_ATTENDANCE_ENFORCE:
+    optional("COACH_PAYMENT_ATTENDANCE_ENFORCE", "false") === "true",
 
   // Wave
   WAVE_API_KEY: required("WAVE_API_KEY"),

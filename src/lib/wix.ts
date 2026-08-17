@@ -845,6 +845,104 @@ export async function listWixConfirmedBookingSnapshots(): Promise<WixAttendanceB
   return out;
 }
 
+// ---------- targeted per-event attendance (coach payroll) ----------
+
+export interface WixEventAttendanceRecord {
+  bookingId: string;
+  eventId: string | null;
+  status: string;
+  numberOfAttendees: number;
+}
+
+export interface WixEventBooking {
+  bookingId: string;
+  eventId: string | null;
+  status: string;
+  numberOfParticipants: number;
+}
+
+/**
+ * Attendance records for a specific set of calendar events. The `eventId` $in
+ * filter is honored by Wix (verified live, scripts/probe-attendance-filters.ts)
+ * so we read only the payroll month's events instead of the whole history.
+ * Event ids are batched (Wix caps $in lists) and each response is cursor-paged;
+ * any page failure throws, so a partial snapshot never reaches classification.
+ */
+export async function listWixAttendanceByEventIds(
+  eventIds: string[],
+): Promise<WixEventAttendanceRecord[]> {
+  const out: WixEventAttendanceRecord[] = [];
+  for (let i = 0; i < eventIds.length; i += 100) {
+    const chunk = eventIds.slice(i, i + 100);
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (;;) {
+      const data = await wixPost("/bookings/bookings-attendance/query", {
+        query: {
+          filter: { eventId: { $in: chunk } },
+          cursorPaging: { limit: 100, ...(cursor ? { cursor } : {}) },
+        },
+      });
+      for (const rec of Array.isArray(data?.attendances) ? data.attendances : []) {
+        if (!rec?.bookingId) continue;
+        out.push({
+          bookingId: String(rec.bookingId),
+          eventId: rec.eventId ? String(rec.eventId) : rec.sessionId ? String(rec.sessionId) : null,
+          status: String(rec.status ?? "UNKNOWN").toUpperCase(),
+          numberOfAttendees: Math.max(0, Number(rec.numberOfAttendees ?? 1) || 0),
+        });
+      }
+      const next = data?.pagingMetadata?.cursors?.next;
+      if (typeof next !== "string" || !next || seen.has(next)) break;
+      seen.add(next);
+      cursor = next;
+    }
+  }
+  return out;
+}
+
+/**
+ * Bookings for a specific set of calendar events, ALL statuses. The reader's
+ * slot.eventId filter returns cancelled/pending bookings too (verified live),
+ * so callers restrict to CONFIRMED when building coverage — the status is kept
+ * here verbatim rather than pre-filtered.
+ */
+export async function listWixEventBookingsByEventIds(
+  eventIds: string[],
+): Promise<WixEventBooking[]> {
+  const out: WixEventBooking[] = [];
+  for (let i = 0; i < eventIds.length; i += 100) {
+    const chunk = eventIds.slice(i, i + 100);
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (;;) {
+      const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+        query: {
+          filter: { "bookedEntity.item.slot.eventId": { $in: chunk } },
+          cursorPaging: { limit: 100, ...(cursor ? { cursor } : {}) },
+        },
+      });
+      for (const entry of Array.isArray(data?.extendedBookings) ? data.extendedBookings : []) {
+        const booking = entry?.booking;
+        if (!booking?.id) continue;
+        const slot = booking?.bookedEntity?.slot ?? {};
+        const participants = Number(booking.numberOfParticipants ?? booking.totalParticipants ?? 1);
+        out.push({
+          bookingId: String(booking.id),
+          eventId: slot.eventId ? String(slot.eventId) : slot.sessionId ? String(slot.sessionId) : null,
+          status: String(booking.status ?? "UNKNOWN").toUpperCase(),
+          numberOfParticipants: Number.isFinite(participants) && participants > 0 ? participants : 1,
+        });
+      }
+      const next = data?.pagingMetadata?.cursors?.next;
+      if (typeof next !== "string" || !next || seen.has(next)) break;
+      seen.add(next);
+      cursor = next;
+    }
+  }
+  return out;
+}
+
 // ---------- general Wix booking mirror (all statuses) ----------
 
 export interface WixBookingSnapshot {

@@ -32,7 +32,8 @@
     "wix:probe-member": "tsx scripts/probe-create-member.ts",
     "wix:probe-contact-plan": "tsx scripts/probe-contact-plan.ts",
     "wix:probe-plan-closure": "tsx scripts/probe-wix-plan-closure.ts",
-    "wix:probe-payments": "tsx scripts/probe-wix-payments.ts"
+    "wix:probe-payments": "tsx scripts/probe-wix-payments.ts",
+    "wix:probe-attendance": "tsx scripts/probe-attendance-filters.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

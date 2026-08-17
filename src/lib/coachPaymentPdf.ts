@@ -77,13 +77,33 @@ export function coachPaymentCourseSourceLabel(
 }
 
 /** Sub-lines printed under a course row. A manual holiday course carries both
- * its reason and the markup note, so the row height is derived from the count. */
+ * its reason and the markup note, so the row height is derived from the count.
+ * A flagged/excluded attendance verdict adds a proof line so the frozen PDF
+ * records exactly why a class was (or would be) dropped from pay. */
 export function coachPaymentCourseSubLines(
-  course: Pick<CoachPaymentCourse, "manual_reason" | "holiday">,
+  course: Pick<
+    CoachPaymentCourse,
+    | "manual_reason"
+    | "holiday"
+    | "attendance_category"
+    | "attendance_reason"
+    | "attendance_attended_count"
+    | "attendance_no_show_count"
+    | "attendance_confirmed_count"
+  >,
 ): string[] {
   const lines: string[] = [];
   if (course.manual_reason) lines.push(`Motif : ${course.manual_reason}`);
   if (course.holiday) lines.push("Jour férié · majoration +50 %");
+  const cat = course.attendance_category;
+  if (cat && cat !== "attended") {
+    const reason = course.attendance_reason ?? "Présences à vérifier";
+    const detail =
+      cat === "empty"
+        ? ""
+        : ` (${course.attendance_attended_count ?? 0} présent(s), ${course.attendance_no_show_count ?? 0} no-show, ${course.attendance_confirmed_count ?? 0} réservé(s))`;
+    lines.push(`Présences Wix : ${reason}${detail}`);
+  }
   return lines;
 }
 

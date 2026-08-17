@@ -1,4 +1,5 @@
 import type { WixCalendarEvent, WixService } from "../lib/wix.js";
+import type { CourseAttendance } from "./coachAttendance.js";
 
 export const DAKAR_TIMEZONE = "Africa/Dakar";
 
@@ -28,6 +29,9 @@ export interface EligibleCourse {
   coachResourceId: string;
   coachName: string;
   raw: unknown;
+  /** Attendance verdict for this event, attached after the Calendar selection.
+   * Undefined when attendance was never fetched (e.g. legacy callers/tests). */
+  attendance?: CourseAttendance;
 }
 
 export type CoachPaymentUiStatus =
@@ -119,7 +123,22 @@ interface BucketCourse {
   wix_status?: string | null;
   participant_count?: number | null;
   manual_decision?: boolean;
+  attendance_category?:
+    | "empty"
+    | "all_no_show"
+    | "attended"
+    | "incomplete"
+    | "unavailable"
+    | null;
 }
+
+/** Attendance verdicts that warrant owner attention in the cockpit/detail. */
+const ATTENDANCE_REVIEW_CATEGORIES = new Set([
+  "empty",
+  "all_no_show",
+  "incomplete",
+  "unavailable",
+]);
 
 export interface CoachPaymentCourseBuckets {
   manual: number;
@@ -152,11 +171,15 @@ export function coachPaymentCourseBuckets(courses: BucketCourse[]): CoachPayment
 }
 
 export function coachPaymentCourseNeedsReview(course: BucketCourse): boolean {
-  return (
-    (course.source === "wix" && course.wix_status === "CANCELLED") ||
-    (course.source === "wix" && course.wix_status !== "CANCELLED" && course.participant_count === 0) ||
-    (Boolean(course.manual_decision) && !course.included)
-  );
+  if (course.source === "wix" && course.wix_status === "CANCELLED") return true;
+  if (course.source === "wix" && course.wix_status !== "CANCELLED") {
+    if (course.attendance_category && ATTENDANCE_REVIEW_CATEGORIES.has(course.attendance_category)) {
+      return true;
+    }
+    // Legacy rows synced before attendance classification carried no category.
+    if (!course.attendance_category && course.participant_count === 0) return true;
+  }
+  return Boolean(course.manual_decision) && !course.included;
 }
 
 export function normalizeSearch(value: string): string {

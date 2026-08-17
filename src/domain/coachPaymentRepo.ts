@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool } from "../db/index.js";
+import { config } from "../config.js";
 import {
   computePaymentTotals,
   monthBounds,
@@ -85,6 +86,17 @@ export interface CoachPaymentCourse {
   manual_decision: boolean;
   manual_reason: string | null;
   holiday: boolean;
+  attendance_category:
+    | "empty"
+    | "all_no_show"
+    | "attended"
+    | "incomplete"
+    | "unavailable"
+    | null;
+  attendance_confirmed_count: number | null;
+  attendance_attended_count: number | null;
+  attendance_no_show_count: number | null;
+  attendance_reason: string | null;
   raw_snapshot: unknown;
   created_at: Date;
 }
@@ -253,7 +265,10 @@ export async function listCurrentStatements(month: string): Promise<CoachPayment
            ) as other_wix_count,
            count(*) filter (
              where (source='wix' and wix_status='CANCELLED')
-                or (source='wix' and wix_status is distinct from 'CANCELLED' and participant_count=0)
+                or (source='wix' and wix_status is distinct from 'CANCELLED'
+                    and attendance_category in ('empty','all_no_show','incomplete','unavailable'))
+                or (source='wix' and wix_status is distinct from 'CANCELLED'
+                    and attendance_category is null and participant_count=0)
                 or (manual_decision and not included)
            ) as anomaly_count
          from coach_payment_courses where statement_id=s.id
@@ -442,15 +457,24 @@ async function insertCourses(
       previous?.wixStatus === null && previous.included === false;
     const manualDecision =
       Boolean(previous?.manualDecision) || legacyManualExclusion;
-    const included = manualDecision
-      ? previous!.included
-      : course.wixStatus !== "CANCELLED";
+    // Auto-exclusion recomputed on every sync (never promoted to a manual
+    // decision), so a later Wix correction re-includes the course on its own.
+    // Cancelled sessions are always excluded; attendance-based exclusion only
+    // bites when enforcement is on (alert-only otherwise — the verdict is still
+    // stored and shown, but the course keeps counting until the owner confirms
+    // the rule on a real month).
+    const att = course.attendance;
+    const autoExcluded =
+      course.wixStatus === "CANCELLED" ||
+      (config.COACH_PAYMENT_ATTENDANCE_ENFORCE && Boolean(att?.autoExcludable));
+    const included = manualDecision ? previous!.included : !autoExcluded;
     await client.query(
       `insert into coach_payment_courses
         (statement_id, source, wix_event_id, service_id, service_name, starts_at,
          ends_at, participant_count, wix_status, coach_resource_id, coach_name,
-         included, manual_decision, raw_snapshot)
-       values ($1,'wix',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+         included, manual_decision, attendance_category, attendance_confirmed_count,
+         attendance_attended_count, attendance_no_show_count, attendance_reason, raw_snapshot)
+       values ($1,'wix',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
       [
         statementId,
         course.wixEventId,
@@ -464,6 +488,11 @@ async function insertCourses(
         course.coachName,
         included,
         manualDecision,
+        att?.category ?? null,
+        att?.confirmedBookingCount ?? null,
+        att?.attendedCount ?? null,
+        att?.noShowCount ?? null,
+        att?.reason ?? null,
         JSON.stringify(course.raw),
       ],
     );
@@ -544,6 +573,7 @@ export async function refreshDraftProfileSnapshot(
 export async function replaceWixSnapshot(
   statementId: string,
   courses: EligibleCourse[],
+  sync: { status: "ok" | "failed"; error: string | null } = { status: "ok", error: null },
 ): Promise<CoachPaymentStatement> {
   if (!validUuid(statementId)) throw new CoachPaymentError("État introuvable");
   return transaction(async (client) => {
@@ -581,11 +611,16 @@ export async function replaceWixSnapshot(
       [statementId],
     );
     await insertCourses(client, statementId, courses, decisions);
+    // Courses (calendar-derived) are always refreshed so the owner keeps a live
+    // view; sync_status reflects whether the attendance proof came through. A
+    // degraded snapshot (failed) blocks validation while showing provisional data.
     await client.query(
       `update coach_payment_statements
-          set sync_status='ok', sync_error=null, synced_at=now(), updated_at=now()
+          set sync_status=$2, sync_error=$3,
+              synced_at=case when $2='ok' then now() else synced_at end,
+              updated_at=now()
         where id=$1`,
-      [statementId],
+      [statementId, sync.status, sync.error],
     );
     return recalculate(client, statementId);
   });

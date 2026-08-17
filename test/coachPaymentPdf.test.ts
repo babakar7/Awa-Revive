@@ -41,4 +41,43 @@ describe("coach payment PDF course sub-lines", () => {
       "Jour férié · majoration +50 %",
     ]);
   });
+
+  it("records an attendance proof line for a flagged verdict", () => {
+    expect(
+      coachPaymentCourseSubLines({
+        manual_reason: null,
+        holiday: false,
+        attendance_category: "all_no_show",
+        attendance_reason: "Non-présentations uniquement",
+        attendance_attended_count: 0,
+        attendance_no_show_count: 2,
+        attendance_confirmed_count: 2,
+      }),
+    ).toEqual(["Présences Wix : Non-présentations uniquement (0 présent(s), 2 no-show, 2 réservé(s))"]);
+  });
+
+  it("omits the count detail for an empty session and stays silent when attended", () => {
+    expect(
+      coachPaymentCourseSubLines({
+        manual_reason: null,
+        holiday: false,
+        attendance_category: "empty",
+        attendance_reason: "Aucune réservation",
+        attendance_attended_count: 0,
+        attendance_no_show_count: 0,
+        attendance_confirmed_count: 0,
+      }),
+    ).toEqual(["Présences Wix : Aucune réservation"]);
+    expect(
+      coachPaymentCourseSubLines({
+        manual_reason: null,
+        holiday: false,
+        attendance_category: "attended",
+        attendance_reason: "Présence confirmée",
+        attendance_attended_count: 3,
+        attendance_no_show_count: 0,
+        attendance_confirmed_count: 3,
+      }),
+    ).toEqual([]);
+  });
 });
