@@ -24,6 +24,7 @@ const rule = (over: Partial<AutoCancelRule> = {}): AutoCancelRule => ({
   weekdays: [],
   start_min_from: null,
   start_min_to: null,
+  opening_contact_id: null,
   ...over,
 });
 

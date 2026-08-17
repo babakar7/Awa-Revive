@@ -46,6 +46,13 @@ Paiement mobile-money tardif sur occurrence annulée → `REFUND_NEEDED` raison
 → reste actif + flux deferred-slot. `slot_cache` exclut/purge les sessions
 annulées (une réponse WhatsApp périmée redéclenche une recherche fraîche).
 
+**Accueil / ouverture (ajout 17/08).** Chaque règle a un destinataire OPTIONNEL
+« accueil » (`opening_contact_id`), prévenu EN PLUS du coach/owner/manager mais
+UNIQUEMENT pour les annulations de cours du matin (`isMorningClass` ≤ 09:15) —
+pour que la personne qui fait l'ouverture sache si elle peut venir plus tard.
+Facultatif : absent/muet = simplement ignoré, ne bloque jamais l'annulation. Son
+message porte une ligne dédiée « si aucun autre cours tôt, tu peux venir plus tard ».
+
 **Notifications.** Réutilisent la machinerie `notificationSweep` (template-first,
 131047, retries, journal) via `notification_log` source `auto_cancel`, dedup par
 (occurrence, numéro). Alerte config unique/occurrence quand un destinataire requis

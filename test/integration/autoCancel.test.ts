@@ -36,6 +36,7 @@ async function seedRule(over: Partial<acrepo.RuleInput> = {}): Promise<string> {
     start_min_to: over.start_min_to ?? null,
     owner_contact_id: over.owner_contact_id ?? null,
     manager_contact_id: over.manager_contact_id ?? null,
+    opening_contact_id: over.opening_contact_id ?? null,
     enabled: over.enabled ?? false,
   });
   const r = await pool.query(`select id from auto_cancel_rules where label = $1 order by created_at desc limit 1`, [
@@ -45,8 +46,9 @@ async function seedRule(over: Partial<acrepo.RuleInput> = {}): Promise<string> {
 }
 
 describe("auto-cancel rule CRUD + activation", () => {
-  it("round-trips a rule; owner is implicit (OWNER_PHONE), only the manager is chosen", async () => {
+  it("round-trips a rule; owner is implicit (OWNER_PHONE), manager + optional opening chosen", async () => {
     const manager = await seedContact("Manager", "+221771112202");
+    const opening = await seedContact("Accueil", "+221770001122");
     const id = await seedRule({
       label: "reformer matin",
       service_ids: ["reformer-foundation", "reformer-intense"],
@@ -54,13 +56,16 @@ describe("auto-cancel rule CRUD + activation", () => {
       start_min_from: 7 * 60,
       start_min_to: 10 * 60,
       manager_contact_id: manager,
+      opening_contact_id: opening,
       enabled: true,
     });
     const rule = (await acrepo.getRule(id))!;
     expect(rule.service_ids).toEqual(["reformer-foundation", "reformer-intense"]);
     expect(rule.weekdays).toEqual([1, 2, 3]);
     expect(rule.start_min_from).toBe(420);
-    // No owner contact was chosen; activation still passes (owner = OWNER_PHONE).
+    expect(rule.opening_contact_id).toBe(opening);
+    expect((await acrepo.openingContactForRule(rule))?.name).toBe("Accueil");
+    // No owner contact was chosen; the optional opening contact never blocks activation.
     expect(acrepo.ownerRecipient()).not.toBeNull();
     expect(await acrepo.ruleActivationError(rule)).toBeNull();
   });

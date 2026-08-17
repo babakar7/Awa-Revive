@@ -42,7 +42,7 @@ export interface AutoCancelRuleRow extends AutoCancelRule {
 }
 
 const RULE_COLUMNS = `id, label, enabled, service_id, service_ids, weekdays, start_min_from, start_min_to,
-  owner_contact_id, manager_contact_id, created_at, updated_at`;
+  owner_contact_id, manager_contact_id, opening_contact_id, created_at, updated_at`;
 
 function rowToRule(r: any): AutoCancelRuleRow {
   // service_ids is the source of truth; fall back to a legacy single service_id.
@@ -62,6 +62,7 @@ function rowToRule(r: any): AutoCancelRuleRow {
     start_min_to: r.start_min_to,
     owner_contact_id: r.owner_contact_id,
     manager_contact_id: r.manager_contact_id,
+    opening_contact_id: r.opening_contact_id ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -92,6 +93,7 @@ export interface RuleInput {
   start_min_to: number | null;
   owner_contact_id: string | null;
   manager_contact_id: string | null;
+  opening_contact_id: string | null;
   enabled: boolean;
 }
 
@@ -100,8 +102,8 @@ export async function createRule(input: RuleInput): Promise<void> {
   await pool.query(
     `insert into auto_cancel_rules
        (label, enabled, service_ids, weekdays, start_min_from, start_min_to,
-        owner_contact_id, manager_contact_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        owner_contact_id, manager_contact_id, opening_contact_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [
       input.label,
       input.enabled,
@@ -111,6 +113,7 @@ export async function createRule(input: RuleInput): Promise<void> {
       input.start_min_to,
       input.owner_contact_id,
       input.manager_contact_id,
+      input.opening_contact_id,
     ],
   );
 }
@@ -120,7 +123,7 @@ export async function updateRule(id: string, input: RuleInput): Promise<void> {
   await pool.query(
     `update auto_cancel_rules set
        label=$2, enabled=$3, service_ids=$4, service_id=null, weekdays=$5, start_min_from=$6,
-       start_min_to=$7, owner_contact_id=$8, manager_contact_id=$9, updated_at=now()
+       start_min_to=$7, owner_contact_id=$8, manager_contact_id=$9, opening_contact_id=$10, updated_at=now()
      where id=$1`,
     [
       id,
@@ -132,6 +135,7 @@ export async function updateRule(id: string, input: RuleInput): Promise<void> {
       input.start_min_to,
       input.owner_contact_id,
       input.manager_contact_id,
+      input.opening_contact_id,
     ],
   );
 }
@@ -173,6 +177,16 @@ export async function managerContactForRule(rule: AutoCancelRuleRow): Promise<Fi
   const res = await pool.query(
     `select id, name, phone, muted from staff_contacts where id = $1`,
     [rule.manager_contact_id],
+  );
+  return (res.rows[0] as FixedContact) ?? null;
+}
+
+/** The rule's optional « accueil / ouverture » contact (morning cancellations only). */
+export async function openingContactForRule(rule: AutoCancelRuleRow): Promise<FixedContact | null> {
+  if (!rule.opening_contact_id) return null;
+  const res = await pool.query(
+    `select id, name, phone, muted from staff_contacts where id = $1`,
+    [rule.opening_contact_id],
   );
   return (res.rows[0] as FixedContact) ?? null;
 }

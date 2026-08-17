@@ -52,6 +52,8 @@ export interface AutoCancelRuleView {
   /** Resolved names for each targeted service id (unknown id → null placeholder). */
   serviceNames: Array<{ id: string; name: string | null }>;
   managerName: string | null;
+  /** Optional opening/reception contact name (morning cancellations). */
+  openingName: string | null;
 }
 
 export interface AutoCancelServiceOption {
@@ -188,6 +190,10 @@ function ruleForm(
     <select name="manager_contact_id" required>${contactOptions(edit?.manager_contact_id ?? null)}</select>
   </label>
   <p class="muted" style="margin:0">Prévenus automatiquement : le <b>coach du cours</b> (numéro Wix) et <b>toi, le propriétaire</b>${config.OWNER_PHONE ? ` (+${esc(config.OWNER_PHONE.replace(/^\+/, ""))})` : ` <span class="danger-text">— OWNER_PHONE non configuré</span>`}. Choisis juste le manager (différent de toi, actif).</p>
+  <label style="max-width:340px">Accueil / ouverture <span class="muted">(optionnel)</span>
+    <select name="opening_contact_id">${contactOptions(edit?.opening_contact_id ?? null)}</select>
+  </label>
+  <p class="muted" style="margin:0">Prévenu·e <b>en plus</b>, mais seulement pour les annulations de <b>cours du matin (≤ 9h15)</b> — pour savoir s'il/elle peut venir plus tard s'il n'y a pas d'autre cours tôt.</p>
   <label class="chip-check" style="align-self:flex-start"><input type="checkbox" name="enabled" value="1"${edit?.enabled ? " checked" : ""}> Activer cette règle</label>
   <div class="cluster">
     <button class="act" type="submit">${edit ? "Enregistrer" : "Créer la règle"}</button>
@@ -227,7 +233,7 @@ export function renderAutoCancelSection(d: AutoCancelSectionData): string {
   <div class="task-copy">
     <div class="cluster">${stateBadge}${svc}</div>
     <b>${esc(r.label)}</b>
-    <p class="muted">${esc(weekdaysSummary(r.weekdays))} · ${esc(timeRangeSummary(r.start_min_from, r.start_min_to))} → coach + toi (propriétaire) + ${esc(view.managerName ?? "manager ?")}</p>
+    <p class="muted">${esc(weekdaysSummary(r.weekdays))} · ${esc(timeRangeSummary(r.start_min_from, r.start_min_to))} → coach + toi (propriétaire) + ${esc(view.managerName ?? "manager ?")}${view.openingName ? ` + ${esc(view.openingName)} <span class="muted">(accueil, matin)</span>` : ""}</p>
     ${errLine}
   </div>
   <div class="task-action">

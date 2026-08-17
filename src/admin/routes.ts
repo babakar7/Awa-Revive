@@ -3665,6 +3665,7 @@ ${photoSection}
             activationError: r.enabled ? await acrepo.ruleActivationError(r) : null,
             serviceNames: r.service_ids.map((id) => ({ id, name: serviceNameById.get(id) ?? null })),
             managerName: r.manager_contact_id ? contactNameById.get(r.manager_contact_id) ?? null : null,
+            openingName: r.opening_contact_id ? contactNameById.get(r.opening_contact_id) ?? null : null,
           })),
         );
         const acSection = renderAutoCancelSection({
@@ -3846,6 +3847,7 @@ ${photoSection}
           return min >= 0 && min < 24 * 60 ? min : null;
         };
         const managerId = String(body.manager_contact_id ?? "").trim() || null;
+        const openingId = String(body.opening_contact_id ?? "").trim() || null;
         return {
           label,
           service_ids: serviceIds,
@@ -3855,6 +3857,7 @@ ${photoSection}
           // Owner is always the studio owner (OWNER_PHONE), never a per-rule pick.
           owner_contact_id: null,
           manager_contact_id: managerId,
+          opening_contact_id: openingId,
           enabled: body.enabled === "1",
         };
       }

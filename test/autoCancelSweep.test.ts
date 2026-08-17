@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   purgeSlotCacheForSession: vi.fn(),
   ownerRecipient: vi.fn(),
   managerContactForRule: vi.fn(),
+  openingContactForRule: vi.fn(),
   withOccurrenceLock: vi.fn(),
   staleCancellingRows: vi.fn(),
   revertToObserving: vi.fn(),
@@ -63,7 +64,7 @@ vi.mock("../src/domain/notificationRepo.js", () => ({
 }));
 vi.mock("../src/domain/autoCancelRepo.js", () => mocks);
 
-import { sweepAutoCancellations } from "../src/domain/autoCancelSweep.js";
+import { openingRecipientFor, sweepAutoCancellations } from "../src/domain/autoCancelSweep.js";
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -77,6 +78,7 @@ const RULE = {
   start_min_to: null,
   owner_contact_id: "o1",
   manager_contact_id: "m1",
+  opening_contact_id: "op1",
 };
 
 /** A slot 2.5h ahead → inside the daytime [start-3h, start-2h] window now. */
@@ -106,6 +108,9 @@ beforeEach(() => {
     phone: "+221771112202",
     muted: false,
   });
+  // Default: no opening contact (keeps the full-sweep tests at 3 recipients,
+  // independent of the real wall-clock morning/daytime split).
+  mocks.openingContactForRule.mockResolvedValue(null);
   mocks.findStaffByName.mockResolvedValue(null);
   mocks.listStaffResources.mockResolvedValue([{ id: "c1", name: "Alou", phone: "+221770000009", email: null }]);
   mocks.claimOrReclaim.mockResolvedValue(true);
@@ -232,5 +237,29 @@ describe("sweepAutoCancellations", () => {
     const n = await sweepAutoCancellations(log);
     expect(n).toBe(0);
     expect(mocks.cancelClassOccurrence).not.toHaveBeenCalled();
+  });
+});
+
+describe("openingRecipientFor (accueil/ouverture, morning-only)", () => {
+  const MORNING = { startIso: "2026-08-24T07:00:00.000Z" }; // 07:00 ≤ 09:15
+  const DAYTIME = { startIso: "2026-08-24T18:00:00.000Z" };
+  const contact = { id: "op1", name: "Accueil Fatou", phone: "+221770001122", muted: false };
+
+  it("adds the opening recipient for a morning class", async () => {
+    mocks.openingContactForRule.mockResolvedValue(contact);
+    const r = await openingRecipientFor(RULE as any, MORNING);
+    expect(r).toEqual({ role: "opening", name: "Accueil Fatou", phone: "+221770001122" });
+  });
+
+  it("does NOT add it for a later (daytime) class even if configured", async () => {
+    mocks.openingContactForRule.mockResolvedValue(contact);
+    expect(await openingRecipientFor(RULE as any, DAYTIME)).toBeNull();
+  });
+
+  it("skips a muted or unset opening contact", async () => {
+    mocks.openingContactForRule.mockResolvedValue({ ...contact, muted: true });
+    expect(await openingRecipientFor(RULE as any, MORNING)).toBeNull();
+    mocks.openingContactForRule.mockResolvedValue(null);
+    expect(await openingRecipientFor(RULE as any, MORNING)).toBeNull();
   });
 });

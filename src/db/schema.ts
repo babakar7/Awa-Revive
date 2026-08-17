@@ -955,6 +955,12 @@ create table if not exists auto_cancel_rules (
 -- unique d'origine devient facultatif (repli legacy, plus écrit par l'UI).
 alter table auto_cancel_rules alter column service_id drop not null;
 alter table auto_cancel_rules add column if not exists service_ids text[] not null default '{}';
+-- Destinataire « accueil / ouverture » OPTIONNEL : prévenu EN PLUS du coach, du
+-- owner et du manager, mais UNIQUEMENT pour les annulations de cours du matin
+-- (≤ 09:15) — pour qu'il/elle sache s'il/elle peut venir plus tard. Facultatif :
+-- son absence ou son mute ne bloque jamais l'annulation.
+alter table auto_cancel_rules add column if not exists opening_contact_id uuid
+  references staff_contacts(id) on delete set null;
 
 -- Registre d'occurrences, clé GLOBALE = event id Calendar V3 (court, slot.eventId)
 -- de l'occurrence. L'unicité globale empêche toute double annulation entre règles

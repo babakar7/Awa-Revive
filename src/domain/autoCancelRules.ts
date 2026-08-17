@@ -52,6 +52,9 @@ export interface AutoCancelRule {
   /** Inclusive start-of-day-minutes range the class start must fall in. null = any. */
   start_min_from: number | null;
   start_min_to: number | null;
+  /** Optional « accueil / ouverture » contact, notified IN ADDITION for morning
+   *  (≤09:15) cancellations only. null = none. Never gates the cancellation. */
+  opening_contact_id: string | null;
 }
 
 /** A concrete occurrence observed from Wix, normalized for the engine. */

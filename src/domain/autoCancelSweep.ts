@@ -9,6 +9,7 @@ import {
   cancelNotifyDedupKey,
   isEmpty,
   isEmptyLongEnough,
+  isMorningClass,
   isWithinWindow,
   matchesRule,
   nextEmptyTimer,
@@ -51,9 +52,22 @@ interface Candidate {
 // ---------- recipient resolution ----------
 
 interface Recipient {
-  role: "coach" | "owner" | "manager";
+  role: "coach" | "owner" | "manager" | "opening";
   name: string;
   phone: string;
+}
+
+/** Resolve the optional « accueil / ouverture » recipient — only for a morning
+ *  (≤09:15) occurrence, only if the rule set one and it's active. Never blocks.
+ *  Exported for unit tests (morning-gating is time-of-day dependent). */
+export async function openingRecipientFor(
+  rule: acrepo.AutoCancelRuleRow,
+  candidate: { startIso: string },
+): Promise<{ role: "opening"; name: string; phone: string } | null> {
+  if (!isMorningClass(candidate.startIso)) return null;
+  const c = await acrepo.openingContactForRule(rule);
+  if (!c || c.muted || phoneDigits(c.phone).length < 8) return null;
+  return { role: "opening", name: c.name, phone: c.phone };
 }
 
 async function resolveCoachPhone(
@@ -97,6 +111,9 @@ async function resolveRecipients(
   if (manager && !manager.muted && phoneDigits(manager.phone).length >= 8) {
     resolvable.push({ role: "manager", name: manager.name, phone: manager.phone });
   }
+  // Optional opening/reception recipient — morning cancellations only, never required.
+  const opening = await openingRecipientFor(rule, candidate);
+  if (opening) resolvable.push(opening);
   if (!coach) return { missing: `coach "${candidate.coach ?? "?"}"`, resolvable };
   if (!owner) return { missing: "propriétaire (OWNER_PHONE)", resolvable };
   if (!manager || manager.muted) return { missing: "manager", resolvable };
@@ -121,13 +138,23 @@ function fmtTime(iso: string): string {
   });
 }
 
-function cancelMessage(serviceName: string, candidate: Candidate, ruleLabel: string): string {
+function cancelMessage(
+  serviceName: string,
+  candidate: Candidate,
+  ruleLabel: string,
+  role?: Recipient["role"],
+): string {
+  // The opening/reception recipient gets an extra line about coming in later.
+  const openingLine =
+    role === "opening"
+      ? `\n👉 Ouverture : si aucun autre cours tôt n'est prévu, tu peux venir plus tard.`
+      : "";
   return (
     `Cours annulé automatiquement (personne d'inscrit).\n` +
     `• ${serviceName}\n` +
     `• ${fmtDay(candidate.startIso)} à ${fmtTime(candidate.startIso)}\n` +
     `• Coach : ${candidate.coach ?? "—"}\n` +
-    `• Règle : ${ruleLabel}\n\n` +
+    `• Règle : ${ruleLabel}${openingLine}\n\n` +
     `Message automatique d'Awa — merci de ne pas répondre.`
   );
 }
@@ -337,6 +364,7 @@ function ruleToPure(r: acrepo.AutoCancelRuleRow): AutoCancelRule {
     weekdays: r.weekdays,
     start_min_from: r.start_min_from,
     start_min_to: r.start_min_to,
+    opening_contact_id: r.opening_contact_id,
   };
 }
 
@@ -455,13 +483,12 @@ async function finalizeCancellation(
   const serviceName = (await wix.getCalendarOccurrence(candidate.eventId).catch(() => null))?.serviceName
     ?? "le cours";
   const subject = "Cours annulé (vide)";
-  const body = cancelMessage(serviceName, candidate, rule.label);
   const seen = new Set<string>();
   for (const r of recipients) {
     const key = phoneDigits(r.phone);
     if (seen.has(key)) continue; // owner == coach etc. → one notice
     seen.add(key);
-    await deliverNotice(candidate.eventId, r, subject, body, log);
+    await deliverNotice(candidate.eventId, r, subject, cancelMessage(serviceName, candidate, rule.label, r.role), log);
   }
 }
 
@@ -493,13 +520,16 @@ async function deliverNoticesForRow(row: acrepo.LedgerRow, log: SweepLog): Promi
     if (manager && !manager.muted && phoneDigits(manager.phone).length >= 8) {
       recipients.push({ role: "manager", name: manager.name, phone: manager.phone });
     }
+    const opening = await openingRecipientFor(rule, candidate);
+    if (opening) recipients.push(opening);
   }
-  const body = cancelMessage(occ?.serviceName ?? "le cours", candidate, rule?.label ?? "annulation auto");
+  const serviceName = occ?.serviceName ?? "le cours";
+  const ruleLabel = rule?.label ?? "annulation auto";
   const seen = new Set<string>();
   for (const r of recipients) {
     const key = phoneDigits(r.phone);
     if (seen.has(key)) continue;
     seen.add(key);
-    await deliverNotice(candidate.eventId, r, "Cours annulé (vide)", body, log);
+    await deliverNotice(candidate.eventId, r, "Cours annulé (vide)", cancelMessage(serviceName, candidate, ruleLabel, r.role), log);
   }
 }
