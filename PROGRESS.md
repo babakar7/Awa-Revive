@@ -317,18 +317,17 @@ Source, contrôle de dates unique) + `test/integration/paymentsLedger.test.ts`
 (filtrage `q` nom/`%`/téléphone-espaces/`q`+méthode, résolution tag cash→exclu,
 allowlist `return_to`, export réservation >1 000 lignes non clampé).
 
-## Commandes salle différées 30/50 min + notes après recherche (16 août 2026)
+## Commandes salle différées 30/50 min + notes après recherche (16–17 août 2026)
 
 - Les composeurs **Salle** et **Supervision** gardent la commande immédiate par
   défaut et proposent « Pour plus tard » avec exactement deux choix : **30 min**
   ou **50 min**. Le serveur refuse toute autre valeur.
-- Une commande différée est enregistrée immédiatement dans la session (subtotal
-  et annulation restent fiables), mais reste hors de l'écran Cuisine jusqu'à sa
-  fenêtre de préparation, **15 min avant l'heure promise**. Salle/Supervision la
-  voient comme « Prévue pour HH:MM » et peuvent l'annuler ou la faire partir via
-  « Préparer maintenant ». L'activation atomique est reprise par le sweep 60 s.
-- Les temps de préparation, alertes « Cuisine non confirmée », KPI en cours et
-  auto-clôture partent de l'activation, jamais de la prise de commande initiale.
+- **Correction métier du 17/08** : une commande différée part désormais en
+  Cuisine **immédiatement**, comme une commande ordinaire. Le ticket porte le
+  badge « ⏰ Pour HH:MM » et la voix annonce « Commande programmée pour HH:MM » ;
+  l'heure future informe la cuisine mais ne retarde ni l'affichage, ni le son,
+  ni les actions. Salle/Supervision confirment explicitement « envoyée en
+  cuisine ». Les anciennes lignes encore en attente sont libérées au boot/sweep.
 - Correctif connexe : ajouter un article ordinaire depuis la recherche quitte
   désormais la vue compacte et révèle immédiatement sa **note par article**.
   Avant, seuls les matchas semblaient accepter une note car leurs choix requis

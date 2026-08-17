@@ -144,7 +144,7 @@ async function cuisineBootData(): Promise<{ cursor: number; tickets: unknown[] }
     listOpenKitchenTickets(),
     latestOpsEventId(CUISINE_CHANNEL),
   ]);
-  return { cursor, tickets: tickets.filter((t) => t.activated_at != null).map(kitchenTicketView) };
+  return { cursor, tickets: tickets.map(kitchenTicketView) };
 }
 
 /** Host-aware redirect for cuisine.revive.sn "/" → the PWA scope. */
@@ -822,8 +822,7 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     return reply.type("application/json").send({ stats, devices });
   });
 
-  // Live stream: scheduled tickets share this durable channel for Supervision;
-  // the Cuisine client ignores them until activation.
+  // Live stream: the cuisine channel carries every ticket event (both sources).
   app.get(`${OWNER_BASE}/events`, async (req, reply) => {
     const device = await deviceFromReq(req, "owner");
     if (!device) return reply.code(401).send({ error: "unpaired" });

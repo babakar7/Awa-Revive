@@ -56,9 +56,6 @@ export const ACCUEIL_CHANNEL = "accueil";
 export const TABLE_ORDER_READY_DELAYS = [30, 50] as const;
 export type TableOrderReadyDelay = (typeof TABLE_ORDER_READY_DELAYS)[number];
 
-/** Wake Cuisine shortly before the promised ready time, not when staff takes the order. */
-export const TABLE_ORDER_PREP_LEAD_MINUTES = 15;
-
 export function parseTableOrderReadyDelay(value: unknown): TableOrderReadyDelay | null | "invalid" {
   if (value === undefined || value === null || value === "") return null;
   const n = typeof value === "number" ? value : Number(value);

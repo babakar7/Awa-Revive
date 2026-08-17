@@ -80,7 +80,7 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("body.ready_in_minutes=state.readyIn");
     expect(SERVICE_APP_JS).toContain("Préparer maintenant");
     expect(SERVICE_APP_JS).toContain("/prepare-now");
-    expect(SERVICE_APP_JS).toContain("Commande programmée — ");
+    expect(SERVICE_APP_JS).toContain("Commande programmée envoyée en cuisine — ");
     expect(serviceBoardPage()).toContain(".later-options");
   });
 

@@ -789,7 +789,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway};if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn.value) body.first_name=fn.value;
       var sentSpot=chosenSpot();
       postJSON('/spots/'+state.spotId+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.ok){ closeSheet(); showOwnerNotice(j.scheduled_for?'Commande programmée — '+(sentSpot?sentSpot.label:'Espace')+' · '+hhmm(j.scheduled_for):'Commande envoyée — '+(sentSpot?sentSpot.label:'Espace')); }
+        if(j&&j.ok){ closeSheet(); showOwnerNotice(j.scheduled_for?'Commande programmée envoyée en cuisine — '+(sentSpot?sentSpot.label:'Espace')+' · '+hhmm(j.scheduled_for):'Commande envoyée — '+(sentSpot?sentSpot.label:'Espace')); }
         else { state.sending=false; go.disabled=false; recompute(); setError((j&&j.message)||'Commande refusée. Corrigez les choix puis réessayez.'); }
       }).catch(function(){ state.sending=false; go.disabled=false; recompute(); setError('Envoi impossible. Vérifiez la connexion puis réessayez.'); });
     };

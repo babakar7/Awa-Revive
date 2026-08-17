@@ -159,33 +159,28 @@ describe("createTableTicket", () => {
     expect((await opsEventsSince("accueil", beforeAccueil)).some((e) => e.kind === "ticket_new")).toBe(true);
   });
 
-  it("holds a future TABLE ticket until its preparation window, then activates once", async () => {
+  it("sends a future TABLE ticket to Cuisine immediately with its promised time", async () => {
     const s = await seat(canapeSpot);
-    const scheduledFor = new Date(Date.now() + 10 * 60_000); // already inside the 15-min prep window
+    const scheduledFor = new Date(Date.now() + 50 * 60_000);
+    const before = await latestOpsEventId("cuisine");
     const { ticket } = await createTableTicket({
       sessionId: s.id, heading: s.short_code, subheading: "Canapé", lines: LINES,
       amountXof: 6000, note: null, clientRequestId: reqId(), isTest: false, scheduledFor,
     });
     expect(ticket.scheduled_for).not.toBeNull();
-    expect(ticket.activated_at).toBeNull();
-    expect(await advanceTicketByCuisine(ticket.id, "PREPARING", "Cuisine")).toBeNull();
-
-    const before = await latestOpsEventId("cuisine");
-    const activated = await activateDueTableTickets();
-    expect(activated.map((t) => t.id)).toContain(ticket.id);
-    expect(activated[0].activated_at).not.toBeNull();
+    expect(ticket.activated_at).not.toBeNull();
     expect((await opsEventsSince("cuisine", before)).some((e) => e.kind === "ticket_new")).toBe(true);
+    expect((await advanceTicketByCuisine(ticket.id, "PREPARING", "Cuisine"))?.status).toBe("PREPARING");
     expect(await activateDueTableTickets()).toHaveLength(0);
   });
 
-  it("can release a future TABLE ticket to Cuisine immediately", async () => {
+  it("keeps the legacy prepare-now override idempotent for an already sent future ticket", async () => {
     const s = await seat(canapeSpot);
     const { ticket } = await createTableTicket({
       sessionId: s.id, heading: s.short_code, subheading: "Canapé", lines: LINES,
       amountXof: 6000, note: null, clientRequestId: reqId(), isTest: false,
       scheduledFor: new Date(Date.now() + 50 * 60_000),
     });
-    expect((await activateTableTicketNow(ticket.id))?.activated_at).not.toBeNull();
     expect(await activateTableTicketNow(ticket.id)).toBeNull();
   });
 
@@ -591,7 +586,7 @@ describe("service PWA over HTTP", () => {
     expect((await getKitchenTicket(JSON.parse(test.body).id))?.is_test).toBe(true);
   });
 
-  it("schedules only 30/50-minute orders, shows them to staff, and withholds them from Cuisine", async () => {
+  it("schedules only 30/50-minute orders and sends them to Cuisine immediately", async () => {
     const accueil = await pairAccueil();
     const cuisine = await pairCuisine();
     const ordered = await app.inject({
@@ -602,18 +597,12 @@ describe("service PWA over HTTP", () => {
     const created = JSON.parse(ordered.body);
     expect(created.scheduled_for).toBeTruthy();
     const ticket = await getKitchenTicket(created.id);
-    expect(ticket?.activated_at).toBeNull();
+    expect(ticket?.activated_at).not.toBeNull();
 
     const serviceState = JSON.parse((await app.inject({ method: "GET", url: "/ops/service/state", headers: { cookie: accueil } })).body);
-    expect(serviceState.tickets.some((t: any) => t.id === created.id && t.scheduled_for && !t.activated_at)).toBe(true);
+    expect(serviceState.tickets.some((t: any) => t.id === created.id && t.scheduled_for && t.activated_at)).toBe(true);
     const cuisineState = JSON.parse((await app.inject({ method: "GET", url: "/ops/cuisine/state", headers: { cookie: cuisine } })).body);
-    expect(cuisineState.tickets.some((t: any) => t.id === created.id)).toBe(false);
-
-    const released = await app.inject({ method: "POST", url: `/ops/service/tickets/${created.id}/prepare-now`, headers: { cookie: accueil } });
-    expect(released.statusCode).toBe(200);
-    expect(JSON.parse(released.body).ok).toBe(true);
-    const cuisineAfter = JSON.parse((await app.inject({ method: "GET", url: "/ops/cuisine/state", headers: { cookie: cuisine } })).body);
-    expect(cuisineAfter.tickets.some((t: any) => t.id === created.id && t.activated_at)).toBe(true);
+    expect(cuisineState.tickets.some((t: any) => t.id === created.id && t.scheduled_for && t.activated_at)).toBe(true);
   });
 
   it("rejects any future delay other than 30 or 50 before opening the table", async () => {

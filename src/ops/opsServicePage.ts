@@ -758,7 +758,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       state.sending=true;go.disabled=true;go.textContent='Envoi…';msg.hidden=true;
       var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,test:state.test}; if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn&&fn.value) body.first_name=fn.value;
       post('/spots/'+sp.id+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
-        if(j&&j.ok){if(j.id&&!j.scheduled_for)trackSend(j.id);closeSheet();showServiceNotice(j.scheduled_for?'Commande programmée — '+sp.label+' · '+hhmm(j.scheduled_for):'Commande envoyée — '+sp.label);}
+        if(j&&j.ok){if(j.id)trackSend(j.id);closeSheet();showServiceNotice(j.scheduled_for?'Commande programmée envoyée en cuisine — '+sp.label+' · '+hhmm(j.scheduled_for):'Commande envoyée — '+sp.label);}
         else{state.sending=false;go.disabled=false;recompute();setError((j&&j.message)||'Commande refusée. Corrigez les choix puis réessayez.');}
       }).catch(function(){state.sending=false;go.disabled=false;recompute();setError('Envoi impossible. Vérifiez la connexion puis réessayez.');});
     };

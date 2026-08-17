@@ -194,11 +194,11 @@ async function main() {
     } catch (err) {
       app.log.error({ err }, "Serve-escalation sweep failed");
     }
-    // Future TABLE orders enter Cuisine only when their 15-minute preparation
-    // window opens. The DB claim is atomic, so overlapping instances emit once.
+    // Compatibility repair: scheduled TABLE orders now enter Cuisine at once.
+    // Release any row created by the former delayed flow before this deploy.
     try {
       const activated = await activateDueTableTickets();
-      if (activated.length > 0) app.log.info({ activated: activated.length }, "Scheduled table orders activated");
+      if (activated.length > 0) app.log.info({ activated: activated.length }, "Legacy scheduled table orders released");
     } catch (err) {
       app.log.error({ err }, "Scheduled table-order activation failed");
     }

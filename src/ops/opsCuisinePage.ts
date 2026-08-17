@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v21";
+const ASSET_VERSION = "v22";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -291,13 +291,14 @@ export const CUISINE_APP_JS = String.raw`(function(){
     return l.qty+' '+l.name+(p?', '+p:'')+(l.note?', '+l.note:''); }).join('. '); }
   function newSpeech(t){ var w=t.heading||'';
     var lead;
-    if(t.source==='DELIVERY') lead='Nouvelle livraison';
+    if(t.scheduled_for) lead='Commande programmée pour '+hhmm(t.scheduled_for);
+    else if(t.source==='DELIVERY') lead='Nouvelle livraison';
     else if(t.source==='BAR') lead='Nouvelle commande bar'+(t.takeaway?' à emporter':'');
     else lead='Nouvelle commande'+(t.takeaway?' à emporter':'');
     var it=itemsSpeech(t);
     // The ticket-level note (champ texte libre) carries instructions the cook
     // must hear — items and per-line notes alone would silently drop it.
-    return lead+(t.scheduled_for?' pour '+hhmm(t.scheduled_for):'')+(w?', '+w:'')+(it?'. '+it:'')+(t.note?'. Note, '+t.note:''); }
+    return lead+(w?', '+w:'')+(it?'. '+it:'')+(t.note?'. Note, '+t.note:''); }
   function urgentSpeech(t){ return 'Commande urgente'+(t.heading?', '+t.heading:''); }
   function cancelSpeech(t){ var it=itemsSpeech(t); return 'Commande annulée'+(t.heading?', '+t.heading:'')+(it?'. '+it:''); }
 

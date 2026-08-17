@@ -53,10 +53,11 @@ describe("cuisine PWA assets", () => {
     expect(CUISINE_APP_JS).toContain("t.takeaway");
   });
 
-  it("holds future table orders until activation and labels their ready time", () => {
-    expect(CUISINE_APP_JS).toContain("if(!t.activated_at)return");
+  it("labels future table orders and announces their promised time by voice", () => {
     expect(CUISINE_APP_JS).toContain("⏰ Pour ");
     expect(CUISINE_APP_JS).toContain("t.scheduled_for");
+    expect(CUISINE_APP_JS).toContain("Commande programmée pour ");
+    expect(CUISINE_APP_JS).toContain("speak(newSpeech(t),false)");
     expect(CUISINE_APP_JS).toContain("t.activated_at||t.created_at");
   });
 

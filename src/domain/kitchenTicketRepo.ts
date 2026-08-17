@@ -4,7 +4,6 @@ import { recordOpsEvent } from "./opsEvents.js";
 import {
   ACCUEIL_CHANNEL,
   CUISINE_CHANNEL,
-  TABLE_ORDER_PREP_LEAD_MINUTES,
   isOpenStatus,
   type KitchenTicketStatus,
   type KitchenTicketSource,
@@ -94,8 +93,6 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
  */
 async function emitTicket(kind: "ticket_new" | "ticket_update", t: KitchenTicket): Promise<void> {
   const view = kitchenTicketView(t);
-  // Cuisine's client ignores not-yet-activated TABLE rows; keeping the durable
-  // event on this shared channel lets Supervision show the scheduled order now.
   await recordOpsEvent(CUISINE_CHANNEL, kind, view);
   await recordOpsEvent(ACCUEIL_CHANNEL, kind, view);
 }
@@ -201,8 +198,7 @@ export async function createTableTicket(
     `insert into kitchen_tickets
        (source, session_id, client_request_id, items_json, note, amount_xof,
         heading, subheading, is_test, takeaway, scheduled_for, activated_at)
-     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-             case when $10::timestamptz is null then now() else null end)
+     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
      on conflict (client_request_id) where client_request_id is not null do nothing
      returning *`,
     [
@@ -227,23 +223,25 @@ export async function createTableTicket(
   return { ticket: existing as KitchenTicket, created: false };
 }
 
-/** Activate due scheduled TABLE orders exactly once and introduce them to Cuisine. */
+/**
+ * Compatibility repair for scheduled TABLE rows created by the former delayed
+ * flow. New scheduled orders activate at insert and reach Cuisine immediately;
+ * this sweep releases any pre-deploy row still waiting.
+ */
 export async function activateDueTableTickets(): Promise<KitchenTicket[]> {
   const res = await pool.query(
     `update kitchen_tickets
-        set activated_at=scheduled_for - make_interval(mins => $1), updated_at=now()
+        set activated_at=now(), updated_at=now()
       where source='TABLE' and status='NEW' and scheduled_for is not null
         and activated_at is null
-        and scheduled_for <= now() + make_interval(mins => $1)
       returning *`,
-    [TABLE_ORDER_PREP_LEAD_MINUTES],
   );
   const rows = res.rows as KitchenTicket[];
   for (const row of rows) await emitTableActivation(row);
   return rows;
 }
 
-/** Reception/owner override when a client finishes early: expose it to Cuisine now. */
+/** Compatibility/manual override for a legacy scheduled row still waiting. */
 export async function activateTableTicketNow(id: string): Promise<KitchenTicket | null> {
   if (!UUID_RE.test(String(id))) return null;
   const res = await pool.query(

@@ -56,7 +56,7 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).toContain("body.ready_in_minutes=state.readyIn");
     expect(OWNER_APP_JS).toContain("Préparer maintenant");
     expect(OWNER_APP_JS).toContain("/prepare-now");
-    expect(OWNER_APP_JS).toContain("Commande programmée — ");
+    expect(OWNER_APP_JS).toContain("Commande programmée envoyée en cuisine — ");
     expect(ownerBoardPage()).toContain(".later-options");
   });
 
