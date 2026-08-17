@@ -421,19 +421,27 @@ export function renderNotificationsPage(d: NotificationsPageData): string {
     ? ""
     : `<a class="act" href="/admin/notifications?new=1#rule-form">+ Nouvelle alerte</a>`;
 
+  // The routine "actives + tout mettre en pause / alertes gérant" controls live
+  // in the collapsed Réglages section so the alerts list comes first. A paused
+  // state still stands out: amber header badge + the section auto-opens below.
   return `
 ${d.banner}
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Configuration</span><h2>Alertes staff</h2><p>Prévenez automatiquement les coachs (ou un numéro fixe) avant les cours choisis.</p></div><div class="page-header-actions"><span class="badge ${d.alertsPaused ? "badge--amber" : "badge--green"}">${d.alertsPaused ? "En pause" : "Actives"}</span>${newButton}</div></header>
-${masterSwitch}
-${ownerAlertCard}
 ${templateNote}
 ${formSection}
 
-<h2>Alertes (${d.rules.length})</h2>
-<p class="muted">« Test » envoie le message avec des valeurs d'exemple à ${d.testPhone ? `<b>+${esc(d.testPhone.replace(/^\+/, ""))}</b>` : "un numéro non configuré"} (jamais au vrai gardien / coach).</p>
-${d.rules.length ? `<div class="task-list">${ruleCards}</div>` : `<div class="card"><div class="empty"><b>Aucune alerte</b><p>Créez la première avec « + Nouvelle alerte ».</p></div></div>`}
+<div class="row between" style="align-items:baseline;flex-wrap:wrap;gap:.5rem"><h2 style="margin:0">Alertes (${d.rules.length})</h2><span class="muted">« Test » envoie un exemple à ${d.testPhone ? `<b>+${esc(d.testPhone.replace(/^\+/, ""))}</b>` : "un numéro non configuré"} (jamais au vrai coach).</span></div>
+${d.rules.length ? `<div class="task-list alert-grid">${ruleCards}</div>` : `<div class="card"><div class="empty"><b>Aucune alerte</b><p>Créez la première avec « + Nouvelle alerte ».</p></div></div>`}
 
-<details class="card" style="margin-top:1rem"${d.openSection === "contacts" ? " open" : ""}>
+<details class="card" style="margin-top:1rem"${d.alertsPaused ? " open" : ""}>
+<summary style="cursor:pointer;font-weight:650">Réglages &amp; alertes gérant</summary>
+<div style="margin-top:.8rem;display:flex;flex-direction:column;gap:.2rem">
+${masterSwitch}
+${ownerAlertCard}
+</div>
+</details>
+
+<details class="card"${d.openSection === "contacts" ? " open" : ""}>
 <summary style="cursor:pointer;font-weight:650">Répertoire staff (${d.contacts.length})</summary>
 <div style="margin-top:.8rem">
 ${coachHint}

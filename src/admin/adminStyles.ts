@@ -249,6 +249,12 @@ tr.rowlink:focus-within{box-shadow:inset 3px 0 var(--brand)}
 .badge--amber{background:var(--warn-bg);border-color:var(--warn-border);color:var(--warn)}
 .badge--blue{background:var(--info-bg);border-color:var(--info-border);color:var(--info)}
 .badge--green{background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok)}
+/* Staff-alert list: tidy fixed-width tiles that pack left, so many alerts scan
+   at a glance instead of one full-width card per row. */
+.alert-grid{grid-template-columns:repeat(auto-fill,minmax(300px,380px));justify-content:start;align-items:stretch}
+.alert-grid .task-item{display:flex;flex-direction:column;align-items:stretch;gap:.45rem;height:100%}
+.alert-grid .task-priority{display:none}
+.alert-grid .task-action{justify-content:flex-start;flex-wrap:wrap;margin-top:auto;padding-top:.15rem}
 /* Multi-select course picker (staff-alert form) */
 .svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.4rem;margin-top:.2rem}
 .svc-grid.is-disabled{opacity:.45;pointer-events:none}

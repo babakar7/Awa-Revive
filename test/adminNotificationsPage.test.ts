@@ -158,4 +158,23 @@ describe("notifications admin — collapsed sections", () => {
     expect(html).toContain('action="/admin/notifications/owner-test"');
     expect(html).toContain("Tester l'alerte gérant");
   });
+
+  it("puts the alerts list first and the pause/owner controls in a collapsed Réglages section", () => {
+    const html = render({ rules: [makeRule()] });
+    // Alerts list uses the compact tile grid.
+    expect(html).toContain('class="task-list alert-grid"');
+    // The pause + owner controls are NOT at the top: the alerts heading comes
+    // before the "Tout mettre en pause" control and the "Réglages" summary.
+    const alertsIdx = html.indexOf("Alertes (1)");
+    const pauseIdx = html.indexOf("Tout mettre en pause");
+    const reglagesIdx = html.indexOf("Réglages");
+    expect(alertsIdx).toBeGreaterThan(-1);
+    expect(pauseIdx).toBeGreaterThan(alertsIdx);
+    expect(reglagesIdx).toBeGreaterThan(alertsIdx);
+  });
+
+  it("auto-opens Réglages when alerts are paused", () => {
+    const html = render({ alertsPaused: true });
+    expect(html).toMatch(/<details class="card"[^>]* open>\s*<summary[^>]*>Réglages/);
+  });
 });
