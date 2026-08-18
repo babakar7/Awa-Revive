@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildHistoryMessages,
+  conversationReplayContext,
   turnsAfterConversationGap,
 } from "../src/agent/index.js";
 
@@ -97,6 +98,54 @@ describe("turnsAfterConversationGap", () => {
     ];
 
     expect(turnsAfterConversationGap(turns)).toEqual([turns[1]]);
+  });
+
+  it("keeps Aïda's latest intent as a stale-safe summary across the 24h reset", () => {
+    const turns = [
+      {
+        role: "user",
+        content: "Coucou je veux venir une fois par semaine les samedi à 12h15 comment faire et quel prix ?",
+        created_at: new Date("2026-08-15T13:05:22Z"),
+      },
+      {
+        role: "user",
+        content: "Reformer",
+        created_at: new Date("2026-08-15T13:05:34Z"),
+      },
+      {
+        role: "user",
+        content: "Non c’est la première fois",
+        created_at: new Date("2026-08-15T13:06:47Z"),
+      },
+      {
+        role: "tool",
+        content: "check_availability({service_id: stale}) -> {slot_id: stale}",
+        created_at: new Date("2026-08-15T13:06:53Z"),
+      },
+      {
+        role: "assistant",
+        content:
+          "Aucun créneau samedi 12h15 pour l'instant. Voici les créneaux Reformer Foundation ouverts 👇\n" +
+          "[message interactif list — options : Dimanche · 10:15]",
+        created_at: new Date("2026-08-15T13:07:03Z"),
+      },
+      {
+        role: "user",
+        content: "Et maintenant?",
+        created_at: new Date("2026-08-18T16:58:15Z"),
+      },
+    ];
+
+    const context = conversationReplayContext(turns);
+
+    expect(context.currentTurns).toEqual([turns[5]]);
+    expect(context.gapDays).toBe(3);
+    expect(context.priorSummary?.latestClientIntent).toContain("samedi à 12h15");
+    expect(context.priorSummary?.latestClientIntent).toContain("Reformer");
+    expect(context.priorSummary?.latestClientIntent).toContain("première fois");
+    expect(context.priorSummary?.lastAssistantOutcome).toContain("Reformer Foundation");
+    expect(JSON.stringify(context.priorSummary)).not.toContain("slot_id");
+    expect(JSON.stringify(context.priorSummary)).not.toContain("Dimanche · 10:15");
   });
 
   it("keeps a continuous conversation, including tool turns", () => {

@@ -35,6 +35,10 @@ import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
 import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
 import { normalizeInboundText } from "../lib/inboundText.js";
+import {
+  summarizePriorConversation,
+  type PriorConversationSummary,
+} from "./conversationSummary.js";
 import { isMidnightTomorrowAmbiguous } from "./relativeDateAmbiguity.js";
 import { applyFrenchRegister, detectFrenchRegister } from "../lib/frenchRegister.js";
 import {
@@ -384,6 +388,43 @@ export function turnsAfterConversationGap<T extends { created_at: Date | string 
     }
   }
   return turns.slice(start);
+}
+
+export interface ConversationReplayContext<T> {
+  currentTurns: T[];
+  gapDays: number | null;
+  priorSummary: PriorConversationSummary | null;
+}
+
+/**
+ * Split replay at the last long silence, but carry a small semantic bridge from
+ * the immediately preceding conversation. Live facts still have to be fetched
+ * again; the bridge exists only so "Et maintenant ?" retains its subject.
+ */
+export function conversationReplayContext<
+  T extends { role: string; content: string; created_at: Date | string },
+>(turns: readonly T[]): ConversationReplayContext<T> {
+  const currentTurns = turnsAfterConversationGap(turns);
+  if (currentTurns.length === turns.length) {
+    return { currentTurns, gapDays: null, priorSummary: null };
+  }
+
+  const boundary = turns.length - currentTurns.length;
+  const previous = new Date(turns[boundary - 1].created_at).getTime();
+  const current = new Date(turns[boundary].created_at).getTime();
+  const gapDays =
+    Number.isFinite(previous) && Number.isFinite(current) && current > previous
+      ? Math.max(1, Math.round((current - previous) / 86_400_000))
+      : null;
+  // If the 30-turn replay contains more than one old conversation, summarize
+  // only the one immediately before the latest gap.
+  const priorConversation = turnsAfterConversationGap(turns.slice(0, boundary));
+
+  return {
+    currentTurns,
+    gapDays,
+    priorSummary: summarizePriorConversation(priorConversation),
+  };
 }
 
 export type DeliveryReplyPaymentMethod = "wave" | "orange_money" | "maxit" | "cash";
@@ -1100,19 +1141,14 @@ export async function handleInboundText(args: {
   }
 
   const history = await repo.lastTurnsForReplay(client.id, 30);
-  const currentConversationHistory = turnsAfterConversationGap(history);
+  const {
+    currentTurns: currentConversationHistory,
+    gapDays: conversationGapDays,
+    priorSummary: priorConversationSummary,
+  } = conversationReplayContext(history);
   // If a long silence split the thread, tell the model how stale the prior
   // exchange is so it never resumes an expired offer or a past-date pitch
   // (prod: a 9-day-later "Bonjour" got "on en était à ton créneau du 16 juillet").
-  let conversationGapDays: number | null = null;
-  if (currentConversationHistory.length > 0 && currentConversationHistory.length < history.length) {
-    const boundary = history.length - currentConversationHistory.length;
-    const prev = new Date(history[boundary - 1].created_at).getTime();
-    const curr = new Date(history[boundary].created_at).getTime();
-    if (Number.isFinite(prev) && Number.isFinite(curr) && curr > prev) {
-      conversationGapDays = Math.max(1, Math.round((curr - prev) / 86_400_000));
-    }
-  }
   // Pack Découverte campaign RETIRED (Babakar, 01/08/2026): the offer is gone,
   // so no inbound lead is ever steered into the 10k first-session pitch. New and
   // returning discovery leads all go through L'Invitée. Referral leads are still
@@ -1224,6 +1260,7 @@ export async function handleInboundText(args: {
         reviewGate,
         reviewLink: config.GOOGLE_REVIEW_URL || undefined,
         conversationGapDays,
+        priorConversationSummary,
         studioClosures,
         faqEntries,
         pendingInteractiveList,
