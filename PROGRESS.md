@@ -1,5 +1,33 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Syntaxe d'outil dans un brouillon : retry AVEC outils (18 août 2026)
+
+**Incident (Mariama Baldé, 18/08 matin).** Après avoir payé le plan « 2x Reformer
+1x Step » (120 000 F), son « Oui stp » pour réserver la Foundation de mercredi
+11h15 a produit un brouillon contenant `⟦trace⟧` au lieu d'un vrai appel
+`book_with_membership`. Le lint sortant l'a bloqué (`tool_syntax`), mais le retry
+correctif tourne **sans outils** : il ne pouvait donc jamais effectuer la
+réservation → message technique en boîte + relais, cliente payée sans séance
+réservée. (Réservation faite manuellement via script ops le jour même, séance
+décomptée + confirmation WhatsApp envoyée côté owner.)
+
+**Fix (`agent/tool-syntax-retry`).** Dans la boucle agent, si la réponse finale
+contient de la syntaxe d'outil (`containsToolSyntax`, même regex que le lint) ET
+que le tour est encore sans effet de bord (aucun outil exécuté, aucun message
+interactif), on ré-entre la boucle UNE fois avec les outils et une instruction
+corrective (`TOOL_SYNTAX_TOOL_RETRY_INSTRUCTION`) — le modèle peut alors
+réellement réserver. Même patron que le retry « silence périmé » du 17/08
+(`shouldRetryToolSyntaxWithTools`, miroir de
+`shouldRetryUnexpectedSilenceWithTools`). Après un outil exécuté ou un second
+leak, le chemin existant (lint → retry sans outils → fallback technique) reste
+inchangé : le lint demeure la dernière garde. Tests : `test/toolSyntaxRetry.test.ts`.
+
+**Piège relevé au passage** : au changement de méthode de paiement, Awa a annoncé
+« le précédent lien Orange Money est annulé » — faux, les liens ne sont pas
+révoqués côté serveur (la cliente a d'ailleurs payé le lien OM « annulé » et le
+doublon Max It a expiré sans dégât). Si un jour double paiement : rembourser via
+le runbook. Non traité dans ce chantier.
+
 ## Plan sur mesure « 2x Reformer 1x Step » (17 août 2026)
 
 - Nouveau plan Wix créé : **120 000 F · 12 séances · 30 jours** (`a3e4c40e-7088-42f7-b04e-49ff7bc9b192`), avec un seul pool de 12 crédits relié aux trois niveaux Reformer et au Step.

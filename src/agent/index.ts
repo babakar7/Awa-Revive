@@ -11,6 +11,7 @@ import { systemPrompt, dynamicContext, businessMapsUrl } from "./systemPrompt.js
 import {
   lintOutboundReply,
   correctiveLintInstruction,
+  containsToolSyntax,
   canToolResultApprovePaymentUrl,
   createSlotTimeGuard,
   absorbSlotTimeFacts,
@@ -172,6 +173,20 @@ const UNEXPECTED_SILENCE_TOOL_RETRY_INSTRUCTION =
   " Tools are available on this retry: when the latest request needs live information, call the " +
   "appropriate tool now and answer from its result.";
 
+// A draft that writes a tool call or a ⟦trace⟧ line as prose was going to be
+// blocked by the outbound lint, whose corrective retry runs WITHOUT tools — so
+// the action the client just approved (a booking, an availability check) could
+// never happen (Mariama 18/08: "Oui stp" → ⟦trace⟧ instead of
+// book_with_membership → paid client stranded on the technical fallback).
+// While the turn is still side-effect free, retrying the normal loop with
+// tools is safe and lets the model actually perform the action.
+const TOOL_SYNTAX_TOOL_RETRY_INSTRUCTION =
+  "Your previous draft was invalid and was NOT sent: it wrote a tool call or an internal " +
+  `${TOOL_TRACE_MARKER} line as plain text. Writing tool syntax in a reply does nothing — no tool ran ` +
+  "and nothing reached the client. If the latest request needs an action (booking, availability, " +
+  "payment link…), CALL the real tool now and answer from its result. Then reply with one natural " +
+  `message containing no tool syntax and no ${TOOL_TRACE_MARKER}.`;
+
 /** Concatenate the text blocks of a model response into the reply string. */
 export function extractText(response: Anthropic.Message): string {
   return response.content
@@ -282,6 +297,28 @@ export function shouldRetryUnexpectedSilenceWithTools(args: {
     !args.interactiveSent &&
     !args.toolExecuted &&
     classifyReplyOutcome(args.replyText, false) === "recover"
+  );
+}
+
+/**
+ * A reply drafting tool syntax as prose is safe to rerun with tools only while
+ * the turn is side-effect free — once any tool or interactive delivery ran,
+ * re-entering the loop could repeat an action, so the tool-less lint retry
+ * remains the recovery path. One retry maximum; a second leak falls through to
+ * the outbound lint exactly as before.
+ */
+export function shouldRetryToolSyntaxWithTools(args: {
+  replyText: string | null;
+  interactiveSent: boolean;
+  toolExecuted: boolean;
+  alreadyRetried: boolean;
+}): boolean {
+  return (
+    !args.alreadyRetried &&
+    !args.interactiveSent &&
+    !args.toolExecuted &&
+    !!args.replyText &&
+    containsToolSyntax(args.replyText)
   );
 }
 
@@ -1224,6 +1261,7 @@ export async function handleInboundText(args: {
   let circuitTripped = false;
   let toolExecutedThisTurn = false;
   let silenceWithToolsRetried = false;
+  let toolSyntaxWithToolsRetried = false;
   let agentSystem = system;
 
   let lastResponse: Anthropic.Message | null = null;
@@ -1302,6 +1340,26 @@ export async function handleInboundText(args: {
           ];
           console.warn(
             "Model returned stale silence before any current-turn tool — retrying once with tools",
+          );
+          continue;
+        }
+        if (
+          loopError == null &&
+          shouldRetryToolSyntaxWithTools({
+            replyText,
+            interactiveSent,
+            toolExecuted: toolExecutedThisTurn,
+            alreadyRetried: toolSyntaxWithToolsRetried,
+          })
+        ) {
+          toolSyntaxWithToolsRetried = true;
+          replyText = null;
+          agentSystem = [
+            ...system,
+            { type: "text", text: TOOL_SYNTAX_TOOL_RETRY_INSTRUCTION },
+          ];
+          console.warn(
+            "Model drafted tool syntax as text before any current-turn tool — retrying once with tools",
           );
           continue;
         }

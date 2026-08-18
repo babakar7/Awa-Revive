@@ -266,6 +266,17 @@ export function findSlotTimeMismatch(reply: string, guard: SlotTimeGuard): SlotT
 const TOOL_SYNTAX_RE =
   /⟦trace⟧|\[outil\]|\b(?:create_(?:payment|plan_payment|cafe_payment|delivery_payment)_link|refresh_expired_plan_payment_link|add_spots_to_booking|book_with_membership|check_availability|present_options|list_classes|list_plans|request_email_verification|submit_verification_code|create_plan_payment_link)\s*\(/i;
 
+/**
+ * True when a reply drafts tool syntax as prose. The agent loop uses this to
+ * retry WITH tools while the turn is still side-effect free — a tool-less
+ * rewrite can never perform the action the client just approved (prod 18/08:
+ * the model wrote ⟦trace⟧ instead of calling book_with_membership, and the
+ * paid client's booking was stranded behind the technical fallback).
+ */
+export function containsToolSyntax(text: string): boolean {
+  return TOOL_SYNTAX_RE.test(text);
+}
+
 const ACTIVE_LINK_CLAIM_RE =
   /\b(?:ton|votre|le|ce|the|your)\s+lien(?:\s+de\s+paiement|\s+payment)?\s+(?:est|reste|is|remains)\s+(?:encore\s+)?(?:actif|active|valide|valid)|\blien\s+(?:est\s+)?toujours\s+valide\b/i;
 
