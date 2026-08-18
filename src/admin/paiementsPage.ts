@@ -79,13 +79,11 @@ function shiftDay(day: string, delta: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-// Quick range chips + a date picker for the movements list. Presets preserve the
-// active method/source/type filters. On the payments view the picker is omitted
-// (the Filtrer card is the single advanced date control — one date UI, not two);
-// the bookings view keeps its inline picker.
-function rangeBar(d: PaymentsPageData, opts: { picker?: boolean } = {}): string {
+// Quick range chips + a date picker for the movements list. Presets and the
+// picker preserve the active view/search/filter context so staff can widen the
+// period without leaving the top of either view.
+function rangeBar(d: PaymentsPageData): string {
   const bookings = d.view === "bookings";
-  const showPicker = opts.picker ?? true;
   const yesterday = shiftDay(d.today, -1);
   const tomorrow = shiftDay(d.today, 1);
   const presets: Array<{ label: string; from: string; to: string }> = bookings
@@ -110,13 +108,11 @@ function rangeBar(d: PaymentsPageData, opts: { picker?: boolean } = {}): string 
     !bookings && d.type ? `<input type="hidden" name="type" value="${esc(d.type)}">` : "",
     d.q ? `<input type="hidden" name="q" value="${esc(d.q)}">` : "",
   ].join("");
-  const picker = showPicker
-    ? `<form method="get" action="/admin/paiements" class="range-picker">${hidden}
+  const picker = `<form method="get" action="/admin/paiements" class="range-picker">${hidden}
       <label>Du <input type="date" name="from" value="${esc(d.from)}"${bookings ? "" : ` min="${esc(d.startDate)}" max="${esc(d.today)}"`}></label>
       <label>Au <input type="date" name="to" value="${esc(d.to)}"${bookings ? "" : ` max="${esc(d.today)}"`}></label>
       <button class="act act--sm" type="submit">Voir</button>
-    </form>`
-    : `<a class="act act--ghost act--sm" href="#pay-filtres">Autre période →</a>`;
+    </form>`;
   return `<div class="range-bar">
     <nav class="filters" aria-label="Période">${chips}</nav>
     ${picker}</div>`;
@@ -377,7 +373,8 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
   const filterQuery = new URLSearchParams({ from: d.from, to: d.to, ...(d.method ? { method: d.method } : {}), ...(d.source ? { source: d.source } : {}), ...(d.type ? { type: d.type } : {}), ...(d.q ? { q: d.q } : {}) }).toString();
   const banners = `${d.notice ? `<div class="card success">${esc(d.notice)}</div>` : ""}${d.error ? `<div class="card warn">${esc(d.error)}</div>` : ""}`;
 
-  const mouvements = `<section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2>${rangeBar(d, { picker: false })}${searchForm(d)}<p class="muted">${d.from === d.to ? `Transactions du ${esc(d.from)}` : `Transactions du ${esc(d.from)} au ${esc(d.to)}`} · 300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>`;
+  const periodBar = `<section class="card payment-period-bar" aria-label="Période des paiements"><span class="eyebrow">Date de paiement</span><h2>Période</h2>${rangeBar(d)}</section>`;
+  const mouvements = `<section class="card anchor-target" id="pay-mouvements"><h2>Mouvements</h2>${searchForm(d)}<p class="muted">${d.from === d.to ? `Transactions du ${esc(d.from)}` : `Transactions du ${esc(d.from)} au ${esc(d.to)}`} · 300 lignes maximum à l’écran ; les totaux et l’export portent sur toute la période.</p>${movementRows(d.rows, d.owner)}</section>`;
   const syncCard = `<div class="card${d.sync.lastError ? " warn" : ""}"><b>Synchronisation Wix : ${d.sync.lastSucceededAt ? fmtDate(d.sync.lastSucceededAt) : "jamais réussie"}</b><p class="muted">${d.sync.recordCount} mouvement(s) stocké(s) · réconciliation complète ${d.sync.lastFullReconciledAt ? fmtDate(d.sync.lastFullReconciledAt) : "jamais"}${d.sync.lastError ? ` · dernière erreur : ${esc(d.sync.lastError)}` : ""}</p><p class="muted">Périmètre comptable depuis le ${esc(d.startDate)} : les lignes antérieures ne sont pas couvertes, les dates historiques estimées sont signalées, et les anciennes commandes Wix en XAF sont comptées à parité nominale 1:1 comme XOF (devise d’origine conservée pour audit).</p></div>`;
   const excludedAlert = alerts.length ? `<div class="card warn"><b>Lignes Wix écartées des totaux</b><p>${alerts.map(([k,n]) => `${esc(k)} : ${n}`).join(" · ")}</p></div>` : "";
   const qualifierSection = qualifier(d.untagged);
@@ -402,7 +399,7 @@ export function renderPaymentsPage(d: PaymentsPageData): string {
   const middle = searchActive
     ? [mouvements, excludedAlert, qualifierSection, remboursements, totaux, filtres, journaliers, manuel]
     : [qualifierSection, remboursements, excludedAlert, mouvements, totaux, filtres, journaliers, manuel];
-  const parts = [banners, viewSwitch(d)];
+  const parts = [banners, viewSwitch(d), periodBar];
   if (!searchActive) parts.push(jumpNav(d));
   if (syncTop) parts.push(syncCard);
   parts.push(...middle);

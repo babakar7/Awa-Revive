@@ -120,9 +120,10 @@ describe("payments ledger pure rules", () => {
     });
     // one day-header band per Dakar day, newest first, header above its rows
     const movements = html.slice(html.indexOf('id="pay-mouvements"'));
+    const movementTable = movements.slice(movements.indexOf("<tbody>"));
     expect(movements).toContain('class="day-head"');
-    expect(movements.indexOf("2026-08-11")).toBeLessThan(movements.indexOf("2026-08-10"));
-    expect(movements.indexOf("day-head")).toBeLessThan(movements.indexOf("Awa"));
+    expect(movementTable.indexOf("2026-08-11")).toBeLessThan(movementTable.indexOf("2026-08-10"));
+    expect(movementTable.indexOf("day-head")).toBeLessThan(movementTable.indexOf("Awa"));
     // per-day net honours the refund (24000 − 24000 = 0) and excludes tag_exclu (30000, not 129999)
     expect(movements).toMatch(/2026-08-11<\/b>[^<]*· 2 transactions · net 0/);
     expect(movements).toMatch(/2026-08-10<\/b>[^<]*· 2 transactions · net 30/);
@@ -291,12 +292,20 @@ describe("paiements search + requalify bridge", () => {
     expect(html).toContain("Wix boutique");
   });
 
-  it("gives the payments view a single date control (no inline date picker)", () => {
-    const html = renderPaymentsPage({ ...paymentsBase, view: "payments" } as any);
-    // The only type=date inputs live in the Filtrer card; the movements range
-    // bar is chips + an "Autre période" link.
+  it("keeps the custom date interval at the top of the payments view", () => {
+    const html = renderPaymentsPage({
+      ...paymentsBase, view: "payments", untagged: [mkMovement()],
+      refundNeeded: [{ id: "b1", service_name: "Sculpt", amount_xof: 12000, client_name: "Awa Ba" }],
+    } as any);
+    // Even with both action queues present, Du/Au remains before them and the
+    // movements list: staff never has to scroll to the later Filtrer card.
     const beforeFiltres = html.slice(0, html.indexOf('id="pay-filtres"'));
-    expect(beforeFiltres).not.toContain('type="date"');
-    expect(html).toContain("Autre période");
+    expect(beforeFiltres.match(/type="date"/g)).toHaveLength(2);
+    expect(beforeFiltres).toContain('name="from"');
+    expect(beforeFiltres).toContain('name="to"');
+    expect(beforeFiltres).not.toContain("Autre période");
+    expect(html.indexOf('class="payment-period-bar"')).toBeLessThan(html.indexOf('id="pay-qualifier"'));
+    expect(html.indexOf('class="payment-period-bar"')).toBeLessThan(html.indexOf('id="pay-remboursements"'));
+    expect(html.indexOf('class="payment-period-bar"')).toBeLessThan(html.indexOf('id="pay-mouvements"'));
   });
 });

@@ -1,5 +1,19 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Paiements : intervalle Du/Au restauré en haut de la vue comptable (18 août 2026)
+
+- Retour terrain : dans « Par date de paiement », la réception ne voyait plus
+  les champs d'intervalle sur le premier écran et devait descendre jusqu'à la
+  carte « Filtrer ». La régression venait du changement du 16/08 qui avait
+  remplacé le picker supérieur par le lien « Autre période → ».
+- Les champs **Du / Au** sont de nouveau affichés directement dans la barre
+  supérieure de la vue, à côté des raccourcis Aujourd'hui / Hier / 7 jours,
+  avant les files « À qualifier » et « Remboursements ».
+  Ils conservent la vue, la recherche et les filtres actifs. La carte « Filtrer »
+  reste disponible plus bas pour les critères avancés.
+- Test de non-régression : la vue comptable doit rendre ses deux champs date
+  avant la section « Filtrer ».
+
 ## Syntaxe d'outil dans un brouillon : retry AVEC outils (18 août 2026)
 
 **Incident (Mariama Baldé, 18/08 matin).** Après avoir payé le plan « 2x Reformer
