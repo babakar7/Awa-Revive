@@ -362,6 +362,8 @@ export function dynamicContext(args: {
    * (prod 07/08: Kadidiatou, « Dimanche » 22h later → <NO_REPLY> twice).
    */
   expiredInteractiveList?: boolean;
+  /** Bare "demain/tomorrow" received during the post-midnight rollover window. */
+  midnightTomorrowAmbiguity?: boolean;
 }): string {
   const now = new Date();
   // Dakar is GMT+0 year-round, so UTC calendar math == Dakar calendar math.
@@ -443,6 +445,26 @@ export function dynamicContext(args: {
         "and would leave the client with no answer. Answer their message normally, and when their request needs " +
         "options (a slot, a payment method…), re-run the relevant tool (e.g. check_availability) to fetch FRESH " +
         "choices and present those — never treat the old list's entries as still valid.",
+    );
+  }
+  if (args.midnightTomorrowAmbiguity) {
+    const todayLabel = now.toLocaleDateString("fr-FR", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      timeZone: config.TIMEZONE,
+    });
+    const tomorrowLabel = addDays(now, 1).toLocaleDateString("fr-FR", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      timeZone: config.TIMEZONE,
+    });
+    lines.push(
+      `MIDNIGHT DATE AMBIGUITY — CURRENT TURN: the client said "demain/tomorrow" just after midnight without ` +
+        `an explicit weekday or date. Do NOT assume a calendar day and do NOT call check_availability yet. Ask ` +
+        `one short clarification naming both choices: do they mean ce matin (${todayLabel}) or demain ` +
+        `(${tomorrowLabel})? Continue as soon as they choose.`,
     );
   }
   // RETIRED & INERT (Babakar, 01/08/2026): the Pack Découverte campaign is off —

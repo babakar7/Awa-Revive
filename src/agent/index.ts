@@ -34,6 +34,7 @@ import { emailAskMessage } from "../lib/linkAsk.js";
 import { commitmentLaterAck } from "../lib/commitmentMessages.js";
 import { PACK_DISCOVERY_CAMPAIGN, isPackDiscoveryCampaignEntry } from "../domain/packDiscoveryCampaign.js";
 import { normalizeInboundText } from "../lib/inboundText.js";
+import { isMidnightTomorrowAmbiguous } from "./relativeDateAmbiguity.js";
 import { applyFrenchRegister, detectFrenchRegister } from "../lib/frenchRegister.js";
 import {
   circuitBreakerReply,
@@ -916,6 +917,7 @@ export async function handleInboundText(args: {
     !pendingInteractiveList &&
     !matchedChoice &&
     isInteractiveListTurn(await repo.lastAssistantTurnContent(client.id));
+  const midnightTomorrowAmbiguity = isMidnightTomorrowAmbiguous(inboundText);
   const campaign = isPackDiscoveryCampaignEntry({ text: inboundText, referral: args.referral, allowedSourceIds: config.PACK_DISCOVERY_META_SOURCE_IDS });
   // Log every inbound ad referral (matched or not) so the real ad source_id can be harvested
   // from Railway logs and added to PACK_DISCOVERY_META_SOURCE_IDS to tighten attribution.
@@ -1189,6 +1191,7 @@ export async function handleInboundText(args: {
         faqEntries,
         pendingInteractiveList,
         expiredInteractiveList,
+        midnightTomorrowAmbiguity,
       }) + replyRequirementsInstruction(replyRequirements),
     },
   ];
@@ -1323,6 +1326,7 @@ export async function handleInboundText(args: {
               language: client.language ?? lang,
               formal: client.fr_register === "vous",
               approvedPaymentUrls,
+              midnightTomorrowAmbiguity,
             },
           );
           if (

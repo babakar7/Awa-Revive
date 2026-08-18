@@ -1559,6 +1559,7 @@ export async function executeTool(
     language?: string | null;
     formal?: boolean;
     approvedPaymentUrls?: Iterable<string>;
+    midnightTomorrowAmbiguity?: boolean;
   } = {},
 ): Promise<string> {
   switch (name) {
@@ -1576,6 +1577,13 @@ export async function executeTool(
     }
 
     case "check_availability": {
+      if (turnContext.midnightTomorrowAmbiguity) {
+        return JSON.stringify({
+          error: "ambiguous_relative_date",
+          message:
+            "The client said tomorrow just after midnight, so the intended date is ambiguous. Do not search yet. Ask whether they mean this morning (today) or tomorrow, naming both calendar dates.",
+        });
+      }
       let serviceId = String(input.service_id ?? "");
       const dateFrom = String(input.date_from ?? "");
       const dateTo = String(input.date_to ?? "");
