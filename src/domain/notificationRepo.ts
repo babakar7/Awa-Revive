@@ -460,6 +460,33 @@ export async function recordStaffPlanningLog(
   }
 }
 
+/**
+ * Journal d'un envoi de fiche de poste. Contrairement à recordStaffPlanningLog,
+ * on stocke le wa_message_id : sans lui, markLogFailedByWamid ne peut jamais
+ * requalifier un envoi que Meta a accepté (200) puis jeté en asynchrone, et
+ * l'échec reste invisible. job_fiche_id rattache la ligne à SA fiche — un
+ * filtre source='fiche_poste' seul mélangerait toutes les fiches.
+ */
+export async function recordFicheLog(
+  ficheId: string,
+  recipientPhone: string,
+  body: string,
+  status: LogStatus,
+  error: string | null,
+  waMessageId: string | null,
+): Promise<void> {
+  try {
+    await pool.query(
+      `insert into notification_log
+         (source, job_fiche_id, recipient_phone, body, status, error, wa_message_id)
+       values ('fiche_poste', $1, $2, $3, $4, $5, $6)`,
+      [ficheId, recipientPhone, body, status, error, waMessageId],
+    );
+  } catch {
+    /* le journal ne doit jamais casser un envoi de fiche */
+  }
+}
+
 /** Test-send log entry (source='test', dedup key test:<uuid> — never blocks a real claim). */
 export async function recordTestLog(
   recipientPhone: string,

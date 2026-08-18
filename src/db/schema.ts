@@ -883,7 +883,8 @@ alter table notification_rules
   add column if not exists service_ids text[];
 
 -- Journal de tout envoi. source ∈ rule | reception | owner_alert | new_chat | technical |
--- delivery | invoice | gift_card | staff_planning | ops_ticket | auto_cancel | test.
+-- delivery | invoice | gift_card | staff_planning | ops_ticket | auto_cancel |
+-- fiche_poste | test.
 -- new_chat = ping owner (NEW_CHAT_NOTIFY_PHONE) uniquement — ne pas confondre
 -- avec reception. owner_alert = copie OWNER_PHONE d'une alerte réception qui
 -- demande une intervention humaine (domain/ownerAlertRules.ts).
@@ -2522,4 +2523,74 @@ create index if not exists idx_email_bounces_email
 -- vérification (claim atomique, même motif que reception_notified_at).
 alter table link_requests
   add column if not exists bounce_notified_at timestamptz;
+
+-- ═══ Fiches de poste (responsabilités par rôle, envoyées sur WhatsApp) ═══
+-- Le gérant rédige une fiche par rôle (accueil, cuisine/bar, gardien…) et la
+-- pousse à toute l'équipe concernée. Le WhatsApp ne porte qu'un message court
+-- + un lien : hors fenêtre 24h le staff reçoit un TEMPLATE, dont le corps est
+-- plafonné à 550 caractères par toTemplateParam (lib/notify.ts) — une fiche
+-- entière n'y tiendrait jamais. Le texte intégral vit sur /fiche/<token>.
+--
+-- PUBLIER = FIGER LES TROIS CHAMPS ENSEMBLE (libellé, clés, corps). Le lien est
+-- permanent et mis en favori : sans instantané, une phrase à moitié écrite est
+-- lisible en direct par toute l'équipe. Et surtout, sans published_role_keys on
+-- pourrait changer les destinataires SANS publier puis envoyer — l'ancien
+-- artefact partirait au nouveau rôle (fiche publiée sur « bar », clés passées à
+-- « accueil » en brouillon → l'accueil reçoit un lien intitulé « Bar »).
+-- published_body is null ⇒ jamais publiée ⇒ le lien public répond 404.
+--
+-- role_keys : CSV canonique (normalizeName, dédupliqué, trié) — pas de text[],
+-- aucune colonne tableau dans ce schéma. Une fiche « Cuisine / Bar » couvre
+-- ainsi les deux libellés qui coexistent dans staff_contacts.role (texte libre).
+--
+-- public_token EN CLAIR et stable, contrairement au token de livraison : il
+-- n'ouvre aucune mutation et n'expose aucune donnée personnelle, et il doit
+-- rester réaffichable (copier le lien, renvoyer) donc non hachable. Pas de
+-- pgcrypto ici → gen_random_uuid() natif, 122 bits. « Régénérer le lien »
+-- (token_rotated_at) couvre le départ d'un employé.
+create table if not exists job_fiches (
+  id uuid primary key default gen_random_uuid(),
+
+  -- brouillon, librement éditable
+  role_label text not null,
+  role_keys  text not null,
+  body text not null default '',
+
+  -- instantané publié : CE QUE VOIT L'ÉQUIPE
+  published_role_label text,
+  published_role_keys  text,
+  published_body       text,
+  published_at timestamptz,
+
+  public_token text not null unique default replace(gen_random_uuid()::text, '-', ''),
+  token_rotated_at timestamptz,
+  -- envois ACCEPTÉS par Meta lors du dernier lot. Peut devenir obsolète si Meta
+  -- signale un échec en asynchrone : la vérité par personne vient du journal.
+  last_sent_at timestamptz,
+  last_sent_count integer not null default 0,
+  updated_at timestamptz not null default now(),
+  updated_by text,
+  created_at timestamptz not null default now(),
+
+  check (char_length(trim(role_label)) between 1 and 60),
+  check (role_keys <> ''),
+  check (char_length(body) <= 8000),
+  check (published_body is null or char_length(published_body) <= 8000),
+  -- les quatre colonnes publiées vont ensemble ou pas du tout
+  check ((published_body is null) = (published_at is null)),
+  check ((published_body is null) = (published_role_label is null)),
+  check ((published_body is null) = (published_role_keys is null))
+);
+create unique index if not exists idx_job_fiches_role on job_fiches (lower(role_label));
+
+-- Rattache un envoi à SA fiche : un simple filtre source='fiche_poste'
+-- mélangerait les envois de toutes les fiches. uuid nu, sans clé étrangère —
+-- notification_log.rule_id est déjà une référence lâche, cette table n'a aucune
+-- FK, et le journal survit ainsi à la suppression d'une fiche. À déclarer ICI
+-- (et non près du create de notification_log) : SCHEMA_SQL est une seule chaîne
+-- exécutée dans l'ordre, job_fiches n'existe qu'à partir de ce point.
+alter table notification_log add column if not exists job_fiche_id uuid;
+create index if not exists idx_notification_log_fiche_recipient
+  on notification_log (job_fiche_id, recipient_phone, created_at desc)
+  where job_fiche_id is not null;
 `;

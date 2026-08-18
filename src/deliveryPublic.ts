@@ -10,6 +10,7 @@ import {
   type DeliveryOrder,
 } from "./domain/deliveryRepo.js";
 import { deliveryCallContact, deliveryFeeCashPhrase } from "./domain/deliveryRules.js";
+import { hardenPublicPage } from "./lib/publicPageHeaders.js";
 
 /**
  * Public, no-auth page the kitchen opens from its WhatsApp ticket. Its explicit
@@ -40,14 +41,7 @@ function esc(s: unknown): string {
 }
 
 function harden(reply: FastifyReply): void {
-  reply.header("Cache-Control", "no-store");
-  reply.header("X-Robots-Tag", "noindex, nofollow");
-  reply.header("Referrer-Policy", "no-referrer");
-  reply.header("X-Frame-Options", "DENY");
-  reply.header(
-    "Content-Security-Policy",
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
-  );
+  hardenPublicPage(reply, { formAction: "self" });
 }
 
 const STYLE = `:root{color-scheme:only light}*{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#f5efe9;color:#302a31;display:flex;align-items:center;justify-content:center;min-height:100vh;line-height:1.55}

@@ -68,6 +68,7 @@ const SOURCE_LABELS: Record<string, string> = {
   invoice: "facture",
   gift_card: "carte cadeau",
   staff_planning: "planning staff",
+  fiche_poste: "fiche de poste",
   ops_ticket: "ticket salle",
   test: "test",
   rule: "règle",

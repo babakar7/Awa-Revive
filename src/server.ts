@@ -7,6 +7,7 @@ import { registerWixWebhook } from "./webhooks/wix.js";
 import { registerBrevoWebhook } from "./webhooks/brevo.js";
 import { registerAdmin } from "./admin/routes.js";
 import { registerDeliveryPublic } from "./deliveryPublic.js";
+import { registerFichePublic } from "./fichePublic.js";
 import { MENU_HOST, registerMenuPublic, serveMenuPage } from "./menuPublic.js";
 import { registerCommande } from "./public/commandeRoutes.js";
 import { registerOps, serveCuisineRoot, serveServiceRoot, serveOwnerRoot } from "./ops/opsRoutes.js";
@@ -130,6 +131,7 @@ export function buildServer() {
   registerAdmin(app);
   // Public, no-auth "mark ready" magic-link pages for the kitchen (outside /admin).
   registerDeliveryPublic(app);
+  registerFichePublic(app);
   // Public café-menu page (menu.revive.sn, stable path /menu — outside /admin).
   registerMenuPublic(app);
   // Public customer ordering app (QR in the changing rooms → /commander).

@@ -60,6 +60,7 @@ describe("admin design system shell", () => {
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(html).toContain('<span class="nav-section">Restaurant</span>');
+    expect(html).toContain('href="/admin/fiches"');
   });
 
   it("pins the daily pages above the first collapsible group", async () => {
