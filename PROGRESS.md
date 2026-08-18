@@ -6076,3 +6076,70 @@ sans changer les statuts, transitions SQL, paiements ni notifications :
   précisément ce qui a permis le paiement du jumeau) ; si une cliente payait
   LES DEUX liens, double débit possible. Envisager void/cancel du lien
   remplacé ou détection du double paiement au webhook.
+
+## 2026-08-18 — Fiches de poste par rôle (`/admin/fiches`)
+
+Le gérant écrit les responsabilités d'un rôle (accueil, cuisine/bar, gardien…),
+les publie, et les pousse sur WhatsApp à toute l'équipe concernée. Destinataires
+tirés de `staff_contacts`, appariés par rôle avec `normalizeName()` — la même
+fonction que le routage cuisine, pour que les deux ne divergent jamais.
+
+**Pourquoi un lien et pas le texte dans le WhatsApp.** Le staff est ~toujours
+hors fenêtre 24h, donc envoi `preferTemplate:true`, donc `toTemplateParam`
+plafonne le corps à **550 caractères** en aplatissant les retours à la ligne.
+Une fiche entière n'y tient pas. Le message porte donc un texte court + un lien
+vers `/fiche/<token>`, page publique en lecture seule. Un test assert que
+`toTemplateParam(body)` contient toujours l'URL — l'aplatissement ne doit jamais
+avaler le lien.
+
+**Publier fige les TROIS champs d'un coup** (`published_role_label`,
+`published_role_keys`, `published_body`), avec des `check` qui interdisent une
+publication partielle. Deux raisons distinctes :
+- le lien est permanent et mis en favori : sans instantané, une phrase à moitié
+  écrite est lisible en direct par toute l'équipe ;
+- **piège non évident** : sans `published_role_keys`, on peut changer les
+  destinataires SANS publier puis envoyer — l'ancien artefact partirait au
+  nouveau rôle (fiche publiée sur « bar », clés passées à « accueil » en
+  brouillon → l'accueil reçoit un lien intitulé « Bar »). L'envoi cible donc
+  toujours `published_role_keys`.
+
+**« Envoyé » ≠ « reçu ».** Le webhook Meta ne traite que `failed`
+([webhooks/whatsapp.ts]) : `delivered` et `read` sont parsés puis jetés. La
+colonne s'appelle donc « Dernier envoi WhatsApp » et dit « accepté par Meta »,
+jamais « reçue » ni « lue » — un test échoue si le mot réapparaît. Attester la
+livraison réelle demanderait de persister delivered/read : périmètre séparé.
+
+**Pièges évités, à ne pas réintroduire :**
+- `recordFicheLog` stocke le `wa_message_id`, contrairement à
+  `recordStaffPlanningLog` qui l'OMET — sans lui `markLogFailedByWamid` ne peut
+  pas requalifier un envoi accepté puis jeté par Meta, et l'échec reste
+  invisible. `job_fiche_id` rattache la ligne à SA fiche (un filtre
+  `source='fiche_poste'` seul mélangerait toutes les fiches).
+- **Pas de filtre planning** sur les destinataires : `listPlanningStaff()` ne
+  renvoie que `PLANNING_ROLES = accueil|bar|entretien`, donc gardien et coach ne
+  sont pas dans la grille — un filtre planning livrerait leur fiche à personne.
+- Contacts `muted` exclus du lot mais AFFICHÉS avec un envoi individuel : la
+  sourdine vise les rappels de cours, pas un message du gérant.
+- Garde-fou inverse : les rôles du répertoire que rien ne couvre sont remontés
+  en chips. C'est ce qui rattrape `cuisine` (vocabulaire PWA ops) vs `bar`
+  (vocabulaire répertoire) — deux nomenclatures qui coexistent en base.
+- Pas de « merci de confirmer que tu l'as lue » : le template Meta dit lui-même
+  « merci de ne pas répondre ».
+- Aucun script sur la page publique (`window.print()` imposerait un
+  `script-src`) : impression via `@media print`, bouton côté admin.
+- L'audit `fiche.link_rotated` ne journalise **aucune valeur de token** — c'est
+  un secret porteur, l'écrire dans un log durable annulerait la rotation.
+- En-têtes durcis extraits dans `lib/publicPageHeaders.ts`, CSP paramétrée
+  (livraison `form-action 'self'`, fiche `'none'`). La page livraison y gagne le
+  `X-Content-Type-Options: nosniff` qui lui manquait.
+
+**Vérification.** Docker n'est jamais lancé sur ce poste, donc pas de Postgres
+local : les tests d'intégration (`test/integration/fiches.test.ts`) sont écrits
+mais **n'ont jamais tourné**. À la place, le `SCHEMA_SQL` complet a été rejoué
+sur la base de PROD dans une transaction annulée avant le push (le DDL est une
+seule requête multi-instructions : une erreur de syntaxe empêche l'app de
+DÉMARRER, pas seulement la feature). Puis parcours complet vérifié en prod —
+brouillon en 404, publication, instantané qui résiste à une édition de
+brouillon, refus serveur d'envoyer un brouillon, refus sans destinataire,
+rotation de lien invalidant l'ancien, audit sans token — sur un rôle ne
+correspondant à personne, donc zéro WhatsApp envoyé, puis fiche supprimée.
