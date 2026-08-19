@@ -149,7 +149,11 @@ config, pas d'annulation (fail-closed, comportement voulu) ; Babakar l'a réacti
 Remède : re-déploiement de `origin/main` par la voie git (worktree + push).
 Garde-fou ajouté : **`/healthz` renvoie `commit` sur Railway** (7 chars de
 `RAILWAY_GIT_COMMIT_SHA`, ou `"local-upload"` si déployé hors git) + `log.warn`
-au boot quand `RAILWAY_GIT_COMMIT_SHA` manque. `railway up` reste BANNI
+au boot quand `RAILWAY_GIT_COMMIT_SHA` manque. **Verrou dur (19/08)** :
+[railway.json](railway.json) → [scripts/railway-build.sh](scripts/railway-build.sh)
+fait **échouer le build Railway sans `RAILWAY_GIT_COMMIT_SHA`** → un `railway up`
+ne peut plus toucher la prod, quel que soit l'agent/outil ; porte de secours
+hotfix = variable `ALLOW_LOCAL_UPLOAD=1` temporaire. `railway up` reste BANNI
 (CLAUDE.md §Git) ; le hub est lecture/ops seulement.
 
 ## Refonte UX des alertes staff : /admin/notifications (17 août 2026)

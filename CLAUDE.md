@@ -70,9 +70,14 @@ son `.env`. Fini l'arbre partagé et les commits qui s'écrasent. Outillage :
   Ensuite `npm run agent:done -- <topic>` retire le worktree et sa branche.
 - **Pousse par unité cohérente** (une feature/un fix buildé+testé), tôt et
   souvent — un `git push` = un auto-deploy.
-- **`railway up` est banni.** Seule exception : hotfix depuis le hub propre sur
-  `main`, et même là commite+pousse d'abord et laisse l'auto-deploy faire, sauf
-  prod à terre. `railway up` déploie du non-commité → git prend du retard sur le
-  live, ce qui régressait la prod au push suivant (l'incident qu'on élimine).
+- **`railway up` est banni — et désormais BLOQUÉ mécaniquement.** Le build
+  Railway ([railway.json](railway.json) → [scripts/railway-build.sh](scripts/railway-build.sh))
+  **refuse de builder sans `RAILWAY_GIT_COMMIT_SHA`** (absent pour un upload
+  local) : un `railway up` échoue au build et la prod reste sur le dernier
+  déploiement git. Incident du 18/08/2026 : un `railway up` depuis le hub périmé
+  a remplacé la prod par un arbre du 16/08 toute une nuit. Seule exception :
+  hotfix prod à terre → poser temporairement la variable Railway
+  `ALLOW_LOCAL_UPLOAD=1`, déployer, la retirer aussitôt — et même là commite et
+  pousse d'abord.
 - **`origin/main` == prod, toujours.** `build` + `test` verts avant tout ship
   (idéalement CI verte, cf. PROGRESS.md §7).
