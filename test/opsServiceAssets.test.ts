@@ -22,7 +22,7 @@ describe("service PWA assets", () => {
 
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
     const version = serviceBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v26");
+    expect(version).toBe("v27");
     expect(SERVICE_SW).toContain(`service-${version}`);
   });
 
@@ -71,6 +71,7 @@ describe("service PWA assets", () => {
 
   it("reveals the note field after adding any searched item", () => {
     expect(SERVICE_APP_JS).toContain("state.q='';search.value='';finishSearch()");
+    expect(SERVICE_APP_JS).toContain("else{finishSearch();}");
     expect(SERVICE_APP_JS).toContain("Note (optionnel)");
     expect(SERVICE_APP_JS).toContain("e.note=d.note");
   });
@@ -87,9 +88,18 @@ describe("service PWA assets", () => {
   it("collapses completed choices, refocuses search, and keeps choices editable", () => {
     expect(SERVICE_APP_JS).toContain("creq.classList.toggle('collapsed'");
     expect(SERVICE_APP_JS).toContain("✓ — modifier");
-    expect(SERVICE_APP_JS).toContain("if(state.searching){try{search.focus()");
+    expect(SERVICE_APP_JS).toContain("state.searching&&choicesComplete");
     expect(SERVICE_APP_JS).toContain("setAttribute('aria-expanded'");
     expect(serviceBoardPage()).toContain(".creq.collapsed .cpills{display:none}");
+  });
+
+  it("renders, requires, submits, and displays every option group", () => {
+    expect(SERVICE_APP_JS).toContain("it.optionGroups");
+    expect(SERVICE_APP_JS).toContain("groups.forEach(function(g)");
+    expect(SERVICE_APP_JS).toContain("e.selections=selections");
+    expect(SERVICE_APP_JS).toContain("miss.group.label");
+    expect(SERVICE_APP_JS).toContain("var picked=linePicked(l)");
+    expect(SERVICE_APP_JS).not.toContain("if(d.choice)e.choice");
   });
 
   it("deprioritizes optional details and provides success/retry feedback", () => {
@@ -203,11 +213,13 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("window.__pick=");
   });
 
-  it("offers a ⭐ Favoris shortcut via the __FAV__ sentinel category", () => {
-    expect(SERVICE_APP_JS).toContain("Favoris");
-    expect(SERVICE_APP_JS).toContain("__FAV__");
-    // Favourite is a server flag read off the menu item, never a client decision.
-    expect(SERVICE_APP_JS).toContain("it.fav");
+  it("does not expose a Favoris category", () => {
+    expect(SERVICE_APP_JS).not.toContain("Favoris");
+    expect(SERVICE_APP_JS).not.toContain("__FAV__");
+  });
+
+  it("places Terrasse first on the service board", () => {
+    expect(SERVICE_APP_JS).toContain("a.label==='Terrasse'?0:1");
   });
 
   it("shows an indicative running subtotal on an occupied tile", () => {

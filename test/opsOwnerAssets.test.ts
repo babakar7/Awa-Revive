@@ -44,11 +44,20 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).toContain("/spots/");
     expect(OWNER_APP_JS).toContain("/orders");
     expect(OWNER_APP_JS).toMatch(/method:\s*['"]POST['"]/);
-    // Required-choice guard + per-line note are carried (no dropped data).
+    // Every required choice group + per-line note are carried (no dropped data).
     expect(OWNER_APP_JS).toContain("obligatoire");
+    expect(OWNER_APP_JS).toContain("it.optionGroups");
+    expect(OWNER_APP_JS).toContain("e.selections=selections");
+    expect(OWNER_APP_JS).toContain("l.selections.map");
     expect(OWNER_APP_JS).toContain("e.note=d.note");
     // The header entry point.
     expect(ownerBoardPage()).toContain('id="take"');
+  });
+
+  it("defaults to Terrasse and keeps the three spaces on one row", () => {
+    expect(OWNER_APP_JS).toContain("a.label==='Terrasse'?0:1");
+    expect(OWNER_APP_JS).toContain("spotId:SPOTS.length?SPOTS[0].id:''");
+    expect(ownerBoardPage()).toContain("grid-template-columns:repeat(3,minmax(0,1fr))");
   });
 
   it("offers only 30/50-minute scheduling and keeps scheduled orders actionable", () => {
@@ -61,7 +70,7 @@ describe("owner supervision PWA assets", () => {
   });
 
   it("reveals ordinary-item notes after adding from search", () => {
-    expect(OWNER_APP_JS).toContain("state.q='';search.value='';finishSearch()");
+    expect(OWNER_APP_JS).toContain("else { finishSearch(); }");
     expect(OWNER_APP_JS).toContain("Note (optionnel)");
     expect(OWNER_APP_JS).toContain("e.note=d.note");
   });
@@ -115,7 +124,7 @@ describe("owner supervision PWA assets", () => {
   it("collapses a completed required choice and returns focus to search", () => {
     expect(OWNER_APP_JS).toContain("creq.classList.toggle('collapsed'");
     expect(OWNER_APP_JS).toContain("✓ — modifier");
-    expect(OWNER_APP_JS).toContain("if(state.searching){try{search.focus()");
+    expect(OWNER_APP_JS).toContain("state.searching&&choicesComplete");
     expect(OWNER_APP_JS).toContain("setAttribute('aria-expanded'");
     expect(ownerBoardPage()).toContain(".creq.collapsed .cpills{display:none}");
     expect(ownerBoardPage()).toContain(".sheet.searching .creq.collapsed~.lnlab");
@@ -137,7 +146,7 @@ describe("owner supervision PWA assets", () => {
     expect(OWNER_APP_JS).toContain("window.__pick.sortItems");
     expect(OWNER_APP_JS).toContain("search.oninput");         // real-time search
     expect(OWNER_APP_JS).toContain("enterkeyhint");
-    expect(OWNER_APP_JS).toContain("⭐ Favoris");             // category chips incl. favs
+    expect(OWNER_APP_JS).not.toContain("Favoris");
   });
 
   it("service worker parses, never caches live data, purges only its own caches", () => {
@@ -151,7 +160,7 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v13");
+    expect(version).toBe("v14");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 

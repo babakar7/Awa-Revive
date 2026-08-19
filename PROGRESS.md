@@ -1,5 +1,21 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Composeurs salle + supervision : espaces et choix multiples (19 août 2026)
+
+- **Terrasse en premier** dans les données affichées par `/ops/service` et
+  `/ops/owner`. Dans le composeur Supervision, elle est aussi sélectionnée par
+  défaut et les trois boutons d'espace restent sur une seule ligne.
+- Le raccourci **⭐ Favoris** est retiré des deux composeurs ; les catégories,
+  la recherche en direct et **🔥 Populaires** restent disponibles.
+- Les articles à plusieurs groupes obligatoires (par exemple boisson + pain)
+  affichent maintenant chaque groupe, refusent l'envoi tant qu'il en manque un
+  et transmettent la liste complète via `selections`. Les cartes salle et
+  supervision affichent également tous les choix reçus.
+- Piège évité lors du portage depuis le hub périmé : un article simple ajouté
+  depuis la recherche doit toujours quitter le mode recherche afin de révéler
+  sa note optionnelle ; un article multi-choix garde au contraire le parcours
+  ouvert jusqu'à la dernière sélection.
+
 ## Paiements : intervalle Du/Au restauré en haut de la vue comptable (18 août 2026)
 
 - Retour terrain : dans « Par date de paiement », la réception ne voyait plus

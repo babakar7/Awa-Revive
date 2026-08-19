@@ -30,7 +30,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v26";
+const ASSET_VERSION = "v27";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -431,7 +431,8 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     var d=el('div','tk'+(waiting?' scheduled':'')+(t.urgent?' urgent':'')); d.dataset.id=t.id;
     (t.items||[]).forEach(function(l,i){ var ln=el('div','line');
       ln.appendChild(el('span','q',l.qty+'×'));
-      ln.appendChild(document.createTextNode(' '+l.name+(l.choice?' ('+l.choice+')':'')));
+      var picked=linePicked(l);
+      ln.appendChild(document.createTextNode(' '+l.name+(picked?' ('+picked+')':'')));
       if(i===0){ var st=el('span','st '+t.status.toLowerCase(), waiting?'Prévue':t.status==='READY'?'Prête':t.status==='PREPARING'?'En prépa':'Envoyée'); ln.appendChild(st); }
       d.appendChild(ln);
       if(l.note) d.appendChild(el('div','tnote','• '+l.note));
@@ -646,9 +647,6 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     var chips=el('div','chips');
     function setCat(c){ state.cat=c; state.cartOnly=false; renderList(); }
     var chipAll=el('button','chip','Tout'); chipAll.onclick=function(){ setCat('__ALL__'); }; chips.appendChild(chipAll);
-    var anyFav=MENU.some(function(c){ return c.items.some(function(it){ return it.fav; }); });
-    var chipFav=anyFav?el('button','chip fav','⭐ Favoris'):null;
-    if(chipFav){ chipFav.onclick=function(){ setCat('__FAV__'); }; chips.appendChild(chipFav); }
     var catChips={};
     MENU.forEach(function(cat){ var ch=el('button','chip',cat.category); ch.onclick=(function(name){return function(){ setCat(name); };})(cat.category); catChips[cat.category]=ch; chips.appendChild(ch); });
     cartChip=el('button','chip cart','Panier (0)');cartChip.type='button';searchbar.appendChild(cartChip);
@@ -659,8 +657,9 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     listEl=el('div','list'); sh.appendChild(listEl);
 
     function itemRow(it){
-      var d=draft[it.id]||{qty:0,choice:'',note:''};
-      var needsChoice=it.choices && it.choices.length;
+      var d=draft[it.id]||{qty:0,selections:{},note:''};
+      var groups=(it.optionGroups&&it.optionGroups.length)?it.optionGroups:(it.choices&&it.choices.length?[{label:it.optionLabel||'Choix',choices:it.choices}]:[]);
+      var needsChoice=groups.length>0;
       var row=el('div','mi'+(d.qty>0?' on':'')); row.dataset.id=it.id;
       var nm=el('div','nm'); nm.appendChild(el('span',null,it.name));
       if(d.qty>0){ nm.appendChild(el('span','qbadge','×'+d.qty)); }
@@ -668,37 +667,43 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       var stp=el('div','stepper');
       var minus=el('button',null,'−'); var qv=el('span','qv',String(d.qty)); var plus=el('button','plus','+');
       var extra=el('div','wrap');extra.style.display=(d.qty>0&&(!state.searching||needsChoice||state.cartOnly))?'block':'none';
-      var creq=null;
-      function markChoice(){ if(!creq)return; var dd=draft[it.id]||{qty:0}; var miss=dd.qty>0 && !dd.choice; creq.classList.toggle('missing',miss); row.classList.toggle('needchoice',miss); }
+      var creqs=[];
+      function choicesComplete(dd){return groups.every(function(g){return !!((dd.selections||{})[g.label]);});}
+      function markChoices(){var dd=draft[it.id]||{qty:0,selections:{}};var anyMissing=false;
+        creqs.forEach(function(c){var miss=dd.qty>0&&!((dd.selections||{})[c.label]);c.box.classList.toggle('missing',miss);if(miss)anyMissing=true;});
+        row.classList.toggle('needchoice',anyMissing);}
       function sync(){ var dd=draft[it.id]||{qty:0}; qv.textContent=dd.qty;
         extra.style.display=(dd.qty>0&&(!state.searching||needsChoice||state.cartOnly))?'block':'none'; row.classList.toggle('on',dd.qty>0);
         var old=nm.querySelector('.qbadge'); if(old) nm.removeChild(old);
         if(dd.qty>0){ var b=el('span','qbadge','×'+dd.qty); nm.insertBefore(b,nm.querySelector('.pr')); }
-        markChoice(); recompute();
+        markChoices(); recompute();
       }
       minus.onpointerdown=function(e){if(state.searching)e.preventDefault();};plus.onpointerdown=function(e){if(state.searching&&!needsChoice)e.preventDefault();};
-      minus.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0) renderList(); };
-      plus.onclick=function(){var dd=draft[it.id]||{qty:0,choice:'',note:''};var wasEmpty=dd.qty===0;dd.qty=Math.min(10,dd.qty+1);draft[it.id]=dd;sync();
-        if(state.searching){state.q='';search.value='';finishSearch();setTimeout(function(){var fresh=listEl.querySelector('[data-id="'+it.id+'"]');if(fresh&&fresh.scrollIntoView)fresh.scrollIntoView({block:'center'});},50);}};
+      minus.onclick=function(){ var dd=draft[it.id]||{qty:0,selections:{},note:''}; dd.qty=Math.max(0,dd.qty-1); draft[it.id]=dd; sync(); if(state.cartOnly&&dd.qty===0) renderList(); };
+      plus.onclick=function(){var dd=draft[it.id]||{qty:0,selections:{},note:''};var wasEmpty=dd.qty===0;dd.qty=Math.min(10,dd.qty+1);draft[it.id]=dd;sync();
+        if(state.searching){state.q='';search.value='';
+          if(needsChoice&&wasEmpty){renderList();try{search.blur();}catch(e){}setTimeout(function(){var fresh=listEl.querySelector('[data-id="'+it.id+'"]');if(fresh&&fresh.scrollIntoView)fresh.scrollIntoView({block:'center'});},50);}
+          else{finishSearch();}
+        }};
       stp.appendChild(minus); stp.appendChild(qv); stp.appendChild(plus); row.appendChild(stp);
-      if(needsChoice){
-        creq=el('div','creq');var optionName=it.optionLabel||'Choix';var choiceLabel=el('button','clab');choiceLabel.type='button';creq.appendChild(choiceLabel);
+      groups.forEach(function(g){
+        var creq=el('div','creq');var optionName=g.label||'Choix';var choiceLabel=el('button','clab');choiceLabel.type='button';creq.appendChild(choiceLabel);
         var pills=el('div','cpills');
-        function paintChoice(){var dd=draft[it.id]||d;var picked=dd.choice||'';creq.classList.toggle('collapsed',!!picked);
+        function paintChoice(){var dd=draft[it.id]||d;var picked=(dd.selections||{})[g.label]||'';creq.classList.toggle('collapsed',!!picked);
           choiceLabel.textContent=picked?optionName+' · '+picked+' ✓ — modifier':optionName+' · obligatoire';choiceLabel.setAttribute('aria-expanded',picked?'false':'true');}
-        choiceLabel.onclick=function(){var dd=draft[it.id]||d;if(!dd.choice)return;var folded=creq.classList.toggle('collapsed');choiceLabel.setAttribute('aria-expanded',folded?'false':'true');if(!folded&&creq.scrollIntoView)creq.scrollIntoView({block:'center'});};
-        it.choices.forEach(function(ch){
-          var p=el('button','cpill'+(d.choice===ch?' sel':''),ch);
-          p.onclick=function(){ var dd=draft[it.id]||{qty:0,choice:'',note:''}; dd.choice=ch; draft[it.id]=dd;
-            Array.from(pills.children).forEach(function(c){c.classList.remove('sel');});p.classList.add('sel');paintChoice();markChoice();if(state.searching){try{search.focus();}catch(e){}} };
+        choiceLabel.onclick=function(){var dd=draft[it.id]||d;if(!((dd.selections||{})[g.label]))return;var folded=creq.classList.toggle('collapsed');choiceLabel.setAttribute('aria-expanded',folded?'false':'true');if(!folded&&creq.scrollIntoView)creq.scrollIntoView({block:'center'});};
+        g.choices.forEach(function(ch){
+          var p=el('button','cpill'+(((d.selections||{})[g.label]===ch)?' sel':''),ch);
+          p.onclick=function(){ var dd=draft[it.id]||{qty:0,selections:{},note:''};dd.selections=dd.selections||{};dd.selections[g.label]=ch;draft[it.id]=dd;
+            Array.from(pills.children).forEach(function(c){c.classList.remove('sel');});p.classList.add('sel');paintChoice();markChoices();if(state.searching&&choicesComplete(dd)){try{search.focus();}catch(e){}} };
           pills.appendChild(p);
         });
-        creq.appendChild(pills);extra.appendChild(creq);paintChoice();
-      }
+        creq.appendChild(pills);extra.appendChild(creq);creqs.push({label:g.label,box:creq});paintChoice();
+      });
       extra.appendChild(el('div','lnlab','Note (optionnel)'));
       var ntn=el('input','ln'); ntn.placeholder='ex: sans sucre, bien chaud…'; ntn.maxLength=140; ntn.value=d.note||'';
       ntn.oninput=function(){ var dd=draft[it.id]||{qty:0}; dd.note=ntn.value; draft[it.id]=dd; }; extra.appendChild(ntn);
-      row.appendChild(extra);markChoice();
+      row.appendChild(extra);markChoices();
       return row;
     }
 
@@ -707,7 +712,6 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     function renderList(){
       // sync chip highlight
       chipAll.classList.toggle('sel',state.cat==='__ALL__'&&!state.q&&!state.cartOnly);
-      if(chipFav) chipFav.classList.toggle('sel',state.cat==='__FAV__'&&!state.q&&!state.cartOnly);
       Object.keys(catChips).forEach(function(k){ catChips[k].classList.toggle('sel',state.cat===k&&!state.q&&!state.cartOnly); });
       cartChip.classList.toggle('sel',state.cartOnly);
       listEl.textContent='';
@@ -729,7 +733,6 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
         var items=cat.items.filter(function(it){
           if(state.cartOnly) return (draft[it.id]&&draft[it.id].qty>0);
           if(q) return normalize(it.name).indexOf(q)>=0;
-          if(state.cat==='__FAV__') return !!it.fav;
           if(state.cat!=='__ALL__') return cat.category===state.cat;
           return !popIds[it.id];   // default view: don't repeat a Populaire below
         });
@@ -747,13 +750,16 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     go=el('button','go','Ajouter des articles');
     go.onclick=function(){
       var miss=null;
-      Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0 && !miss){ var it=findItem(id); if(it&&it.choices&&it.choices.length&&!d.choice) miss=it; } });
+      Object.keys(draft).forEach(function(id){var d=draft[id];if(d.qty<1||miss)return;var it=findItem(id);var groups=(it&&it.optionGroups)||[];
+        groups.forEach(function(g){if(!miss&&!((d.selections||{})[g.label]))miss={item:it,group:g};});});
       if(miss){
-        setError('Choisissez « '+(miss.optionLabel||'option')+' » pour '+miss.name+'.');state.cartOnly=true;state.q='';search.value='';finishSearch();renderList();
-        var r=listEl.querySelector('[data-id="'+miss.id+'"]'); if(r&&r.scrollIntoView) r.scrollIntoView({block:'center'});
+        setError('Choisissez « '+miss.group.label+' » pour '+miss.item.name+'.');state.cartOnly=true;state.q='';search.value='';finishSearch();renderList();
+        var r=listEl.querySelector('[data-id="'+miss.item.id+'"]'); if(r&&r.scrollIntoView) r.scrollIntoView({block:'center'});
         return;
       }
-      var items=[]; Object.keys(draft).forEach(function(id){ var d=draft[id]; if(d.qty>0){ var e={item_id:id,qty:d.qty}; if(d.choice)e.choice=d.choice; if(d.note)e.note=d.note; items.push(e); } });
+      var items=[]; Object.keys(draft).forEach(function(id){var d=draft[id];if(d.qty>0){var e={item_id:id,qty:d.qty};var it=findItem(id);var selections=[];
+        ((it&&it.optionGroups)||[]).forEach(function(g){var value=(d.selections||{})[g.label];if(value)selections.push({label:g.label,value:value});});
+        if(selections.length)e.selections=selections;if(d.note)e.note=d.note;items.push(e);}});
       if(!items.length){setError('Ajoutez au moins un article au panier.');return;}
       state.sending=true;go.disabled=true;go.textContent='Envoi…';msg.hidden=true;
       var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,test:state.test}; if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn&&fn.value) body.first_name=fn.value;
@@ -796,7 +802,12 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       if(!d){ retryLoad(); if(done)done(); return; }
       if(connected && (d.cursor||0)<cursor){ if(done)done(); return; }  // stale snapshot — ignore
       cursor=d.cursor||0;
-      SPOTS=(d.spots||[]).slice().sort(function(a,b){return (a.sort_order||0)-(b.sort_order||0);});
+      // Terrasse is the default service area, then preserve the configured order
+      // for every other space.
+      SPOTS=(d.spots||[]).slice().sort(function(a,b){
+        var ap=a.label==='Terrasse'?0:1, bp=b.label==='Terrasse'?0:1;
+        return ap-bp || (a.sort_order||0)-(b.sort_order||0);
+      });
       if(d.menu&&d.menu.length) MENU=d.menu;
       if(d.top) TOP=d.top;
       if(d.vapidKey){ VAPID=d.vapidKey; }
