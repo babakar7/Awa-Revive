@@ -166,6 +166,26 @@ describe("reschedule_booking", () => {
     expect((await pool.query(`select status from pending_bookings where id=$1`, [booking.id])).rows[0].status).toBe("BOOKED");
   });
 
+  it("labels an already-started local class distinctly instead of a 0-hour 16h refusal", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, {
+      status: "BOOKED",
+      wix_booking_id: "wb_started",
+      slot_start: inHours(-1),
+      slot_end: inHours(0),
+    });
+    await repo.cacheSlots(client.id, "svc_1", [{
+      eventId: "ev_monday",
+      slot: { serviceId: "svc_1", sessionId: "ev_monday", startDate: inHours(48), endDate: inHours(49) },
+    }]);
+
+    const out = JSON.parse(await executeTool(asClient(client), "reschedule_booking", {
+      booking_id: booking.id, event_id: "ev_monday",
+    }));
+    expect(out.error).toBe("class_already_started");
+    expect(mock.calls.some((c) => c.url.endsWith("/reschedule") || c.url.endsWith("/cancel"))).toBe(false);
+  });
+
   it("rejects a different-class target without cancelling the original booking", async () => {
     const client = await seedClient();
     const booking = await seedBooking(client.id, { status: "BOOKED", wix_booking_id: "wb_existing", slot_start: inHours(30) });
@@ -253,6 +273,16 @@ describe("reschedule_booking", () => {
 });
 
 describe("cancel_booking no-refund policy", () => {
+  it("does not turn an already-started class into a 0-hour cancellation-policy refusal", async () => {
+    const client = await seedClient();
+    const booking = await seedBooking(client.id, {
+      status: "BOOKED", wix_booking_id: "wb_cancel_started", slot_start: inHours(-1), slot_end: inHours(0),
+    });
+    const out = JSON.parse(await executeTool(asClient(client), "cancel_booking", { booking_id: booking.id }));
+    expect(out.error).toBe("class_already_started");
+    expect(mock.calls.some((call) => call.url.endsWith("/cancel"))).toBe(false);
+  });
+
   it("uses Wix native refund for a membership cancellation and does not double-credit", async () => {
     const client = await seedClient();
     const booking = await seedBooking(client.id, {

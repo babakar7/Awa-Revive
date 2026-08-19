@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Engine-level flow for the empty-class auto-cancellation sweep, with Wix, the
@@ -152,6 +152,10 @@ beforeEach(() => {
   ]);
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("sweepAutoCancellations", () => {
   it("cancels an empty in-window occurrence and notifies coach, owner and manager", async () => {
     mocks.getCalendarOccurrence.mockResolvedValue({
@@ -172,6 +176,11 @@ describe("sweepAutoCancellations", () => {
   });
 
   it("cancels immediately a class already empty at the cutoff (no 15-min wait)", async () => {
+    // The rule has a special previous-evening window for early morning
+    // classes. Keep this test in daytime so +2h50 always means the documented
+    // three-hour cutoff, regardless of the machine's wall-clock hour.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-19T10:00:00.000Z"));
     // Slot 2h50 ahead → the cutoff (start-3h) was 10 min ago; empty since then,
     // never had anyone. Only 10 min of emptiness — the old rule would still wait.
     const start = new Date(Date.now() + 170 * 60_000).toISOString();

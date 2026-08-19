@@ -1,5 +1,43 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Solde Clé, cours déjà commencé et historique personnel fiable (19 août 2026)
+
+- **Solde** : `planRemainingSessions` ne confond plus un pool Wix absent de
+  `eligible-pools` parce qu'il vaut zéro avec un solde inconnu. Après le chemin
+  éligible normal, il lit le pool actif exact (member + plan + commande) via la
+  requête `balances/query` déjà éprouvée ; une seule correspondance donne aussi
+  `0`, zéro ou plusieurs restent `unknown`. `check_membership` expose séparément
+  les bonus de Clé et leur périmètre : un bonus ne doit jamais être présenté comme
+  utilisable sur un Sculpt/Reformer s'il ne le couvre pas.
+- **Décision booking** : `book_with_membership` distingue désormais
+  `no_sessions_left`, `class_not_covered` et `eligibility_unknown` au lieu de
+  renvoyer le même `not_eligible` qui poussait Awa à inventer le motif.
+- **Cours passé** : report/annulation d'une résa Awa déjà commencée renvoie
+  `class_already_started` (pas une erreur 16 h à `0`). Pour une résa
+  `studio:<id>`, le miroir Wix prouve le statut passé/annulé pour ce client avant
+  la relecture live des créneaux à venir ; sans preuve, on garde `unknown_booking`.
+- **Historique** : `get_session_history` lit au plus 12 réservations confirmées
+  des 90 derniers jours de `wix_booking_records`, joint l'émargement et ne
+  ré-identifie jamais par téléphone. `unmarked` signifie seulement « Wix ne l'a
+  pas encore marqué », jamais une absence. Attribution : transaction Wix ou résa
+  Awa prouvée, bonus/invitation explicitement distingués, sinon inconnu. Les
+  horodatages de synchro booking/attendance sont retournés séparément ; si
+  l'émargement a plus de 24 h, une lecture Wix bornée par `eventId` est tentée,
+  sinon le miroir reste honnêtement indiqué.
+- **PHASE2** : ne pas enrichir le miroir avec `plan_order_id` /
+  `membership_plan_name` dans ce chantier : les colonnes existent mais le sync
+  ne les remplit pas encore.
+- **Validation** : `npm run build` et **1 495 tests unitaires** sont verts.
+  Le test auto-cancel « already empty at the cutoff » a été rendu déterministe
+  (horloge fixe de journée) : son ancien créneau `now + 2h50` basculait selon
+  l'heure réelle dans la règle spéciale des cours tôt le matin, et ne testait
+  plus le cutoff annoncé.
+  Le test d'intégration ciblé n'a pas pu démarrer ici : Docker retourne code 125
+  au `docker run postgres:16-alpine` (aucun test exécuté). Ne pas faire passer
+  une vérification de prod en lecture seule pour un smoke test mutant
+  `book_with_membership`/paiement ; tout test mutant prod exige un compte isolé
+  et une autorisation explicite.
+
 ## Composeurs salle + supervision : espaces et choix multiples (19 août 2026)
 
 - **Terrasse en premier** dans les données affichées par `/ops/service` et

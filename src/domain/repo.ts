@@ -1434,6 +1434,82 @@ export async function findClientBooking(
   return res.rows[0] ?? null;
 }
 
+/**
+ * Best available evidence for a Wix-only booking a client mentions after it
+ * has fallen out of the upcoming list.  We intentionally require the mirror's
+ * established client match; a phone supplied by the model is never enough.
+ */
+export async function findMirroredBookingForClient(
+  clientId: string,
+  wixBookingId: string,
+): Promise<{
+  booking_id: string;
+  status: string | null;
+  session_start: Date | null;
+  service_name: string | null;
+} | null> {
+  const result = await pool.query(
+    `select booking_id, status, session_start, service_name
+       from wix_booking_records
+      where booking_id=$1 and matched_client_id=$2
+      limit 1`,
+    [wixBookingId, clientId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export interface SessionHistoryRow {
+  booking_id: string;
+  service_name: string | null;
+  session_start: Date | null;
+  booking_status: string | null;
+  booking_synced_at: Date | null;
+  benefit_transaction_id: string | null;
+  attendance_status: string | null;
+  attendance_synced_at: Date | null;
+  event_id: string | null;
+  local_booking_id: string | null;
+  local_payment_method: string | null;
+  local_membership_plan_name: string | null;
+  protected_benefit_kind: "BONUS" | "INVITATION" | null;
+}
+
+/**
+ * Client-owned confirmed sessions only. This is a bounded mirror read, not a
+ * contact/phone re-match, so the agent can never inspect somebody else's
+ * attendance history.
+ */
+export async function recentSessionHistory(clientId: string): Promise<SessionHistoryRow[]> {
+  const result = await pool.query(
+    `select r.booking_id, r.service_name, r.session_start, r.status as booking_status,
+            r.synced_at as booking_synced_at, r.benefit_transaction_id,
+            coalesce(r.raw #>> '{bookedEntity,slot,eventId}', r.raw #>> '{bookedEntity,schedule,eventId}') as event_id,
+            a.status as attendance_status, a.synced_at as attendance_synced_at,
+            p.id as local_booking_id, p.payment_method as local_payment_method,
+            p.membership_plan_name as local_membership_plan_name,
+            k.kind as protected_benefit_kind
+       from wix_booking_records r
+       left join lateral (
+         select status, synced_at from wix_attendance_records
+          where booking_id=r.booking_id
+          order by synced_at desc, attendance_id desc limit 1
+       ) a on true
+       left join pending_bookings p
+         on p.client_id=$1 and p.wix_booking_id=r.booking_id
+       left join key_benefit_bookings k on k.wix_booking_id=r.booking_id
+      where r.matched_client_id=$1
+        and r.invalidated_at is null
+        and (r.status is null or r.status='CONFIRMED')
+        and r.session_start is not null
+        and r.session_start <= now()
+        and r.session_start >= now() - interval '90 days'
+      order by r.session_start desc
+      limit 12`,
+    [clientId],
+  );
+  return result.rows;
+}
+
 /** All upcoming BOOKED rows across all clients — for the cancellation sweep. */
 export async function allUpcomingBooked(): Promise<
   (PendingBooking & { wa_phone: string; language: string | null })[]

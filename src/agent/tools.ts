@@ -535,7 +535,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "Book one OR several spots on a class slot using the client's active abonnement — no Wave payment. " +
       "Set participants > 1 to book several people in ONE go, all deducted from THIS client's plan (one " +
       "session per spot, same class/slot). Wix validates that the plan covers this service and that enough " +
-      "sessions remain; if not eligible or the balance can't cover the whole group, this returns an error " +
+      "sessions remain; errors distinguish no_sessions_left, class_not_covered, and eligibility_unknown; " +
+      "if the balance can't cover the whole group, this returns an error " +
       "and you should offer the normal Wave payment for the total instead (all-or-nothing — the plan never " +
       "covers only part of a group). Only call when the context or check_membership shows an active plan " +
       "whose covers_classes includes this class, and the client chose a slot from check_availability.",
@@ -741,6 +742,15 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "client's WhatsApp number). Both carry a booking_id usable for rescheduling or cancellation. " +
       "A voluntary cancellation is never refundable; offer a same-class move or transfer first. " +
       "Use it before answering about existing bookings and before any cancel/reschedule.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_session_history",
+    description:
+      "List THIS client's own confirmed past sessions from the last 90 days (maximum 12). " +
+      "Use when they ask what sessions they attended, missed, or used on a plan. Attendance is only " +
+      "reported when Wix explicitly marked it; an unmarked session is NOT a no-show. Never use this " +
+      "for a friend, relative, coach, or another client.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -3346,14 +3356,57 @@ export async function executeTool(
           };
         }),
       );
+      // A Clé's bonus is a distinct Wix pool. Surface it separately from the
+      // main Reformer balance so a zero main balance never turns into the
+      // misleading "you have no sessions" answer. The server still enforces
+      // the scope in book_key_bonus.
+      const memberId = await wix.findMemberIdByContactId(contactId);
+      const activeKeys = config.KEYS_AUTOMATION_ENABLED
+        ? await keyRepo.activeKeysForClient({ clientId: client.id, wixMemberId: memberId })
+        : [];
+      const bonus_benefits = await Promise.all(
+        activeKeys
+          .filter((key) => !!key.bonus_plan_id && !!key.bonus_order_id)
+          .map(async (key) => {
+            const mapping = keyMappingForPlan(key.plan_id);
+            const covers = mapping?.bonus
+              ? await wix.planCoveredClassNames(mapping.bonus.planId)
+              : null;
+            const bonusMembership = memberships.find(
+              (membership) =>
+                membership.planId === key.bonus_plan_id &&
+                membership.orderId === key.bonus_order_id,
+            );
+            const remaining = await wix.planRemainingSessions(
+              contactId,
+              key.bonus_plan_id!,
+              bonusMembership?.planName ?? "Cours Bonus",
+              key.bonus_order_id,
+            );
+            return {
+              plan: "Cours Bonus",
+              attached_to: mapping ? `Clé ${key.key_type}` : "abonnement",
+              remaining_sessions:
+                remaining === null ? "unknown — verified by Wix at booking time" : remaining,
+              covers_classes:
+                covers === null ? "unknown — scope is verified at booking time" : covers,
+              weekdays_only: mapping?.bonus?.slotRule === "ANY_WEEKDAY_HOUR",
+              booking_tool: "book_key_bonus",
+              note:
+                "Only state this bonus covers the classes returned in covers_classes. Do not say it covers a Reformer/Sculpt class unless that class is explicitly listed; book_key_bonus enforces the scope.",
+            };
+          }),
+      );
       return JSON.stringify({
         verified: true,
         active_plans: activePlans,
+        bonus_benefits,
         note:
           "Only propose book_with_membership for classes in covers_classes — for other classes, " +
           "say the plan doesn't cover them and offer normal Wave payment. remaining_sessions is " +
           "the current balance — a number can be relayed to the client as of right now; " +
-          "'unknown' means say the balance is checked at booking time, NEVER guess a number.",
+          "'unknown' means say the balance is checked at booking time, NEVER guess a number. " +
+          "Always mention an available bonus separately; only route it through book_key_bonus if the requested class is in that bonus's covers_classes.",
       });
     }
 
@@ -3987,11 +4040,52 @@ export async function executeTool(
           failureCode: "membership_not_eligible",
           metadata: { service_id: serviceId, selection_result: "membership_not_eligible" },
         });
+        // Do not collapse "not covered", an exhausted plan, and a Wix lookup
+        // uncertainty into one instruction to charge.  The distinction is
+        // informational only: booking itself remains fail-closed above.
+        try {
+          const plans = await wix.listActiveMemberships(contact.id);
+          let coverageUnknown = false;
+          let coversClass = false;
+          let knownZero = false;
+          for (const plan of plans) {
+            const covers = await wix.planCoveredClassNames(plan.planId);
+            if (covers === null) {
+              coverageUnknown = true;
+              continue;
+            }
+            if (!covers.includes(service.name)) continue;
+            coversClass = true;
+            const remaining = await wix.planRemainingSessions(
+              contact.id,
+              plan.planId,
+              plan.planName,
+              plan.orderId,
+            );
+            if (remaining === 0) knownZero = true;
+          }
+          if (knownZero) {
+            return JSON.stringify({
+              error: "no_sessions_left",
+              message:
+                "The plan covers this class but has 0 sessions left. Do not retry book_with_membership. " +
+                "Surface any separate bonus from check_membership only if its scope covers this class; otherwise offer normal payment.",
+            });
+          }
+          if (!coversClass && !coverageUnknown) {
+            return JSON.stringify({
+              error: "class_not_covered",
+              message:
+                "The client's active plan does not cover this class. Do not say their balance is zero; offer normal payment, while keeping any separately scoped bonus distinct.",
+            });
+          }
+        } catch (classificationError) {
+          console.error("Membership failure classification unavailable:", classificationError);
+        }
         return JSON.stringify({
-          error: "not_eligible",
+          error: "eligibility_unknown",
           message:
-            "The client's abonnement does not cover this class (or has no sessions left this period). " +
-            "Explain this kindly and offer the normal Wave payment, or reception for questions about their plan.",
+            "Wix could not confirm whether this plan can be used for this class. Do not claim the balance is zero; offer normal payment or reception for plan questions.",
         });
       }
 
@@ -4162,10 +4256,9 @@ export async function executeTool(
           });
         }
         return JSON.stringify({
-          error: notEligible ? "not_eligible" : "membership_booking_failed",
+          error: notEligible ? "eligibility_unknown" : "membership_booking_failed",
           message: notEligible
-            ? "The client's abonnement does not cover this class (or has no sessions left this period). " +
-              "Explain this kindly and offer the normal Wave payment, or reception for questions about their plan."
+            ? "Wix refused the plan redemption after booking preparation. Do not claim the balance is zero; offer normal payment or reception for plan questions."
             : "Technical problem while using the abonnement. Offer the Wave payment flow or reception.",
         });
       }
@@ -4279,6 +4372,70 @@ export async function executeTool(
       });
     }
 
+    case "get_session_history": {
+      const rows = await repo.recentSessionHistory(client.id);
+      const staleAttendance = rows.some(
+        (row) =>
+          !row.attendance_synced_at ||
+          Date.now() - new Date(row.attendance_synced_at).getTime() > 24 * 60 * 60 * 1000,
+      );
+      // Attendance is normally refreshed on a full mirror pass. For a small
+      // client history, use Wix's proven eventId filter when marks are stale;
+      // it is read-only and we still return the mirror if Wix is unavailable.
+      const liveByBooking = new Map<string, string>();
+      let attendance_checked_at: string | undefined;
+      if (staleAttendance) {
+        const eventIds = [...new Set(rows.map((row) => row.event_id).filter((id): id is string => !!id))];
+        if (eventIds.length > 0) {
+          try {
+            const live = await wix.listWixAttendanceByEventIds(eventIds);
+            for (const entry of live) liveByBooking.set(entry.bookingId, entry.status);
+            attendance_checked_at = new Date().toISOString();
+          } catch (error) {
+            console.error("Bounded live attendance refresh failed (using mirror):", error);
+          }
+        }
+      }
+      const sessions = rows.map((row) => {
+        const attendance = liveByBooking.get(row.booking_id) ?? row.attendance_status;
+        const attendance_state =
+          attendance === "ATTENDED"
+            ? "marked_present"
+            : attendance === "NOT_ATTENDED" || attendance === "ABSENT"
+              ? "marked_absent"
+              : "unmarked";
+        const usage = row.protected_benefit_kind === "BONUS"
+          ? { type: "bonus", label: "Cours Bonus", proven: true }
+          : row.protected_benefit_kind === "INVITATION"
+            ? { type: "invitation", label: "Invitation", proven: true }
+            : row.local_payment_method === "membership"
+              ? {
+                  type: "membership",
+                  label: row.local_membership_plan_name || "abonnement (plan non précisé)",
+                  proven: true,
+                }
+              : row.benefit_transaction_id
+                ? { type: "membership", label: "abonnement (plan non précisé)", proven: true }
+                : { type: "unknown", label: "mode de paiement non connu", proven: false };
+        return {
+          class: row.service_name ?? "Cours",
+          slot_start: row.session_start,
+          slot_start_dakar: row.session_start ? fmtDakar(String(row.session_start)) : undefined,
+          attendance: attendance_state,
+          usage,
+          booking_synced_at: row.booking_synced_at,
+          attendance_synced_at: row.attendance_synced_at,
+        };
+      });
+      return JSON.stringify({
+        period_days: 90,
+        sessions,
+        attendance_checked_at,
+        note:
+          "This is this client's own confirmed history only. 'unmarked' means Wix has not recorded attendance yet; it NEVER means absent or no-show. Payment/plan attribution is shown only when the mirror or this chat has direct evidence.",
+      });
+    }
+
     case "reschedule_booking": {
       const bookingId = String(input.booking_id ?? "");
       const requestedEventId = String(input.event_id ?? "");
@@ -4302,6 +4459,20 @@ export async function executeTool(
       // a model can never move somebody else's reservation.
       if (bookingId.startsWith("studio:")) {
         const wixId = bookingId.slice("studio:".length);
+        const mirrored = await repo.findMirroredBookingForClient(client.id, wixId);
+        if (mirrored?.status === "CANCELED" || mirrored?.status === "DECLINED") {
+          return JSON.stringify({
+            error: "booking_cancelled",
+            message: "This booking was already cancelled. Do not try to move it; offer a new upcoming slot instead.",
+          });
+        }
+        if (mirrored?.session_start && new Date(mirrored.session_start).getTime() <= Date.now()) {
+          return JSON.stringify({
+            error: "class_already_started",
+            class: mirrored.service_name ?? undefined,
+            message: "That class has already started and can no longer be moved. Offer a new upcoming slot instead.",
+          });
+        }
         const protectedBenefit = await keyRepo.protectedBenefitForWixBooking(wixId);
         if (protectedBenefit) {
           return JSON.stringify({
@@ -4359,6 +4530,13 @@ export async function executeTool(
       const booking = await repo.findClientBooking(client.id, bookingId);
       if (!booking || booking.status !== "BOOKED" || !booking.wix_booking_id) {
         return JSON.stringify({ error: "unknown_booking", message: "No such upcoming confirmed booking for this client. Re-run get_my_bookings." });
+      }
+      if (new Date(booking.slot_start).getTime() <= Date.now()) {
+        return JSON.stringify({
+          error: "class_already_started",
+          class: booking.service_name,
+          message: "That class has already started and can no longer be moved. Offer a new upcoming slot instead.",
+        });
       }
       const protectedBenefit = await keyRepo.protectedBenefitForBooking(booking.id);
       if (protectedBenefit) {
@@ -4429,6 +4607,20 @@ export async function executeTool(
       // keeps them intact and hands final cancellation to reception.
       if (bookingId.startsWith("studio:")) {
         const wixId = bookingId.slice("studio:".length);
+        const mirrored = await repo.findMirroredBookingForClient(client.id, wixId);
+        if (mirrored?.status === "CANCELED" || mirrored?.status === "DECLINED") {
+          return JSON.stringify({
+            error: "booking_cancelled",
+            message: "This booking was already cancelled. Do not try to cancel it again; offer a new upcoming slot instead.",
+          });
+        }
+        if (mirrored?.session_start && new Date(mirrored.session_start).getTime() <= Date.now()) {
+          return JSON.stringify({
+            error: "class_already_started",
+            class: mirrored.service_name ?? undefined,
+            message: "That class has already started and can no longer be cancelled. Offer a new upcoming slot instead.",
+          });
+        }
         const protectedBenefit = await keyRepo.protectedBenefitForWixBooking(wixId);
         if (protectedBenefit) {
           return JSON.stringify({
@@ -4484,6 +4676,13 @@ export async function executeTool(
         return JSON.stringify({
           error: "unknown_booking",
           message: "No such upcoming confirmed booking for this client. Re-run get_my_bookings.",
+        });
+      }
+      if (new Date(booking.slot_start).getTime() <= Date.now()) {
+        return JSON.stringify({
+          error: "class_already_started",
+          class: booking.service_name,
+          message: "That class has already started and can no longer be cancelled. Offer a new upcoming slot instead.",
         });
       }
 

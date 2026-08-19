@@ -25,6 +25,13 @@ de priorité (🔥 fort impact client / 🔧 confort ops / 🧪 à valider avant
 
 ## Réservations
 
+- 🔧 **Enrichir l'attribution du miroir Wix des réservations** :
+  `wix_booking_records` possède `plan_order_id` et `membership_plan_name`, mais
+  `wixBookingSync` ne les alimente pas encore. L'historique client doit continuer
+  à afficher une attribution seulement quand la transaction Benefit Programs ou
+  une réservation Awa le prouve ; traiter l'enrichissement du sync dans un
+  chantier séparé (cadence de réconciliation et tests propres).
+
 - ~~🔥 **Annulation par le bot**~~ → **FAIT (juillet 2026)** : outil
   `cancel_booking`, règle 16h vérifiée côté serveur (double contrôle
   consultation + exécution). Abonnement → séance re-créditée automatiquement

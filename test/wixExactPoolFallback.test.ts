@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  exactPlanPoolBalance,
   findExactBenefitWithFallback,
   redeemMembershipForBooking,
   type EligibleBenefit,
@@ -159,6 +160,41 @@ describe("findExactBenefitWithFallback", () => {
       serviceId: "service-1", contactId: "contact-1", memberId: "member-1",
       planId: "plan-1", orderId: "order-1",
     })).resolves.toBeNull();
+  });
+});
+
+describe("exactPlanPoolBalance", () => {
+  it("reports an authoritative zero for exactly one active pool", async () => {
+    installResolverMock({
+      balances: [{
+        id: "pool-1",
+        beneficiary: { memberId: "member-1" },
+        amount: { available: "0" },
+        poolInfo: {
+          id: "pool-1",
+          namespace: "@wix/pricing-plans",
+          externalProgramDefinitionId: "plan-1",
+          externalProgramId: "order-1",
+          status: "ACTIVE",
+        },
+      }],
+    });
+    await expect(exactPlanPoolBalance({ memberId: "member-1", planId: "plan-1", orderId: "order-1" }))
+      .resolves.toBe(0);
+  });
+
+  it("keeps missing or ambiguous pools unknown", async () => {
+    installResolverMock({ balances: [] });
+    await expect(exactPlanPoolBalance({ memberId: "member-1", planId: "plan-1", orderId: "order-1" }))
+      .resolves.toBeNull();
+
+    const duplicate = {
+      id: "pool-1", beneficiary: { memberId: "member-1" }, amount: { available: "0" },
+      poolInfo: { id: "pool-1", namespace: "@wix/pricing-plans", externalProgramDefinitionId: "plan-1", externalProgramId: "order-1", status: "ACTIVE" },
+    };
+    installResolverMock({ balances: [duplicate, duplicate] });
+    await expect(exactPlanPoolBalance({ memberId: "member-1", planId: "plan-1", orderId: "order-1" }))
+      .resolves.toBeNull();
   });
 });
 

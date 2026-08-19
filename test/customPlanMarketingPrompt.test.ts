@@ -19,4 +19,16 @@ describe("custom plan marketing guidance", () => {
     expect(prompt).not.toMatch(/sur-mesure plan has NO bonus/i);
     expect(prompt).not.toMatch(/grants no “cours en plus”/i);
   });
+
+  it("does not turn a future class into a reschedule without an identified source booking", () => {
+    const prompt = systemPrompt();
+    expect(prompt).toMatch(/future slot.*NEW booking/i);
+    expect(prompt).toMatch(/explicitly identified a confirmed, upcoming source booking/i);
+  });
+
+  it("keeps unmarked attendance distinct from an absence", () => {
+    const prompt = systemPrompt();
+    expect(prompt).toMatch(/get_session_history/);
+    expect(prompt).toMatch(/unmarked.*NEVER call it an absence\/no-show/i);
+  });
 });

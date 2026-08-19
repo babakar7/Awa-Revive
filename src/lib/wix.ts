@@ -2495,6 +2495,41 @@ function memberIdOf(value: any): string {
 }
 
 /**
+ * Read the balance of one *exact* active Pricing Plans pool.  Unlike
+ * eligible-pools this remains visible when its balance is zero, which matters
+ * when a client asks for their balance (but must never be used to authorise a
+ * redemption).  Missing or duplicate pools deliberately stay unknown.
+ */
+export async function exactPlanPoolBalance(args: {
+  memberId: string;
+  planId: string;
+  orderId: string;
+}): Promise<number | null> {
+  const balanceData = await wixPost("/benefit-programs/v1/balances/query", {
+    query: {
+      filter: { "beneficiary.memberId": { $eq: args.memberId } },
+      cursorPaging: { limit: 100 },
+    },
+  });
+  const matches = (Array.isArray(balanceData?.balances) ? balanceData.balances : [])
+    .filter((balance: any) => {
+      const pool = balance?.poolInfo ?? {};
+      const available = Number(balance?.amount?.available);
+      return (
+        entityId(balance) &&
+        entityId(balance) === entityId(pool) &&
+        memberIdOf(balance?.beneficiary) === args.memberId &&
+        String(pool?.namespace ?? "") === PRICING_PLANS_NAMESPACE &&
+        String(pool?.externalProgramDefinitionId ?? "") === args.planId &&
+        String(pool?.externalProgramId ?? "") === args.orderId &&
+        String(pool?.status ?? "") === "ACTIVE" &&
+        Number.isFinite(available)
+      );
+    });
+  return matches.length === 1 ? Number(matches[0].amount.available) : null;
+}
+
+/**
  * Resolve one exact paid Pricing Plans order when Wix's eligible-pools index
  * has not materialized it. This deliberately runs only after every native
  * eligibility response was empty. Any unrelated eligible benefit, ambiguous
@@ -2528,8 +2563,8 @@ export async function findExactBenefitWithFallback(args: {
       cursorPaging: { limit: 100 },
     },
   });
-  const matches = (Array.isArray(balanceData?.balances) ? balanceData.balances : [])
-    .filter((balance: any) => {
+  const matches = (Array.isArray(balanceData?.balances) ? balanceData.balances : []).filter(
+    (balance: any) => {
       const pool = balance?.poolInfo ?? {};
       const available = Number(balance?.amount?.available);
       return (
@@ -2543,7 +2578,8 @@ export async function findExactBenefitWithFallback(args: {
         Number.isFinite(available) &&
         available >= count
       );
-    });
+    },
+  );
   if (matches.length !== 1) return null;
 
   const balance = matches[0];
@@ -2620,9 +2656,9 @@ export async function findEligibleBenefit(
  * Remaining session credits on one of this contact's plans, or null when the
  * balance cannot be determined (no covered service in the catalog, pool not
  * eligible right now, or the eligible pool belongs to another plan). Reuses
- * the proven eligible-pools call — the balance rides on the same pool object
- * used for redemption — instead of a separate, unverified pools-query API.
- * Callers must treat null as "unknown", never as zero.
+ * eligible-pools hides exhausted pools, so an exact, already-proven balances
+ * query is used as a read-only fallback. Callers must treat null as "unknown",
+ * never as zero.
  */
 export async function planRemainingSessions(
   contactId: string,
@@ -2638,7 +2674,12 @@ export async function planRemainingSessions(
       await findEligibleBenefits(covered.id, contactId),
       { planId, orderId },
     );
-    if (!benefit) return null;
+    if (!benefit) {
+      const memberId = await findMemberIdByContactId(contactId);
+      return memberId && orderId
+        ? await exactPlanPoolBalance({ memberId, planId, orderId })
+        : null;
+    }
     // Name is a secondary guard only. IDs above select the actual plan.
     if (benefit.planName.trim().toLowerCase() !== planName.trim().toLowerCase()) return null;
     return benefit.available;
