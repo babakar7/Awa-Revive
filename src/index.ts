@@ -300,6 +300,13 @@ async function main() {
     },
   });
   app.log.info(`Revive booking agent listening on http://localhost:${activePort}`);
+  if (process.env.RAILWAY_ENVIRONMENT && !process.env.RAILWAY_GIT_COMMIT_SHA) {
+    // Deployed WITHOUT git (railway up from a local tree): prod ≠ origin/main.
+    // Loud on purpose — this silently regressed prod on 18/08/2026.
+    app.log.warn(
+      "DEPLOIEMENT HORS GIT (railway up ?) : aucun RAILWAY_GIT_COMMIT_SHA — la prod ne reflète pas origin/main. Re-déployer via git push.",
+    );
+  }
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, "Shutting down");

@@ -94,7 +94,16 @@ export function buildServer() {
 
   app.get("/healthz", async (_req, reply) => {
     const ok = await checkDatabaseHealth();
-    return reply.code(ok ? 200 : 503).send({ ok });
+    // On Railway, expose WHAT is running: Railway sets RAILWAY_GIT_COMMIT_SHA
+    // only for git-triggered deploys. A `railway up` (banned — uploads a local
+    // tree, bypassing git + CI) has none and shows "local-upload", so a silent
+    // prod regression (18/08/2026 incident) is visible in one request.
+    // Local/tests keep the bare { ok } shape.
+    const body: { ok: boolean; commit?: string } = { ok };
+    if (process.env.RAILWAY_ENVIRONMENT) {
+      body.commit = process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || "local-upload";
+    }
+    return reply.code(ok ? 200 : 503).send(body);
   });
 
   // Global same-origin route: menu, ordering, Railway and configured hosts all

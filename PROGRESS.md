@@ -133,6 +133,25 @@ régimes) + `autoCancelSweep` (13, Wix mocké) unitaires ; `integration/autoCanc
 (verrou/ledger/garde/cache/CRUD + persistance sticky `last_protected_at`).
 Build + 1410 unitaires verts.
 
+**Incident 18→19/08 : le moteur n'a pas tourné (prod régressée par `railway up`).**
+Le Reformer (Yass) du 19/08 09:15 n'a pas été annulé à 23h. Cause : le 18/08 à
+17:42 un agent a lancé **`railway up` depuis le hub `resabot`** — figé à `edcf2b3`
+(16/08) + 20 fichiers non commités, **sans le moteur** — ce qui a remplacé le
+déploiement git à jour (924b902, 17:18). Aucun push ensuite → la prod est restée
+sur l'arbre du 16/08 toute la nuit (ni annulation auto, ni rien de mergé depuis).
+Diagnostic reproductible : (1) `auto_cancel_ledger` sans aucune ligne pour les
+cours du lendemain = aucun candidat évalué ; (2) `railway deployment list` /
+`list_deployments` : déploiement actif **sans hash de commit** (`-`) = upload
+local, pas GitHub ; (3) GET `/admin/notifications` sans la section « Annulation
+automatique ». Second blocage indépendant trouvé au passage : **Yass était en
+muet** dans le répertoire → coach = destinataire requis non résoluble → alerte
+config, pas d'annulation (fail-closed, comportement voulu) ; Babakar l'a réactivé.
+Remède : re-déploiement de `origin/main` par la voie git (worktree + push).
+Garde-fou ajouté : **`/healthz` renvoie `commit` sur Railway** (7 chars de
+`RAILWAY_GIT_COMMIT_SHA`, ou `"local-upload"` si déployé hors git) + `log.warn`
+au boot quand `RAILWAY_GIT_COMMIT_SHA` manque. `railway up` reste BANNI
+(CLAUDE.md §Git) ; le hub est lecture/ops seulement.
+
 ## Refonte UX des alertes staff : /admin/notifications (17 août 2026)
 
 **Pourquoi.** Babakar trouvait la page d'alertes coachs mauvaise : un formulaire géant

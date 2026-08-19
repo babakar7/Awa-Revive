@@ -38,8 +38,11 @@ Bookings**, paiement d'abord via **Wave** (mobile money) ou décompte d'un
 - **Avant tout push : `npm run build && npm test`** (tests purs, sans réseau).
   Intégration : `npm run test:integration` (Postgres jetable Docker).
 - **Déploiement : auto-deploy** — `git push` sur `main` (`babakar7/Awa-Revive`)
-  rebuild et redéploie sur Railway. Santé : `GET /healthz`. Détails ops :
-  PROGRESS.md §7. (`railway up` est **banni** hors hotfix — cf. section Git.)
+  rebuild et redéploie sur Railway. Santé : `GET /healthz` → `{ok, commit}` ;
+  **`commit` doit être le SHA poussé** — `"local-upload"` = quelqu'un a fait
+  `railway up`, la prod ne reflète plus `origin/main` (incident 18/08/2026 : le
+  moteur d'annulation auto a disparu une nuit). Détails ops : PROGRESS.md §7.
+  (`railway up` est **banni** hors hotfix — cf. section Git.)
 - Prod : `https://resabot-production.up.railway.app`. Numéro Awa : +221 78 953 66 76.
 - Après un changement produit non trivial, **mets à jour PROGRESS.md** (décision,
   piège, chronologie) — c'est ce qui permet à la session suivante de reprendre.
