@@ -64,6 +64,19 @@ function dateTimeLabel(date: Date): string {
   });
 }
 
+export function reformerFinishedTranscript(name: string, label: string): string {
+  return (
+    `Bonjour ${name} ✦ Tes séances Reformer de ${label} sont maintenant utilisées. ` +
+    `J’espère que ton expérience chez Revive t’a plu 😊\n\n` +
+    `Pour continuer, je te conseille L’Habituée — Clé 6 séances : 6 séances Reformer ` +
+    `sur 30 jours à 72 000 F, avec piscine les jours de séance, 1 cours en plus, accès ` +
+    `à la bibliothèque, massage au tarif membre et possibilité de demander 7 jours de prolongation.\n\n` +
+    `Pour un rythme plus régulier, La Résidente propose 12 séances sur 60 jours, ` +
+    `avec des avantages élargis.\n\n` +
+    `Souhaites-tu que je t’aide à prendre L’Habituée ?`
+  );
+}
+
 async function sendClaimed(args: {
   dedupKey: string;
   keyId: string;
@@ -278,8 +291,7 @@ export async function sweepKeyNudges(log: {
 
     const lastBooked = facts.reformerBookings.at(-1)?.slot_start;
     if (reformerFamily && remaining === 0 && lastBooked && lastBooked.getTime() <= now.getTime()) {
-      const transcript =
-        `[fin des séances Reformer] ${label} terminée — proposition L'Habituée ou La Résidente.`;
+      const transcript = reformerFinishedTranscript(name, label);
       if (
         await sendClaimed({
           dedupKey: `REFORMER_FINISHED:${key.id}`,

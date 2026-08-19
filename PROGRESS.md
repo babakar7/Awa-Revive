@@ -1,5 +1,21 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Relance fin des crédits : L’Habituée recommandée en premier (19 août 2026)
+
+- Le texte historique disait seulement que les séances Reformer étaient
+  terminées et mettait L’Habituée / La Résidente au même niveau, sans expliquer
+  les avantages. Nouvelle copie validée par Babakar : elle parle précisément
+  des crédits Reformer utilisés, recommande d’abord L’Habituée (6 séances / 30
+  jours / 72 000 F, piscine les jours de séance, cours en plus, bibliothèque,
+  massage membre, prolongation possible), puis cite brièvement La Résidente.
+- Le transcript durable de `REFORMER_FINISHED` reprend désormais le vrai corps
+  client au lieu du marqueur interne `[fin des séances Reformer]`. Une régression
+  verrouille la priorité L’Habituée et les deux paramètres du template.
+- Nouveau template Meta `_awa_key_reformer_finished_v2`, langue `en`, catégorie
+  Marketing, soumis sous l’id `1064468122664827` et approuvé par Meta le
+  19/08. La production bascule `WA_KEY_FINISHED_TEMPLATE` vers cette v2 ;
+  l’ancien template reste dans Meta mais n’est plus référencé.
+
 ## Solde Clé, cours déjà commencé et historique personnel fiable (19 août 2026)
 
 - **Solde** : `planRemainingSessions` ne confond plus un pool Wix absent de

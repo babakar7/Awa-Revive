@@ -71,6 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedConfig.WA_KEY_MEMBER_J5_TEMPLATE = "";
   mockedConfig.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE = "";
+  mockedConfig.WA_KEY_FINISHED_TEMPLATE = "";
   mocks.claimKeyNudge.mockResolvedValue(true);
   mocks.completeKeyNudge.mockResolvedValue(undefined);
   mocks.addTurn.mockResolvedValue(undefined);
@@ -202,5 +203,38 @@ describe("Key invitation reminder sweep", () => {
       ["Aïda", "La Résidente — Clé 12 séances", "4", "6 août"],
     );
     expect(mocks.claimKeyNudge).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the approved L'Habituée-first copy when Reformer credits are finished", async () => {
+    mockedConfig.WA_KEY_FINISHED_TEMPLATE = "_awa_key_reformer_finished_v2";
+    mockedConfig.WA_KEY_FINISHED_TEMPLATE_LANG = "en";
+    mocks.listActiveKeysForNudges.mockResolvedValue([
+      activeKey({
+        key_type: "INVITEE",
+        plan_id: "invitee-plan",
+        available_invitations: 0,
+      }),
+    ]);
+    mocks.planRemainingSessions.mockResolvedValue(0);
+    mocks.inviteeGuaranteeFacts.mockResolvedValue({
+      reformerBookings: [{ slot_start: new Date("2026-07-31T12:30:00Z") }],
+      bonusBookings: 0,
+    });
+
+    await expect(sweepKeyNudges(log)).resolves.toBe(1);
+
+    expect(mocks.sendTemplate).toHaveBeenCalledWith(
+      "221770000001",
+      "_awa_key_reformer_finished_v2",
+      "en",
+      ["Aïda", "L'Invitée — Clé 3 séances"],
+    );
+    expect(mocks.addTurn).toHaveBeenCalledWith(
+      "client-1",
+      "assistant",
+      expect.stringMatching(
+        /je te conseille L’Habituée — Clé 6 séances[\s\S]*La Résidente propose 12 séances/,
+      ),
+    );
   });
 });

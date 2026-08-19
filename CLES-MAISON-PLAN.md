@@ -133,6 +133,29 @@ Les deux templates Meta restent nécessaires parce que leurs contextes et leurs
 variables diffèrent, mais ils partagent un claim durable unique
 `INVITEE_CONVERSION:<key_id>`.
 
+## Relance à la fin des crédits Reformer
+
+Cette relance ne dit jamais que toute la Clé est expirée : elle indique seulement
+que ses crédits Reformer sont utilisés. Elle recommande L’Habituée en premier et
+mentionne La Résidente brièvement pour garder un message lisible.
+
+Template Meta, deux variables (`prénom`, `Clé terminée`) :
+
+> Bonjour {{prénom}} ✦ Tes séances Reformer de {{Clé terminée}} sont
+> maintenant utilisées. J’espère que ton expérience chez Revive t’a plu 😊
+>
+> Pour continuer, je te conseille L’Habituée — Clé 6 séances : 6 séances
+> Reformer sur 30 jours à 72 000 F, avec piscine les jours de séance, 1 cours
+> en plus, accès à la bibliothèque, massage au tarif membre et possibilité de
+> demander 7 jours de prolongation.
+>
+> Pour un rythme plus régulier, La Résidente propose 12 séances sur 60 jours,
+> avec des avantages élargis.
+>
+> Souhaites-tu que je t’aide à prendre L’Habituée ?
+
+Boutons : `L'Habituée`, `La Résidente`, `Aide-moi à choisir`.
+
 ## Relance Fondatrices à J-5
 
 Une seule relance est claimée par commande Wix legacy, avec issue durable

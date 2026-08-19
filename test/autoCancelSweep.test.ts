@@ -87,6 +87,11 @@ function inWindowStartIso(): string {
 }
 
 beforeEach(() => {
+  // Keep the default +2h30 slot in the documented daytime cutoff window.
+  // With the real late-evening clock it becomes an early-morning class and
+  // correctly follows a different previous-day rule, making this test flaky.
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-19T10:00:00.000Z"));
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.isAutoCancelPaused.mockResolvedValue(false);
   mocks.listEnabledRules.mockResolvedValue([RULE]);
