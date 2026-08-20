@@ -164,6 +164,16 @@ Préavis minimum **120 min** (`AUTO_CANCEL_MIN_NOTICE_MINUTES`, décision Babaka
 Fail-closed partout : capacité inconnue, destinataire manquant/muet, ou lecture
 Wix en échec → on n'annule pas.
 
+**Le calendrier est global, pas par règle (UX 20/08).** Une règle ne dit QUE
+quels cours (services, jours, plage d'heure de début) et QUI est prévenu — pas
+« combien de temps avant ». Babakar a cherché ce champ en créant la règle Massage
+et ne l'a pas trouvé, parce qu'il n'existe pas. Le formulaire affiche donc, sous
+les boutons de plage horaire, une phrase qui énonce le calendrier réel de la plage
+choisie (`timingHint()` dans [src/admin/autoCancelSection.ts](src/admin/autoCancelSection.ts),
+dérivée des constantes du moteur pour ne jamais dériver). Au passage, le bouton
+« Reste de la journée » part de **09:16** et non 09:15 : les deux bornes de
+`matchesRule()` sont inclusives, donc un cours à 9h15 tombait dans les DEUX plages.
+
 **Gate Wix RÉUSSI (probe live 17/08).** `POST /calendar/v3/events/{id}/cancel`
 annule la seule occurrence, la retire des disponibilités (source d'Awa + widget),
 et un booking ultérieur reçoit 428 `SLOT_NOT_AVAILABLE`. `notifyParticipants=false`

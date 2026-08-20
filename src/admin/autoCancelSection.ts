@@ -1,5 +1,11 @@
 import { config } from "../config.js";
 import type { AutoCancelRuleRow, LedgerJournalRow } from "../domain/autoCancelRepo.js";
+import {
+  DAYTIME_CUTOFF_MS,
+  EMPTY_REQUIRED_MS,
+  MORNING_CUTOFF_MINUTES,
+  MORNING_ELIGIBILITY_HOUR,
+} from "../domain/autoCancelRules.js";
 
 /**
  * Auto-cancellation section of /admin/notifications (server-rendered, no
@@ -44,6 +50,44 @@ function minutesToHHMM(min: number | null): string {
   const h = Math.floor(min / 60);
   const m = min % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Minutes as a human delay: 120 → "2 h", 90 → "1 h 30", 15 → "15 min". */
+function fmtDelay(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h} h` : `${h} h ${m}`;
+}
+
+/**
+ * The engine's timing is GLOBAL, not per-rule: a rule only says WHICH classes
+ * and WHO is alerted. Babakar picked a time bucket and looked for a "how long
+ * before" field that does not exist (20/08), so the form spells the schedule out
+ * for the bucket currently selected. Boundaries mirror `matchesRule()`: both
+ * ends inclusive, hence a 09:15 class belongs to BOTH buckets.
+ *
+ * `from` / `to` are the raw "HH:MM" input values ("" = open end).
+ */
+export function timingHint(from: string, to: string): string {
+  const morningHHMM = minutesToHHMM(MORNING_CUTOFF_MINUTES);
+  const morningLabel = morningHHMM.replace(/^0/, "").replace(":", "h");
+  const daytime = fmtDelay(DAYTIME_CUTOFF_MS / 60_000);
+  const covers = {
+    morning: !from || from <= morningHHMM,
+    daytime: !to || to > morningHHMM,
+  };
+  const when =
+    covers.morning && covers.daytime
+      ? `la veille à ${MORNING_ELIGIBILITY_HOUR}h pour un cours qui commence à ${morningLabel} ou avant, sinon ${daytime} avant le début`
+      : covers.morning
+        ? `la veille à ${MORNING_ELIGIBILITY_HOUR}h`
+        : `${daytime} avant le début du cours`;
+  return (
+    `Décision : ${when}. Le cours doit être resté vide ` +
+    `${fmtDelay(EMPTY_REQUIRED_MS / 60_000)} d'affilée, et rien n'est annulé ` +
+    `à moins de ${fmtDelay(config.AUTO_CANCEL_MIN_NOTICE_MINUTES)} du début.`
+  );
 }
 
 export interface AutoCancelRuleView {
@@ -128,7 +172,12 @@ function ruleForm(
   // about, so nobody has to type a time for the common case.
   const TIME_PRESETS: Array<{ from: string; to: string; label: string }> = [
     { from: "", to: "09:15", label: "Tôt le matin (jusqu'à 9h15)" },
-    { from: "09:15", to: "", label: "Reste de la journée (après 9h15)" },
+    // 09:16, not 09:15: both range ends are inclusive in matchesRule(), so
+    // starting this bucket at 09:15 made a 09:15 class belong to BOTH buckets —
+    // and the timing hint below then had to mention the previous-evening cutoff
+    // for a bucket labelled "après 9h15". No stored rule uses 09:15 as its lower
+    // bound (checked in prod 20/08), so the two buckets now partition the day.
+    { from: "09:16", to: "", label: "Reste de la journée (après 9h15)" },
     { from: "", to: "", label: "Toute heure" },
   ];
   const presetBtns = TIME_PRESETS.map((p) => {
@@ -153,6 +202,7 @@ function ruleForm(
     <legend class="muted">Heure de début du cours</legend>
     <div class="cluster">${presetBtns}</div>
     <p class="muted" id="ac-time-summary" style="margin:.1rem 0"></p>
+    <p class="muted" id="ac-time-timing" style="margin:.1rem 0">${esc(timingHint(fromV, toV))}</p>
     <details class="resolution-panel">
       <summary class="act act--sm act--ghost" style="cursor:pointer;display:inline-flex">Plage précise (optionnel)</summary>
       <div class="row" style="margin-top:.6rem">
@@ -169,13 +219,26 @@ function ruleForm(
   (function(){
     var f=document.getElementById('ac-rule-form'); if(!f) return;
     var from=f.querySelector('[name=start_from]'), to=f.querySelector('[name=start_to]');
-    var sum=f.querySelector('#ac-time-summary'); if(!from||!to) return;
+    var sum=f.querySelector('#ac-time-summary');
+    var tim=f.querySelector('#ac-time-timing');
+    // Same buckets as timingHint() server-side, sentences precomputed there.
+    var TIMING=${JSON.stringify({
+      morningHHMM: minutesToHHMM(MORNING_CUTOFF_MINUTES),
+      both: timingHint("", ""),
+      morning: timingHint("", minutesToHHMM(MORNING_CUTOFF_MINUTES)),
+      daytime: timingHint(minutesToHHMM(MORNING_CUTOFF_MINUTES + 1), ""),
+    })};
+    if(!from||!to) return;
     function label(){ var a=from.value, b=to.value;
       if(!a && !b) return 'toute heure';
       if(!a && b) return 'les cours qui commencent jusqu\\'à '+b;
       if(a && !b) return 'les cours qui commencent à partir de '+a;
       return 'les cours qui commencent entre '+a+' et '+b; }
+    function timing(){ var a=from.value, b=to.value;
+      var m=!a || a<=TIMING.morningHHMM, d=!b || b>TIMING.morningHHMM;
+      return m&&d ? TIMING.both : m ? TIMING.morning : TIMING.daytime; }
     function upd(){ if(sum) sum.textContent='Cible : '+label()+'.';
+      if(tim) tim.textContent=timing();
       f.querySelectorAll('.ac-time-preset').forEach(function(btn){
         var active=(btn.getAttribute('data-from')||'')===(from.value||'') && (btn.getAttribute('data-to')||'')===(to.value||'');
         btn.classList.toggle('act--ok', active); btn.classList.toggle('act--ghost', !active); }); }
