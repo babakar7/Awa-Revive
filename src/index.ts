@@ -39,6 +39,7 @@ import { syncAttendanceLeaderboard } from "./domain/attendanceLeaderboard.js";
 import { syncAdInsights } from "./domain/adInsightsSync.js";
 import { sweepOmVerifications } from "./domain/orangeMoneyVerification.js";
 import { syncWixPayments } from "./domain/wixPaymentSync.js";
+import { sweepDeferredAwa } from "./agent/index.js";
 
 async function main() {
   assertConfig();
@@ -156,6 +157,10 @@ async function main() {
       // never typed) → hand it to reception so no plan-holder is lost silently.
       const escalated = await escalateStaleLinkRequests();
       if (escalated > 0) app.log.info({ escalated }, "Stale link requests handed to reception");
+      if (config.AWA_AUTO_RESUME_DEFERRED_ENABLED) {
+        const recovered = await sweepDeferredAwa();
+        if (recovered > 0) app.log.info({ recovered }, "Recovered deferred Awa messages");
+      }
       // Réservations parties sans fiche contact Wix (ambiguïté, nom
       // inexploitable, panne) : une alerte gérant par jour au-delà du seuil,
       // pour qu'un trou ne redevienne jamais invisible (cas Penda 17/08).

@@ -215,6 +215,9 @@ import { extendKeySevenDays } from "../domain/keyExtension.js";
 import * as paymentsLedger from "../domain/paymentsLedger.js";
 import { csvCell, renderPaymentsPage } from "./paiementsPage.js";
 import { wixPaymentSyncState } from "../domain/wixPaymentSync.js";
+import { enqueue } from "../lib/serialize.js";
+import { markDeferredHandledByHuman } from "../domain/deferredAwa.js";
+import { resumeAwaAndContinue } from "../agent/index.js";
 
 export { escapeHtml } from "./helpers.js";
 
@@ -1150,7 +1153,12 @@ export function registerAdmin(app: FastifyInstance): void {
           adminOps.lastClientMessageAt(clientId),
         ]);
         const query = req.query as Record<string, string | undefined>;
-        const banner = query.done ? `<div class="card success"><b>✓ Action enregistrée</b></div>` : query.err ? `<div class="card warn"><b>${escapeHtml(query.err)}</b></div>` : "";
+        const doneLabel = query.done === "resumed"
+          ? "Awa reprend la conversation."
+          : query.done && query.done !== "takeover" && query.done !== "disengaged"
+            ? query.done
+            : "Action enregistrée";
+        const banner = query.done ? `<div class="card success"><b>✓ ${escapeHtml(doneLabel)}</b></div>` : query.err ? `<div class="card warn"><b>${escapeHtml(query.err)}</b></div>` : "";
         const body = renderClientWorkspace({ client, turns, workspace, lastClientMessage, whatsappWindowOpen: adminOps.isWithinWhatsAppWindow(lastClientMessage), banner });
         reply
           .type("text/html")
@@ -1196,8 +1204,19 @@ export function registerAdmin(app: FastifyInstance): void {
       admin.post("/conversations/:clientId/resume", async (req, reply) => {
         const { clientId } = req.params as { clientId: string };
         const identity = { username: req.adminUser ?? "?", role: req.adminRole ?? "team" };
-        const updated = await adminOps.resumeAwa(clientId, identity);
-        return reply.redirect(`/admin/conversations/${clientId}?${updated ? "done=resumed" : `err=${encodeURIComponent("Client introuvable")}`}`, 303);
+        const result = await resumeAwaAndContinue({ clientId, identity });
+        if (result.resumed) {
+          await adminOps.recordAdminAudit(identity, "conversation.takeover_ended", "client", clientId, {
+            deferredCount: result.deferredCount,
+            processingStarted: result.processingStarted,
+          });
+        }
+        const outcome = !result.resumed
+          ? `err=${encodeURIComponent("Client introuvable")}`
+          : result.processingStarted
+            ? `done=${encodeURIComponent(`${result.deferredCount} message(s) confié(s) à Awa`)}`
+            : "done=resumed";
+        return reply.redirect(`/admin/conversations/${clientId}?${outcome}`, 303);
       });
 
       admin.post("/conversations/:clientId/reply", async (req, reply) => {
@@ -1226,11 +1245,14 @@ export function registerAdmin(app: FastifyInstance): void {
         if (!outbound) return back("done", "already-sent");
         const identity = { username: req.adminUser ?? "?", role: req.adminRole ?? "team" };
         try {
-          const wamid = mode === "template"
-            ? await sendTemplate(client.wa_phone, config.WA_ADMIN_FOLLOWUP_TEMPLATE, config.WA_ADMIN_FOLLOWUP_TEMPLATE_LANG, [])
-            : await sendText(client.wa_phone, message);
-          await adminOps.markAdminOutboundSent(outbound.id, wamid);
-          await adminOps.recordAdminAudit(identity, "conversation.message_sent", "client", clientId, { mode, outboundId: outbound.id });
+          await enqueue(client.wa_phone, async () => {
+            const wamid = mode === "template"
+              ? await sendTemplate(client.wa_phone, config.WA_ADMIN_FOLLOWUP_TEMPLATE, config.WA_ADMIN_FOLLOWUP_TEMPLATE_LANG, [])
+              : await sendText(client.wa_phone, message);
+            await adminOps.markAdminOutboundSent(outbound.id, wamid);
+            const handledDeferred = await markDeferredHandledByHuman(clientId);
+            await adminOps.recordAdminAudit(identity, "conversation.message_sent", "client", clientId, { mode, outboundId: outbound.id, handledDeferred });
+          });
           // Replying to the client yourself resolves their open interventions.
           // Covers technical takeovers where nobody clicked "Prendre le relais"
           // (case Tout: takeover set by awa-technical-failure). No-op if the

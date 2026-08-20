@@ -334,6 +334,9 @@ export const config = {
   // 24h free-text window. It must have no body variables.
   WA_ADMIN_FOLLOWUP_TEMPLATE: optional("WA_ADMIN_FOLLOWUP_TEMPLATE", ""),
   WA_ADMIN_FOLLOWUP_TEMPLATE_LANG: optional("WA_ADMIN_FOLLOWUP_TEMPLATE_LANG", "fr"),
+  // Background recovery of messages deferred during a human takeover. Keep
+  // dark until the migration and production relay checks have been validated.
+  AWA_AUTO_RESUME_DEFERRED_ENABLED: optional("AWA_AUTO_RESUME_DEFERRED_ENABLED", "false") === "true",
   // Where the "Envoyer un test" button on /admin/notifications sends its preview
   // message. Defaults to Babakar's number so tests never surprise the guardian
   // or a coach. Empty = the test button is disabled.

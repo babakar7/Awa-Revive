@@ -362,6 +362,30 @@ create table if not exists admin_outbound_messages (
 create index if not exists idx_admin_outbound_client_created
   on admin_outbound_messages (client_id, created_at);
 
+-- Messages reçus pendant un relais humain. Le tour utilisateur reste dans
+-- conversations pour que l'équipe voie le fil immédiatement ; cette table
+-- est uniquement la file durable qui permet à Awa de reprendre sans rejouer
+-- ou réinsérer ces tours. Le bail court rend un redémarrage récupérable.
+create table if not exists deferred_awa_messages (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id) on delete cascade,
+  wa_message_id text not null,
+  content text not null,
+  status text not null default 'pending'
+    check (status in ('pending','processing','done','handled_by_human','failed')),
+  attempts integer not null default 0 check (attempts >= 0),
+  lease_until timestamptz,
+  last_error text,
+  created_at timestamptz not null default now(),
+  processed_at timestamptz,
+  updated_at timestamptz not null default now(),
+  unique (wa_message_id)
+);
+create index if not exists idx_deferred_awa_due
+  on deferred_awa_messages (status, lease_until, created_at);
+create index if not exists idx_deferred_awa_client_created
+  on deferred_awa_messages (client_id, created_at);
+
 create table if not exists handoffs (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references clients(id),

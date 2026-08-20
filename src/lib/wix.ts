@@ -1215,6 +1215,22 @@ export interface WixContactBooking {
   participants: number;
 }
 
+/** A future Wix booking that is explicitly paid with a pricing-plan credit. */
+export interface WixFutureMembershipBooking extends WixContactBooking {
+  status: "CONFIRMED" | "PENDING";
+  /** Wix does not reliably expose the exact plan order on a booking. */
+  planId: string | null;
+}
+
+function selectedPaymentOption(booking: any): string | null {
+  const raw =
+    booking?.selectedPaymentOption ??
+    booking?.paymentDetails?.selectedPaymentOption ??
+    booking?.payment?.selectedPaymentOption ??
+    booking?.bookedEntity?.selectedPaymentOption;
+  return typeof raw === "string" ? raw.toUpperCase() : null;
+}
+
 /**
  * Booking activity of these contacts, for the /admin/crm activity ranking —
  * batched ($in verified live 11/07). Returns two sets: `upcoming` (a confirmed
@@ -1295,6 +1311,59 @@ export async function listContactUpcomingBookings(
       serviceName: b?.bookedEntity?.title ?? serviceName(slot.serviceId),
       startDate,
       participants: Math.max(1, Number(b.numberOfParticipants ?? 1)),
+    });
+  }
+  return out.sort((a, b) => Date.parse(a.startDate) - Date.parse(b.startDate));
+}
+
+/**
+ * Future confirmed bookings consuming a membership credit, read directly from
+ * Wix. Cancelled, refunded and direct/offline payments are deliberately
+ * excluded. The plan id is best-effort only: Wix can omit it, especially when
+ * more than one compatible plan exists, so callers must never invent one.
+ */
+export async function listContactFutureMembershipBookings(
+  contactId: string,
+): Promise<WixFutureMembershipBooking[]> {
+  const extendedBookings: any[] = [];
+  for (let offset = 0; offset < 500; offset += 100) {
+    const data = await wixPost("/_api/bookings-reader/v2/extended-bookings/query", {
+      query: {
+        filter: {
+          "contactDetails.contactId": contactId,
+          status: { $eq: "CONFIRMED" },
+        },
+        paging: { limit: 100, offset },
+      },
+    });
+    const batch: any[] = Array.isArray(data?.extendedBookings) ? data.extendedBookings : [];
+    extendedBookings.push(...batch);
+    if (batch.length < 100) break;
+  }
+  const services = await listServices().catch(() => [] as WixService[]);
+  const byId = new Map(services.map((service) => [service.id, service.name]));
+  const now = Date.now();
+  const out: WixFutureMembershipBooking[] = [];
+  for (const entry of extendedBookings) {
+    const booking = entry?.booking;
+    if (!booking?.id || String(booking.status ?? "").toUpperCase() !== "CONFIRMED") continue;
+    if (selectedPaymentOption(booking) !== "MEMBERSHIP") continue;
+    const paymentStatus = String(booking?.paymentStatus ?? booking?.payment?.status ?? "").toUpperCase();
+    if (["REFUNDED", "CANCELED", "CANCELLED"].includes(paymentStatus)) continue;
+    const slot = booking?.bookedEntity?.slot ?? booking?.bookedEntity?.schedule ?? {};
+    const startDate = slot.startDate ?? slot.firstSessionStart;
+    if (typeof startDate !== "string" || Date.parse(startDate) <= now) continue;
+    const serviceId = typeof slot.serviceId === "string" ? slot.serviceId : null;
+    out.push({
+      id: String(booking.id),
+      serviceId,
+      serviceName: String(booking?.bookedEntity?.title ?? byId.get(serviceId ?? "") ?? "Cours"),
+      startDate,
+      participants: Math.max(1, Number(booking.numberOfParticipants ?? 1)),
+      status: "CONFIRMED",
+      planId: typeof (booking?.pricingPlanId ?? booking?.paymentDetails?.pricingPlanId) === "string"
+        ? String(booking?.pricingPlanId ?? booking?.paymentDetails?.pricingPlanId)
+        : null,
     });
   }
   return out.sort((a, b) => Date.parse(a.startDate) - Date.parse(b.startDate));

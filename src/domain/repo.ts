@@ -95,6 +95,20 @@ export async function upsertClient(waPhone: string): Promise<Client> {
   return res.rows[0];
 }
 
+/** Live client row for durable workers that already know the internal id. */
+export async function getClientById(clientId: string): Promise<Client | null> {
+  const res = await pool.query(
+    `select id, wa_phone, name, language, email_prompted_at, claimed_email,
+            capability_menu_at, fr_register, is_test, human_takeover_until,
+            human_takeover_by, human_takeover_at, awa_disengaged_until,
+            awa_disengaged_at, awa_disengaged_reason, awa_disengaged_kind,
+            awa_no_intent_streak, awa_no_intent_last_at
+       from clients where id=$1`,
+    [clientId],
+  );
+  return res.rows[0] ?? null;
+}
+
 /** Mark or unmark a client as a studio team/test number (admin toggle). */
 export async function setClientTest(clientId: string, isTest: boolean): Promise<void> {
   await pool.query(

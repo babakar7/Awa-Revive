@@ -512,7 +512,9 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       "server-side via their WhatsApp number. Call this when the client mentions having an abonnement, " +
       "pack or credits, asks how many sessions they have left, or BEFORE creating any payment link. " +
       "Returns their active plans with covers_classes (which classes each plan can pay for) and " +
-      "remaining_sessions (current balance), or why verification failed. Set claim:true when the CLIENT " +
+      "remaining_sessions (credits available for a NEW booking after confirmed future membership bookings), " +
+      "plus future_membership_bookings (course/date/time/status) for an honest balance explanation, or why " +
+      "verification failed. Set claim:true when the CLIENT " +
       "ASSERTS having an abonnement/prepaid plan (\"j'ai un abonnement\", \"c'est prépayé\") — if the plan " +
       "then can't be found under their number, the server opens a link request and the result tells you " +
       "to propose the email verification (request_email_verification).",
@@ -3337,6 +3339,11 @@ export async function executeTool(
               : " Use the normal Wave payment flow."),
         });
       }
+      // A Wix balance is the number of credits still AVAILABLE for a new
+      // booking. Before discussing a disputed balance, show the confirmed
+      // future reservations that already consumed credits; do not mistake
+      // those for attended classes.
+      const futureMembershipBookings = await wix.listContactFutureMembershipBookings(contactId);
       const activePlans = await Promise.all(
         memberships.map(async (m) => {
           const covers = await wix.planCoveredClassNames(m.planId);
@@ -3397,14 +3404,64 @@ export async function executeTool(
             };
           }),
       );
+      const compatiblePlans = activePlans.filter((plan) =>
+        futureMembershipBookings.some((booking) =>
+          Array.isArray(plan.covers_classes) &&
+          (plan.covers_classes as string[]).some((name) =>
+            name.trim().toLocaleLowerCase() === booking.serviceName.trim().toLocaleLowerCase(),
+          ),
+        ),
+      );
+      const ambiguousPlanAttribution = compatiblePlans.length > 1 &&
+        futureMembershipBookings.some((booking) => !booking.planId);
+      const balancesKnown = activePlans.every((plan) => typeof plan.remaining_sessions === "number");
+      const availableSessions = balancesKnown
+        ? activePlans.reduce((total, plan) => total + Number(plan.remaining_sessions), 0)
+        : "unknown";
+      const futureReservedSessions = futureMembershipBookings.reduce(
+        (total, booking) => total + booking.participants,
+        0,
+      );
+      console.info("[membership_balance]", JSON.stringify({
+        clientId: client.id,
+        plans: activePlans.map((plan) => ({ plan: plan.plan, remaining: plan.remaining_sessions })),
+        futureMembershipBookingCount: futureMembershipBookings.length,
+        ambiguousPlanAttribution,
+      }));
       return JSON.stringify({
         verified: true,
         active_plans: activePlans,
         bonus_benefits,
+        future_membership_bookings: futureMembershipBookings.map((booking) => {
+          const start = new Date(booking.startDate);
+          return {
+            course: booking.serviceName,
+            date: start.toLocaleDateString("fr-FR", { timeZone: config.TIMEZONE }),
+            time: start.toLocaleTimeString("fr-FR", { timeZone: config.TIMEZONE, hour: "2-digit", minute: "2-digit" }),
+            status: booking.status,
+            participants: booking.participants,
+          };
+        }),
+        balance_semantics: "available_after_confirmed_bookings",
+        booking_balance_summary: {
+          future_reserved_sessions: futureReservedSessions,
+          available_to_book: availableSessions,
+          total_still_to_do: typeof availableSessions === "number"
+            ? availableSessions + futureReservedSessions
+            : "unknown",
+        },
+        ...(ambiguousPlanAttribution ? {
+          plan_attribution: "ambiguous",
+          attribution_note: "Several active plans can cover a future membership booking and Wix does not identify the exact plan. Do not assign that booking to one plan or invent a per-plan calculation.",
+        } : {}),
         note:
           "Only propose book_with_membership for classes in covers_classes — for other classes, " +
-          "say the plan doesn't cover them and offer normal Wave payment. remaining_sessions is " +
-          "the current balance — a number can be relayed to the client as of right now; " +
+          "say the plan doesn't cover them and offer normal Wave payment. remaining_sessions means credits " +
+          "AVAILABLE TO BOOK after confirmed membership bookings, not sessions attended. On a balance dispute, " +
+          "explain known completed sessions only if actually provided, then future_membership_bookings already " +
+          "reserved, then the available balance. booking_balance_summary gives the safe total still to do: phrase it " +
+          "as ‘X séance(s) encore à faire, dont Y déjà réservée(s) et Z disponible(s) à réserver’ when known. " +
+          "Do not count cancelled/refunded/direct-paid bookings. " +
           "'unknown' means say the balance is checked at booking time, NEVER guess a number. " +
           "Always mention an available bonus separately; only route it through book_key_bonus if the requested class is in that bonus's covers_classes.",
       });

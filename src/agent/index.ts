@@ -24,7 +24,18 @@ import {
 import { shouldRouteReactionAsReply } from "./reactionIntent.js";
 import { capabilityMenuKind, isVagueOpener } from "../lib/capabilityMenu.js";
 import { TOOL_DEFINITIONS, executeTool, NO_REPLY_SENTINEL } from "./tools.js";
-import { isAwaDisengaged, isHumanTakeoverActive } from "../domain/adminOperations.js";
+import { isAwaDisengaged, isHumanTakeoverActive, isWithinWhatsAppWindow, lastClientMessageAt } from "../domain/adminOperations.js";
+import {
+  claimDeferredForSweep,
+  deferredBatchStillProcessing,
+  deferInboundForAwa,
+  exhaustedDeferredMessages,
+  markDeferredDone,
+  markDeferredFailed,
+  resumeAndClaimDeferred,
+  type DeferredAwaMessage,
+} from "../domain/deferredAwa.js";
+import { enqueue } from "../lib/serialize.js";
 import * as deliveries from "../domain/deliveryRepo.js";
 import * as commitments from "../domain/commitments.js";
 import * as closuresRepo from "../domain/closuresRepo.js";
@@ -971,12 +982,14 @@ export async function handleInboundText(args: {
   waMessageId: string;
   profileName?: string;
   referral?: WhatsAppReferral;
+  /** Used by the durable takeover queue: the user turn already exists. */
+  preprocessedText?: boolean;
 }): Promise<void> {
-  const inboundText = normalizeInboundText(args.text);
+  const inboundText = args.preprocessedText ? args.text : normalizeInboundText(args.text);
   let text = inboundText;
   const client = await repo.upsertClient(args.waPhone);
-  const presentedChoices = await repo.latestPresentedChoices(client.id);
-  const matchedChoice = resolveFreeTextChoice(text, presentedChoices);
+  const presentedChoices = args.preprocessedText ? [] : await repo.latestPresentedChoices(client.id);
+  const matchedChoice = args.preprocessedText ? null : resolveFreeTextChoice(text, presentedChoices);
   if (matchedChoice) {
     text += `\n[choix écrit résolu] ${matchedChoice.title} (id: ${matchedChoice.choice_id})`;
   }
@@ -1024,12 +1037,13 @@ export async function handleInboundText(args: {
     client.fr_register = "vous";
   }
 
-  await repo.addTurn(client.id, "user", text, args.waMessageId);
+  if (!args.preprocessedText) await repo.addTurn(client.id, "user", text, args.waMessageId);
 
   // Human takeover is a hard gate: keep the incoming turn, alert reception,
   // and never enter the model/tool loop. The timestamp expires automatically
   // after 12h, so normal handling resumes without a background sweep.
   if (isHumanTakeoverActive(client)) {
+    await deferInboundForAwa({ clientId: client.id, waMessageId: args.waMessageId, content: text });
     notifyHumanTakeoverInbound(client, text);
     return;
   }
@@ -1815,6 +1829,7 @@ export async function handleFailedImage(waPhone: string, waMessageId: string, pr
   await maybeNotifyConversationStart(client, "[image]", profileName);
   await repo.addTurn(client.id, "user", "[image reçue — lecture échouée]", waMessageId);
   if (isHumanTakeoverActive(client)) {
+    await deferInboundForAwa({ clientId: client.id, waMessageId, content: "[image reçue — lecture échouée]" });
     notifyHumanTakeoverInbound(client, "[image reçue]");
     return;
   }
@@ -1846,6 +1861,7 @@ export async function handleReaction(
   const label = emoji ? `[réaction ${emoji}]` : "[réaction retirée]";
   await repo.addTurn(client.id, "user", label, waMessageId);
   if (isHumanTakeoverActive(client)) {
+    await deferInboundForAwa({ clientId: client.id, waMessageId, content: label });
     notifyHumanTakeoverInbound(client, label);
     return;
   }
@@ -1877,6 +1893,7 @@ export async function handleUnsupportedMedia(
   await maybeNotifyConversationStart(client, label, profileName);
   await repo.addTurn(client.id, "user", label, waMessageId);
   if (isHumanTakeoverActive(client)) {
+    await deferInboundForAwa({ clientId: client.id, waMessageId, content: label });
     notifyHumanTakeoverInbound(client, label);
     return;
   }
@@ -1898,6 +1915,7 @@ export async function handleFailedVoiceNote(waPhone: string, waMessageId: string
   await maybeNotifyConversationStart(client, "[note vocale]", profileName);
   await repo.addTurn(client.id, "user", "[note vocale — transcription échouée]", waMessageId);
   if (isHumanTakeoverActive(client)) {
+    await deferInboundForAwa({ clientId: client.id, waMessageId, content: "[note vocale — transcription échouée]" });
     notifyHumanTakeoverInbound(client, "[note vocale]");
     return;
   }
@@ -1920,4 +1938,122 @@ export async function handleFailedVoiceNote(waPhone: string, waMessageId: string
   );
   await sendText(waPhone, reply);
   await repo.addTurn(client.id, "assistant", reply);
+}
+
+export interface ResumeAwaResult {
+  resumed: boolean;
+  deferredCount: number;
+  processingStarted: boolean;
+}
+
+async function processDeferredBatch(messages: DeferredAwaMessage[]): Promise<void> {
+  if (messages.length === 0) return;
+  if (!(await deferredBatchStillProcessing(messages.map((message) => message.id)))) {
+    console.info("[awa_deferred]", JSON.stringify({
+      clientId: messages[0].client_id,
+      count: messages.length,
+      outcome: "settled_by_human_before_processing",
+    }));
+    return;
+  }
+  const client = await repo.getClientById(messages[0].client_id);
+  if (!client) {
+    for (const message of messages) await markDeferredFailed(message.id, "client_not_found");
+    return;
+  }
+  const lastUserAt = await lastClientMessageAt(client.id);
+  if (!isWithinWhatsAppWindow(lastUserAt)) {
+    for (const message of messages) await markDeferredFailed(message.id, "whatsapp_24h_window_closed");
+    await handleTechnicalFailure({
+      client,
+      waMessageId: messages[messages.length - 1].wa_message_id,
+      stage: "deferred_awa_window_closed",
+      cause: "Messages retained during human takeover are now outside the WhatsApp 24h window",
+      sendClient: false,
+    });
+    console.info("[awa_deferred]", JSON.stringify({ clientId: client.id, count: messages.length, outcome: "window_closed" }));
+    return;
+  }
+  const combined = messages.length === 1
+    ? messages[0].content
+    : `[messages reçus pendant le relais humain — réponds à l'ensemble dans l'ordre]\n${messages
+      .map((message, index) => `${index + 1}. ${message.content}`)
+      .join("\n")}`;
+  try {
+    await handleInboundText({
+      waPhone: client.wa_phone,
+      text: combined,
+      waMessageId: messages[messages.length - 1].wa_message_id,
+      preprocessedText: true,
+    });
+    for (const message of messages) await markDeferredDone(message.id);
+    console.info("[awa_deferred]", JSON.stringify({ clientId: client.id, count: messages.length, outcome: "done" }));
+  } catch (error) {
+    let terminal = false;
+    for (const message of messages) terminal = (await markDeferredFailed(message.id, error)) || terminal;
+    console.error("Deferred Awa processing failed:", error);
+    if (terminal) {
+      await handleTechnicalFailure({
+        client,
+        waMessageId: messages[messages.length - 1].wa_message_id,
+        stage: "deferred_awa_failed_after_retries",
+        cause: error,
+        sendClient: true,
+      });
+    }
+  }
+}
+
+export async function resumeAwaAndContinue(args: {
+  clientId: string;
+  identity: { username: string; role: "owner" | "team" };
+}): Promise<ResumeAwaResult> {
+  const client = await repo.getClientById(args.clientId);
+  if (!client) return { resumed: false, deferredCount: 0, processingStarted: false };
+  return enqueue(client.wa_phone, async () => {
+    const claim = await resumeAndClaimDeferred(args.clientId);
+    if (!claim.resumed) return { resumed: false, deferredCount: 0, processingStarted: false };
+    console.info("[awa_deferred]", JSON.stringify({
+      clientId: args.clientId,
+      deferredCount: claim.messages.length,
+      action: "resume_claimed",
+      by: args.identity.username,
+    }));
+    if (claim.messages.length > 0) await processDeferredBatch(claim.messages);
+    return {
+      resumed: true,
+      deferredCount: claim.messages.length,
+      processingStarted: claim.messages.length > 0,
+    };
+  });
+}
+
+export async function sweepDeferredAwa(): Promise<number> {
+  const exhausted = await exhaustedDeferredMessages();
+  for (const message of exhausted) {
+    const client = await repo.getClientById(message.client_id);
+    await markDeferredFailed(message.id, "processing lease expired after maximum attempts");
+    if (client) {
+      await handleTechnicalFailure({
+        client,
+        waMessageId: message.wa_message_id,
+        stage: "deferred_awa_failed_after_retries",
+        cause: "processing lease expired after maximum attempts",
+        sendClient: isWithinWhatsAppWindow(await lastClientMessageAt(client.id)),
+      });
+    }
+  }
+  const messages = await claimDeferredForSweep();
+  const byClient = new Map<string, DeferredAwaMessage[]>();
+  for (const message of messages) {
+    const list = byClient.get(message.client_id) ?? [];
+    list.push(message);
+    byClient.set(message.client_id, list);
+  }
+  await Promise.all([...byClient.entries()].map(async ([clientId, batch]) => {
+    const client = await repo.getClientById(clientId);
+    if (!client) return processDeferredBatch(batch);
+    return enqueue(client.wa_phone, () => processDeferredBatch(batch));
+  }));
+  return messages.length + exhausted.length;
 }

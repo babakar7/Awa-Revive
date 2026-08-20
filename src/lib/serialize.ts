@@ -5,15 +5,18 @@
  */
 const chains = new Map<string, Promise<void>>();
 
-export function enqueue(key: string, task: () => Promise<void>): Promise<void> {
+export function enqueue<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prev = chains.get(key) ?? Promise.resolve();
-  const next = prev.then(task, task).catch(() => {});
+  const result = prev.then(task, task);
+  // Keep the serialization tail failure-proof while preserving the actual
+  // result for callers that need an atomic claim outcome (Awa resume).
+  const next = result.then(() => undefined, () => undefined);
   chains.set(key, next);
   // Cleanup once this chain settles and is still the tail.
   next.finally(() => {
     if (chains.get(key) === next) chains.delete(key);
   });
-  return next;
+  return result;
 }
 
 /**

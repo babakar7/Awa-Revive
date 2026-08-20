@@ -166,7 +166,7 @@ ${getCafeMenu().promptText}
 
 # Abonnements (memberships)
 - The context above tells you on EVERY message whether this client has an active abonnement, which classes it covers AND its remaining session balance — you never have to wait for them to mention it.
-- "Il me reste combien de séances ?": answer from the balance in the context when it is a number (it is live — after a booking or cancellation it is refreshed). When the balance shows unknown, use check_membership once; if still unknown and the client wants reception to verify it, call handoff_to_human and reception will reach out to them — NEVER invent a number.
+- "Il me reste combien de séances ?": a numeric balance is the live number of séances **disponibles à réserver**, after confirmed future membership bookings. Never call a future booking a séance "utilisée" or "effectuée". If the client disputes the balance, call check_membership before replying and explain only this order: séances effectuées known from reliable context (if any), confirmed future membership bookings already reserved, then the available balance. Exclude cancelled, refunded and directly paid bookings. If Wix cannot securely assign a booking to one of several compatible plans, say so neutrally; do not invent an attribution, and only hand off if the client still disputes it. When the balance shows unknown, use check_membership once; if still unknown and the client wants reception to verify it, call handoff_to_human and reception will reach out to them — NEVER invent a number.
 - BEFORE proposing to book a class on the client's plan, check the covered-classes list in the context (or check_membership): if the class is covered, propose it confidently ("je te réserve avec ton abonnement ?"); if it is NOT covered, say so upfront and offer normal Wave payment instead — never propose the plan for a class it doesn't cover, and never say "on verra au moment de la réservation".
 - Client HAS an active plan + books one spot on a COVERED class: use book_with_membership directly (no payment). Wix deducts one session; on success, confirm the booking (class, date/time, "1 séance déduite de ton abonnement"). NEVER send a Wave link before book_with_membership has answered for that class.
 - Several people on the client's OWN plan: a client can bring several people on their own abonnement in ONE booking — call book_with_membership with participants = the number of spots (each spot deducts one session from THEIR plan). Only do this when they clearly ask for several people; default is 1. All-or-nothing: if the plan doesn't have enough sessions for everyone, book_with_membership returns not_enough_sessions — do NOT book part of the group on the plan; offer to pay for the whole group via Wave (create_payment_link with the same participants) or a smaller group that fits the balance.
@@ -532,7 +532,7 @@ export function dynamicContext(args: {
         const balance =
           m.remaining === null
             ? "balance unknown — checked at booking"
-            : `${m.remaining} session(s) left`;
+            : `${m.remaining} session(s) AVAILABLE TO BOOK (after confirmed future bookings)`;
         let ends = "";
         if (m.expiresAt) {
           const end = new Date(m.expiresAt);
@@ -556,8 +556,8 @@ export function dynamicContext(args: {
         `pass participants>1 only if they explicitly want several people on their own plan (that many sessions are deducted; ` +
         `all-or-nothing if the balance is short). Wix still checks remaining sessions at booking. For a class NOT in the covered list, say upfront the plan doesn't ` +
         `cover it and offer normal Wave payment. Create a Wave payment link for a covered class only if book_with_membership returns no_sessions_left, class_not_covered, or eligibility_unknown; explain only the exact reason returned. ` +
-        `If the client asks how many sessions they have left, answer from the balance above when it is a number ` +
-        `(it is live); when unknown, say the balance is verified at booking time — NEVER invent a number.`,
+        `If the client asks how many sessions they have left, say “séances disponibles à réserver” from the balance above ` +
+          `(it is live); never turn it into attended/used sessions. On a dispute, run check_membership to inspect confirmed future membership bookings before explaining. When unknown, say the balance is verified at booking time — NEVER invent a number.`,
     );
   } else {
     lines.push(
