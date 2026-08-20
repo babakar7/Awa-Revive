@@ -421,6 +421,55 @@ describe("Clés registry", () => {
     ]);
   });
 
+  it("detects a chosen or purchased next Reformer Key without treating an expired link as a commitment", async () => {
+    const client = await seedClient();
+    const current = await keys.upsertKey({
+      paidOrderId: "current-key-order",
+      clientId: client.id,
+      mapping,
+      startsAt: new Date(inHours(-10 * 24)),
+      endsAt: new Date(inHours(10 * 24)),
+      status: "ACTIVE",
+    });
+    const commitment = {
+      keyId: current.id,
+      clientId: client.id,
+      paidOrderId: current.paid_order_id,
+      family: current.family,
+    };
+
+    await expect(keys.hasNextKeyCommitment(commitment)).resolves.toBe(false);
+
+    const pending = await pool.query(
+      `insert into pending_plan_orders
+         (client_id, plan_id, plan_name, amount_xof, starts_at, is_key,
+          key_family, continuity_source_order_id, status, link_expires_at)
+       values ($1,'next-habituee','L''Habituée — Clé 6 séances',72000,$2,true,
+               'REFORMER',$3,'AWAITING_PAYMENT',$4)
+       returning id`,
+      [client.id, inHours(10 * 24), current.paid_order_id, inHours(1)],
+    );
+    await expect(keys.hasNextKeyCommitment(commitment)).resolves.toBe(true);
+
+    await pool.query(
+      `update pending_plan_orders set link_expires_at=now() - interval '1 minute'
+        where id=$1`,
+      [pending.rows[0].id],
+    );
+    await expect(keys.hasNextKeyCommitment(commitment)).resolves.toBe(false);
+
+    await keys.upsertKey({
+      paidOrderId: "purchased-next-key-order",
+      clientId: client.id,
+      mapping: { ...mapping, type: "HABITUEE" },
+      startsAt: new Date(inHours(10 * 24)),
+      endsAt: new Date(inHours(40 * 24)),
+      status: "SCHEDULED",
+      previousKeyId: current.id,
+    });
+    await expect(keys.hasNextKeyCommitment(commitment)).resolves.toBe(true);
+  });
+
   it("releases a paid next Key only after L'Invitée's third session has started", async () => {
     const client = await seedClient();
     const invitee = await keys.upsertKey({

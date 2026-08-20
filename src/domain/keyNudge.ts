@@ -291,6 +291,20 @@ export async function sweepKeyNudges(log: {
 
     const lastBooked = facts.reformerBookings.at(-1)?.slot_start;
     if (reformerFamily && remaining === 0 && lastBooked && lastBooked.getTime() <= now.getTime()) {
+      if (
+        await keyRepo.hasNextKeyCommitment({
+          keyId: key.id,
+          clientId: key.client_id!,
+          paidOrderId: key.paid_order_id,
+          family: key.family,
+        })
+      ) {
+        log.info(
+          { keyId: key.id, clientId: key.client_id },
+          "Finished-credit nudge suppressed: next Key already chosen or purchased",
+        );
+        continue;
+      }
       const transcript = reformerFinishedTranscript(name, label);
       if (
         await sendClaimed({

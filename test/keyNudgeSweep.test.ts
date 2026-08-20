@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   claimKeyNudge: vi.fn(),
   completeKeyNudge: vi.fn(),
   inviteeGuaranteeFacts: vi.fn(),
+  hasNextKeyCommitment: vi.fn(),
   addTurn: vi.fn(),
 }));
 
@@ -41,6 +42,7 @@ vi.mock("../src/domain/keyRepo.js", () => ({
   claimKeyNudge: mocks.claimKeyNudge,
   completeKeyNudge: mocks.completeKeyNudge,
   inviteeGuaranteeFacts: mocks.inviteeGuaranteeFacts,
+  hasNextKeyCommitment: mocks.hasNextKeyCommitment,
 }));
 
 import { sweepKeyNudges } from "../src/domain/keyNudge.js";
@@ -77,6 +79,7 @@ beforeEach(() => {
   mocks.addTurn.mockResolvedValue(undefined);
   mocks.sendTemplate.mockResolvedValue("wamid-1");
   mocks.inviteeGuaranteeFacts.mockResolvedValue({ reformerBookings: [], bonusBookings: 0 });
+  mocks.hasNextKeyCommitment.mockResolvedValue(false);
 });
 
 describe("Key invitation reminder sweep", () => {
@@ -236,5 +239,35 @@ describe("Key invitation reminder sweep", () => {
         /je te conseille L’Habituée — Clé 6 séances[\s\S]*La Résidente propose 12 séances/,
       ),
     );
+  });
+
+  it("does not send the finished-credit offer when the next Key is already chosen or purchased", async () => {
+    mockedConfig.WA_KEY_FINISHED_TEMPLATE = "_awa_key_reformer_finished_v2";
+    mockedConfig.WA_KEY_FINISHED_TEMPLATE_LANG = "en";
+    mocks.listActiveKeysForNudges.mockResolvedValue([
+      activeKey({
+        key_type: "INVITEE",
+        plan_id: "invitee-plan",
+        available_invitations: 0,
+      }),
+    ]);
+    mocks.planRemainingSessions.mockResolvedValue(0);
+    mocks.inviteeGuaranteeFacts.mockResolvedValue({
+      reformerBookings: [{ slot_start: new Date("2026-07-31T12:30:00Z") }],
+      bonusBookings: 0,
+    });
+    mocks.hasNextKeyCommitment.mockResolvedValue(true);
+
+    await expect(sweepKeyNudges(log)).resolves.toBe(0);
+
+    expect(mocks.hasNextKeyCommitment).toHaveBeenCalledWith({
+      keyId: "key-1",
+      clientId: "client-1",
+      paidOrderId: "paid-1",
+      family: "REFORMER",
+    });
+    expect(mocks.claimKeyNudge).not.toHaveBeenCalled();
+    expect(mocks.sendTemplate).not.toHaveBeenCalled();
+    expect(mocks.addTurn).not.toHaveBeenCalled();
   });
 });

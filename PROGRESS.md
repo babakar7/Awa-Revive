@@ -1,5 +1,19 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Relance fin des crédits : suppression si la prochaine Clé est déjà engagée (20 août 2026)
+
+- La relance `REFORMER_FINISHED` vérifie désormais, juste avant son claim, si
+  une prochaine Clé de la même famille a déjà été choisie ou achetée. Elle est
+  supprimée lorsqu'un parcours Awa est encore actif (`DRAFT` récent ou lien de
+  paiement valide), déjà payé/programmé/activé, ou lorsqu'une Clé suivante
+  enregistrée dans `key_registry` référence la Clé terminée.
+- Un lien de paiement expiré ne bloque pas définitivement la relance : un sweep
+  ultérieur peut encore proposer L'Habituée. La protection anti-doublon
+  `REFORMER_FINISHED:<keyId>` reste inchangée et garantit un seul envoi par Clé.
+- Régressions unitaire et Postgres ajoutées : aucun template ni transcript
+  lorsque la prochaine Clé existe ; détection des chemins Awa et Wix, avec
+  réouverture correcte après expiration d'un lien non payé.
+
 ## Relance fin des crédits : L’Habituée recommandée en premier (19 août 2026)
 
 - Le texte historique disait seulement que les séances Reformer étaient

@@ -175,6 +175,45 @@ export async function listActiveKeysForNudges(): Promise<
 }
 
 /**
+ * A finished-credit offer is unnecessary once the client has already started
+ * choosing or buying the next Key in the same continuity family. Pending
+ * payment choices remain suppressing only while their link is live; if the
+ * link expires, a later sweep may offer the Key again.
+ */
+export async function hasNextKeyCommitment(args: {
+  keyId: string;
+  clientId: string;
+  paidOrderId: string;
+  family: ContinuityFamily;
+}): Promise<boolean> {
+  const result = await pool.query(
+    `select exists (
+       select 1
+         from key_registry next_key
+        where next_key.previous_key_id=$1
+          and next_key.family=$4
+          and next_key.status in ('ACTIVE','SCHEDULED')
+     ) or exists (
+       select 1
+         from pending_plan_orders next_order
+        where next_order.client_id=$2
+          and next_order.is_key
+          and next_order.key_family=$4
+          and next_order.continuity_source_order_id=$3
+          and (
+            (next_order.status='DRAFT'
+              and next_order.created_at >= now() - interval '1 hour')
+            or (next_order.status='AWAITING_PAYMENT'
+              and next_order.link_expires_at > now())
+            or next_order.status in ('PAID','SCHEDULED','ACTIVATED')
+          )
+     ) as committed`,
+    [args.keyId, args.clientId, args.paidOrderId, args.family],
+  );
+  return result.rows[0]?.committed === true;
+}
+
+/**
  * Claim-before-send for commercial nudges. FAILED is intentionally terminal:
  * one missed reminder is preferable to duplicate client messages.
  */
