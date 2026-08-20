@@ -72,6 +72,10 @@ import {
   renderHistoriqueFragment,
 } from "./historiqueCommandesPage.js";
 import * as q from "./queries.js";
+import type { ContactGapBooking } from "./queries.js";
+import { gapLabel } from "../domain/bookingContactWatch.js";
+import { ensureBookingContact } from "../domain/bookingContact.js";
+import { backfillBookingContacts } from "../domain/bookingContactBackfill.js";
 import {
   auditActiveSubscribers,
   auditContacts,
@@ -2679,10 +2683,11 @@ ${recentRows ? `<div class="table-wrap"><table class="responsive-table"><thead><
         // One contacts fetch + one orders fetch feed everything: the audit
         // (duplicates/no-phone), the link-queue candidates, the plan badges
         // AND the unreachable-subscribers section.
-        const [rawContacts, orders, linkQueue] = await Promise.all([
+        const [rawContacts, orders, linkQueue, missingContact] = await Promise.all([
           fetchAllContacts(),
           listAllActiveOrders().catch(() => [] as any[]),
           links.receptionQueue().catch(() => []),
+          q.bookingsMissingContact().catch(() => [] as ContactGapBooking[]),
         ]);
         const plansByContact = new Map<string, string[]>();
         for (const o of orders) {
@@ -2710,7 +2715,9 @@ ${recentRows ? `<div class="table-wrap"><table class="responsive-table"><thead><
                   ? "Fiche liée. Le client n'a PAS pu être prévenu sur WhatsApp (fenêtre 24h fermée) — il verra son abonnement à son prochain message."
                   : done === "dismissed"
                     ? "Demande ignorée."
-                    : done === "traite"
+                    : done === "fiche"
+                      ? "Fiche créée et réservation(s) rattachée(s) — la cliente existe maintenant dans le CRM."
+                      : done === "traite"
                       ? "Groupe marqué traité — il n'apparaîtra plus (sauf si ses fiches changent). Restaurable en bas de la section doublons."
                       : done === "restaure"
                         ? "Groupe ré-affiché dans la liste."
@@ -2933,12 +2940,51 @@ introuvable » — à compléter dans Wix → Contacts avec leur numéro WhatsAp
 <div class="card warn"><table><tr><th>Abonnée</th><th>Abonnement(s)</th><th>Problème</th><th>Numéro(s) enregistré(s)</th></tr>${unreachableRows}</table></div>`
           : "";
 
+        // Réservations payées parties sans fiche Wix : le tableau de bord Wix
+        // les rapproche visuellement d'une homonyme, donc la réception peut
+        // appeler la mauvaise personne (cas Penda 17/08). Un clic crée la fiche
+        // et rattache la réservation — sauf en cas d'ambiguïté, qui se règle
+        // d'abord dans la section Doublons juste en dessous.
+        const missingContactRows = missingContact
+          .map((b) => {
+            const when = new Date(b.slot_start).toLocaleString("fr-FR", {
+              timeZone: config.TIMEZONE,
+              day: "2-digit",
+              month: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+            const action =
+              b.contact_gap === "ambiguous"
+                ? `<a class="act act--sm act--ghost" href="#doublons">Fusionner d'abord</a>`
+                : `<form class="inline" method="post" action="/admin/crm/booking-contact"><input type="hidden" name="booking" value="${escapeHtml(b.id)}"><button class="act act--sm act--ok">Créer la fiche</button></form>`;
+            return `<tr>
+<td>${escapeHtml(b.client_name ?? "(sans nom)")}</td>
+<td>+${escapeHtml(b.wa_phone)}</td>
+<td>${escapeHtml(b.service_name)}<div class="muted">${when}</div></td>
+<td>${escapeHtml(gapLabel(b.contact_gap))}</td>
+<td class="nowrap">${action}</td>
+</tr>`;
+          })
+          .join("");
+        const missingContactSection = `<h2 id="sans-fiche">🪪 Réservations sans fiche client ${missingContact.length ? `(${missingContact.length})` : ""}</h2>
+<p class="muted">Ces clientes ont payé, mais leur réservation Wix n'est rattachée à aucune fiche :
+elle n'apparaît dans l'historique de personne, et Wix affiche à sa place la fiche d'une homonyme —
+la réception risque d'appeler quelqu'un d'autre. Awa crée désormais la fiche manquante toute seule ;
+ce qui reste ici est ce qu'elle refuse de trancher.</p>
+${
+  missingContact.length
+    ? `<div class="card warn"><table><tr><th>Cliente</th><th>WhatsApp</th><th>Séance</th><th>Pourquoi</th><th></th></tr>${missingContactRows}</table></div>`
+    : `<div class="card"><span class="ok">✓ Toutes les réservations récentes ont une fiche.</span></div>`
+}`;
+
         const body = `
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Clients</span><h2>Qualité des contacts</h2><p>Résolvez les liaisons et les anomalies Wix qui empêchent Awa de reconnaître correctement les clientes.</p></div><div class="page-header-actions"><span class="badge ${linkQueue.length || unreachable.length ? "badge--amber" : "badge--green"}">${linkQueue.length + unreachable.length} priorité(s)</span></div></header>
 ${banner}
 <nav class="jump-nav" aria-label="Sections CRM">
   <a href="#liaisons">Liaisons${linkQueue.length ? ` (${linkQueue.length})` : ""}</a>
   <a href="#injoignables">Injoignables${unreachable.length ? ` (${unreachable.length})` : ""}</a>
+  <a href="#sans-fiche">Résas sans fiche${missingContact.length ? ` (${missingContact.length})` : ""}</a>
   <a href="#doublons">Doublons${audit.duplicates.length ? ` (${audit.duplicates.length})` : ""}</a>
   <a href="#sans-tel">Sans téléphone${audit.noPhone.length ? ` (${audit.noPhone.length})` : ""}</a>
 </nav>
@@ -2946,11 +2992,13 @@ ${banner}
 <div class="stat"><span class="muted">Fiches contact Wix</span><b>${audit.total}</b></div>
 <div class="stat"><span class="muted">Liaisons en attente</span><b>${linkQueue.length}</b></div>
 <div class="stat"><span class="muted">Abonnés injoignables</span><b>${unreachable.length}</b></div>
+<div class="stat"><span class="muted">Résas sans fiche</span><b>${missingContact.length}</b></div>
 <div class="stat"><span class="muted">Numéros en doublon</span><b>${audit.duplicates.length}</b></div>
 <div class="stat"><span class="muted">Fiches sans téléphone</span><b>${audit.noPhone.length}</b></div>
 </div>
 ${linkSection || `<h2 id="liaisons">🔗 Liaisons en attente</h2><div class="card"><span class="ok">✓ Aucune liaison en attente.</span></div>`}
 ${unreachableSection || `<h2 id="injoignables">Abonnés injoignables — aucun</h2>`}
+${missingContactSection}
 <h2 id="doublons">👯 Doublons à fusionner ${audit.duplicates.length ? `(${audit.duplicates.length})` : ""}</h2>
 <p class="muted">Awa refuse (prudemment) de choisir quand un numéro correspond à plusieurs fiches :
 ces clientes ne sont pas reconnues. Un clic fusionne le groupe — la fiche conservée (✓) est choisie
@@ -3065,6 +3113,53 @@ ${noPhoneDormant.length ? `<details><summary>Fiches dormantes — sans résa à 
           req.log.info({ key, by: req.adminUser }, "CRM duplicate group restored");
         }
         return reply.redirect("/admin/crm?done=restaure", 303);
+      });
+
+      /**
+       * Réparation manuelle d'une réservation partie sans fiche contact Wix :
+       * crée (ou retrouve) la fiche, puis rattache la réservation ET les autres
+       * réservations récentes de la même cliente via le backfill existant.
+       * Refuse l'ambiguïté — plusieurs fiches sur ce numéro se fusionnent
+       * d'abord dans la section Doublons, sinon on fabriquerait un doublon.
+       */
+      admin.post("/crm/booking-contact", async (req, reply) => {
+        const bookingId = String((req.body as any)?.booking ?? "");
+        const fail = (msg: string) =>
+          reply.redirect(`/admin/crm?err=${encodeURIComponent(msg)}#sans-fiche`, 303);
+        const rows = await q.bookingsMissingContact(365);
+        const target = rows.find((b) => b.id === bookingId);
+        if (!target) return fail("réservation introuvable ou déjà réparée — recharge la page");
+        if (target.contact_gap === "ambiguous") {
+          return fail("ce numéro porte plusieurs fiches : fusionne-les d'abord (section Doublons)");
+        }
+
+        const phone = `+${target.wa_phone.replace(/^\+/, "")}`;
+        const outcome = await ensureBookingContact(
+          { clientId: target.client_id, phone, name: target.client_name },
+          undefined,
+          req.log,
+        );
+        if (!outcome.contact) {
+          return fail(
+            outcome.gap === "bad_name"
+              ? "aucun nom exploitable pour cette cliente — complète son prénom puis réessaie"
+              : "Wix a refusé la création de fiche — réessaie dans un instant",
+          );
+        }
+        await backfillBookingContacts(
+          { clientId: target.client_id, phone, contactId: outcome.contact.id },
+          req.log,
+        );
+        await pool
+          .query(`update pending_bookings set contact_gap = null where client_id = $1`, [
+            target.client_id,
+          ])
+          .catch(() => undefined);
+        req.log.info(
+          { bookingId, contactId: outcome.contact.id, created: outcome.created, by: req.adminUser },
+          "Booking contact repaired from admin dashboard",
+        );
+        return reply.redirect(`/admin/crm?done=fiche#sans-fiche`, 303);
       });
 
       admin.post("/crm/link", async (req, reply) => {

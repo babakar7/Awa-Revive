@@ -20,6 +20,7 @@ import {
 } from "../lib/receptionContact.js";
 import { recordBookingFunnelEvent } from "./bookingFunnel.js";
 import { backfillBookingContacts } from "./bookingContactBackfill.js";
+import { ensureBookingContact, type ContactGap } from "./bookingContact.js";
 import { guardBooking, isSessionAutoCancelled, OccurrenceCancelledError } from "./autoCancelGuard.js";
 import * as deliveries from "./deliveryRepo.js";
 import { normalizeDeliveryPhone } from "./deliveryRules.js";
@@ -189,6 +190,7 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
   let serviceLabel: string;
   let extras: ExtraLine[];
   let resolvedContact: wix.WixContactMatch | null = null;
+  let contactGap: ContactGap | null = null;
   try {
     participants = Math.max(1, booking.participants ?? 1);
     const slotStartIso = new Date(booking.slot_start).toISOString();
@@ -219,8 +221,23 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
     }
 
     const phone = `+${client.wa_phone.replace(/^\+/, "")}`;
-    const contact = await wix.findContactByPhone(phone, client?.name ?? undefined);
+    // Une réservation payée ne doit JAMAIS partir sans fiche contact : si aucun
+    // contact ne porte ce numéro, on la crée ici (cas Penda 17/08 —
+    // WIX-ORPHAN-BOOKINGS-PLAN.md). Ne lève jamais : au pire on repart sur le
+    // comportement d'avant (réservation inline) avec la raison notée.
+    const ensured = await ensureBookingContact(
+      {
+        clientId: booking.client_id,
+        phone,
+        name: client?.name ?? null,
+        email: client?.claimed_email ?? null,
+      },
+      undefined,
+      log,
+    );
+    const contact = ensured.contact;
     resolvedContact = contact;
+    contactGap = ensured.gap;
     const bookingName = contact?.fullName || client?.name || "Client Revive";
     if (contact?.fullName && contact.fullName !== client?.name) {
       await repo.updateClientName(booking.client_id, contact.fullName);
@@ -249,6 +266,16 @@ export async function fulfillPaidBooking(bookingId: string, log: any): Promise<v
     }
 
     await transition(pool, booking.id, "BOOKED", { wix_booking_id: wixBookingId });
+    // Trou de fiche (ambiguïté, nom inexploitable, panne Wix) : on le rend
+    // visible dans l'admin plutôt que de le laisser passer en silence.
+    if (contactGap) {
+      await pool
+        .query(`update pending_bookings set contact_gap = $2 where id = $1`, [
+          booking.id,
+          contactGap,
+        ])
+        .catch((err) => log.error({ err, bookingId: booking.id }, "contact_gap write failed"));
+    }
     log.info({ bookingId: booking.id, wixBookingId, participants }, "Booking confirmed in Wix");
     serviceLabel =
       participants > 1 ? `${booking.service_name} — ${participants} places` : booking.service_name;

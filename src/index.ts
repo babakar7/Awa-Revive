@@ -10,6 +10,7 @@ import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { sweepStaffNotifications } from "./domain/notificationSweep.js";
+import { sweepContactGapAlert } from "./domain/bookingContactWatch.js";
 import { sweepAutoCancellations } from "./domain/autoCancelSweep.js";
 import { sweepDeliveries } from "./domain/deliveryNotify.js";
 import { sweepServeEscalations } from "./domain/opsEscalation.js";
@@ -155,6 +156,13 @@ async function main() {
       // never typed) → hand it to reception so no plan-holder is lost silently.
       const escalated = await escalateStaleLinkRequests();
       if (escalated > 0) app.log.info({ escalated }, "Stale link requests handed to reception");
+      // Réservations parties sans fiche contact Wix (ambiguïté, nom
+      // inexploitable, panne) : une alerte gérant par jour au-delà du seuil,
+      // pour qu'un trou ne redevienne jamais invisible (cas Penda 17/08).
+      const contactGaps = await sweepContactGapAlert();
+      if (contactGaps > 0) {
+        app.log.warn({ contactGaps }, "Bookings created without a Wix contact");
+      }
     } catch (err) {
       app.log.error({ err }, "Expiry/reconciliation sweep failed");
     }

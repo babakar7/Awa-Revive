@@ -1213,3 +1213,37 @@ export async function lastLogPerRule(): Promise<
   }
   return map;
 }
+
+export interface ContactGapBooking {
+  id: string;
+  client_id: string;
+  client_name: string | null;
+  wa_phone: string;
+  service_name: string;
+  slot_start: Date;
+  contact_gap: string;
+  wix_booking_id: string | null;
+}
+
+/**
+ * Réservations confirmées parties SANS fiche contact Wix (WIX-ORPHAN-BOOKINGS-PLAN.md).
+ * Le flux crée la fiche quand il peut ; ces lignes sont celles qu'il a refusé de
+ * trancher (numéro porté par plusieurs fiches, nom inexploitable) ou qu'une
+ * panne a laissées passer. Sans cet écran, elles redeviennent invisibles.
+ */
+export async function bookingsMissingContact(days = 30): Promise<ContactGapBooking[]> {
+  const res = await pool.query(
+    `select pb.id, pb.client_id, c.name as client_name, c.wa_phone,
+            pb.service_name, pb.slot_start, pb.contact_gap, pb.wix_booking_id
+       from pending_bookings pb
+       join clients c on c.id = pb.client_id
+      where pb.contact_gap is not null
+        and pb.status = 'BOOKED'
+        and pb.created_at > now() - ($1 || ' days')::interval
+        and coalesce(c.is_test, false) = false
+      order by pb.slot_start desc
+      limit 50`,
+    [String(days)],
+  );
+  return res.rows;
+}

@@ -4792,6 +4792,54 @@ stats admin, domaine custom bookings.revive.sn. (OM/Max It, get_my_bookings
   affiche encore ce libellé historique mais EST réparable (cf. 6.6bis) ; les
   nouvelles réservations prennent le nom canonique de la fiche contact Wix.
 
+### 6.6ter Cas Penda — une réservation payée ne part plus jamais sans fiche (20/08/2026)
+
+- **Le cas** : Penda (+221 78 958 09 84) paie 12 000 F par Wave le 17/08 à 09h39
+  pour le Reformer Sculpt de 11h15. Réservation Wix `60c35f2b` parfaite côté
+  paiement, mais **sans `contactId`** — et aucun contact Wix ne portait son
+  numéro. Dans la liste de participants, Wix affiche alors la fiche d'une
+  **homonyme** (« Penda », +221 76 529 58 11, créée en 09/2025, dont les 2 seules
+  réservations datent de septembre 2025). La réception qui appelle « la Penda de
+  lundi 11h15 » tombe sur quelqu'un d'autre.
+- **Cause** : `findContactByPhone` renvoie `null` aussi bien pour « aucun
+  contact » que pour « plusieurs contacts, prénom qui ne tranche pas ». Le
+  chemin de réservation traitait les deux pareil — résa inline, sans fiche.
+  Le backfill 6.6bis ne pouvait rien : il lui faut une fiche à rattacher, et
+  pour une cliente qui n'a jamais donné d'email elle n'arrive jamais.
+- **Ampleur mesurée (01/07 → 20/08)** : 12 réservations d'Awa sur 121 (**10 %**),
+  9 clientes, dont **Djibril 3 fois** et **Julian 2 fois** — des habituées
+  totalement absentes du CRM. (64 autres réservations orphelines viennent de la
+  réception ou du site : hors périmètre, corrigeables à la main.)
+- **Correctif** : [src/domain/bookingContact.ts](src/domain/bookingContact.ts) —
+  `resolvePhoneContact` sépare enfin les deux cas. Aucun contact + nom
+  exploitable → **création de la fiche avant de réserver**, sous verrou
+  consultatif keyé sur le numéro avec re-résolution (deux paiements simultanés
+  ne peuvent pas créer deux fiches). Ambiguïté → **on ne crée JAMAIS** (ce serait
+  un doublon), on réserve comme avant. Nom inexploitable (« A », « L », cf.
+  6.6bis) → pas de fiche non plus. Rien de tout ça ne peut faire échouer une
+  réservation : le paiement est déjà encaissé, tout échec dégrade vers l'ancien
+  comportement.
+- **Visibilité** : colonne `pending_bookings.contact_gap`
+  (`ambiguous|bad_name|lookup_failed|create_failed`), section **« Réservations
+  sans fiche client »** sur /admin/crm avec bouton « Créer la fiche » (l'ambiguïté
+  renvoie vers Doublons, à fusionner d'abord), et **alerte gérant une fois par
+  jour** au-delà de 3 trous sur 7 jours
+  ([src/domain/bookingContactWatch.ts](src/domain/bookingContactWatch.ts)).
+  Sans ce compteur, un trou redevient invisible — c'est exactement ce qui a
+  laissé passer le cas Penda.
+- **Rattrapage** : [scripts/backfill-orphan-booking-contacts.ts](scripts/backfill-orphan-booking-contacts.ts)
+  (dry-run par défaut, `--apply`, `--phone=` pour une seule cliente). Dry-run du
+  20/08 : 9 fiches à créer, 2 fiches existantes à rattacher, 1 cas ambigu laissé
+  à l'humain (Yacine +221 78 370 87 95, plusieurs fiches sur le numéro).
+  **Penda traitée le 20/08** : fiche `eccc17eb-0b24-4151-b3f9-e9b66a0421f9`
+  créée, ses 2 réservations rattachées, la liste de participants du 17/08
+  affiche désormais son vrai numéro. Le reste attend le go de Babakar.
+- **Non fait volontairement** : l'homonyme « Penda » de 09/2025 n'a PAS été
+  supprimée. C'est une vraie cliente distincte (son propre numéro, son email,
+  ses 2 réservations de septembre 2025) — ce n'était pas un doublon, juste un
+  rapprochement d'affichage de Wix, qui disparaît de lui-même maintenant que la
+  vraie fiche existe.
+
 ### 6.6bis Cas d'étude « A » (Amy Ndiaye) — réparation d'un booking sans fiche contact (21/07/2026)
 
 - **Le cas** : première cliente (tél. +221777406410), profil WhatsApp « A »,

@@ -62,6 +62,17 @@ create unique index if not exists idx_pending_bookings_wix_booking
 create index if not exists idx_pending_bookings_confirmed_slot
   on pending_bookings (slot_start, client_id) where status='BOOKED';
 
+-- Pourquoi cette réservation est partie SANS fiche contact Wix (null = elle en
+-- a bien une). Le flux ne crée jamais de fiche quand plusieurs contacts portent
+-- le numéro sans que le prénom tranche ('ambiguous' — créer là fabriquerait un
+-- doublon), ni quand le nom connu ne vaut rien ('bad_name', ex. « A »). Cette
+-- colonne est ce qui rend le trou VISIBLE dans l'admin au lieu de le laisser
+-- passer en silence (cas Penda 17/08, WIX-ORPHAN-BOOKINGS-PLAN.md §7).
+alter table pending_bookings add column if not exists contact_gap text;
+alter table pending_bookings drop constraint if exists pending_bookings_contact_gap_check;
+alter table pending_bookings add constraint pending_bookings_contact_gap_check
+  check (contact_gap is null or contact_gap in ('ambiguous','bad_name','lookup_failed','create_failed'));
+
 -- Voluntary cancellation of a mobile-money booking: the seat is released but
 -- the payment is retained under the studio's no-refund policy. This marker
 -- distinguishes it from a reception/Wix cancellation that may have another
@@ -176,6 +187,11 @@ alter table clients add constraint clients_awa_disengaged_kind_check
 -- Deterministic guard against rapid conversations made only of greetings,
 -- unclear fragments or unreadable voice notes. The count expires after 24 h;
 -- a real Revive request resets it immediately.
+-- Fiche contact Wix du client, mémorisée au moment où on la résout ou la crée
+-- (WIX-ORPHAN-BOOKINGS-PLAN.md). Confort de lecture uniquement : Wix reste la
+-- vérité, une divergence se tranche toujours en faveur de Wix.
+alter table clients add column if not exists wix_contact_id text;
+
 alter table clients add column if not exists awa_no_intent_streak integer not null default 0;
 alter table clients add column if not exists awa_no_intent_last_at timestamptz;
 
