@@ -80,6 +80,8 @@ export type OpsEventKind =
 export interface KitchenTicketView {
   id: string;
   source: KitchenTicketSource;
+  /** Source delivery id, present only for DELIVERY tickets. */
+  delivery_order_id?: string | null;
   status: KitchenTicketStatus;
   items: ExtraLine[];
   note: string | null;

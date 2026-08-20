@@ -149,6 +149,35 @@ export function normalizeDeliveryPhone(raw: string): string | null {
   return d;
 }
 
+/** Validate the optional operational hand-off contact supplied with a delivery. */
+export function parseDeliveryRecipientFields(
+  input: { recipient_name?: unknown; recipient_phone?: unknown },
+):
+  | { recipientName: string | null; recipientPhone: string | null }
+  | { error: string } {
+  const recipientName = String(input.recipient_name ?? "").trim();
+  const recipientPhoneRaw = String(input.recipient_phone ?? "").trim();
+  if (!!recipientName !== !!recipientPhoneRaw) {
+    return { error: "le nom et le téléphone du contact de remise doivent être renseignés ensemble" };
+  }
+  if (!recipientName) return { recipientName: null, recipientPhone: null };
+  if (recipientName.length > 120) return { error: "le nom du contact de remise est trop long" };
+  const recipientPhone = normalizeDeliveryPhone(recipientPhoneRaw);
+  return recipientPhone
+    ? { recipientName, recipientPhone }
+    : { error: "numéro du contact de remise invalide" };
+}
+
+/** Only the deliberate whole-hour kitchen lead choices are accepted. */
+export function parseKitchenLeadMinutes(input: { kitchen_lead_minutes?: unknown }): number | null {
+  const minutes = Number(String(input.kitchen_lead_minutes ?? "60").trim());
+  return DELIVERY_KITCHEN_LEAD_OPTIONS.includes(
+    minutes as (typeof DELIVERY_KITCHEN_LEAD_OPTIONS)[number],
+  )
+    ? minutes
+    : null;
+}
+
 // ---------- Dakar schedule ----------
 
 /** Africa/Dakar is UTC year-round. Parse a `datetime-local` value strictly as

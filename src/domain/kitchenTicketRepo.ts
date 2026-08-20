@@ -65,6 +65,7 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
   return {
     id: t.id,
     source: t.source,
+    delivery_order_id: t.delivery_order_id,
     status: t.status,
     items: extrasFromJson(t.items_json),
     note: t.note,
@@ -97,7 +98,7 @@ async function emitTicket(kind: "ticket_new" | "ticket_update", t: KitchenTicket
   await recordOpsEvent(ACCUEIL_CHANNEL, kind, view);
 }
 async function emitRemoved(t: KitchenTicket): Promise<void> {
-  const payload = { id: t.id, status: t.status };
+  const payload = { id: t.id, status: t.status, delivery_order_id: t.delivery_order_id };
   await recordOpsEvent(CUISINE_CHANNEL, "ticket_removed", payload);
   await recordOpsEvent(ACCUEIL_CHANNEL, "ticket_removed", payload);
 }
@@ -542,15 +543,15 @@ export async function ackTicketDisplayed(id: string): Promise<boolean> {
           and d.kitchen_notify_status = 'pending'
         returning d.id
      )
-     select id, ipad_ack_at from acked`,
+     select id, ipad_ack_at, delivery_order_id from acked`,
     [id],
   );
-  const row = res.rows[0] as { id: string; ipad_ack_at: Date } | undefined;
+  const row = res.rows[0] as { id: string; ipad_ack_at: Date; delivery_order_id: string | null } | undefined;
   if (row) {
     // First ack ONLY: tell both boards the tablet actually rendered this ticket,
     // exactly once. The reception board flips "Envoi à Cuisine…" → "Reçue par
     // Cuisine ✓" on this; a repeated ack updated no row so it never re-emits.
-    const payload = { id: row.id, ipad_ack_at: row.ipad_ack_at };
+    const payload = { id: row.id, ipad_ack_at: row.ipad_ack_at, delivery_order_id: row.delivery_order_id };
     await recordOpsEvent(CUISINE_CHANNEL, "ticket_ack", payload);
     await recordOpsEvent(ACCUEIL_CHANNEL, "ticket_ack", payload);
     return true;

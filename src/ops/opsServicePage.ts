@@ -10,6 +10,7 @@ import {
   opsHead,
 } from "./opsTheme.js";
 import { OPS_PICKER_HELPERS } from "./opsPicker.js";
+import { OPS_DELIVERY_COMPOSER } from "./opsDeliveryComposer.js";
 
 /**
  * The reception PWA (service.revive.sn) — HTML shell, manifest, service worker
@@ -30,7 +31,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v27";
+const ASSET_VERSION = "v28";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -253,6 +254,12 @@ font-weight:800;font-size:1.02rem;box-shadow:var(--shadow-1)}
 .toast{position:fixed;z-index:40;left:50%;bottom:calc(1rem + env(safe-area-inset-bottom));transform:translateX(-50%);
 max-width:calc(100% - 2rem);padding:.75rem 1rem;border-radius:999px;background:var(--ok-strong);color:#fff;font-weight:750;
 box-shadow:var(--shadow-2);animation:pop .2s var(--ease);white-space:nowrap}
+#service-tabs{position:sticky;top:0;z-index:8;display:flex;gap:.35rem;padding:.5rem .9rem;background:var(--surface);border-bottom:1px solid var(--border-soft)}
+#service-tabs button{border:1px solid var(--border-strong);background:var(--surface-raised);color:var(--ink-700);border-radius:999px;padding:.55rem .8rem;font:inherit;font-weight:700}
+#service-tabs button.on{background:var(--plum-600);border-color:var(--plum-600);color:#fff}#service-tabs button.attention{box-shadow:0 0 0 2px var(--warn-border)}
+#delivery-board{padding:.9rem;display:grid;gap:.75rem}.delivery-top{display:flex;gap:.6rem;align-items:center}.delivery-top h2{margin:0;flex:1;font-family:var(--serif)}
+.delivery-card{background:var(--surface-raised);border:1px solid var(--border-soft);border-left:6px solid var(--info);border-radius:var(--radius-lg);padding:.85rem;box-shadow:var(--shadow-1);display:grid;gap:.35rem}.delivery-card.ready{background:var(--ok-bg);border-color:var(--ok-border)}.delivery-card .delivery-name{font-family:var(--serif);font-size:1.2rem;font-weight:700}.delivery-card .delivery-meta{color:var(--ink-500);font-size:.9rem}.delivery-card .delivery-warn{color:var(--danger);font-weight:700}.delivery-actions{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.3rem}.delivery-actions button{padding:.55rem .7rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--surface);font:inherit;font-weight:700}.delivery-actions button.danger{color:var(--danger);border-color:var(--danger-border)}
+.delivery-bottom{position:sticky;bottom:0;display:flex;gap:.6rem;padding:.7rem .9rem;background:var(--surface);border-top:1px solid var(--border-soft)}.delivery-bottom button{flex:1;background:var(--plum-600);border:0;border-radius:var(--radius);padding:.8rem;color:#fff;font:inherit;font-weight:800}.delivery-bottom a{align-self:center;color:var(--ink-500);font-size:.85rem}
 /* Focused search spends the keyboard-reduced viewport on dense menu rows. */
 .sheet.searching .sheet-title,.sheet.searching .modeseg,.sheet.searching .later-picker,.sheet.searching .optional,.sheet.searching .browsebar{display:none}
 .sheet.searching::before{display:none}.sheet.searching .search-summary,.sheet.searching .searchctl{display:flex}
@@ -271,7 +278,9 @@ export function serviceBoardPage(): string {
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="hist" aria-label="Tables récentes">🕐</button><button id="snd" class="sndbtn" aria-label="Activer/couper le son">🔊</button><button id="bell" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><span class="count" id="count"></span></header>
+<nav id="service-tabs" aria-label="Espace de travail"><button id="tab-salle" class="on">🍽️ Salle</button><button id="tab-deliveries">🛵 Livraisons <span id="delivery-count"></span></button></nav>
 <main id="board"><p class="empty" id="empty">Chargement…</p></main>
+<section id="delivery-board" hidden><div class="delivery-top"><h2>🛵 Livraisons</h2></div><div id="delivery-list"><p class="empty">Chargement…</p></div><div class="delivery-bottom"><button id="new-delivery">＋ Livraison</button><a href="/admin/livraisons">Admin ↗</a></div></section>
 <noscript>Activez JavaScript pour la prise de commande en salle.</noscript>
 <script src="${BASE}/app.js?b=${ASSET_VERSION}"></script>
 </body></html>`;
@@ -322,19 +331,25 @@ self.addEventListener('notificationclick',e=>{
   e.notification.close();
   const url=(e.notification.data&&e.notification.data.url)||'${BASE}/';
   e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(cl=>{
-    for(const c of cl){ if(c.url.indexOf('${BASE}')>=0 && 'focus' in c) return c.focus(); }
+    for(const c of cl){ if(c.url.indexOf('${BASE}')>=0){
+      if('navigate' in c) return c.navigate(url).then(function(cc){return cc&&cc.focus?cc.focus():c.focus();}).catch(function(){return c.focus();});
+      if('focus' in c) return c.focus();
+    } }
     if(self.clients.openWindow) return self.clients.openWindow(url);
   }));
 });`;
 
 // ── Client app ───────────────────────────────────────────────────────────────
-export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
+export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_DELIVERY_COMPOSER + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
   var cursor=0;                    // event cursor; seeded from /state before SSE opens
   var connected=false;             // SSE opened once, after the first /state
   var SPOTS=[];
   var MENU=[];
   var TOP=[];
+  var DELIVERIES=[];
+  var RECENT_DELIVERY_CLIENTS=[];
+  var deliveryTickets=new Map();
   var loaded=false, loadTries=0;   // load-state guard (see refreshState/retryLoad)
   var sessions=new Map();
   var tickets=new Map();
@@ -347,6 +362,16 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var offline=document.getElementById('offline');
   var bell=document.getElementById('bell');
   var VAPID='';
+  var tabSalle=document.getElementById('tab-salle');
+  var tabDeliveries=document.getElementById('tab-deliveries');
+  var deliveryBoard=document.getElementById('delivery-board');
+  var deliveryList=document.getElementById('delivery-list');
+  var deliveryCount=document.getElementById('delivery-count');
+  var activeTab='salle';
+
+  function setTab(tab){ activeTab=tab==='livraisons'?'livraisons':'salle'; board.hidden=activeTab!=='salle'; deliveryBoard.hidden=activeTab!=='livraisons'; tabSalle.classList.toggle('on',activeTab==='salle'); tabDeliveries.classList.toggle('on',activeTab==='livraisons'); try{sessionStorage.setItem('service.tab',activeTab);}catch(e){} if(activeTab==='livraisons')refreshDeliveries(); }
+  (function(){var q=new URLSearchParams(location.search).get('tab');try{q=q||sessionStorage.getItem('service.tab');}catch(e){}setTab(q);})();
+  tabSalle.onclick=function(){setTab('salle');};tabDeliveries.onclick=function(){setTab('livraisons');};
 
   // Paint + load the board FIRST, before any optional audio/push/composer setup —
   // so a throw in any of that can never leave the board stuck on "Chargement…"
@@ -422,9 +447,17 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   // new order: triple bip + vibration (no-op on iOS but free) + a spoken cue.
   function vibrate(pattern){ try{ if(navigator.vibrate) navigator.vibrate(pattern); }catch(e){} }
   function readyAlert(t){ if(muted) return; beep(); setTimeout(beep,260); setTimeout(beep,520);
-    vibrate([200,100,200,100,300]); speak('Commande prête'+((function(){var w=spotSpeech(t);return w?', '+w:'';})())); }
+    vibrate([200,100,200,100,300]); speak((t.delivery?'Livraison prête':'Commande prête')+((function(){var w=t.delivery?(t.heading||''):spotSpeech(t);return w?', '+w:'';})())); }
 
   function post(path,body){ return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},body:JSON.stringify(body||{})}); }
+
+  function deliveryActionLabel(action){return {mark_departed:'🛵 Partie en livraison',mark_delivered:'✅ Livrée',select_cash:'💵 Espèces',activate_now:'⚡ Activer maintenant',renotify_kitchen:'🔁 Renvoyer cuisine',cancel:'✕ Annuler'}[action]||action;}
+  function deliveryActionPath(action){return {mark_departed:'depart',mark_delivered:'delivered',select_cash:'cash',activate_now:'activate-now',renotify_kitchen:'renotify-kitchen',cancel:'cancel'}[action]||'';}
+  function deliveryCard(d){var card=el('article','delivery-card'+(d.group==='ready'?' ready':''));card.appendChild(el('div','delivery-name',d.client_name));card.appendChild(el('div','delivery-meta',(d.client_phone||'')+' · '+(d.address||'')));if(d.recipient_name)card.appendChild(el('div','delivery-meta','Remise : '+d.recipient_name+(d.recipient_phone?' · '+d.recipient_phone:'')));card.appendChild(el('div','delivery-meta',(d.items||[]).map(function(i){return i.qty+'× '+i.name+(i.choice?' ('+i.choice+')':'');}).join(' · ')));card.appendChild(el('div','delivery-meta',(d.amount_xof||0).toLocaleString('fr-FR')+' F · '+(d.payment_label||'')));if(d.kitchen_status)card.appendChild(el('div','delivery-meta','Cuisine : '+d.kitchen_status));if(d.blockingReason)card.appendChild(el('div','delivery-warn','⚠︎ '+d.blockingReason));var acts=el('div','delivery-actions');(d.allowedActions||[]).forEach(function(action){var b=el('button',action==='cancel'?'danger':'',deliveryActionLabel(action));b.onclick=function(){function go(){b.disabled=true;post('/deliveries/'+encodeURIComponent(d.id)+'/'+deliveryActionPath(action),{}).then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {r:r,j:j};});}).then(function(x){if(!x.r.ok){showServiceNotice(x.j.message||'Action impossible.');b.disabled=false;}refreshDeliveries();}).catch(function(){showServiceNotice('Erreur réseau — réessaie.');b.disabled=false;});}if(action==='cancel')askConfirm('Annuler cette livraison ?','Oui, annuler','Non, garder',go);else go();};acts.appendChild(b);});if(acts.childNodes.length)card.appendChild(acts);return card;}
+  function renderDeliveries(){if(!deliveryList)return;deliveryList.textContent='';if(!DELIVERIES.length){deliveryList.appendChild(el('p','empty','Aucune livraison ouverte.'));}else{DELIVERIES.forEach(function(d){deliveryList.appendChild(deliveryCard(d));});}var n=DELIVERIES.length;deliveryCount.textContent=n?'('+n+')':'';var ready=DELIVERIES.some(function(d){return d.group==='ready';});tabDeliveries.classList.toggle('attention',ready);}
+  function refreshDeliveries(){return fetch(BASE+'/deliveries',{headers:{'X-Requested-With':'fetch'}}).then(function(r){if(r.status===401){location.reload();return null;}return r.ok?r.json():null;}).then(function(d){if(d){DELIVERIES=d.deliveries||[];renderDeliveries();}}).catch(function(){});}
+  function openDelivery(){if(window.__deliveryComposer)window.__deliveryComposer.open({base:BASE,menu:MENU,top:TOP,recent:RECENT_DELIVERY_CLIENTS,post:post,onDone:function(){showServiceNotice('Livraison créée.');refreshDeliveries();}});}
+  var newDelivery=document.getElementById('new-delivery');if(newDelivery)newDelivery.onclick=openDelivery;
 
   function ticketCard(t){
     var waiting=!!(t.scheduled_for&&!t.activated_at);
@@ -810,13 +843,15 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       });
       if(d.menu&&d.menu.length) MENU=d.menu;
       if(d.top) TOP=d.top;
+      RECENT_DELIVERY_CLIENTS=d.recentDeliveryClients||[];
       if(d.vapidKey){ VAPID=d.vapidKey; }
       sessions=new Map(); (d.sessions||[]).forEach(function(s){sessions.set(s.id,s);});
       tickets=new Map(); (d.tickets||[]).forEach(function(t){ if(t.source==='TABLE') tickets.set(t.id,t); });
+      deliveryTickets=new Map(); (d.deliveryTickets||[]).forEach(function(t){ deliveryTickets.set(t.id,t); });
       // Drop confirmation tracking for orders no longer on the board.
       Object.keys(sentAt).forEach(function(id){ if(!tickets.has(id)) delete sentAt[id]; });
       Object.keys(overdue).forEach(function(id){ if(!tickets.has(id)) delete overdue[id]; });
-      loaded=true; render(); initPush();
+      loaded=true; render(); initPush(); refreshDeliveries();
       if(!connected){ connected=true; connect(); }   // open the live stream, seeded at cursor
       if(done)done();
     }).catch(function(){ retryLoad(); if(done)done(); });
@@ -1020,15 +1055,16 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     es.addEventListener('session_new',function(e){ beat(); var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); flashSpot(s.spot_id); });
     es.addEventListener('session_update',function(e){ beat(); var s=JSON.parse(e.data); sessions.set(s.id,s); bump(e); render(); });
     es.addEventListener('session_closed',function(e){ beat(); var d=JSON.parse(e.data); sessions.delete(d.id); bump(e); render(); });
-    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var isNew=!tickets.has(t.id); tickets.set(t.id,t); render(); if(isNew){ beep(); speak(newSpeech(t)); } });
-    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); bump(e); if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ readyAlert(t); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
-    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); bump(e); tickets.delete(d.id); delete sentAt[d.id]; delete overdue[d.id]; render(); });
+    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); bump(e); if(t.source==='DELIVERY'){deliveryTickets.set(t.id,t);refreshDeliveries();return;} if(t.source!=='TABLE')return; var isNew=!tickets.has(t.id); tickets.set(t.id,t); render(); if(isNew){ beep(); speak(newSpeech(t)); } });
+    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); bump(e); if(t.source==='DELIVERY'){var before=deliveryTickets.get(t.id);deliveryTickets.set(t.id,t);refreshDeliveries();if(t.status==='READY'&&(!before||before.status!=='READY'))readyAlert({delivery:true,heading:t.heading,subheading:t.subheading});return;} if(t.source!=='TABLE')return; var was=tickets.get(t.id); tickets.set(t.id,t); render(); if(t.status==='READY' && (!was||was.status!=='READY')){ readyAlert(t); var stEl=board.querySelector('[data-id="'+t.id+'"] .st.ready'); if(stEl)stEl.classList.add('just-ready'); } });
+    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); bump(e); if(d.delivery_order_id){deliveryTickets.delete(d.id);refreshDeliveries();return;} tickets.delete(d.id); delete sentAt[d.id]; delete overdue[d.id]; render(); });
     // The cuisine tablet rendered this ticket: flip our "Envoi…" to "Reçue ✓".
-    es.addEventListener('ticket_ack',function(e){ beat(); var a=JSON.parse(e.data); bump(e); var t=tickets.get(a.id); delete overdue[a.id]; if(t){ t.ipad_ack_at=a.ipad_ack_at; render(); } });
+    es.addEventListener('ticket_ack',function(e){ beat(); var a=JSON.parse(e.data); bump(e); if(a.delivery_order_id){refreshDeliveries();return;} var t=tickets.get(a.id); delete overdue[a.id]; if(t){ t.ipad_ack_at=a.ipad_ack_at; render(); } });
   }
   function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); try{ connect(); }catch(e){} } }
   setInterval(function(){ reconnectIfStale(60000); },15000);
   setInterval(function(){ if(loaded) refreshState(); },60000);   // authoritative resync
+  setInterval(function(){ if(loaded) refreshDeliveries(); },20000);
   document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'){ reconnectIfStale(30000); if(loaded) refreshState(); } });
 
   // Keep the reception screen awake while the board is open. Wake Lock drops when

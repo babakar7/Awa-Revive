@@ -1,4 +1,13 @@
-import type { NotifyStatus, OpenDeliveryOrder } from "./deliveryRepo.js";
+import {
+  orderItems,
+  type NotifyStatus,
+  type OpenDeliveryOrder,
+} from "./deliveryRepo.js";
+import {
+  deliveryPaymentStaffText,
+  type DeliveryStatus,
+} from "./deliveryRules.js";
+import type { ExtraLine } from "../lib/cafeMenu.js";
 
 /**
  * Pure reception-board presentation logic. This module decides only how an
@@ -21,6 +30,15 @@ export type DeliveryPrimaryAction =
   | "mark_departed"
   | "mark_delivered";
 
+/** Server-authorized operations for the device board. The UI never infers these. */
+export type DeliveryAction =
+  | "mark_departed"
+  | "mark_delivered"
+  | "select_cash"
+  | "activate_now"
+  | "renotify_kitchen"
+  | "cancel";
+
 export interface DeliveryPresentation {
   order: OpenDeliveryOrder;
   group: DeliveryGroup;
@@ -28,6 +46,9 @@ export interface DeliveryPresentation {
   /** Exact operational explanation, shown prominently when work is blocked. */
   blockingReason: string | null;
   primaryAction: DeliveryPrimaryAction | null;
+  allowedActions: DeliveryAction[];
+  /** Kitchen tablet has not displayed this ticket after the operational grace. */
+  kitchenUnconfirmed: boolean;
   /** Next meaningful operational deadline, used for urgency ordering. */
   dueAt: Date | null;
 }
@@ -35,6 +56,7 @@ export interface DeliveryPresentation {
 export type DeliveryGroups = Record<DeliveryGroup, DeliveryPresentation[]>;
 
 const DUE_SOON_MS = 15 * 60_000;
+const KITCHEN_ACK_GRACE_MS = 10_000;
 
 function isSent(status: NotifyStatus): boolean {
   return status === "sent" || status === "sent_template";
@@ -106,6 +128,24 @@ function kitchenProjectionBlock(order: OpenDeliveryOrder): string | null {
   return "Ticket cuisine manquant : renvoyer la commande au bar.";
 }
 
+function kitchenBad(order: OpenDeliveryOrder): boolean {
+  return (
+    ["failed", "partial", "fallback_reception"].includes(order.kitchen_notify_status) ||
+    (order.status === "IN_KITCHEN" &&
+      !!order.activated_at &&
+      !["NEW", "PREPARING", "READY"].includes(order.kitchen_ticket_status ?? ""))
+  );
+}
+
+function kitchenUnconfirmed(order: OpenDeliveryOrder, now: Date): boolean {
+  return (
+    order.kitchen_ticket_status === "NEW" &&
+    !order.kitchen_ipad_ack_at &&
+    !!order.kitchen_ticket_created_at &&
+    now.getTime() - new Date(order.kitchen_ticket_created_at).getTime() >= KITCHEN_ACK_GRACE_MS
+  );
+}
+
 function operationalDueAt(order: OpenDeliveryOrder): Date | null {
   if (order.status === "OUT_FOR_DELIVERY") {
     return order.out_for_delivery_at ? new Date(order.out_for_delivery_at) : null;
@@ -167,13 +207,99 @@ export function deriveDeliveryPresentation(
   }
 
   const dueAt = operationalDueAt(order);
+  const allowedActions: DeliveryAction[] = [];
+  if (["PENDING_CHOICE", "AWAITING_PAYMENT"].includes(order.payment_status)) {
+    allowedActions.push("select_cash");
+  }
+  if (order.status === "OUT_FOR_DELIVERY") allowedActions.push("mark_delivered");
+  if (
+    order.status === "IN_KITCHEN" &&
+    order.activated_at &&
+    order.kitchen_ticket_status === "READY" &&
+    (order.payment_status === "CASH_DUE" || order.payment_status === "PAID") &&
+    !notificationReason &&
+    !ticketReason
+  ) {
+    allowedActions.push("mark_departed");
+  }
+  if (order.status === "IN_KITCHEN" && order.scheduled_for && !order.activated_at) {
+    allowedActions.push("activate_now");
+  }
+  if (kitchenBad(order) && order.status === "IN_KITCHEN" && order.activated_at) {
+    allowedActions.push("renotify_kitchen");
+  }
+  allowedActions.push("cancel");
   return {
     order,
     group,
     urgency: urgencyFor(order, dueAt, now),
     blockingReason,
     primaryAction,
+    allowedActions,
+    kitchenUnconfirmed: kitchenUnconfirmed(order, now),
     dueAt,
+  };
+}
+
+/** The deliberately small PWA contract. Internal tokens/outbox values never cross it. */
+export interface DeliveryBoardItem {
+  id: string;
+  client_name: string;
+  client_phone: string;
+  address: string;
+  recipient_name: string | null;
+  recipient_phone: string | null;
+  items: ExtraLine[];
+  amount_xof: number;
+  note: string | null;
+  is_test: boolean;
+  status: DeliveryStatus;
+  payment_label: string;
+  kitchen_status: string | null;
+  kitchen_ready_at: string | null;
+  scheduled_for: string | null;
+  activated_at: string | null;
+  created_at: string;
+  out_for_delivery_at: string | null;
+  group: DeliveryGroup;
+  urgency: DeliveryUrgency;
+  blockingReason: string | null;
+  primaryAction: DeliveryPrimaryAction | null;
+  allowedActions: DeliveryAction[];
+  kitchen_unconfirmed: boolean;
+}
+
+function iso(value: Date | string | null): string | null {
+  return value ? new Date(value).toISOString() : null;
+}
+
+export function deliveryBoardItem(p: DeliveryPresentation): DeliveryBoardItem {
+  const o = p.order;
+  return {
+    id: o.id,
+    client_name: o.client_name,
+    client_phone: o.client_phone,
+    address: o.address,
+    recipient_name: o.recipient_name,
+    recipient_phone: o.recipient_phone,
+    items: orderItems(o),
+    amount_xof: o.amount_xof,
+    note: o.note,
+    is_test: o.is_test,
+    status: o.status,
+    payment_label: deliveryPaymentStaffText({ ...o, items: orderItems(o) }),
+    kitchen_status: o.kitchen_ticket_status,
+    kitchen_ready_at: iso(o.kitchen_ready_at),
+    scheduled_for: iso(o.scheduled_for),
+    activated_at: iso(o.activated_at),
+    created_at: new Date(o.created_at).toISOString(),
+    out_for_delivery_at: iso(o.out_for_delivery_at),
+    group: p.group,
+    urgency: p.urgency,
+    blockingReason: p.blockingReason,
+    primaryAction: p.primaryAction,
+    allowedActions: p.allowedActions,
+    kitchen_unconfirmed: p.kitchenUnconfirmed,
   };
 }
 

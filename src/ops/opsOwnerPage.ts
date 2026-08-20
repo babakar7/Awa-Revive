@@ -10,6 +10,7 @@ import {
   opsHead,
 } from "./opsTheme.js";
 import { OPS_PICKER_HELPERS } from "./opsPicker.js";
+import { OPS_DELIVERY_COMPOSER } from "./opsDeliveryComposer.js";
 
 /**
  * The owner supervision PWA (owner.revive.sn) — an overview of all live activity
@@ -24,7 +25,7 @@ import { OPS_PICKER_HELPERS } from "./opsPicker.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v14";
+const ASSET_VERSION = "v15";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -66,6 +67,7 @@ border-radius:999px;padding:.28rem .7rem;font-size:.8rem;font-weight:600}
 .dev.on{background:var(--ok-bg);color:var(--ok)}
 .dev.on .ddot{background:var(--ok-strong)}
 main{padding:.9rem 1rem 1rem;display:grid;gap:.9rem;grid-template-columns:repeat(auto-fill,minmax(18rem,1fr));align-content:start}
+#owner-layout{padding:.9rem 1rem 1rem;display:grid;grid-template-columns:minmax(18rem,1fr) minmax(18rem,2fr);gap:.9rem;align-items:start}#owner-layout main{padding:0;min-width:0}.owner-deliveries{display:grid;gap:.75rem}.owner-deliveries h2{margin:0;font-family:var(--serif);font-size:1.35rem}.delivery-card{background:var(--surface-raised);border:1px solid var(--border-soft);border-left:6px solid var(--info);border-radius:var(--radius-lg);padding:.85rem;display:grid;gap:.35rem;box-shadow:var(--shadow-1)}.delivery-card.ready{background:var(--ok-bg);border-color:var(--ok-border)}.delivery-name{font-family:var(--serif);font-size:1.2rem;font-weight:700}.delivery-meta{color:var(--ink-500);font-size:.9rem}.delivery-warn{color:var(--danger);font-weight:700}.delivery-actions{display:flex;flex-wrap:wrap;gap:.4rem}.delivery-actions button{padding:.5rem .65rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--surface);font:inherit;font-weight:700}.delivery-actions button.danger{color:var(--danger);border-color:var(--danger-border)}@media(max-width:52rem){#owner-layout{grid-template-columns:1fr}}
 .card{background:var(--surface-raised);border:1px solid var(--border-soft);border-left:6px solid var(--plum-600);
 border-radius:var(--radius-lg);padding:.9rem 1rem;display:flex;flex-direction:column;gap:.5rem;box-shadow:var(--shadow-1)}
 .card.src-delivery{border-left-color:var(--info)}
@@ -254,10 +256,10 @@ export function ownerBoardPage(): string {
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Supervision</h1><span id="clock"></span><span class="spacer"></span>
-<button id="bell" type="button" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><button id="take" type="button">＋ Commande</button><span class="count" id="count"></span></header>
+<button id="bell" type="button" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><button id="take" type="button">＋ Commande</button><button id="take-delivery" type="button">＋ Livraison</button><span class="count" id="count"></span></header>
 <section id="kpi" class="kpi-bar"></section>
 <section id="devs" class="dev-bar"></section>
-<main id="board"><p class="empty" id="empty">Chargement…</p></main>
+<div id="owner-layout"><section class="owner-deliveries"><h2>🛵 Livraisons</h2><div id="delivery-list"><p class="empty">Chargement…</p></div></section><main id="board"><p class="empty" id="empty">Chargement…</p></main></div>
 <noscript>Activez JavaScript pour la supervision.</noscript>
 <script src="${BASE}/app.js?b=${ASSET_VERSION}"></script>
 </body></html>`;
@@ -313,7 +315,7 @@ self.addEventListener('notificationclick',e=>{
 });`;
 
 // ── Client app (SSE cuisine channel + /stats poll; can also take an order) ───
-export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
+export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_DELIVERY_COMPOSER + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
   var cursor=0;             // event cursor; seeded from /state before SSE opens
   var booted=false;         // flips true after the first successful /state load
@@ -322,6 +324,9 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var MENU=[];
   var TOP=[];
   var model=new Map();
+  var DELIVERIES=[];
+  var RECENT_DELIVERY_CLIENTS=[];
+  var DELIVERY_STATS={};
   var board=document.getElementById('board');
   var countEl=document.getElementById('count');
   var dot=document.getElementById('dot');
@@ -329,8 +334,15 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   var clockEl=document.getElementById('clock');
   var kpiEl=document.getElementById('kpi');
   var devEl=document.getElementById('devs');
+  var deliveryList=document.getElementById('delivery-list');
 
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
+  function showNotice(message){var old=document.querySelector('.toast');if(old&&old.parentNode)old.parentNode.removeChild(old);var n=el('div','toast',message);document.body.appendChild(n);setTimeout(function(){if(n.parentNode)n.parentNode.removeChild(n);},2800);}
+  function deliveryActionLabel(a){return {mark_departed:'🛵 Partie',mark_delivered:'✅ Livrée',select_cash:'💵 Espèces',activate_now:'⚡ Activer',renotify_kitchen:'🔁 Renvoyer cuisine',cancel:'✕ Annuler'}[a]||a;}
+  function deliveryActionPath(a){return {mark_departed:'depart',mark_delivered:'delivered',select_cash:'cash',activate_now:'activate-now',renotify_kitchen:'renotify-kitchen',cancel:'cancel'}[a]||'';}
+  function deliveryCard(d){var c=el('article','delivery-card'+(d.group==='ready'?' ready':''));c.appendChild(el('div','delivery-name',d.client_name));c.appendChild(el('div','delivery-meta',(d.client_phone||'')+' · '+(d.address||'')));c.appendChild(el('div','delivery-meta',(d.items||[]).map(function(i){return i.qty+'× '+i.name+(i.choice?' ('+i.choice+')':'');}).join(' · ')));c.appendChild(el('div','delivery-meta',(d.amount_xof||0).toLocaleString('fr-FR')+' F · '+(d.payment_label||'')));if(d.kitchen_status)c.appendChild(el('div','delivery-meta','Cuisine : '+d.kitchen_status));if(d.blockingReason)c.appendChild(el('div','delivery-warn','⚠︎ '+d.blockingReason));var acts=el('div','delivery-actions');(d.allowedActions||[]).forEach(function(a){var b=el('button',a==='cancel'?'danger':'',deliveryActionLabel(a));b.onclick=function(){function go(){b.disabled=true;postJSON('/deliveries/'+encodeURIComponent(d.id)+'/'+deliveryActionPath(a),{}).then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {r:r,j:j};});}).then(function(x){if(!x.r.ok){showNotice(x.j.message||'Action impossible.');b.disabled=false;}refreshDeliveries();}).catch(function(){showNotice('Erreur réseau — réessaie.');b.disabled=false;});}if(a==='cancel')askConfirm('Annuler cette livraison ?','Oui, annuler','Non, garder',go);else go();};acts.appendChild(b);});if(acts.childNodes.length)c.appendChild(acts);return c;}
+  function renderDeliveries(){deliveryList.textContent='';if(!DELIVERIES.length){deliveryList.appendChild(el('p','empty',booted?'Aucune livraison ouverte':'Chargement…'));return;}DELIVERIES.forEach(function(d){deliveryList.appendChild(deliveryCard(d));});}
+  function refreshDeliveries(){return fetch(BASE+'/deliveries',{headers:{'X-Requested-With':'fetch'}}).then(function(r){if(r.status===401){location.reload();return null;}return r.ok?r.json():null;}).then(function(d){if(d){DELIVERIES=d.deliveries||[];renderDeliveries();}}).catch(function(){});}
   function fmtSecs(s){ s=Math.max(0,Math.floor(s)); var m=Math.floor(s/60), r=s%60; return (m<10?'0':'')+m+':'+(r<10?'0':'')+r; }
   function fmtElapsed(iso){ return fmtSecs((Date.now()-new Date(iso).getTime())/1000); }
   function betweenSecs(a,b){ return (new Date(b).getTime()-new Date(a).getTime())/1000; }
@@ -454,7 +466,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
   }
 
   function render(){
-    var list=Array.from(model.values()).sort(function(x,y){
+    var list=Array.from(model.values()).filter(function(t){return t.source!=='DELIVERY';}).sort(function(x,y){
       var u=(y.urgent?1:0)-(x.urgent?1:0);
       var sx=x.scheduled_for&&!x.activated_at?1:0,sy=y.scheduled_for&&!y.activated_at?1:0;
       return u || (sx-sy) || (new Date((sx?x.scheduled_for:x.activated_at)||x.created_at)-new Date((sy?y.scheduled_for:y.activated_at)||y.created_at));
@@ -471,6 +483,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     kpiEl.appendChild(kpi('Prépa moyenne', s.avgPrepSecs!=null?Math.round(s.avgPrepSecs/60)+' min':'—'));
     kpiEl.appendChild(kpi('Urgences', String(s.urgentToday!=null?s.urgentToday:0)));
     kpiEl.appendChild(kpi('En cours', String(s.inProgress!=null?s.inProgress:0)));
+    kpiEl.appendChild(kpi('Livraisons en cours', String(DELIVERY_STATS.openCount!=null?DELIVERY_STATS.openCount:0)));
   }
   function renderDevices(list){ devEl.textContent='';
     (list||[]).forEach(function(d){ if(d.revoked_at) return;
@@ -519,19 +532,22 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       });
       if(d.menu&&d.menu.length) MENU=d.menu;
       if(d.top) TOP=d.top;
+      RECENT_DELIVERY_CLIENTS=d.recentDeliveryClients||[];
+      DELIVERY_STATS=d.deliveryStats||DELIVERY_STATS;
       if(d.stats)renderStats(d.stats); if(d.devices)renderDevices(d.devices);
       if(d.vapidKey){ VAPID=d.vapidKey; }
-      booted=true; render(); initPush();
+      booted=true; render(); renderDeliveries(); refreshDeliveries(); initPush();
       if(!connected){ connected=true; connect(); }
     }).catch(function(){});
   }
   function pollStats(){
     fetch(BASE+'/stats',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
-      if(!d)return; if(d.stats)renderStats(d.stats); if(d.devices)renderDevices(d.devices);
+      if(!d)return; DELIVERY_STATS=d.deliveryStats||DELIVERY_STATS; if(d.stats)renderStats(d.stats); if(d.devices)renderDevices(d.devices);
     }).catch(function(){});
   }
   setInterval(pollStats,60000);
   setInterval(refreshState,60000);   // authoritative reconciliation every minute
+  setInterval(function(){if(booted)refreshDeliveries();},20000);
   // Surface the "Cuisine non confirmée" anomaly promptly (its trigger is elapsed
   // time, not an event): re-render every 10s while any NEW ticket is unacked.
   setInterval(function(){ var pend=false; model.forEach(function(t){ if(t.status==='NEW' && !t.ipad_ack_at) pend=true; }); if(pend) render(); },10000);
@@ -553,11 +569,11 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
       if(firstOpen){ firstOpen=false; } else { refreshState(); } };
     es.onerror=function(){setOnline(false);};
     es.addEventListener('ping',beat);
-    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); });
-    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); bump(e); render(); });
-    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); clearPendingReady(d.id); model.delete(d.id); bump(e); render(); });
+    es.addEventListener('ticket_new',function(e){ beat(); var t=JSON.parse(e.data); model.set(t.id,t); bump(e); render(); if(t.source==='DELIVERY')refreshDeliveries(); });
+    es.addEventListener('ticket_update',function(e){ beat(); var t=JSON.parse(e.data); if(t.status==='READY') clearPendingReady(t.id); model.set(t.id,t); bump(e); render(); if(t.source==='DELIVERY')refreshDeliveries(); });
+    es.addEventListener('ticket_removed',function(e){ beat(); var d=JSON.parse(e.data); clearPendingReady(d.id); model.delete(d.id); bump(e); render(); if(d.delivery_order_id)refreshDeliveries(); });
     // Cuisine acked a ticket → clear the anomaly on this board.
-    es.addEventListener('ticket_ack',function(e){ beat(); var a=JSON.parse(e.data); bump(e); var t=model.get(a.id); if(t){ t.ipad_ack_at=a.ipad_ack_at; render(); } });
+    es.addEventListener('ticket_ack',function(e){ beat(); var a=JSON.parse(e.data); bump(e); var t=model.get(a.id); if(t){ t.ipad_ack_at=a.ipad_ack_at; render(); } if(a.delivery_order_id)refreshDeliveries(); });
   }
   function reconnectIfStale(maxMs){ if(Date.now()-lastBeat>maxMs){ beat(); setOnline(false); connect(); } }
   setInterval(function(){ reconnectIfStale(60000); },15000);
@@ -575,6 +591,8 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + String.raw`(function(){
     document.body.appendChild(notice); setTimeout(function(){ if(notice.parentNode) notice.parentNode.removeChild(notice); },2800);
   }
   var takeBtn=document.getElementById('take');
+  var takeDeliveryBtn=document.getElementById('take-delivery');
+  if(takeDeliveryBtn)takeDeliveryBtn.onclick=function(){if(window.__deliveryComposer)window.__deliveryComposer.open({base:BASE,menu:MENU,top:TOP,recent:RECENT_DELIVERY_CLIENTS,post:postJSON,onDone:function(){showOwnerNotice('Livraison créée.');refreshDeliveries();}});};
   function openComposer(){
     var ov=el('div','ov'); var sh=el('div','sheet');
     sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true'); sh.setAttribute('aria-label','Prendre une commande');

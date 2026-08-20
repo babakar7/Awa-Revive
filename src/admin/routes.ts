@@ -5,7 +5,7 @@ import QRCode from "qrcode";
 import { pool } from "../db/index.js";
 import { transition } from "../domain/stateMachine.js";
 import * as repo from "../domain/repo.js";
-import { extrasFromJson, getCafeMenu, computeExtras, formatExtrasOneLine } from "../lib/cafeMenu.js";
+import { extrasFromJson, getCafeMenu } from "../lib/cafeMenu.js";
 import { bookingPaymentLabel, paymentMethodLabel } from "../lib/paymentMethod.js";
 import {
   adminAuthHook,
@@ -17,12 +17,7 @@ import {
 } from "./auth.js";
 import { escapeHtml as escLogin } from "./helpers.js";
 import * as delivery from "../domain/deliveryRepo.js";
-import {
-  createDeliveryTicket,
-  completeTicketForDelivery,
-  cancelTicketForDelivery,
-  refreshDeliveryTicketContact,
-} from "../domain/kitchenTicketRepo.js";
+import { createDeliveryTicket, refreshDeliveryTicketContact } from "../domain/kitchenTicketRepo.js";
 import {
   createPairingDevice,
   deleteOpsDevice,
@@ -48,19 +43,20 @@ import * as closures from "../domain/closuresRepo.js";
 import * as faq from "../domain/faqRepo.js";
 import {
   attemptActivationNotify,
-  attemptCreatedNotify,
   attemptRecipientRouteNotify,
   attemptRescheduleNotify,
-  attemptRouteNotify,
   renotifyKitchen,
 } from "../domain/deliveryNotify.js";
 import {
-  DELIVERY_KITCHEN_LEAD_OPTIONS,
   formatDakarDateTime,
   normalizeDeliveryPhone,
   parseDakarDateTime,
   parseDeliveryQtyFields,
+  parseDeliveryRecipientFields,
+  parseKitchenLeadMinutes,
 } from "../domain/deliveryRules.js";
+import { createDeliveryFromInput } from "../domain/deliveryCreate.js";
+import * as deliveryActions from "../domain/deliveryActions.js";
 import {
   livraisonsBanner,
   renderLivraisonForm,
@@ -312,34 +308,6 @@ function wixPlanOrdersSection(rows: any[]): string {
     : `<div class="empty"><b>Aucun abonnement Wix direct</b><p>Aucune formule achetée directement dans Wix.</p></div>`;
   return `<div class="section-header"><h2>Abonnements achetés dans Wix</h2><span class="badge badge--amber">${rows.length}</span></div>
 <div class="card">${body}</div>`;
-}
-
-function parseDeliveryRecipientFields(
-  body: Record<string, string>,
-):
-  | { recipientName: string | null; recipientPhone: string | null }
-  | { error: string } {
-  const recipientName = String(body.recipient_name ?? "").trim();
-  const recipientPhoneRaw = String(body.recipient_phone ?? "").trim();
-  if (!!recipientName !== !!recipientPhoneRaw) {
-    return { error: "le nom et le téléphone du contact de remise doivent être renseignés ensemble" };
-  }
-  if (!recipientName) return { recipientName: null, recipientPhone: null };
-  if (recipientName.length > 120) {
-    return { error: "le nom du contact de remise est trop long" };
-  }
-  const recipientPhone = normalizeDeliveryPhone(recipientPhoneRaw);
-  if (!recipientPhone) return { error: "numéro du contact de remise invalide" };
-  return { recipientName, recipientPhone };
-}
-
-function parseKitchenLeadMinutes(body: Record<string, string>): number | null {
-  const minutes = Number(String(body.kitchen_lead_minutes ?? "60").trim());
-  return DELIVERY_KITCHEN_LEAD_OPTIONS.includes(
-    minutes as (typeof DELIVERY_KITCHEN_LEAD_OPTIONS)[number],
-  )
-    ? minutes
-    : null;
 }
 
 function formatKitchenLeadHours(minutes: number): string {
@@ -1460,12 +1428,6 @@ ${wixPlanOrdersSection(wixPlanOrders)}`;
 
       admin.post("/livraisons", async (req, reply) => {
         const b = (req.body ?? {}) as Record<string, string>;
-        const name = String(b.client_name ?? "").trim();
-        const address = String(b.address ?? "").trim();
-        const note = String(b.note ?? "").trim() || null;
-        const wixContactId = String(b.wix_contact_id ?? "").trim().slice(0, 100) || null;
-        const isTest = b.is_test === "1";
-        const phone = normalizeDeliveryPhone(String(b.client_phone ?? ""));
         // On a validation error, re-render the form (200) with everything the
         // user already typed + the message, instead of redirecting to a blank
         // form and losing it all. Rebuild qty/choice maps from the submitted body.
@@ -1482,6 +1444,7 @@ ${wixPlanOrdersSection(wixPlanOrders)}`;
           }
           const recents = await delivery.recentDeliveryClients();
           const form = renderLivraisonForm(getCafeMenu().items, livraisonsBanner(undefined, msg), recents, {
+            client_request_id: b.client_request_id,
             client_name: b.client_name,
             client_phone: b.client_phone,
             recipient_name: b.recipient_name,
@@ -1502,112 +1465,30 @@ ${wixPlanOrdersSection(wixPlanOrders)}`;
             await layout("Nouvelle livraison", "/admin/livraisons", form, { subtitle: "Commande téléphonique", contentWidth: "standard", breadcrumbs: [{ href: "/admin/livraisons", label: "Livraisons" }, { label: "Nouvelle" }] }),
           );
         };
-        if (!name) return backErr("Le nom du client est obligatoire.", "client_name");
-        if (!phone) return backErr("Le numéro de téléphone est invalide.", "client_phone");
-        if (!address) return backErr("L’adresse de livraison est obligatoire.", "address");
-        const recipient = parseDeliveryRecipientFields(b);
-        if ("error" in recipient) {
-          return backErr(
-            recipient.error,
-            String(b.recipient_name ?? "").trim() ? "recipient_phone" : "recipient_name",
-          );
-        }
-        const deliveryMode = b.delivery_mode === "scheduled" ? "scheduled" : "now";
-        let scheduledFor: Date | null = null;
-        let kitchenNotifyAt: Date | null = null;
-        let kitchenLead: number | null = null;
-        if (deliveryMode === "scheduled") {
-          kitchenLead = parseKitchenLeadMinutes(b);
-          if (kitchenLead === null) {
-            return backErr(
-              "Le délai cuisine doit être compris entre 1 et 12 heures.",
-              "kitchen_lead_minutes",
-            );
-          }
-          scheduledFor = parseDakarDateTime(String(b.scheduled_for ?? ""));
-          if (!scheduledFor) {
-            return backErr("La date et l’heure d’arrivée sont invalides.", "scheduled_for");
-          }
-          if (scheduledFor.getTime() <= Date.now()) {
-            return backErr("L’heure d’arrivée doit être dans le futur.", "scheduled_for");
-          }
-          kitchenNotifyAt = new Date(scheduledFor.getTime() - kitchenLead * 60_000);
-        }
         const parsed = parseDeliveryQtyFields(b);
         if ("error" in parsed) return backErr(parsed.error, "articles");
-        // Prices/total resolved server-side from the menu (never trusted from the
-        // form); choices for option-items are required and validated here too.
-        const priced = computeExtras(getCafeMenu().items, parsed.entries, { requireChoices: true });
-        if (!priced.ok) return backErr(priced.message, "articles");
-        const slaRaw = parseInt(String(b.sla_minutes ?? "").trim(), 10);
-        const sla = Number.isFinite(slaRaw) && slaRaw >= 5 && slaRaw <= 180 ? slaRaw : config.DELIVERY_SLA_MINUTES;
-
-        const { order } = await delivery.createDeliveryOrder({
-          client_name: name,
-          client_phone: phone,
-          wix_contact_id: wixContactId,
-          recipient_name: recipient.recipientName,
-          recipient_phone: recipient.recipientPhone,
-          address,
-          note,
-          items: priced.lines,
-          amount_xof: priced.totalXof,
-          sla_minutes: sla,
-          created_by: req.adminUser ?? null,
-          is_test: isTest,
-          scheduled_for: scheduledFor,
-          kitchen_notify_at: kitchenNotifyAt,
-        });
-        req.log.info({ order: order.id, by: req.adminUser }, "Delivery order created");
-        // Confirm receipt to the client (fire-and-forget; the sweep reconciles).
-        void attemptCreatedNotify(order.id, req.log);
-        // Ping reception on EVERY new order — the owner also enters orders, and
-        // reception must see them to manage the delivery. Harmless self-echo
-        // when reception entered the order herself.
-        notifyReception(
-          isTest
-            ? "🧪 TEST — nouvelle commande livraison"
-            : scheduledFor
-              ? "🗓️ Nouvelle livraison programmée"
-              : "🛵 Nouvelle commande livraison",
-          `${isTest ? "🧪 COMMANDE DE TEST — exclue des statistiques.\n" : ""}` +
-            `Client : ${name} (+${phone})\n` +
-            (recipient.recipientName && recipient.recipientPhone
-              ? `Contact remise : ${recipient.recipientName} (+${recipient.recipientPhone}) — à appeler par le livreur\n`
-              : "") +
-            `Commande : ${formatExtrasOneLine(priced.lines)}\n` +
-            `Total : ${priced.totalXof} FCFA\n` +
-            `Paiement : choix client en attente via Awa — départ bloqué\n` +
-            `Adresse : ${address}\n` +
-            (scheduledFor
-              ? `Arrivée promise : ${formatDakarDateTime(scheduledFor, "fr")} (heure de Dakar)\n` +
-                `Alerte cuisine : ${formatDakarDateTime(kitchenNotifyAt!, "fr")} (${formatKitchenLeadHours(kitchenLead!)} l’arrivée)\n`
-              : "") +
-            (note ? `Note : ${note}\n` : "") +
-            `Suivi : /admin/livraisons`,
-          { whatsappFirst: true, preferTemplate: true },
+        const result = await createDeliveryFromInput(
+          {
+            client_name: b.client_name ?? "",
+            client_phone: b.client_phone ?? "",
+            address: b.address ?? "",
+            note: b.note,
+            wix_contact_id: b.wix_contact_id,
+            recipient_name: b.recipient_name,
+            recipient_phone: b.recipient_phone,
+            delivery_mode: b.delivery_mode,
+            scheduled_for: b.scheduled_for,
+            kitchen_lead_minutes: b.kitchen_lead_minutes,
+            sla_minutes: b.sla_minutes,
+            client_request_id: b.client_request_id,
+            items: parsed.entries,
+            is_test: b.is_test === "1",
+          },
+          req.adminUser ?? null,
+          req.log,
         );
-        // Only active orders reach the kitchen iPad. Creating or activating an
-        // order never sends an automatic WhatsApp to kitchen staff.
-        let kitchenOk = false;
-        if (order.activated_at) {
-          // Project the active order onto a kitchen ticket right away so the
-          // cuisine iPad shows it instantly (the sweep reconcile is the backstop).
-          const ticket = await createDeliveryTicket(order, config.OPS_KITCHEN_FALLBACK_SECONDS)
-            .then((r) => r.ticket)
-            .catch((e) => {
-              req.log.error({ err: e, order: order.id }, "Kitchen ticket create failed");
-              return null;
-            });
-          kitchenOk = !!ticket;
-          if (scheduledFor) await attemptActivationNotify(order.id, req.log);
-        }
-        const done = scheduledFor && !order.activated_at
-          ? "scheduled"
-          : kitchenOk
-            ? "created"
-            : "created-kitchen-failed";
-        return reply.redirect(`/admin/livraisons?done=${done}`, 303);
+        if (!result.ok) return backErr(result.message, result.field);
+        return reply.redirect(`/admin/livraisons?done=${result.done}`, 303);
       });
 
       admin.post("/livraisons/:id/recipient", async (req, reply) => {
@@ -1756,115 +1637,38 @@ ${wixPlanOrdersSection(wixPlanOrders)}`;
 
       admin.post("/livraisons/:id/activate-now", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const activated = await delivery.activateScheduledDeliveryNow(id);
-        if (!activated) {
-          return reply.redirect(
-            "/admin/livraisons?err=alerte immédiate impossible : commande déjà activée ou traitée",
-            303,
-          );
-        }
-        req.log.info(
-          { order: id, by: req.adminUser },
-          "Scheduled delivery manually activated",
-        );
-        await createDeliveryTicket(
-          activated,
-          config.OPS_KITCHEN_FALLBACK_SECONDS,
-        )
-          .catch((error) => {
-            req.log.error(
-              { err: error, order: id },
-              "Kitchen ticket create failed after manual activation",
-            );
-          });
-        await attemptActivationNotify(id, req.log);
-        return reply.redirect("/admin/livraisons?done=activated-now", 303);
+        const result = await deliveryActions.activateNow(id, req.log);
+        return reply.redirect(result.ok ? "/admin/livraisons?done=activated-now" : `/admin/livraisons?err=${encodeURIComponent(result.message)}`, 303);
       });
 
       admin.post("/livraisons/:id/depart", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const updated = await delivery.markOutForDelivery(id, `admin-${req.adminUser ?? "?"}`);
-        if (updated) {
-          req.log.info({ order: id, by: req.adminUser }, "Delivery order marked out-for-delivery from dashboard");
-          // Remove the kitchen ticket from the iPad live (sweep reconcile is the backstop).
-          await completeTicketForDelivery(id).catch((e) => req.log.error({ err: e, order: id }, "Ticket complete failed"));
-          await attemptRouteNotify(id, req.log); // await so the board shows the ping outcome
-          return reply.redirect("/admin/livraisons?done=departed", 303);
-        }
-        const current = await delivery.findDeliveryOrder(id);
-        const err = current?.status === "IN_KITCHEN" && !current.activated_at
-          ? "départ bloqué : cette livraison programmée n'est pas encore activée"
-          : current?.status === "IN_KITCHEN" && !delivery.deliveryMayDepart(current)
-            ? "départ bloqué : attendre le choix espèces ou la confirmation du paiement mobile"
-            : "commande déjà traitée — recharge la page";
-        return reply.redirect(`/admin/livraisons?err=${encodeURIComponent(err)}`, 303);
+        const result = await deliveryActions.depart(id, `admin-${req.adminUser ?? "?"}`, req.log);
+        return reply.redirect(result.ok ? "/admin/livraisons?done=departed" : `/admin/livraisons?err=${encodeURIComponent(result.message)}`, 303);
       });
 
       admin.post("/livraisons/:id/delivered", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const updated = await delivery.markDelivered(id, `admin-${req.adminUser ?? "?"}`);
-        if (updated) {
-          req.log.info({ order: id, by: req.adminUser }, "Delivery order marked delivered");
-          // A delivery closed straight from IN_KITCHEN (departure never tapped)
-          // must still leave the iPad board.
-          await completeTicketForDelivery(id).catch((e) => req.log.error({ err: e, order: id }, "Ticket complete failed"));
-          return reply.redirect("/admin/livraisons?done=delivered", 303);
-        }
-        const current = await delivery.findDeliveryOrder(id);
-        const err = current?.status === "IN_KITCHEN" && !current.activated_at
-          ? "livraison bloquée : la commande programmée n'est pas encore activée"
-          : current && !delivery.deliveryMayDepart(current)
-            ? "livraison bloquée : paiement non choisi ou non confirmé"
-            : "commande déjà traitée";
-        return reply.redirect(`/admin/livraisons?err=${encodeURIComponent(err)}`, 303);
+        const result = await deliveryActions.deliver(id, `admin-${req.adminUser ?? "?"}`, req.log);
+        return reply.redirect(result.ok ? "/admin/livraisons?done=delivered" : `/admin/livraisons?err=${encodeURIComponent(result.message)}`, 303);
       });
 
       admin.post("/livraisons/:id/cash", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const updated = await delivery.selectDeliveryCash(id);
-        if (updated) {
-          req.log.info({ order: id, by: req.adminUser }, "Delivery cash payment selected by admin");
-          notifyReception(
-            `${updated.is_test ? "🧪 TEST — " : ""}💵 Espèces choisies — livraison`,
-              `Client : ${updated.client_name} (+${updated.client_phone})\n` +
-              (updated.recipient_name && updated.recipient_phone
-                ? `Contact remise : ${updated.recipient_name} (+${updated.recipient_phone})\n`
-                : "") +
-              `Montant à encaisser : ${updated.amount_xof} FCFA\n` +
-              (updated.activated_at
-                ? `Le départ est autorisé.`
-                : `Le départ sera autorisé à l'activation cuisine.`),
-            { whatsappFirst: true, preferTemplate: true },
-          );
-        }
-        return reply.redirect(updated ? "/admin/livraisons?done=cash" : "/admin/livraisons?err=paiement déjà traité", 303);
+        const result = await deliveryActions.cash(id, req.log);
+        return reply.redirect(result.ok ? "/admin/livraisons?done=cash" : `/admin/livraisons?err=${encodeURIComponent(result.message)}`, 303);
       });
 
       admin.post("/livraisons/:id/cancel", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const updated = await delivery.markCancelled(id, `admin-${req.adminUser ?? "?"}`);
-        if (updated) {
-          req.log.info({ order: id, by: req.adminUser }, "Delivery order cancelled");
-          // Pull the ticket off the iPad board immediately (sweep is the backstop).
-          await cancelTicketForDelivery(id, "livraison annulée").catch((e) => req.log.error({ err: e, order: id }, "Ticket cancel failed"));
-          if (updated.payment_status === "REFUND_NEEDED") {
-            notifyReception(
-              "💸 REMBOURSEMENT à faire — livraison annulée après paiement",
-              `Client : ${updated.client_name} (+${updated.client_phone})\n` +
-                `Montant : ${updated.amount_xof} FCFA\nRéférence : ${updated.payment_ref ?? "?"}`,
-              { whatsappFirst: true, preferTemplate: true },
-            );
-          }
-        }
-        return reply.redirect(updated ? "/admin/livraisons?done=cancelled" : "/admin/livraisons?err=commande déjà traitée", 303);
+        const result = await deliveryActions.cancel(id, `admin-${req.adminUser ?? "?"}`, req.log);
+        return reply.redirect(result.ok ? "/admin/livraisons?done=cancelled" : `/admin/livraisons?err=${encodeURIComponent(result.message)}`, 303);
       });
 
       admin.post("/livraisons/:id/renotify-kitchen", async (req, reply) => {
         const { id } = req.params as { id: string };
-        const order = await delivery.findDeliveryOrder(id);
-        if (!order) return reply.redirect("/admin/livraisons?err=commande introuvable", 303);
-        const ok = await renotifyKitchen(order, req.log);
-        return reply.redirect(ok ? "/admin/livraisons?done=renotified" : "/admin/livraisons?err=commande déjà partie/close", 303);
+        const result = await deliveryActions.renotify(id, req.log);
+        return reply.redirect(result.ok ? "/admin/livraisons?done=renotified" : `/admin/livraisons?err=${encodeURIComponent(result.message)}`, 303);
       });
 
       // ---------- Appareils PWA (iPad cuisine, téléphones accueil) ----------

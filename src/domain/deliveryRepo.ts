@@ -66,6 +66,8 @@ export interface DeliveryOrder {
   status: DeliveryStatus;
   sla_minutes: number;
   ready_token_hash: string;
+  /** Staff/PWA idempotency key. NULL keeps legacy/admin rows compatible. */
+  client_request_id: string | null;
   created_by: string | null;
   scheduled_for: Date | null; // promised arrival, Africa/Dakar at the edges
   kitchen_notify_at: Date | null;
@@ -110,6 +112,8 @@ export interface DeliveryOrder {
 export type OpenDeliveryOrder = DeliveryOrder & {
   kitchen_ticket_status: KitchenTicketStatus | null;
   kitchen_ready_at: Date | null;
+  kitchen_ticket_created_at: Date | null;
+  kitchen_ipad_ack_at: Date | null;
 };
 
 /** Convenience: the frozen items snapshot as ExtraLine[]. */
@@ -134,6 +138,7 @@ export interface CreateDeliveryInput {
   is_test: boolean;
   scheduled_for: Date | null;
   kitchen_notify_at: Date | null;
+  client_request_id?: string | null;
 }
 
 /** Insert an order (status IN_KITCHEN). Future scheduled orders remain
@@ -141,21 +146,22 @@ export interface CreateDeliveryInput {
  * whose deadline is already due are activated atomically at insert. */
 export async function createDeliveryOrder(
   input: CreateDeliveryInput,
-): Promise<{ order: DeliveryOrder; token: string }> {
+): Promise<{ order: DeliveryOrder; token: string; created: boolean }> {
   const token = newReadyToken();
   const res = await pool.query(
     `insert into delivery_orders
        (client_name, client_phone, wix_contact_id, recipient_name, recipient_phone,
         address, note, items_json, amount_xof,
         sla_minutes, ready_token_hash, created_by, is_test, scheduled_for,
-        kitchen_notify_at, activated_at, activation_notify_status,
+        kitchen_notify_at, client_request_id, activated_at, activation_notify_status,
         recipient_route_notify_status)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
        case when $14::timestamptz is null then now()
             when $15::timestamptz <= now() then $15::timestamptz
             else null end,
        case when $14::timestamptz is null then 'sent' else 'pending' end,
        case when $5::text is null then 'sent' else 'pending' end)
+     on conflict (client_request_id) where client_request_id is not null do nothing
      returning *`,
     [
       input.client_name,
@@ -173,9 +179,16 @@ export async function createDeliveryOrder(
       input.is_test,
       input.scheduled_for,
       input.kitchen_notify_at,
+      input.client_request_id?.slice(0, 80) || null,
     ],
   );
-  return { order: res.rows[0] as DeliveryOrder, token };
+  const created = res.rows[0] as DeliveryOrder | undefined;
+  if (created) return { order: created, token, created: true };
+  const replay = await pool.query(
+    `select * from delivery_orders where client_request_id=$1`,
+    [input.client_request_id?.slice(0, 80) || null],
+  );
+  return { order: replay.rows[0] as DeliveryOrder, token: "", created: false };
 }
 
 export async function findDeliveryOrder(id: string): Promise<DeliveryOrder | null> {
@@ -1203,7 +1216,8 @@ export async function claimDeliverySlaAlerts(): Promise<DeliveryOrder[]> {
 
 export async function listOpenDeliveryOrders(): Promise<OpenDeliveryOrder[]> {
   const res = await pool.query(
-    `select d.*, kt.status as kitchen_ticket_status, kt.ready_at as kitchen_ready_at
+    `select d.*, kt.status as kitchen_ticket_status, kt.ready_at as kitchen_ready_at,
+            kt.created_at as kitchen_ticket_created_at, kt.ipad_ack_at as kitchen_ipad_ack_at
        from delivery_orders d
        left join kitchen_tickets kt on kt.delivery_order_id = d.id
       where d.status in ('IN_KITCHEN','OUT_FOR_DELIVERY')

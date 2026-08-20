@@ -1219,6 +1219,12 @@ alter table delivery_orders add constraint delivery_orders_delivery_fee_status_c
 create unique index if not exists idx_delivery_orders_source_cafe
   on delivery_orders (source_cafe_order_id) where source_cafe_order_id is not null;
 
+-- Device-side idempotency for the reception/owner delivery composer. A retry on
+-- unreliable mobile data returns the original order instead of duplicating it.
+alter table delivery_orders add column if not exists client_request_id text;
+create unique index if not exists idx_delivery_orders_client_request
+  on delivery_orders (client_request_id) where client_request_id is not null;
+
 -- Chaque lien mobile possède sa propre référence fournisseur. Cela permet de
 -- reconnaître un ancien lien payé tardivement après un changement de moyen et
 -- d'éviter de confondre ce paiement avec l'essai actuellement affiché par Awa.

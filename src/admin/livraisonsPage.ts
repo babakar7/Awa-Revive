@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { config } from "../config.js";
 import {
   type CafeMenuItem,
@@ -592,6 +593,7 @@ function normalizeSearch(value: string): string {
 
 /** Values to repopulate the form with after a validation error (or empty on GET). */
 export interface LivraisonPrefill {
+  client_request_id?: string;
   client_name?: string;
   client_phone?: string;
   recipient_name?: string;
@@ -715,6 +717,7 @@ ${optionSelect}</div>`;
 </style>
 <header class="page-header"><div class="page-header-copy"><span class="eyebrow">Livraisons</span><h2>Nouvelle commande</h2><p>Le client choisira Wave, Orange Money, Max It ou espèces avec Awa. Le montant est calculé automatiquement depuis le menu actif.</p></div></header>
 <form method="post" action="/admin/livraisons" class="col delivery-create-form">
+  <input name="client_request_id" type="hidden" value="${esc(prefill.client_request_id ?? crypto.randomUUID())}">
   <section class="card delivery-form-panel" aria-labelledby="delivery-panel-client">
     <div class="delivery-panel-heading"><span class="delivery-panel-number">1</span><div><h2 id="delivery-panel-client">Client et destination</h2><p class="muted">Retrouvez une fiche récente ou Wix, puis vérifiez les coordonnées de remise.</p></div></div>
     <div class="delivery-client-picker">

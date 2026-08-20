@@ -22,7 +22,7 @@ describe("service PWA assets", () => {
 
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
     const version = serviceBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v27");
+    expect(version).toBe("v28");
     expect(SERVICE_SW).toContain(`service-${version}`);
   });
 
@@ -44,6 +44,13 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("'aria-modal'");
     expect(SERVICE_APP_JS).toContain("'dialog'");
     expect(SERVICE_APP_JS).toContain("Abandonner cette commande ?");
+  });
+
+  it("includes the delivery tab, shared composer, and deep-link navigation", () => {
+    expect(serviceBoardPage()).toContain("tab-deliveries");
+    expect(SERVICE_APP_JS).toContain("window.__deliveryComposer");
+    expect(SERVICE_APP_JS).toContain("/deliveries");
+    expect(SERVICE_SW).toContain("navigate(url)");
   });
 
   it("keeps cart persistent without taking width from the category scroller", () => {

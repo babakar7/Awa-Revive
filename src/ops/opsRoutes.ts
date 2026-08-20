@@ -40,6 +40,11 @@ import {
   listRecentClosedSessions,
 } from "../domain/serviceSessionRepo.js";
 import { getCafeMenu, computeExtras, pickerMenu } from "../lib/cafeMenu.js";
+import * as delivery from "../domain/deliveryRepo.js";
+import { createDeliveryFromInput } from "../domain/deliveryCreate.js";
+import * as deliveryActions from "../domain/deliveryActions.js";
+import { DELIVERY_GROUP_ORDER, deliveryBoardItem, groupDeliveryOrders } from "../domain/deliveryPresentation.js";
+import { searchWixDeliveryClients } from "../lib/wix.js";
 import { savePushSubscription } from "../domain/pushRepo.js";
 import { pushToRole, pushToDevice } from "./pushSender.js";
 import { ticketItemsSummary } from "../domain/kitchenTicketRules.js";
@@ -157,9 +162,18 @@ export async function serveCuisineRoot(_req: FastifyRequest, reply: FastifyReply
  * it) AND the owner's phone (supervision). Fire-and-forget — never fails the
  * route; each PWA's tap lands on its own board.
  */
-function pushReadyTableAlert(t: KitchenTicket): void {
-  if (t.source !== "TABLE") return;
+function pushReadyAlert(t: KitchenTicket): void {
+  if (t.source !== "TABLE" && t.source !== "DELIVERY") return;
   const view = kitchenTicketView(t);
+  if (t.source === "DELIVERY") {
+    void pushToRole("accueil", {
+      title: "🛵 Livraison prête",
+      body: `${view.heading} · ${view.subheading ?? ""}`.trim(),
+      url: "/ops/service/?tab=livraisons",
+      tag: `ready-${t.id}`,
+    }).catch(() => {});
+    return;
+  }
   const title = "🔔 Commande prête";
   const body = `${view.heading} · ${ticketItemsSummary(view)}`;
   void pushToRole("accueil", { title, body, url: "/ops/service/", tag: `ready-${t.id}` }).catch(() => {});
@@ -250,7 +264,7 @@ export function registerOps(app: FastifyInstance): void {
     const device = await requireCuisine(req, reply);
     if (!device) return reply;
     const t = await advanceTicketByCuisine((req.params as any).id, "READY", device.label);
-    if (t) pushReadyTableAlert(t);
+    if (t) pushReadyAlert(t);
     return reply.type("application/json").send({ ok: !!t });
   });
 
@@ -419,18 +433,21 @@ function buildServiceMenu(): Array<{ category: string; items: unknown[] }> {
 async function serviceBootData(): Promise<unknown> {
   // Self-heal: free any table left with no open order (orphan / all-served).
   await closeEmptyOpenSessions().catch(() => {});
-  const [spots, sessions, tickets, cursor, top] = await Promise.all([
+  const [spots, sessions, tickets, cursor, top, recentDeliveryClients] = await Promise.all([
     listActiveSpots(),
     listOpenSessions(),
     listOpenKitchenTickets(),
     latestOpsEventId(ACCUEIL_CHANNEL),
     topOrderedItemIds(),
+    delivery.recentDeliveryClients(),
   ]);
   return {
     cursor,
     spots,
     sessions,
     tickets: tickets.filter((t) => t.source === "TABLE").map(kitchenTicketView),
+    deliveryTickets: tickets.filter((t) => t.source === "DELIVERY").map(kitchenTicketView),
+    recentDeliveryClients,
     menu: buildServiceMenu(),
     // Item ids best-sellers-first for the "🔥 Populaires" picker section.
     top,
@@ -519,6 +536,49 @@ async function createSpotOrder(
   return { code: 200, body: { ok: true, session_id: session.id, id: ticket.id, scheduled_for: ticket.scheduled_for } };
 }
 
+async function deliveryBoardData() {
+  const groups = groupDeliveryOrders(await delivery.listOpenDeliveryOrders());
+  return { deliveries: DELIVERY_GROUP_ORDER.flatMap((group) => groups[group].map(deliveryBoardItem)) };
+}
+
+type RequireDevice = (req: FastifyRequest, reply: FastifyReply) => Promise<OpsDevice | null>;
+
+function registerDeliveryRoutes(app: FastifyInstance, base: string, role: "accueil" | "owner", requireDevice: RequireDevice): void {
+  app.get(`${base}/deliveries`, async (req, reply) => {
+    if (!await requireDevice(req, reply)) return reply;
+    reply.header("Cache-Control", "no-store");
+    return reply.type("application/json").send(await deliveryBoardData());
+  });
+  app.get(`${base}/delivery-clients`, async (req, reply) => {
+    if (!await requireDevice(req, reply)) return reply;
+    const term = String((req.query as { q?: string })?.q ?? "").trim();
+    reply.header("Cache-Control", "no-store");
+    if (term.length < 2) return reply.type("application/json").send({ clients: [] });
+    try { return reply.type("application/json").send({ clients: await searchWixDeliveryClients(term, 12) }); }
+    catch (error) { req.log.warn({ err: error, term }, "Ops Wix delivery client search failed"); return reply.code(502).type("application/json").send({ clients: [], error: "wix_unavailable" }); }
+  });
+  app.post(`${base}/deliveries`, async (req, reply) => {
+    const device = await requireDevice(req, reply); if (!device) return reply;
+    const body = (req.body as any) ?? {};
+    const result = await createDeliveryFromInput({ ...body, is_test: body.is_test === true || body.test === true }, `ops-${role}:${device.label}`, req.log);
+    if (!result.ok) return reply.code(400).type("application/json").send(result);
+    return reply.type("application/json").send({ ok: true, id: result.order.id, created: result.created, replayed: !result.created, done: result.done });
+  });
+  const actions: Array<[string, (id: string, device: OpsDevice) => Promise<any>]> = [
+    ["depart", (id, d) => deliveryActions.depart(id, `ops-${role}:${d.label}`, app.log)],
+    ["delivered", (id, d) => deliveryActions.deliver(id, `ops-${role}:${d.label}`, app.log)],
+    ["cash", (id) => deliveryActions.cash(id, app.log)],
+    ["cancel", (id, d) => deliveryActions.cancel(id, `ops-${role}:${d.label}`, app.log)],
+    ["activate-now", (id) => deliveryActions.activateNow(id, app.log)],
+    ["renotify-kitchen", (id) => deliveryActions.renotify(id, app.log)],
+  ];
+  for (const [name, action] of actions) app.post(`${base}/deliveries/:id/${name}`, async (req, reply) => {
+    const device = await requireDevice(req, reply); if (!device) return reply;
+    const result = await action((req.params as { id: string }).id, device);
+    return reply.code(result.ok ? 200 : result.code).type("application/json").send(result);
+  });
+}
+
 function registerServiceRoutes(app: FastifyInstance): void {
   // ── Static PWA assets ──
   app.get(`${SERVICE_BASE}/manifest.webmanifest`, async (_req, reply) => {
@@ -583,6 +643,8 @@ function registerServiceRoutes(app: FastifyInstance): void {
     }
     return device;
   };
+
+  registerDeliveryRoutes(app, SERVICE_BASE, "accueil", requireAccueil);
 
   // "Libérer" a spot: close its session (refused server-side while a ticket is open).
   app.post(`${SERVICE_BASE}/sessions/:id/close`, async (req, reply) => {
@@ -720,13 +782,15 @@ async function autoCloseIfEmpty(sessionId: string | null, by: string | null): Pr
 const OWNER_BASE = "/ops/owner";
 
 async function ownerBootData(): Promise<unknown> {
-  const [tickets, cursor, stats, devices, spots, top] = await Promise.all([
+  const [tickets, cursor, stats, deliveryStats, devices, spots, top, recentDeliveryClients] = await Promise.all([
     listOpenKitchenTickets(),
     latestOpsEventId(CUISINE_CHANNEL),
     ticketStatsToday(),
+    delivery.deliveryStats(),
     listOpsDevices(),
     listActiveSpots(),
     topOrderedItemIds(),
+    delivery.recentDeliveryClients(),
   ]);
   // spots + menu + top let the owner board also TAKE an order with the same
   // findability as the salle (server still decides prices/choices).
@@ -734,10 +798,12 @@ async function ownerBootData(): Promise<unknown> {
     cursor,
     tickets: tickets.map(kitchenTicketView),
     stats,
+    deliveryStats,
     devices,
     spots,
     menu: buildServiceMenu(),
     top,
+    recentDeliveryClients,
     // Public VAPID key so the PWA can subscribe to push; "" = push disabled.
     vapidKey: config.VAPID_PUBLIC_KEY,
   };
@@ -818,8 +884,8 @@ function registerOwnerRoutes(app: FastifyInstance): void {
   app.get(`${OWNER_BASE}/stats`, async (req, reply) => {
     const device = await deviceFromReq(req, "owner");
     if (!device) return reply.code(401).type("application/json").send({ error: "unpaired" });
-    const [stats, devices] = await Promise.all([ticketStatsToday(), listOpsDevices()]);
-    return reply.type("application/json").send({ stats, devices });
+    const [stats, deliveryStats, devices] = await Promise.all([ticketStatsToday(), delivery.deliveryStats(), listOpsDevices()]);
+    return reply.type("application/json").send({ stats, deliveryStats, devices });
   });
 
   // Live stream: the cuisine channel carries every ticket event (both sources).
@@ -854,6 +920,8 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     }
     return device;
   };
+
+  registerDeliveryRoutes(app, OWNER_BASE, "owner", requireOwner);
 
   // Register the owner phone's Web Push subscription (lock-screen "commande
   // prête" alerts) — same contract as the salle endpoint, scoped to this role.
@@ -896,7 +964,7 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     if (!device) return reply;
     const t = await advanceTicketByCuisine((req.params as any).id, "READY", device.label);
     // Same side effect as the cuisine route: reception + owner lock screens ring.
-    if (t) pushReadyTableAlert(t);
+    if (t) pushReadyAlert(t);
     return reply.type("application/json").send({ ok: !!t });
   });
 

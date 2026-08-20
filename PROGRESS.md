@@ -1,5 +1,25 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Livraisons disponibles dans les PWAs ops (20 août 2026)
+
+- Les livraisons téléphoniques se créent, suivent et clôturent désormais depuis
+  `/ops/service` et `/ops/owner`, tout en gardant l’admin comme surface des
+  corrections rares. Le noyau `deliveryCreate` sépare validation/prix purs et
+  orchestration ; les transitions sont partagées avec l’admin dans
+  `deliveryActions`.
+- Le contrat PWA est un DTO minimal au-dessus de `deliveryPresentation` : aucune
+  donnée sensible de paiement/notification/token ou `items_json` brut ne sort du
+  serveur. Les boutons viennent de `allowedActions` calculé côté serveur.
+- `delivery_orders.client_request_id` est idempotent (index unique partiel) ; un
+  rejeu mobile ne recrée ni notification ni ticket cuisine. Les tickets cuisine
+  portent maintenant `delivery_order_id` jusque dans les événements SSE.
+- Une livraison prête alerte les téléphones accueil, ouvre directement l’onglet
+  Livraisons et sonne aussi dans l’app. L’écran owner affiche les cartes livraison
+  séparément des tickets cuisine/salle/bar et son KPI est alimenté au boot comme
+  au poll `/stats`.
+- Validation locale : build + 1 512 tests existants verts, plus tests ciblés du
+  composeur/DTO/PWA. Après déploiement git, vérifier `/healthz` contre le SHA.
+
 ## Relance fin des crédits : suppression si la prochaine Clé est déjà engagée (20 août 2026)
 
 - La relance `REFORMER_FINISHED` vérifie désormais, juste avant son claim, si
