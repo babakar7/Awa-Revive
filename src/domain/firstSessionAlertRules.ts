@@ -50,21 +50,16 @@ function fmtTime(iso: string): string {
   });
 }
 
-function fmtDay(iso: string): string {
-  return new Date(iso).toLocaleDateString("fr-FR", {
-    timeZone: config.TIMEZONE,
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
-}
-
 function attendeeLine(a: FirstSessionAttendee): string {
   const name = (a.clientName ?? "").trim() || "Cliente sans nom enregistré";
   const testTag = a.isTest ? " [TEST]" : "";
   return `• ${name}${testTag} (${a.waPhone})`;
 }
 
+/**
+ * Deliberately terse (Babakar 21/08): the subject carries class + time + the
+ * matcha cue, the body only lists who — no coach, no date line, no footer.
+ */
 export function buildFirstSessionMessage(
   slot: Pick<SlotWithName, "serviceName" | "startDate" | "coach">,
   attendees: FirstSessionAttendee[],
@@ -72,13 +67,7 @@ export function buildFirstSessionMessage(
   const time = fmtTime(slot.startDate);
   const service = slot.serviceName || "Cours";
   const subject = `🍵 Matcha offert — ${service} ${time}`;
-  const body =
-    `1re séance L'Invitée (Clé 3 séances) dans ce cours — ` +
-    `matcha de bienvenue offert, à proposer à l'arrivée sans attendre la demande :\n` +
-    `${attendees.map(attendeeLine).join("\n")}\n\n` +
-    `Cours : ${service} — ${fmtDay(slot.startDate)} à ${time}` +
-    (slot.coach ? ` — Coach : ${slot.coach}` : "") +
-    `\n\nMessage automatique d'Awa — merci de ne pas répondre.`;
+  const body = `1re séance L'Invitée :\n${attendees.map(attendeeLine).join("\n")}`;
   return { subject, body };
 }
 

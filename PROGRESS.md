@@ -37,7 +37,17 @@ posée par la réception directement dans Wix ne déclenche rien. Kill switch :
 
 **Validation.** Build + 1 524 tests unitaires verts (11 nouveaux,
 `test/firstSessionAlertRules.test.ts`). Requête de détection rejouée sur la
-prod en lecture seule avant le ship.
+prod en lecture seule avant le ship. **Première alerte réelle le 21/08 16:15**
+(Reformer Foundation 17:15) : owner + 2 accueil en service, 3× `sent_template`.
+
+**Copie volontairement minimale (retour Babakar 21/08, après la 1re alerte
+réelle).** Sujet = `🍵 Matcha offert — <cours> <heure>` ; corps = uniquement
+`1re séance L'Invitée :` + la liste des clientes (nom + numéro). Pas de coach,
+pas de date, pas de pied « message automatique » — ne pas ré-étoffer. Autre
+retour du même soir : une accueil présente HORS planning publié (Linsey,
+exceptionnellement là) ne reçoit rien — c'est le comportement voulu (« en
+service à l'heure du cours » = planning publié) ; un aperçu ponctuel lui a été
+envoyé à la main via le template `awa_notification`.
 
 ## Commandes « offertes » : hors chiffre d'affaires (21 août 2026)
 

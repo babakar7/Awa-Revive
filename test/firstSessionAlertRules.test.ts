@@ -50,23 +50,18 @@ describe("firstSessionDedupKey", () => {
 describe("buildFirstSessionMessage", () => {
   const slot = { serviceName: "Reformer", startDate: START, coach: "Yass" };
 
-  it("names the class, the time, the coach and every client", () => {
+  it("puts class + time + matcha cue in the subject and only the clients in the body", () => {
     const { subject, body } = buildFirstSessionMessage(slot, [
       { clientName: "Fatou Diop", waPhone: "+221771234567", isTest: false },
       { clientName: "Awa Ndiaye", waPhone: "+221779999999", isTest: false },
     ]);
-    expect(subject).toContain("🍵");
-    expect(subject).toContain("Reformer");
-    expect(subject).toContain("10:15");
-    expect(body).toContain("Fatou Diop");
-    expect(body).toContain("+221771234567");
-    expect(body).toContain("Awa Ndiaye");
-    expect(body).toContain("Coach : Yass");
-    expect(body).toContain("1re séance L'Invitée");
-    expect(body).toContain("matcha");
+    expect(subject).toBe("🍵 Matcha offert — Reformer 10:15");
+    expect(body).toBe(
+      "1re séance L'Invitée :\n• Fatou Diop (+221771234567)\n• Awa Ndiaye (+221779999999)",
+    );
   });
 
-  it("marks test clients and survives a missing name or coach", () => {
+  it("marks test clients and survives a missing name", () => {
     const { body } = buildFirstSessionMessage(
       { serviceName: "Reformer", startDate: START, coach: undefined },
       [{ clientName: null, waPhone: "+221770000000", isTest: true }],
@@ -74,7 +69,6 @@ describe("buildFirstSessionMessage", () => {
     expect(body).toContain("[TEST]");
     expect(body).toContain("Cliente sans nom enregistré");
     expect(body).toContain("+221770000000");
-    expect(body).not.toContain("Coach :");
   });
 });
 
