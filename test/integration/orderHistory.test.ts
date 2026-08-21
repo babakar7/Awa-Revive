@@ -195,4 +195,57 @@ describe("order history queries", () => {
     // channel filter applied → the SUR_PLACE order is not listed
     expect(res.body).toContain("Aucune commande");
   });
+
+  // « Offert » : la commande a bien eu lieu (elle compte dans les volumes), mais
+  // son montant est une dépense promo, pas une recette.
+  it("keeps an offered order in the counts and out of every revenue figure", async () => {
+    await pool.query(
+      `insert into kitchen_tickets (source, items_json, amount_xof, heading, subheading, status)
+       values ('TABLE', $1::jsonb, 2500, 'Table', 'C-24', 'COMPLETED')`,
+      [ITEMS],
+    );
+    await pool.query(
+      `insert into kitchen_tickets (source, items_json, amount_xof, heading, subheading, status, offert)
+       values ('TABLE', $1::jsonb, 2000, 'Table', 'C-24', 'COMPLETED', true)`,
+      [ITEMS],
+    );
+
+    // Listée, badgée — jamais escamotée (sinon on croit l'avoir perdue).
+    const list = await listOrderHistory(ALL);
+    expect(list.total).toBe(2);
+    expect(list.rows.filter((r) => r.offert)).toHaveLength(1);
+
+    const stats = await orderHistoryStats(ALL);
+    expect(stats.completed).toBe(2); // le volume compte les deux
+    expect(stats.revenueXof).toBe(2500); // le revenu, non
+    expect(stats.avgTicketXof).toBe(2500); // ni le panier moyen
+    expect(stats.offertsXof).toBe(2000); // suivi à part
+
+    // Par canal : 2 commandes, un seul revenu (le filtre est sur la SOMME).
+    const byChannel = await orderHistoryByChannel(ALL);
+    const surPlace = byChannel.find((c) => c.channel === "SUR_PLACE")!;
+    expect(surPlace.orders).toBe(2);
+    expect(surPlace.revenueXof).toBe(2500);
+
+    // Idem sur la série quotidienne.
+    const daily = await orderHistoryDaily({ ...ALL, period: "7" });
+    expect(daily.reduce((s, d) => s + d.orders, 0)).toBe(2);
+    expect(daily.reduce((s, d) => s + d.revenueXof, 0)).toBe(2500);
+  });
+
+  it("shows the offered value on the admin page", async () => {
+    await pool.query(
+      `insert into kitchen_tickets (source, items_json, amount_xof, heading, subheading, status, offert)
+       values ('TABLE', $1::jsonb, 2000, 'Table', 'C-24', 'COMPLETED', true)`,
+      [ITEMS],
+    );
+    const res = await app.inject({
+      method: "GET",
+      url: "/admin/historique-commandes?period=all",
+      headers: { authorization: AUTH },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("Offerts");
+    expect(res.body).toContain("🎁 Offert");
+  });
 });

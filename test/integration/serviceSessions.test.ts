@@ -25,6 +25,7 @@ import {
   serveTableTicket,
   cancelTableTicket,
   setTicketUrgent,
+  setTicketOffert,
   kitchenTicketView,
   ticketStatsToday,
   getKitchenTicket,
@@ -335,6 +336,73 @@ describe("session subtotal (indicative)", () => {
     const before = await latestOpsEventId("accueil");
     await publishOpenSessionUpdate(s.id);
     expect(await opsEventsSince("accueil", before)).toHaveLength(0);
+  });
+
+  it("an offered order leaves the subtotal — the guest is never asked to pay it", async () => {
+    const s = await seat(canapeSpot);
+    const a = await makeTableTicket(s.id, s.short_code); // 6000
+    const b = await makeTableTicket(s.id, s.short_code); // 6000
+    await setTicketOffert(b.id, true);
+    expect((await getOpenSession(s.id))!.total_xof).toBe(6000);
+    // …and comes back if the gesture is undone (mis-tap).
+    await setTicketOffert(b.id, false);
+    expect((await getOpenSession(s.id))!.total_xof).toBe(12000);
+    // The amount itself is never rewritten: it IS the value offered.
+    await setTicketOffert(a.id, true);
+    expect((await getKitchenTicket(a.id))!.amount_xof).toBe(6000);
+  });
+});
+
+describe("setTicketOffert (geste commercial)", () => {
+  it("offers a still-open order and tells both boards", async () => {
+    const s = await seat(canapeSpot);
+    const t = await makeTableTicket(s.id, s.short_code);
+    const before = await latestOpsEventId("accueil");
+    const offered = await setTicketOffert(t.id, true);
+    expect(offered!.offert).toBe(true);
+    const upd = (await opsEventsSince("accueil", before)).filter((e) => e.kind === "ticket_update");
+    expect(upd).toHaveLength(1);
+    expect((upd[0].payload as any).offert).toBe(true);
+  });
+
+  it("offers an ALREADY SERVED order without resurrecting its card", async () => {
+    // The three boards blindly set() any ticket_update into their model, so a
+    // ticket_update for a COMPLETED ticket would put a served card back on screen.
+    const s = await seat(canapeSpot);
+    const t = await makeTableTicket(s.id, s.short_code);
+    await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
+    await serveTableTicket(t.id, "Fatou");
+    const before = await latestOpsEventId("accueil");
+    const offered = await setTicketOffert(t.id, true);
+    expect(offered!.offert).toBe(true); // the comp IS recorded
+    const events = await opsEventsSince("accueil", before);
+    expect(events.filter((e) => e.kind === "ticket_update")).toHaveLength(0);
+  });
+
+  it("still works on a table closed TODAY (it auto-closes on the last serve)", async () => {
+    const s = await seat(canapeSpot);
+    const t = await makeTableTicket(s.id, s.short_code);
+    await advanceTicketByCuisine(t.id, "READY", "iPad Cuisine");
+    await serveTableTicket(t.id, "Fatou");
+    await closeSession(s.id, "Accueil 1");
+    expect((await setTicketOffert(t.id, true))!.offert).toBe(true);
+  });
+
+  it("refuses a cancelled order, a table closed on a previous day, and junk ids", async () => {
+    const s = await seat(canapeSpot);
+    const cancelled = await makeTableTicket(s.id, s.short_code);
+    await cancelTableTicket(cancelled.id, "erreur");
+    expect(await setTicketOffert(cancelled.id, true)).toBeNull();
+
+    // Yesterday's table: the comp window is over (the day is accounted for).
+    const old = await makeTableTicket(s.id, s.short_code);
+    await advanceTicketByCuisine(old.id, "READY", "iPad Cuisine");
+    await serveTableTicket(old.id, "Fatou");
+    await closeSession(s.id, "Accueil 1");
+    await pool.query("update service_sessions set closed_at = now() - interval '1 day' where id = $1", [s.id]);
+    expect(await setTicketOffert(old.id, true)).toBeNull();
+
+    expect(await setTicketOffert("not-a-uuid", true)).toBeNull();
   });
 });
 
@@ -754,5 +822,112 @@ describe("service PWA over HTTP", () => {
     });
     expect(bad.statusCode).toBe(400);
     expect(await getOpenSessionBySpot(canapeSpot)).toBeNull();
+  });
+
+  // ── « Offert » over HTTP: both composers, both toggles, the detail route ──
+
+  it("both composers can send an order already marked offert", async () => {
+    const acc = await pairAccueil();
+    const service = await app.inject({
+      method: "POST", url: `/ops/service/spots/${canapeSpot}/orders`, headers: { cookie: acc },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-off-svc", offert: true },
+    });
+    expect(service.statusCode).toBe(200);
+    expect((await getKitchenTicket(JSON.parse(service.body).id))!.offert).toBe(true);
+
+    const own = await pairOwner();
+    const owner = await app.inject({
+      method: "POST", url: `/ops/owner/spots/${terrasseSpot}/orders`, headers: { cookie: own },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-off-own", offert: true },
+    });
+    expect(owner.statusCode).toBe(200);
+    expect((await getKitchenTicket(JSON.parse(owner.body).id))!.offert).toBe(true);
+
+    // Absent flag = paying order (an old cached PWA must never offer by accident).
+    const plain = await app.inject({
+      method: "POST", url: `/ops/service/spots/${pergolaSpot}/orders`, headers: { cookie: acc },
+      payload: { items: [{ item_id: "JANTBI", qty: 1 }], client_request_id: "req-off-none" },
+    });
+    expect((await getKitchenTicket(JSON.parse(plain.body).id))!.offert).toBe(false);
+  });
+
+  it("both toggle endpoints flip the flag and refresh the table subtotal", async () => {
+    const acc = await pairAccueil();
+    const session = await seat(canapeSpot, "Awa");
+    const ticket = await makeTableTicket(session.id, "Canapé");
+    expect((await getOpenSession(session.id))!.total_xof).toBe(6000);
+
+    const on = await app.inject({
+      method: "POST", url: `/ops/service/tickets/${ticket.id}/offert`,
+      headers: { cookie: acc }, payload: { offert: true },
+    });
+    expect(JSON.parse(on.body).ok).toBe(true);
+    // Offered → out of the addition the client is shown.
+    expect((await getOpenSession(session.id))!.total_xof).toBe(0);
+
+    // The owner un-offers it (mis-tap) — same guard, same effect.
+    const own = await pairOwner();
+    const off = await app.inject({
+      method: "POST", url: `/ops/owner/tickets/${ticket.id}/offert`,
+      headers: { cookie: own }, payload: { offert: false },
+    });
+    expect(JSON.parse(off.body).ok).toBe(true);
+    expect((await getOpenSession(session.id))!.total_xof).toBe(6000);
+
+    // Unpaired device never reaches the mutation.
+    const denied = await app.inject({
+      method: "POST", url: `/ops/service/tickets/${ticket.id}/offert`, payload: { offert: true },
+    });
+    expect(denied.statusCode).toBe(401);
+  });
+
+  it("the session detail route lists served orders, and refuses closed/unpaired", async () => {
+    const cookie = await pairAccueil();
+    const session = await seat(canapeSpot, "Awa");
+    const ticket = await makeTableTicket(session.id, "Canapé");
+    await advanceTicketByCuisine(ticket.id, "READY", "iPad Cuisine");
+    await serveTableTicket(ticket.id, "Accueil 1");
+
+    // Served → gone from the live board, still present here (that's the point).
+    const res = await app.inject({
+      method: "GET", url: `/ops/service/sessions/${session.id}/orders`, headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.tickets).toHaveLength(1);
+    expect(body.tickets[0].status).toBe("COMPLETED");
+    expect(body.tickets[0].offert).toBe(false);
+    expect(body.total_xof).toBe(6000);
+
+    expect(
+      (await app.inject({ method: "GET", url: `/ops/service/sessions/${session.id}/orders` })).statusCode,
+    ).toBe(401);
+    await closeSession(session.id, "Accueil 1");
+    expect(
+      (await app.inject({ method: "GET", url: `/ops/service/sessions/${session.id}/orders`, headers: { cookie } })).statusCode,
+    ).toBe(404);
+  });
+
+  it("Tables récentes carries the offert flag and the recomputed subtotal", async () => {
+    const cookie = await pairAccueil();
+    const session = await seat(canapeSpot, "Awa");
+    const ticket = await makeTableTicket(session.id, "Canapé");
+    await advanceTicketByCuisine(ticket.id, "READY", "iPad Cuisine");
+    // Through the route, so the auto-close on the LAST serve really fires.
+    await app.inject({ method: "POST", url: `/ops/service/tickets/${ticket.id}/served`, headers: { cookie } });
+    expect(await getOpenSession(session.id)).toBeNull();
+
+    // The comp decided a minute later: the table is already closed (today).
+    const toggled = await app.inject({
+      method: "POST", url: `/ops/service/tickets/${ticket.id}/offert`,
+      headers: { cookie }, payload: { offert: true },
+    });
+    expect(JSON.parse(toggled.body).ok).toBe(true);
+
+    const recent = await app.inject({ method: "GET", url: "/ops/service/recent", headers: { cookie } });
+    const s = JSON.parse(recent.body).sessions[0];
+    expect(s.tickets[0].id).toBe(ticket.id);
+    expect(s.tickets[0].offert).toBe(true);
+    expect(s.total_xof).toBe(0);
   });
 });

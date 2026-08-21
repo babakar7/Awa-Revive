@@ -160,7 +160,7 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v17");
+    expect(version).toBe("v18");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 
@@ -215,5 +215,14 @@ describe("owner supervision PWA assets", () => {
   it("the board has no inline boot (CSP script-src 'self' would block it)", () => {
     expect(ownerBoardPage()).not.toContain("window.__BOOT__");
     expect(ownerBoardPage()).not.toContain("<script>");
+  });
+
+  // « Offert » : le montant reste réel, seul son poids comptable change.
+  it("can offer an order — from the composer and from a live salle card", () => {
+    expect(OWNER_APP_JS).toContain("state.offert=offCb.checked");
+    expect(OWNER_APP_JS).toContain("offert:state.offert");
+    expect(OWNER_APP_JS).toContain("+'/offert'");
+    expect(OWNER_APP_JS).toContain("{offert:!t.offert}");
+    expect(OWNER_APP_JS).toContain("🎁 Offert");
   });
 });

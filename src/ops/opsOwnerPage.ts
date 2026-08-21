@@ -26,7 +26,7 @@ import { OPS_DELIVERY_COMPOSER, OPS_DELIVERY_COMPOSER_CSS } from "./opsDeliveryC
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v17";
+const ASSET_VERSION = "v18";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -95,6 +95,10 @@ border-radius:var(--radius-lg);padding:.9rem 1rem;display:flex;flex-direction:co
 padding:.2rem .55rem;border-radius:999px;background:var(--info-bg);color:var(--info);white-space:nowrap}
 .badge.table{background:var(--rose);color:var(--plum-700)}
 .badge.test{background:var(--danger-bg);color:var(--danger)}
+/* Offerte : hors addition et hors chiffre d'affaires (le montant reste réel). */
+.badge.offert{background:var(--plum-50);color:var(--plum-700);border:1px solid var(--plum-300)}
+button.act.off{background:none;border:1px solid var(--plum-300);color:var(--plum-700);flex:0 0 auto;padding:.8rem .7rem;box-shadow:none}
+button.act.off.on{background:var(--plum-700);border-color:var(--plum-700);color:#fff}
 .badge.away{background:var(--info);color:#fff}
 .badge.urgent{background:var(--danger);color:#fff;animation:pulse 1.2s ease-in-out infinite}
 .age{margin-left:auto;font-size:1.25rem;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ok-strong)}
@@ -184,6 +188,10 @@ background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:
 .later-delay{min-height:2.65rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:#fff;color:var(--ink-700);font-weight:750}
 .later-delay.sel{border-color:var(--plum-600);background:var(--plum-600);color:#fff}
 .optional{border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--surface-raised);margin-bottom:.55rem}
+.offertrow{display:flex;align-items:center;gap:.6rem;margin:.15rem 0 .55rem;padding:.6rem .7rem;border-radius:var(--radius);
+border:1px dashed var(--border-strong);color:var(--ink-700);font-size:.92rem;font-weight:700}
+.offertrow.on{border-style:solid;border-color:var(--plum-700);background:var(--plum-50);color:var(--plum-700)}
+.offertrow .offcb{width:1.3rem;height:1.3rem;flex:0 0 auto;accent-color:var(--plum-700)}
 .optional summary{padding:.65rem .75rem;cursor:pointer;font-weight:700;color:var(--ink-600);font-size:.88rem}
 .optional-fields{padding:0 .65rem .1rem}
 .toolbar{position:sticky;top:0;z-index:3;background:var(--surface);padding:.05rem 0 .45rem}
@@ -449,6 +457,18 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY
   // the reception→cuisine anomaly, mirrored on the supervisor's board.
   function unconfirmed(t){ return t.status==='NEW' && t.activated_at && !t.ipad_ack_at && elapsedMins(t.activated_at)>=0.17; }
 
+  // « Offert » — promo pack drink or goodwill gesture. Keeps the real price so the
+  // value offered stays measurable, but leaves the table's addition and the
+  // revenue reports. Correcting an ALREADY SERVED order is done from /ops/service
+  // (the supervision board only shows live tickets).
+  function offertBtn(t){
+    var b=el('button','act off'+(t.offert?' on':''), t.offert?'🎁 ✓':'🎁');
+    b.title=t.offert?'Ne plus offrir cette commande':'Offrir cette commande (hors chiffre d’affaires)';
+    b.setAttribute('aria-pressed',t.offert?'true':'false');
+    b.onclick=function(){act(b,'/tickets/'+t.id+'/offert',{offert:!t.offert});};
+    return b;
+  }
+
   function card(t){
     var waiting=!!(t.scheduled_for&&!t.activated_at);
     var isPending=!!pendingReady[t.id];
@@ -463,6 +483,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY
     else b=el('span','badge table','🍽️ Sur place');
     top.appendChild(b);
     if(t.is_test) top.appendChild(el('span','badge test','Test'));
+    if(t.offert) top.appendChild(el('span','badge offert','🎁 Offert'));
     var a;
     var ageStart=t.activated_at||t.created_at;
     if(waiting){ a=el('span','age','Prévue'); }
@@ -489,7 +510,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY
       var pn=el('button','act prep','Préparer maintenant');pn.onclick=function(){act(pn,'/tickets/'+t.id+'/prepare-now');};acts.appendChild(pn);
       var pc=el('button','act cancelx','✕');pc.setAttribute('aria-label','Annuler cette commande prévue');pc.onclick=function(){askConfirm('Annuler cette commande prévue ?','Oui, annuler la commande','Non, garder la commande',function(){act(pc,'/tickets/'+t.id+'/cancel',{reason:'commande prévue annulée (supervision)'});});};acts.appendChild(pc);
     } else if(t.status==='READY'){
-      if(t.source==='TABLE'){ var sv=el('button','act serve','🙋 Servie'); sv.onclick=function(){act(sv,'/tickets/'+t.id+'/served');}; acts.appendChild(sv); }
+      if(t.source==='TABLE'){ var sv=el('button','act serve','🙋 Servie'); sv.onclick=function(){act(sv,'/tickets/'+t.id+'/served');}; acts.appendChild(sv); acts.appendChild(offertBtn(t)); }
       else if(t.source==='BAR'){ var dn=el('button','act ready','Terminée'); dn.onclick=function(){act(dn,'/tickets/'+t.id+'/complete');}; acts.appendChild(dn); }
     } else if(isPending){
       // Mis-tap window: the "Prête" POST hasn't fired yet — one tap undoes it.
@@ -505,6 +526,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY
         ug.title=t.urgent?'Retirer l’urgence':'Marquer urgent'; ug.setAttribute('aria-pressed',t.urgent?'true':'false');
         ug.onclick=function(){act(ug,'/tickets/'+t.id+'/urgent',{urgent:!t.urgent});};
         acts.appendChild(ug);
+        acts.appendChild(offertBtn(t));
         var cx=el('button','act cancelx','✕'); cx.title='Annuler cette commande'; cx.setAttribute('aria-label','Annuler cette commande');
         cx.onclick=function(){ askConfirm('Annuler cette commande ?','Oui, annuler la commande','Non, garder la commande',function(){ act(cx,'/tickets/'+t.id+'/cancel',{reason:'annulée (supervision)'}); }); };
         acts.appendChild(cx);
@@ -647,7 +669,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY
     sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true'); sh.setAttribute('aria-label','Prendre une commande');
     var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
     var draft={};
-    var state={takeaway:false,cat:'__ALL__',q:'',cartOnly:false,readyIn:0,searching:false,spotId:SPOTS.length?SPOTS[0].id:'',sending:false};
+    var state={takeaway:false,offert:false,cat:'__ALL__',q:'',cartOnly:false,readyIn:0,searching:false,spotId:SPOTS.length?SPOTS[0].id:'',sending:false};
     var spotButtons=[]; var totalEl,cartChip,searchCart,listEl,go,msg,search,summarySpot,summaryMode,summaryWhen;
     function cartCount(){ var n=0; Object.keys(draft).forEach(function(id){ if(draft[id].qty>0)n+=draft[id].qty; }); return n; }
     function chosenSpot(){ for(var i=0;i<SPOTS.length;i++){if(SPOTS[i].id===state.spotId)return SPOTS[i];} return null; }
@@ -718,6 +740,13 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY
     var optionalFields=el('div','optional-fields');
     var fn=el('input'); fn.placeholder='Prénom'; fn.maxLength=40; fn.setAttribute('autocomplete','given-name'); optionalFields.appendChild(fn);
     var gnote=el('textarea'); gnote.placeholder='Note générale'; gnote.maxLength=280; optionalFields.appendChild(gnote);
+    // Offered from the start (promo pack, geste commercial): priced normally, but
+    // hors addition et hors chiffre d'affaires.
+    var offRow=el('label','offertrow'); offRow.setAttribute('role','switch'); offRow.setAttribute('aria-checked','false');
+    var offCb=document.createElement('input'); offCb.type='checkbox'; offCb.className='offcb';
+    offCb.onchange=function(){ state.offert=offCb.checked; offRow.classList.toggle('on',offCb.checked); offRow.setAttribute('aria-checked',offCb.checked?'true':'false'); };
+    offRow.appendChild(offCb); offRow.appendChild(el('span',null,'🎁 Commande offerte — hors chiffre d’affaires'));
+    optionalFields.appendChild(offRow);
     optional.appendChild(optionalFields); sh.appendChild(optional);
 
     // Compact search header keeps the two decisions visible over the keyboard.
@@ -863,7 +892,7 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY
         if(selections.length)e.selections=selections; if(d.note)e.note=d.note; items.push(e); } });
       if(!items.length){ setError('Ajoutez au moins un article au panier.'); return; }
       state.sending=true; go.disabled=true; go.textContent='Envoi…'; msg.hidden=true;
-      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway};if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn.value) body.first_name=fn.value;
+      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,offert:state.offert};if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn.value) body.first_name=fn.value;
       var sentSpot=chosenSpot();
       postJSON('/spots/'+state.spotId+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
         if(j&&j.ok){ closeSheet(); showOwnerNotice(j.scheduled_for?'Commande programmée envoyée en cuisine — '+(sentSpot?sentSpot.label:'Espace')+' · '+hhmm(j.scheduled_for):'Commande envoyée — '+(sentSpot?sentSpot.label:'Espace')); }

@@ -336,6 +336,8 @@ form.inline{display:inline}
 .checklist-progress{display:flex;align-items:center;justify-content:space-between;gap:1rem}
 .checklist-progress>div{display:flex;flex-direction:column;gap:.12rem}
 .report-stat-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+/* Historique commandes : 5 KPIs (le 5e = « Offerts ») — une seule ligne. */
+.orders-stat-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
 .ad-roas-hero{border-color:var(--plum-300);background:linear-gradient(135deg,var(--plum-50),var(--surface-raised));box-shadow:var(--shadow-2)}
 .ad-roas-grid{grid-template-columns:1.4fr 1fr 1fr;margin-bottom:0}
 .ad-roas-primary{border-color:var(--plum-300);background:var(--surface-raised)}
@@ -582,7 +584,7 @@ details>summary{cursor:pointer}
   .conversation-shell{grid-template-columns:1fr}
   .client-summary{position:static}
   .activity-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .report-stat-grid,.report-breakdown{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .report-stat-grid,.report-breakdown,.orders-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .ad-roas-grid{grid-template-columns:1.2fr 1fr 1fr}
   .menu-filters{grid-template-columns:repeat(2,minmax(0,1fr))}
   .follow-up-filters,.conversation-filters{grid-template-columns:repeat(2,minmax(0,1fr))}

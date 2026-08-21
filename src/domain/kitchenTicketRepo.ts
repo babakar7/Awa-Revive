@@ -45,6 +45,9 @@ export interface KitchenTicket {
   takeaway: boolean;
   /** Set when the accueil escalates a TABLE order as urgent (NULL = normal). */
   urgent_at: Date | null;
+  /** TABLE order offered to the guest (pack promo, geste commercial): the real
+   *  price stays in amount_xof, but it never counts as revenue nor in the bill. */
+  offert: boolean;
   ipad_ack_at: Date | null;
   fallback_due_at: Date | null;
   fallback_claimed_at: Date | null;
@@ -83,6 +86,7 @@ export function kitchenTicketView(t: KitchenTicket): KitchenTicketView {
     session_id: t.session_id,
     takeaway: t.takeaway,
     urgent: t.urgent_at != null,
+    offert: t.offert,
   };
 }
 
@@ -182,6 +186,9 @@ export interface TableTicketInput {
   isTest: boolean;
   /** Guest is seated but wants this order packaged to-go (absent/false = sur place). */
   takeaway?: boolean;
+  /** Offered order (pack promo, geste commercial): priced as usual, but excluded
+   *  from the table subtotal and from every revenue aggregate. */
+  offert?: boolean;
   /** Requested ready time; NULL/absent keeps the existing immediate flow. */
   scheduledFor?: Date | null;
 }
@@ -198,8 +205,8 @@ export async function createTableTicket(
   const res = await pool.query(
     `insert into kitchen_tickets
        (source, session_id, client_request_id, items_json, note, amount_xof,
-        heading, subheading, is_test, takeaway, scheduled_for, activated_at)
-     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+        heading, subheading, is_test, takeaway, offert, scheduled_for, activated_at)
+     values ('TABLE', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
      on conflict (client_request_id) where client_request_id is not null do nothing
      returning *`,
     [
@@ -212,6 +219,7 @@ export async function createTableTicket(
       input.subheading,
       input.isTest,
       input.takeaway ?? false,
+      input.offert ?? false,
       input.scheduledFor ?? null,
     ],
   );
@@ -359,6 +367,42 @@ export async function setTicketUrgent(id: string, urgent: boolean, _by: string |
 }
 
 /**
+ * « Offert » — the accueil (or the owner) offers an on-site order: a promo pack
+ * drink, or a goodwill gesture after something went wrong. The amount stays the
+ * real menu price — the flag is what removes it from the table's indicative
+ * subtotal and from every revenue aggregate, while still counting in the
+ * operational volumes (commandes du jour, populaires, temps de prépa).
+ *
+ * Settable on any non-cancelled TABLE ticket, INCLUDING an already served one,
+ * as long as its session is still open OR was closed today — a table auto-closes
+ * on its last serve, so a comp decided a minute later must still be recordable.
+ * Idempotent. The `isOpenStatus` guard on the emit is load-bearing: the three
+ * boards blindly `set()` any ticket_update into their model, so emitting one for
+ * a COMPLETED ticket would resurrect a served card. Subtotal refresh is the
+ * caller's job (publishOpenSessionUpdate), as for serve/cancel.
+ */
+export async function setTicketOffert(id: string, offert: boolean): Promise<KitchenTicket | null> {
+  if (!UUID_RE.test(String(id))) return null;
+  const res = await pool.query(
+    `update kitchen_tickets
+        set offert = $2, updated_at = now()
+      where id = $1 and source = 'TABLE' and status <> 'CANCELLED'
+        and session_id is not null
+        and exists (
+          select 1 from service_sessions s
+           where s.id = kitchen_tickets.session_id
+             and (s.status = 'OPEN'
+                  or (s.status = 'CLOSED' and s.closed_at::date = current_date))
+        )
+      returning *`,
+    [id, offert],
+  );
+  const ticket = (res.rows[0] as KitchenTicket) ?? null;
+  if (ticket && isOpenStatus(ticket.status)) await emitTicket("ticket_update", ticket);
+  return ticket;
+}
+
+/**
  * "Servie" — a READY table ticket is served and leaves both boards (COMPLETED).
  * Idempotent (a second tap finds no READY row). Records the server if the ticket
  * was never claimed. Emits ticket_removed.
@@ -451,6 +495,22 @@ export async function ticketsForSession(sessionId: string): Promise<KitchenTicke
   const res = await pool.query(
     `select * from kitchen_tickets
       where session_id = $1 and status in ('NEW','PREPARING','READY')
+      order by created_at asc`,
+    [sessionId],
+  );
+  return res.rows as KitchenTicket[];
+}
+
+/**
+ * EVERY TABLE ticket of one session, any status, oldest first — backs the salle
+ * "🧾 Détail" sheet, where an already served order can still be offered while the
+ * table is open (served tickets have left the live board).
+ */
+export async function allSessionTableTickets(sessionId: string): Promise<KitchenTicket[]> {
+  if (!UUID_RE.test(String(sessionId))) return [];
+  const res = await pool.query(
+    `select * from kitchen_tickets
+      where session_id = $1 and source = 'TABLE'
       order by created_at asc`,
     [sessionId],
   );

@@ -818,7 +818,8 @@ const ORDER_HISTORY_BASE_CTE = `base as (
     coalesce(nullif(kt.subheading, ''), ss.short_code) as detail,
     kt.items_json,
     pco.client_id,
-    kt.is_test
+    kt.is_test,
+    kt.offert
   from kitchen_tickets kt
   left join delivery_orders d on d.id = kt.delivery_order_id
   left join pending_cafe_orders pco
@@ -836,7 +837,8 @@ const ORDER_HISTORY_BASE_CTE = `base as (
     d.address,
     d.items_json,
     null::uuid,
-    d.is_test
+    d.is_test,
+    false
   from delivery_orders d
   where not exists (select 1 from kitchen_tickets kt where kt.delivery_order_id = d.id)
   union all
@@ -850,7 +852,8 @@ const ORDER_HISTORY_BASE_CTE = `base as (
     pco.service_name,
     pco.extras_json,
     pco.client_id,
-    cl.is_test
+    cl.is_test,
+    false
   from pending_cafe_orders pco
   join clients cl on cl.id = pco.client_id
   where pco.status = 'PAID'
@@ -879,9 +882,13 @@ export interface OrderHistoryRow {
   detail: string | null;
   items_json: unknown;
   client_id: string | null;
+  /** Offered order (salle): listed and counted, but never counted as revenue. */
+  offert: boolean;
 }
 
-/** Current-window predicate (excludes tests) shared by list/channel/daily. */
+/** Current-window predicate (excludes tests) shared by list/channel/daily.
+ *  N'y ajoute JAMAIS `not offert` : une commande offerte doit rester listée et
+ *  comptée — seules les SOMMES de montants l'excluent (via leur `filter`). */
 function orderWindowClause(filters: OrderHistoryFilters, params: unknown[]): string {
   const conds = ["is_test = false"];
   if (filters.period === "today") conds.push("created_at >= current_date");
@@ -911,7 +918,7 @@ export async function listOrderHistory(
   params.push(pageSize, (page - 1) * pageSize);
   const res = await pool.query(
     `with ${ORDER_HISTORY_BASE_CTE}
-     select id, created_at, channel, status, amount_xof, heading, detail, items_json, client_id,
+     select id, created_at, channel, status, amount_xof, heading, detail, items_json, client_id, offert,
             count(*) over()::int as total_count
        from base
       where ${conds.join(" and ")}
@@ -938,6 +945,9 @@ export interface OrderHistoryStats {
   previousCompleted: number;
   previousRevenueXof: number;
   firstOrderAt: Date | null;
+  /** Menu value of the offered orders (pack promo, geste commercial) on the
+   *  window — hors revenu, mais suivi pour connaître ce qui a été offert. */
+  offertsXof: number;
 }
 
 /** Top-line KPIs for the selected window plus the equal previous window. */
@@ -967,10 +977,11 @@ export async function orderHistoryStats(filters: OrderHistoryFilters): Promise<O
        count(*) filter (where status='COMPLETED' and (cur_start is null or created_at >= cur_start))::int as completed,
        count(*) filter (where status='CANCELLED' and (cur_start is null or created_at >= cur_start))::int as cancelled,
        count(*) filter (where status='OPEN' and (cur_start is null or created_at >= cur_start))::int as open_count,
-       coalesce(sum(amount_xof) filter (where status='COMPLETED' and (cur_start is null or created_at >= cur_start)),0)::int as revenue,
-       coalesce(round(avg(amount_xof) filter (where status='COMPLETED' and amount_xof>0 and (cur_start is null or created_at >= cur_start))),0)::int as avg_ticket,
+       coalesce(sum(amount_xof) filter (where status='COMPLETED' and not offert and (cur_start is null or created_at >= cur_start)),0)::int as revenue,
+       coalesce(round(avg(amount_xof) filter (where status='COMPLETED' and not offert and amount_xof>0 and (cur_start is null or created_at >= cur_start))),0)::int as avg_ticket,
+       coalesce(sum(amount_xof) filter (where status='COMPLETED' and offert and (cur_start is null or created_at >= cur_start)),0)::int as offerts,
        count(*) filter (where status='COMPLETED' and cur_start is not null and created_at < cur_start)::int as prev_completed,
-       coalesce(sum(amount_xof) filter (where status='COMPLETED' and cur_start is not null and created_at < cur_start),0)::int as prev_revenue,
+       coalesce(sum(amount_xof) filter (where status='COMPLETED' and not offert and cur_start is not null and created_at < cur_start),0)::int as prev_revenue,
        (select min(created_at) from base where is_test=false) as first_order_at
      from scoped`,
     [filters.period, filters.channel],
@@ -985,6 +996,7 @@ export async function orderHistoryStats(filters: OrderHistoryFilters): Promise<O
     previousCompleted: r.prev_completed ?? 0,
     previousRevenueXof: r.prev_revenue ?? 0,
     firstOrderAt: r.first_order_at ?? null,
+    offertsXof: r.offerts ?? 0,
   };
 }
 
@@ -1002,7 +1014,8 @@ export async function orderHistoryByChannel(
   const where = orderWindowClause(filters, params);
   const res = await pool.query(
     `with ${ORDER_HISTORY_BASE_CTE}
-     select channel, count(*)::int as orders, coalesce(sum(amount_xof),0)::int as revenue
+     select channel, count(*)::int as orders,
+            coalesce(sum(amount_xof) filter (where not offert),0)::int as revenue
        from base
       where ${where} and status = 'COMPLETED'
       group by channel`,
@@ -1037,7 +1050,7 @@ export async function orderHistoryDaily(filters: OrderHistoryFilters): Promise<O
     `with ${ORDER_HISTORY_BASE_CTE}
      select to_char(d::date, 'YYYY-MM-DD') as day,
             count(b.id) filter (where b.status='COMPLETED')::int as orders,
-            coalesce(sum(b.amount_xof) filter (where b.status='COMPLETED'),0)::int as revenue
+            coalesce(sum(b.amount_xof) filter (where b.status='COMPLETED' and not b.offert),0)::int as revenue
        from generate_series(current_date - ($1::int - 1), current_date, interval '1 day') d
        left join base b
          on b.is_test = false

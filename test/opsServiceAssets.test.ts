@@ -22,7 +22,7 @@ describe("service PWA assets", () => {
 
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
     const version = serviceBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v30");
+    expect(version).toBe("v31");
     expect(SERVICE_SW).toContain(`service-${version}`);
   });
 
@@ -261,5 +261,31 @@ describe("service PWA assets", () => {
     // The order POST sends item ids + qty, never a price.
     expect(SERVICE_APP_JS).toContain("/orders");
     expect(SERVICE_APP_JS).not.toContain("unitPriceXof");
+  });
+
+  // « Offert » : boisson d'un pack promo, ou geste commercial après un incident.
+  it("can offer an order from the composer and from a live card", () => {
+    // Composer switch → carried in the POST body (the server decides the rest).
+    expect(SERVICE_APP_JS).toContain("state.offert=offCb.checked");
+    expect(SERVICE_APP_JS).toContain("offert:state.offert");
+    // Per-card toggle, on the ready branch as well as the open one.
+    expect(SERVICE_APP_JS).toContain("+'/offert'");
+    expect(SERVICE_APP_JS).toContain("{offert:!t.offert}");
+    expect(SERVICE_APP_JS).toContain("🎁 Offert");
+  });
+
+  it("offers an already served order from the table detail sheet", () => {
+    // A served ticket has left the live board (ticket_removed): the comp decided
+    // after the fact is done from « 🧾 Détail », fed by the session orders route.
+    expect(SERVICE_APP_JS).toContain("🧾 Détail");
+    expect(SERVICE_APP_JS).toContain("'/sessions/'+s.id+'/orders'");
+    expect(SERVICE_APP_JS).toContain("openSessionDetail");
+  });
+
+  it("keeps the comp reachable on a table closed today, via Tables récentes", () => {
+    // A table auto-closes on its last serve, so the goodwill gesture decided a
+    // minute later lands in the recent panel — which must therefore be actionable.
+    expect(SERVICE_APP_JS).toContain("recentSession(s,load)");
+    expect(SERVICE_APP_JS).toContain("🎁 offert");
   });
 });

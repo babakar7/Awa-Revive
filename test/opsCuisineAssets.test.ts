@@ -53,6 +53,14 @@ describe("cuisine PWA assets", () => {
     expect(CUISINE_APP_JS).toContain("t.takeaway");
   });
 
+  it("badges an offered order without offering any way to change it", () => {
+    // La cuisine doit le savoir (elle prépare exactement pareil) mais le geste
+    // commercial se décide en salle ou en supervision, jamais sur la tablette.
+    expect(CUISINE_APP_JS).toContain("🎁 Offert");
+    expect(CUISINE_APP_JS).toContain("t.offert");
+    expect(CUISINE_APP_JS).not.toContain("/offert'");
+  });
+
   it("labels future table orders and announces their promised time by voice", () => {
     expect(CUISINE_APP_JS).toContain("⏰ Pour ");
     expect(CUISINE_APP_JS).toContain("t.scheduled_for");

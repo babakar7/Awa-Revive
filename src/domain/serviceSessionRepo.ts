@@ -42,9 +42,11 @@ export interface OpenSession {
 
 // sum(integer) is bigint (→ string in pg); cast back to integer. Includes served
 // tickets (the client can't recompute them — ticket_removed drops them locally).
+// Offered orders are excluded: the guest must never be asked to pay them.
 const SESSION_TOTAL_SQL = `coalesce((
     select sum(k.amount_xof) from kitchen_tickets k
      where k.session_id = s.id and k.source = 'TABLE' and k.status <> 'CANCELLED'
+       and k.offert = false
   ), 0)::integer`;
 
 const SELECT_OPEN = `
@@ -97,6 +99,8 @@ export interface RecentSessionTicket {
   items: ExtraLine[];
   note: string | null;
   takeaway: boolean;
+  /** Offered line: shown as such and excluded from the session subtotal. */
+  offert: boolean;
   created_at: Date | string;
   ready_at: Date | string | null;
   cancel_reason: string | null;
@@ -125,7 +129,8 @@ export async function listRecentClosedSessions(limit = 20): Promise<RecentClosed
             coalesce((
               select json_agg(json_build_object(
                        'id', k.id, 'status', k.status, 'items', k.items_json,
-                       'note', k.note, 'takeaway', k.takeaway, 'created_at', k.created_at,
+                       'note', k.note, 'takeaway', k.takeaway, 'offert', k.offert,
+                       'created_at', k.created_at,
                        'ready_at', k.ready_at, 'cancel_reason', k.cancel_reason
                      ) order by k.created_at)
                 from kitchen_tickets k
@@ -151,6 +156,7 @@ export async function listRecentClosedSessions(limit = 20): Promise<RecentClosed
       items: extrasFromJson(t.items),
       note: t.note,
       takeaway: !!t.takeaway,
+      offert: !!t.offert,
       created_at: t.created_at,
       ready_at: t.ready_at,
       cancel_reason: t.cancel_reason,

@@ -2021,6 +2021,12 @@ alter table kitchen_tickets add column if not exists takeaway boolean not null d
 -- « Urgent » : l'accueil peut escalader une commande salle à tout moment (client
 -- qui s'impatiente) → elle remonte en tête de l'écran cuisine. NULL = normal.
 alter table kitchen_tickets add column if not exists urgent_at timestamptz;
+-- « Offert » : commande salle offerte (boisson d'un pack promo, geste commercial
+-- après un incident). Le montant reste le PRIX RÉEL du menu — c'est le flag qui
+-- l'exclut du revenu, du panier moyen et du sous-total indicatif de la table, et
+-- qui alimente le KPI « Offerts » (valeur offerte). Les volumes opérationnels
+-- (commandes du jour, populaires, temps de prépa) le comptent normalement.
+alter table kitchen_tickets add column if not exists offert boolean not null default false;
 create index if not exists idx_kitchen_tickets_session
   on kitchen_tickets (session_id) where session_id is not null;
 -- Clés de la Maison. Wix remains the only ledger for Reformer/bonus session

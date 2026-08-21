@@ -129,7 +129,7 @@ function orderRow(row: OrderHistoryRow): string {
 <td data-label="Canal"><span class="badge ${CHANNEL_BADGE[row.channel]}">${esc(CHANNEL_LABELS[row.channel])}</span></td>
 <td data-label="Client"><b>${client}</b>${detail}</td>
 <td data-label="Articles">${itemsSummary(row.items_json)}</td>
-<td data-label="Montant"><b>${fmtFcfa(row.amount_xof)}</b></td>
+<td data-label="Montant"><b>${fmtFcfa(row.amount_xof)}</b>${row.offert ? ` <span class="badge badge--violet">🎁 Offert</span>` : ""}</td>
 <td data-label="Statut"><span class="badge ${STATUS_BADGE[row.status]}">${esc(STATUS_LABELS[row.status])}</span></td>
 </tr>`;
 }
@@ -178,10 +178,11 @@ function renderHistoriqueBody(data: HistoriqueCommandesData): string {
 ${filterTabs("Filtrer par période", "period", periodOptions, filters)}
 ${filterTabs("Filtrer par canal", "channel", channelOptions, filters)}
 ${filterTabs("Filtrer par statut", "status", statusOptions, filters)}
-<div class="stat-grid report-stat-grid">
+<div class="stat-grid orders-stat-grid">
   <div class="stat"><span>Commandes terminées</span><b>${stats.completed}</b><span>${trend(stats.completed, stats.previousCompleted, filters.period)}</span></div>
   <div class="stat"><span>Revenu articles</span><b>${fmtFcfa(stats.revenueXof)}</b><span>${trend(stats.revenueXof, stats.previousRevenueXof, filters.period)}</span></div>
   <div class="stat"><span>Panier moyen</span><b>${fmtFcfa(stats.avgTicketXof)}</b><span>par commande terminée</span></div>
+  <div class="stat"><span>Offerts</span><b>${fmtFcfa(stats.offertsXof)}</b><span>valeur offerte — hors revenu</span></div>
   <div class="stat"><span>Annulées / en cours</span><b>${stats.cancelled} / ${stats.open}</b><span>sur la période</span></div>
 </div>
 <div class="section-header"><div><span class="eyebrow">Financier</span><h2>Revenu par canal</h2></div><b>${fmtFcfa(stats.revenueXof)}</b></div>
@@ -190,7 +191,7 @@ ${trendBars(daily)}
 <div class="section-header"><div><span class="eyebrow">Détail</span><h2>Commandes</h2></div><span class="badge badge--gray">${result.total}</span></div>
 <div class="card">${table}</div>
 ${pagination(result, filters)}
-<p class="muted" style="margin-top:1rem;font-size:.8rem;line-height:1.5">Les montants des commandes en salle (sur place) sont indicatifs — le POS reste la seule source comptable. Le revenu articles exclut les frais de livraison.${stats.firstOrderAt ? ` Historique unifié depuis le ${fmtDate(stats.firstOrderAt)} ; les commandes plus anciennes figurent avec un détail réduit.` : ""}</p>
+<p class="muted" style="margin-top:1rem;font-size:.8rem;line-height:1.5">Les montants des commandes en salle (sur place) sont indicatifs — le POS reste la seule source comptable. Le revenu articles exclut les frais de livraison. Les commandes offertes (🎁) restent listées et comptées, mais leur montant est retiré du revenu et du panier moyen : il est repris dans « Offerts ».${stats.firstOrderAt ? ` Historique unifié depuis le ${fmtDate(stats.firstOrderAt)} ; les commandes plus anciennes figurent avec un détail réduit.` : ""}</p>
 </div>`;
 }
 

@@ -110,6 +110,10 @@ export interface KitchenTicketView {
   takeaway?: boolean;
   /** Accueil escalated this order as urgent → bubbles to the top of the KDS. */
   urgent?: boolean;
+  /** Offered order (pack promo, geste commercial). The amount stays the real menu
+   *  price; the flag keeps it out of the table subtotal and of every revenue
+   *  aggregate. Optional so other view builders stay valid. */
+  offert?: boolean;
 }
 
 /** One-line items summary reused by the ticket card and the fallback WhatsApp. */

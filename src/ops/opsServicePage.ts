@@ -32,7 +32,7 @@ import { OPS_DELIVERY_COMPOSER, OPS_DELIVERY_COMPOSER_CSS } from "./opsDeliveryC
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v30";
+const ASSET_VERSION = "v31";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -102,6 +102,11 @@ border-radius:999px;padding:.15rem .5rem;margin-top:.3rem;letter-spacing:.02em}
 button.act.urg{flex:1;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border)}
 button.act.urg.on{background:var(--danger);color:#fff;border-color:var(--danger)}
 .tk .taken{font-size:.8rem;color:var(--info);margin-top:.25rem}
+/* « Offert » : commande offerte — hors addition et hors chiffre d'affaires. */
+.tk .off{display:inline-block;font-size:.75rem;font-weight:800;color:var(--plum-700);
+background:var(--plum-50);border:1px solid var(--plum-300);border-radius:999px;padding:.15rem .5rem;margin-top:.3rem}
+button.act.off{flex:0 0 auto;background:none;border:1px solid var(--plum-300);color:var(--plum-700);min-width:2.75rem}
+button.act.off.on{background:var(--plum-700);border-color:var(--plum-700);color:#fff}
 /* Cuisine-confirmation line: sent → received (auto, on the tablet's ACK) → warn. */
 .tk .cuis{font-size:.8rem;font-weight:700;margin-top:.3rem}
 .tk .cuis.send{color:var(--ink-500)}
@@ -143,6 +148,13 @@ min-height:2.75rem;padding:.45rem .8rem;font-size:1rem;font-weight:700}
 .hsh .htime{margin-left:auto;font-size:.82rem;color:var(--ink-500)}
 .hline{font-size:.95rem;color:var(--ink-700);padding:.1rem 0}
 .hline.cx{color:var(--danger);text-decoration:line-through}
+/* Session detail sheet: one row per order (served ones included) + « Offert ». */
+.dord{border:1px solid var(--border-soft);border-radius:var(--radius);padding:.55rem .7rem;
+background:var(--surface-raised);margin-bottom:.5rem}
+.dord.cx .hline{color:var(--danger);text-decoration:line-through}
+.dmeta{display:flex;align-items:baseline;gap:.5rem;margin:.3rem 0 .45rem;font-size:.82rem;color:var(--ink-500)}
+.dmeta .damt{margin-left:auto;font-weight:800;color:var(--plum-700)}
+.dord button.act.off{width:100%;flex:none}
 .htot{display:flex;align-items:baseline;gap:.5rem;margin-top:.4rem;padding-top:.4rem;border-top:1px solid var(--border-soft);font-size:.82rem;color:var(--ink-500)}
 .htot .htotv{margin-left:auto;font-weight:800;font-size:1rem;color:var(--plum-700)}
 /* Overlay (order composer) */
@@ -192,6 +204,9 @@ background:var(--surface-raised);color:var(--ink-700);font-weight:700;font-size:
 border:1px dashed var(--border-strong);background:var(--surface-raised);color:var(--ink-500);font-size:.9rem;font-weight:600}
 .testrow.on{border-style:solid;border-color:var(--danger);background:var(--danger-bg);color:var(--danger)}
 .testrow .testcb{width:1.3rem;height:1.3rem;flex:0 0 auto;accent-color:var(--danger)}
+/* Same switch, "offert" palette — an offered order is normal, not an anomaly. */
+.testrow.offertrow.on{border-color:var(--plum-700);background:var(--plum-50);color:var(--plum-700)}
+.testrow .testcb.offcb{accent-color:var(--plum-700)}
 .sheet input,.sheet textarea{width:100%;padding:.8rem;border-radius:var(--radius);border:1px solid var(--border);
 background:#fff;color:var(--ink-900);font-size:1rem;font-family:inherit}
 .sheet textarea{min-height:3rem}.optional{border:1px solid var(--border-soft);border-radius:var(--radius);background:var(--surface-raised);margin-bottom:.55rem}
@@ -462,6 +477,22 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
   function openDelivery(){if(window.__deliveryComposer)window.__deliveryComposer.open({base:BASE,menu:MENU,top:TOP,recent:RECENT_DELIVERY_CLIENTS,post:post,onDone:function(){showServiceNotice('Livraison créée.');refreshDeliveries();}});}
   var newDelivery=document.getElementById('new-delivery');if(newDelivery)newDelivery.onclick=openDelivery;
 
+  // « Offert » toggle — a promo-pack drink or a goodwill gesture. The order keeps
+  // its real price (the value offered stays measurable) but leaves the table's
+  // subtotal and the revenue reports. Same optimistic-disable pattern as ⚡ Urgent.
+  function offertBtn(t,onDone){
+    var b=el('button','act off'+(t.offert?' on':''), t.offert?'🎁 Offert ✓':'🎁 Offert');
+    b.title=t.offert?'Ne plus offrir cette commande':'Offrir cette commande (hors chiffre d’affaires)';
+    b.setAttribute('aria-pressed', t.offert?'true':'false');
+    b.onclick=function(){ b.disabled=true;
+      post('/tickets/'+t.id+'/offert',{offert:!t.offert}).then(function(r){
+        if(!r.ok){ b.disabled=false; return; }
+        t.offert=!t.offert; if(onDone) onDone();
+      }).catch(function(){ b.disabled=false; });
+    };
+    return b;
+  }
+
   function ticketCard(t){
     var waiting=!!(t.scheduled_for&&!t.activated_at);
     var d=el('div','tk'+(waiting?' scheduled':'')+(t.urgent?' urgent':'')); d.dataset.id=t.id;
@@ -475,6 +506,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
     });
     if(t.note) d.appendChild(el('div','tnote','📝 '+t.note));
     if(t.takeaway) d.appendChild(el('div','away','📦 À emporter'));
+    if(t.offert) d.appendChild(el('div','off','🎁 Offert'));
     if(t.scheduled_for) d.appendChild(el('div','timing','⏰ '+(waiting?'Prévue pour ':'Pour ')+hhmm(t.scheduled_for)));
     if(t.urgent) d.appendChild(el('div','urg','⚡ Urgent'));
     // Cuisine confirmation for orders THIS phone sent: "Envoi…" → auto "Reçue ✓" on
@@ -497,6 +529,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
       // completes the ticket (the /served endpoint completes any READY ticket), so
       // the old two-step "Je prends" → "Servie" is gone — simpler for everyone.
       var sv=el('button','act serve','🙋 Je prends'); sv.onclick=function(){ sv.disabled=true; post('/tickets/'+t.id+'/served',{}).then(function(r){if(!r.ok)sv.disabled=false;}).catch(function(){sv.disabled=false;}); }; acts.appendChild(sv);
+      acts.appendChild(offertBtn(t));
       d.appendChild(acts);
     } else {
       var acts2=el('div','tacts');
@@ -506,6 +539,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
       ug.setAttribute('aria-pressed', t.urgent?'true':'false');
       ug.onclick=function(){ ug.disabled=true; post('/tickets/'+t.id+'/urgent',{urgent:!t.urgent}).then(function(r){if(!r.ok)ug.disabled=false;}).catch(function(){ug.disabled=false;}); };
       acts2.appendChild(ug);
+      acts2.appendChild(offertBtn(t));
       var cx=el('button','act cancel','✕'); cx.title='Annuler cette commande'; cx.setAttribute('aria-label','Annuler cette commande');
       cx.onclick=function(){ askConfirm('Annuler cette commande ?','Oui, annuler la commande','Non, garder la commande',function(){ cx.disabled=true; post('/tickets/'+t.id+'/cancel',{reason:'annulée en salle'}).then(function(r){if(!r.ok)cx.disabled=false;}).catch(function(){cx.disabled=false;}); }); };
       acts2.appendChild(cx); d.appendChild(acts2);
@@ -537,8 +571,53 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
       st.appendChild(el('span','sv',s.total_xof+' F')); c.appendChild(st); }
     var sa=el('div','sacts');
     var add=el('button','sec add','＋ Ajouter une commande'); add.onclick=function(){ openOrder(sp,s,add); }; sa.appendChild(add);
+    // Served orders have left the live board, so the detail sheet is where a
+    // already-served order can still be offered while the table is open.
+    var det=el('button','sec det','🧾 Détail'); det.setAttribute('aria-label','Détail de la table '+sp.label);
+    det.onclick=function(){ openSessionDetail(s,sp,det); }; sa.appendChild(det);
     c.appendChild(sa);
     return c;
+  }
+
+  // ---- Session detail: every order of an OPEN table, served ones included ----
+  // The live board is forward-only (a served ticket disappears), so this sheet is
+  // the surface for a comp decided after the fact — « c'est offert, désolé ».
+  function openSessionDetail(s,sp,opener){
+    unlock();
+    var ov=el('div','ov'); var sh=el('div','sheet');
+    sh.setAttribute('role','dialog'); sh.setAttribute('aria-modal','true');
+    sh.setAttribute('aria-label','Détail de la table '+sp.label);
+    var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
+    function close(){ if(ov.parentNode) document.body.removeChild(ov); document.body.style.overflow=prevOverflow; if(opener&&opener.focus){try{opener.focus();}catch(e){}} }
+    ov.onclick=function(e){ if(e.target===ov) close(); };
+    var x=el('button','close-x','×'); x.setAttribute('aria-label','Fermer'); x.onclick=close; sh.appendChild(x);
+    sh.appendChild(el('h2',sp.label+(s.first_name?' · '+s.first_name:'')));
+    var list=el('div','list'); list.appendChild(el('p','hempty','Chargement…')); sh.appendChild(list);
+    ov.appendChild(sh); document.body.appendChild(ov);
+    function load(){
+      fetch(BASE+'/sessions/'+s.id+'/orders',{headers:{'X-Requested-With':'fetch'}})
+        .then(function(r){return r.ok?r.json():null;}).then(function(d){
+          list.textContent='';
+          var rows=(d&&d.tickets)||[];
+          if(!rows.length){ list.appendChild(el('p','hempty','Aucune commande sur cette table.')); return; }
+          rows.forEach(function(t){
+            var cx=t.status==='CANCELLED';
+            var row=el('div','dord'+(cx?' cx':''));
+            (t.items||[]).forEach(function(l){ row.appendChild(el('div','hline',rLine(l))); });
+            if(t.note) row.appendChild(el('div','hline','📝 '+t.note));
+            var meta=el('div','dmeta');
+            meta.appendChild(el('span','dtime',hhmm(t.created_at)));
+            meta.appendChild(el('span','dst', cx?'Annulée':t.status==='COMPLETED'?'Servie':t.status==='READY'?'Prête':t.status==='PREPARING'?'En prépa':'Envoyée'));
+            meta.appendChild(el('span','damt',(t.offert?'Offert · ':'')+t.amount_xof+' F'));
+            row.appendChild(meta);
+            if(!cx) row.appendChild(offertBtn(t,load));
+            list.appendChild(row);
+          });
+          var tot=el('div','htot'); tot.appendChild(el('span',null,'Sous-total — indicatif'));
+          tot.appendChild(el('span','htotv',((d&&d.total_xof)||0)+' F')); list.appendChild(tot);
+        }).catch(function(){ list.textContent=''; list.appendChild(el('p','hempty','Erreur de chargement.')); });
+    }
+    load();
   }
 
   function render(){
@@ -597,7 +676,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
     sh.setAttribute('aria-label','Nouvelle commande — '+sp.label);
     var prevOverflow=document.body.style.overflow; document.body.style.overflow='hidden';
     var draft={};
-    var state={cat:'__ALL__',q:'',cartOnly:false,takeaway:false,test:false,readyIn:0,searching:false,sending:false};
+    var state={cat:'__ALL__',q:'',cartOnly:false,takeaway:false,test:false,offert:false,readyIn:0,searching:false,sending:false};
     var totalEl,cartChip,searchCart,listEl,go,msg,search,summaryMode,summaryWhen;
     function returnFocus(){ var t=trigger;
       if(!t||!t.isConnected){ var host=board.querySelector('[data-spot="'+sp.id+'"]');
@@ -654,7 +733,15 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
     var testCb=document.createElement('input'); testCb.type='checkbox'; testCb.className='testcb';
     testCb.onchange=function(){ state.test=testCb.checked; testRow.classList.toggle('on',testCb.checked); testRow.setAttribute('aria-checked',testCb.checked?'true':'false'); };
     testRow.appendChild(testCb); testRow.appendChild(el('span',null,'🧪 Commande test — exclue des statistiques'));
-    optionalFields.appendChild(testRow); optional.appendChild(optionalFields); sh.appendChild(optional);
+    optionalFields.appendChild(testRow);
+    // Offered from the start (promo pack, geste commercial) — the order is priced
+    // normally but ne compte pas dans l'addition ni dans le chiffre d'affaires.
+    var offRow=el('label','testrow offertrow'); offRow.setAttribute('role','switch'); offRow.setAttribute('aria-checked','false');
+    var offCb=document.createElement('input'); offCb.type='checkbox'; offCb.className='testcb offcb';
+    offCb.onchange=function(){ state.offert=offCb.checked; offRow.classList.toggle('on',offCb.checked); offRow.setAttribute('aria-checked',offCb.checked?'true':'false'); };
+    offRow.appendChild(offCb); offRow.appendChild(el('span',null,'🎁 Commande offerte — hors chiffre d’affaires'));
+    optionalFields.appendChild(offRow);
+    optional.appendChild(optionalFields); sh.appendChild(optional);
 
     var searchSummary=el('div','search-summary'); searchSummary.appendChild(el('span',null,sp.label));
     searchSummary.appendChild(el('span','dotsep','·')); summaryMode=el('span',null,'Sur place'); searchSummary.appendChild(summaryMode);
@@ -798,7 +885,7 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
         if(selections.length)e.selections=selections;if(d.note)e.note=d.note;items.push(e);}});
       if(!items.length){setError('Ajoutez au moins un article au panier.');return;}
       state.sending=true;go.disabled=true;go.textContent='Envoi…';msg.hidden=true;
-      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,test:state.test}; if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn&&fn.value) body.first_name=fn.value;
+      var body={items:items,note:gnote.value,client_request_id:uuid(),takeaway:state.takeaway,test:state.test,offert:state.offert}; if(state.readyIn)body.ready_in_minutes=state.readyIn;if(fn&&fn.value) body.first_name=fn.value;
       post('/spots/'+sp.id+'/orders',body).then(function(r){return r.json().catch(function(){return{};});}).then(function(j){
         if(j&&j.ok){if(j.id)trackSend(j.id);closeSheet();showServiceNotice(j.scheduled_for?'Commande programmée envoyée en cuisine — '+sp.label+' · '+hhmm(j.scheduled_for):'Commande envoyée — '+sp.label);}
         else{state.sending=false;go.disabled=false;recompute();setError((j&&j.message)||'Commande refusée. Corrigez les choix puis réessayez.');}
@@ -1000,14 +1087,17 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
     ? l.selections.map(function(s){return s.label+' : '+s.value;}).join(' · ')
     : (l.choice||''); }
   function rLine(l){ var p=rPicked(l); return l.qty+'× '+l.name+(p?' ('+p+')':'')+(l.note?' — '+l.note:''); }
-  function recentSession(s){
+  function recentSession(s,reload){
     var card=el('div','hsess');
     var h=el('div','hsh'); h.appendChild(el('span','hnm',s.short_code));
     if(s.first_name) h.appendChild(el('span','hwho','👤 '+s.first_name));
     h.appendChild(el('span','htime',hhmm(s.closed_at))); card.appendChild(h);
     (s.tickets||[]).forEach(function(t){ var cx=t.status==='CANCELLED';
-      (t.items||[]).forEach(function(l){ card.appendChild(el('div','hline'+(cx?' cx':''),rLine(l)+(cx?' — annulé':''))); });
+      (t.items||[]).forEach(function(l){ card.appendChild(el('div','hline'+(cx?' cx':''),rLine(l)+(cx?' — annulé':'')+(!cx&&t.offert?' — 🎁 offert':''))); });
       if(t.note) card.appendChild(el('div','hline','📝 '+t.note));
+      // A table auto-closes on its last serve, so a comp decided a minute later
+      // lands here. Toggling stays possible for tables closed TODAY (server guard).
+      if(!cx) card.appendChild(offertBtn(t,reload));
     });
     var tot=el('div','htot'); tot.appendChild(el('span',null,'Sous-total — indicatif'));
     tot.appendChild(el('span','htotv',s.total_xof+' F')); card.appendChild(tot);
@@ -1024,12 +1114,15 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVE
     sh.appendChild(el('h2','Tables récentes'));
     var list=el('div','list'); list.appendChild(el('p','hempty','Chargement…')); sh.appendChild(list);
     ov.appendChild(sh); document.body.appendChild(ov);
-    fetch(BASE+'/recent',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
-      list.textContent='';
-      var rows=(d&&d.sessions)||[];
-      if(!rows.length){ list.appendChild(el('p','hempty','Aucune table fermée aujourd’hui.')); return; }
-      rows.forEach(function(s){ list.appendChild(recentSession(s)); });
-    }).catch(function(){ list.textContent=''; list.appendChild(el('p','hempty','Erreur de chargement.')); });
+    function load(){
+      fetch(BASE+'/recent',{headers:{'X-Requested-With':'fetch'}}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+        list.textContent='';
+        var rows=(d&&d.sessions)||[];
+        if(!rows.length){ list.appendChild(el('p','hempty','Aucune table fermée aujourd’hui.')); return; }
+        rows.forEach(function(s){ list.appendChild(recentSession(s,load)); });
+      }).catch(function(){ list.textContent=''; list.appendChild(el('p','hempty','Erreur de chargement.')); });
+    }
+    load();
   }
   if(histBtn) histBtn.onclick=openRecent;
 

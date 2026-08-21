@@ -25,7 +25,7 @@ import {
 const BASE = "/ops/cuisine";
 // Same cache-bust discipline as the salle PWA: the version is the SW cache name
 // AND the app.js query string, so a fresh deploy can't be served stale.
-const ASSET_VERSION = "v22";
+const ASSET_VERSION = "v23";
 
 /** PWA pages need script-src 'self' (app.js) + worker-src 'self' (the SW) —
  *  looser than the strict delivery-page CSP, which forbids all script. Still no
@@ -72,6 +72,8 @@ border-radius:var(--radius-lg);padding:1rem 1.1rem;display:flex;flex-direction:c
 padding:.22rem .6rem;border-radius:999px;background:var(--info-bg);color:var(--info);white-space:nowrap}
 .badge.table{background:var(--rose);color:var(--plum-700)}
 .badge.test{background:var(--danger-bg);color:var(--danger)}
+/* Offerte : information seulement — la cuisine prépare exactement pareil. */
+.badge.offert{background:var(--plum-50);color:var(--plum-700);border:1px solid var(--plum-200)}
 .badge.away{background:var(--info);color:#fff}
 .badge.scheduled{background:var(--plum-50);color:var(--plum-700);border:1px solid var(--plum-200)}
 .badge.urgent{background:var(--danger);color:#fff;animation:pulse 1.2s ease-in-out infinite}
@@ -362,6 +364,7 @@ export const CUISINE_APP_JS = String.raw`(function(){
     top.appendChild(b);
     if(t.scheduled_for)top.appendChild(el('span','badge scheduled','⏰ Pour '+hhmm(t.scheduled_for)));
     if(t.is_test) top.appendChild(el('span','badge test','Test'));
+    if(t.offert) top.appendChild(el('span','badge offert','🎁 Offert'));
     var a;
     var ageStart=t.activated_at||t.created_at;
     if(t.status==='READY' && t.ready_at){

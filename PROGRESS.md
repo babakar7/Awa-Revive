@@ -1,5 +1,57 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Commandes « offertes » : hors chiffre d'affaires (21 août 2026)
+
+**Pourquoi.** Les offres du type « pack 3 cours + 1 boisson offerte » et les
+gestes commerciaux après un incident étaient facturés comme des ventes normales :
+ils gonflaient le revenu et le panier moyen de `/admin/historique-commandes`, et
+apparaissaient dans l'addition indicative de la table.
+
+**Modèle retenu (décidé avec Babakar).** Un booléen `offert` sur **toute la
+commande** (`kitchen_tickets.offert`, salle uniquement — `source='TABLE'`), sur le
+patron de `is_test`. Une commande mixte (2 cafés payés + 1 boisson offerte) se
+fait en **deux commandes sur le même espace** : la session les regroupe déjà.
+- **`amount_xof` garde le prix réel du menu.** C'est le flag qui retire la
+  commande du revenu — jamais une remise à zéro. Le montant EST la valeur
+  offerte, et alimente le nouveau KPI « Offerts ».
+- **Volumes opérationnels inchangés** : `ticketStatsToday`, 🔥 Populaires et les
+  temps de prépa comptent les commandes offertes (elles ont bien été préparées).
+- Le `/commander` client et les livraisons sont paiement-d'abord (un total à 0 y
+  est refusé) : le flag n'existe pas pour eux, et `stats()` / `adminReport()` /
+  `paymentsLedger` (qui lisent `pending_cafe_orders`) ne bougent pas.
+
+**Où on l'utilise.** Interrupteur 🎁 dans les deux composeurs (`/ops/service` et
+`/ops/owner`), bouton 🎁 sur les cartes salle et supervision, badge 🎁 en cuisine
+(information seulement — la cuisine ne décide jamais d'un geste commercial).
+
+**Le piège du geste décidé après coup.** Une table se ferme automatiquement dès sa
+dernière commande servie, et une commande servie quitte les tableaux
+(`ticket_removed`). Le « c'est offert, désolé » arrive donc presque toujours quand
+la carte n'est plus là. Deux surfaces le rattrapent, côté salle uniquement :
+**🧾 Détail** (session ouverte, `GET /ops/service/sessions/:id/orders`) et
+**Tables récentes** (table fermée **aujourd'hui**). Le garde serveur est dans la
+même requête atomique que la mutation : `source='TABLE'`, statut ≠ CANCELLED, et
+session `OPEN` ou `CLOSED` avec `closed_at::date = current_date` — exactement
+l'expression déjà utilisée par `listRecentClosedSessions` (prod tourne en
+`Etc/UTC`, Dakar = UTC+0 toute l'année : vérifié par `SHOW TIMEZONE` le 21/08).
+
+**Garde-fous à ne pas casser.**
+- `setTicketOffert` **n'émet `ticket_update` que si le statut est encore ouvert**
+  (`isOpenStatus`). Les trois tableaux font un `set()` aveugle sur `ticket_update` :
+  émettre pour un ticket COMPLETED ferait **réapparaître une carte déjà servie**.
+- Dans `orderHistoryByChannel` / `orderHistoryDaily`, `not offert` va **dans le
+  `filter` de la somme, jamais dans le `WHERE`** — sinon le nombre de commandes
+  perdrait aussi les offertes. Même consigne écrite au-dessus de
+  `orderWindowClause` : la commande offerte reste listée et comptée.
+- `SESSION_TOTAL_SQL` exclut les offertes : le client ne doit jamais se voir
+  demander de payer une commande offerte.
+
+**Validation.** `npm run build` + **1 536 tests unitaires** verts. Intégration en
+CI (pas de Docker en local). Les requêtes SQL et le DDL ont été **rejoués sur la
+prod dans une transaction annulée** (`ROLLBACK`) avant le push : colonne créée,
+sous-total, garde de mutation, `Tables récentes` et les trois agrégats analytics
+tournent sur les vraies données (30 j : revenu 679 500 F inchangé, offerts 0).
+
 ## Livraisons disponibles dans les PWAs ops (20 août 2026)
 
 - Les livraisons téléphoniques se créent, suivent et clôturent désormais depuis

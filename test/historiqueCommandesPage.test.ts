@@ -24,6 +24,7 @@ function row(overrides: Partial<OrderHistoryRow> = {}): OrderHistoryRow {
       { id: "jus", name: "Jus bissap", qty: 1, unitPriceXof: 1500, lineTotalXof: 1500 },
     ],
     client_id: "client-1",
+    offert: false,
     ...overrides,
   };
 }
@@ -55,6 +56,7 @@ function data(overrides: Partial<HistoriqueCommandesData> = {}): HistoriqueComma
       previousCompleted: 10,
       previousRevenueXof: 50000,
       firstOrderAt: new Date("2026-07-28T09:00:00Z"),
+      offertsXof: 0,
       ...overrides.stats,
     },
     byChannel: overrides.byChannel ?? [
@@ -161,5 +163,40 @@ describe("renderHistoriqueCommandes", () => {
     expect(html).toContain("Revenu par canal");
     expect(html).not.toContain('id="oh-root"');
     expect(html).not.toContain("<script>");
+  });
+
+  // « Offert » : la valeur offerte est suivie à part — jamais dans le revenu,
+  // mais la commande reste visible dans la liste (sinon on croit l'avoir perdue).
+  it("shows the offered value as its own KPI, in a grid that fits five tiles", () => {
+    const html = renderHistoriqueFragment(data({ stats: { offertsXof: 7500 } as any }));
+    expect(html).toContain("Offerts");
+    expect(html).toContain("valeur offerte — hors revenu");
+    expect(html).toMatch(/7\s500\sF/); // l'espace est insécable (format fr)
+    // 5 KPIs → page-specific grid, sinon la 5e tuile part seule sur une 2e ligne.
+    expect(html).toContain("orders-stat-grid");
+    expect(html).not.toContain("report-stat-grid");
+  });
+
+  it("badges an offered order in the list while keeping its real amount", () => {
+    const html = renderHistoriqueFragment(
+      data({
+        result: {
+          rows: [row({ offert: true, amount_xof: 2500 })],
+          page: 1,
+          pageSize: 50,
+          total: 1,
+          pages: 1,
+        },
+      }),
+    );
+    expect(html).toContain("🎁 Offert");
+    // Le montant réel reste affiché : c'est LA valeur offerte, pas un zéro.
+    expect(html).toMatch(/2\s500\sF/);
+  });
+
+  it("explains in the footer that offered orders are listed but not counted", () => {
+    const html = renderHistoriqueFragment(data());
+    expect(html).toContain("Les commandes offertes");
+    expect(html).toContain("retiré du revenu et du panier moyen");
   });
 });

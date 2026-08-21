@@ -21,9 +21,11 @@ import {
   serveTableTicket,
   cancelTableTicket,
   setTicketUrgent,
+  setTicketOffert,
   ticketStatsToday,
   topOrderedItemIds,
   ticketsForSession,
+  allSessionTableTickets,
   listRecentClosedTickets,
   activateTableTicketNow,
 } from "../domain/kitchenTicketRepo.js";
@@ -32,6 +34,7 @@ import { ACCUEIL_CHANNEL, CUISINE_CHANNEL, parseTableOrderReadyDelay } from "../
 import { listActiveSpots } from "../domain/serviceSpotRepo.js";
 import {
   openSessionAtSpot,
+  getOpenSession,
   getOpenSessionBySpot,
   listOpenSessions,
   closeSession,
@@ -518,6 +521,10 @@ async function createSpotOrder(
   // (already red-badged "Test") so the flow can be exercised end-to-end, but is
   // excluded from every report (ticketStatsToday). Any non-true value = real order.
   const isTest = b.test === true;
+  // Offered order (promo pack drink, goodwill after an incident): priced as usual
+  // so the value given away stays measurable, but excluded from the table's
+  // subtotal and from every revenue aggregate. Any non-true value = paying order.
+  const offert = b.offert === true;
   const { ticket } = await createTableTicket({
     sessionId: session.id,
     heading: session.short_code,
@@ -528,6 +535,7 @@ async function createSpotOrder(
     clientRequestId,
     isTest,
     takeaway,
+    offert,
     scheduledFor,
   });
   // Refresh the spot's live subtotal on the reception boards (aggregate isn't
@@ -706,6 +714,18 @@ function registerServiceRoutes(app: FastifyInstance): void {
     return reply.type("application/json").send({ ok: !!t });
   });
 
+  // Offer / un-offer an on-site order (promo pack, goodwill gesture). Works on a
+  // served order too, while the table is open or was closed today — the amount is
+  // kept, only its accounting weight changes.
+  app.post(`${SERVICE_BASE}/tickets/:id/offert`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const offert = (req.body as any)?.offert === true;
+    const t = await setTicketOffert((req.params as any).id, offert);
+    if (t) await publishOpenSessionUpdate(t.session_id).catch(() => {});
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
   // Register a device's Web Push subscription (lock-screen alerts).
   app.post(`${SERVICE_BASE}/push/subscribe`, async (req, reply) => {
     const device = await requireAccueil(req, reply);
@@ -742,6 +762,23 @@ function registerServiceRoutes(app: FastifyInstance): void {
     if (!device) return reply;
     reply.header("Cache-Control", "no-store");
     return reply.type("application/json").send(await serviceBootData());
+  });
+
+  // Every order of an OPEN session, served ones included — backs the "🧾 Détail"
+  // sheet, the only place an already-served order can still be offered.
+  app.get(`${SERVICE_BASE}/sessions/:id/orders`, async (req, reply) => {
+    const device = await requireAccueil(req, reply);
+    if (!device) return reply;
+    const sessionId = (req.params as any).id;
+    const session = await getOpenSession(sessionId);
+    if (!session) return reply.code(404).type("application/json").send({ ok: false });
+    const tickets = await allSessionTableTickets(sessionId);
+    reply.header("Cache-Control", "no-store");
+    return reply.type("application/json").send({
+      ok: true,
+      total_xof: session.total_xof,
+      tickets: tickets.map((t) => ({ ...kitchenTicketView(t), cancel_reason: t.cancel_reason })),
+    });
   });
 
   // Read-only recent history: today's closed sessions + their indicative subtotal
@@ -1004,6 +1041,18 @@ function registerOwnerRoutes(app: FastifyInstance): void {
     if (!device) return reply;
     const urgent = (req.body as any)?.urgent === true;
     const t = await setTicketUrgent((req.params as any).id, urgent, device.label);
+    return reply.type("application/json").send({ ok: !!t });
+  });
+
+  // Offer / un-offer an order. The owner board only shows live tickets, so in
+  // practice this covers open orders; correcting an already served one is done
+  // from /ops/service ("🧾 Détail" or « Tables récentes »).
+  app.post(`${OWNER_BASE}/tickets/:id/offert`, async (req, reply) => {
+    const device = await requireOwner(req, reply);
+    if (!device) return reply;
+    const offert = (req.body as any)?.offert === true;
+    const t = await setTicketOffert((req.params as any).id, offert);
+    if (t) await publishOpenSessionUpdate(t.session_id).catch(() => {});
     return reply.type("application/json").send({ ok: !!t });
   });
 }
