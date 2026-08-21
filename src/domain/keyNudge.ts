@@ -64,6 +64,13 @@ function dateTimeLabel(date: Date): string {
   });
 }
 
+export function aquabikeFinishedTranscript(name: string): string {
+  return (
+    `Coucou ${name} 🌊 Tu as terminé toutes tes séances Aquabike, bravo ! ` +
+    `Envie d'enchaîner ? Je te prépare un nouvel Abonnement Aquabike quand tu veux 💛`
+  );
+}
+
 export function reformerFinishedTranscript(name: string, label: string): string {
   return (
     `Bonjour ${name} ✦ Tes séances Reformer de ${label} sont maintenant utilisées. ` +
@@ -124,6 +131,10 @@ export async function sweepKeyNudges(log: {
       config.WA_KEY_INVITATION_J10_TEMPLATE,
       config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE,
       config.WA_KEY_FINISHED_TEMPLATE,
+      config.WA_AQUABIKE_INVITATION_J10_TEMPLATE,
+      config.WA_AQUABIKE_MEMBER_J5_TEMPLATE,
+      config.WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE,
+      config.WA_AQUABIKE_FINISHED_TEMPLATE,
     ].some(Boolean)
   ) {
     return 0;
@@ -136,38 +147,47 @@ export async function sweepKeyNudges(log: {
     const name = key.client_name || "toi";
     const label = keyLabel(key.key_type);
 
-    // The lifecycle reminder templates (J+10 invitation, member J-5, finished)
-    // are Reformer/Clé-worded, so they only fire for the REFORMER family. The
-    // Aquabike abonnement (its own family) gets no lifecycle nudge until its own
-    // templates exist — a wrong-worded reminder is worse than none.
-    const reformerFamily = key.family === "REFORMER";
+    // Lifecycle reminders are family-specific: the Clé templates are Reformer/
+    // Clé-worded; the Aquabike family uses its own set (different wording AND a
+    // different variable set). When a family's template is unset, sendClaimed
+    // no-ops — an Aquabike holder never receives a Reformer-worded message.
+    const isAqua = key.family === "AQUABIKE";
 
     // This reminder is entirely local. Keep it before the Wix balance lookup:
     // a transient Wix failure on the one eligible calendar day must not make
     // the client lose her invitation reminder.
     if (
-      reformerFamily &&
       key.available_invitations > 0 &&
       isCalendarDaysBefore(key.starts_at, now, -10)
     ) {
       const endLabel = dateLabel(key.effective_ends_at);
-      const transcript =
-        `[rappel invitation Clé J+10] ${label} : ${key.available_invitations} ` +
-        `invitation(s) disponible(s), à utiliser avant le ${endLabel}.`;
+      const transcript = isAqua
+        ? `[rappel invitation Aquabike J+10] ${key.available_invitations} invitation(s) Aquabike disponible(s), à utiliser avant le ${endLabel}.`
+        : `[rappel invitation Clé J+10] ${label} : ${key.available_invitations} invitation(s) disponible(s), à utiliser avant le ${endLabel}.`;
       if (
         await sendClaimed({
           dedupKey: `INVITATION_J10:${key.id}`,
           keyId: key.id,
           clientId: key.client_id!,
           phone: key.wa_phone,
-          template: config.WA_KEY_INVITATION_J10_TEMPLATE,
-          language: config.WA_KEY_INVITATION_J10_TEMPLATE_LANG,
-          params: [
-            toTemplateParam(name, 60),
-            String(key.available_invitations),
-            toTemplateParam(label, 80),
-            toTemplateParam(endLabel, 40),
-          ],
+          template: isAqua
+            ? config.WA_AQUABIKE_INVITATION_J10_TEMPLATE
+            : config.WA_KEY_INVITATION_J10_TEMPLATE,
+          language: isAqua
+            ? config.WA_AQUABIKE_INVITATION_J10_TEMPLATE_LANG
+            : config.WA_KEY_INVITATION_J10_TEMPLATE_LANG,
+          params: isAqua
+            ? [
+                toTemplateParam(name, 60),
+                String(key.available_invitations),
+                toTemplateParam(endLabel, 40),
+              ]
+            : [
+                toTemplateParam(name, 60),
+                String(key.available_invitations),
+                toTemplateParam(label, 80),
+                toTemplateParam(endLabel, 40),
+              ],
           transcript,
           log,
         })
@@ -242,55 +262,82 @@ export async function sweepKeyNudges(log: {
     }
 
     if (
-      reformerFamily &&
       key.key_type !== "INVITEE" &&
       remaining > 0 &&
       isCalendarDaysBefore(key.effective_ends_at, now, 5)
     ) {
       const endLabel = dateLabel(key.effective_ends_at);
+      const invitationTemplate = isAqua
+        ? config.WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE
+        : config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE;
+      const baseTemplate = isAqua
+        ? config.WA_AQUABIKE_MEMBER_J5_TEMPLATE
+        : config.WA_KEY_MEMBER_J5_TEMPLATE;
       const useInvitationVariant =
-        key.available_invitations > 0 &&
-        Boolean(config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE);
-      const transcript =
-        `[relance Clé J-5] ${label} : ${remaining} séance(s), expiration le ` +
-        `${endLabel}.` +
-        (useInvitationVariant
-          ? ` ${key.available_invitations} invitation(s) encore disponible(s) sur cette Clé.`
-          : "");
+        key.available_invitations > 0 && Boolean(invitationTemplate);
+      const transcript = isAqua
+        ? `[relance Abonnement Aquabike J-5] ${remaining} séance(s), expiration le ${endLabel}.` +
+          (useInvitationVariant
+            ? ` ${key.available_invitations} invitation(s) Aquabike encore disponible(s).`
+            : "")
+        : `[relance Clé J-5] ${label} : ${remaining} séance(s), expiration le ${endLabel}.` +
+          (useInvitationVariant
+            ? ` ${key.available_invitations} invitation(s) encore disponible(s) sur cette Clé.`
+            : "");
+      // Aquabike param sets drop the plan-name variable (always the Aquabike abo).
+      const params = isAqua
+        ? useInvitationVariant
+          ? [
+              toTemplateParam(name, 60),
+              String(remaining),
+              toTemplateParam(endLabel, 40),
+              String(key.available_invitations),
+            ]
+          : [toTemplateParam(name, 60), String(remaining), toTemplateParam(endLabel, 40)]
+        : useInvitationVariant
+          ? [
+              toTemplateParam(name, 60),
+              toTemplateParam(label, 80),
+              String(remaining),
+              toTemplateParam(endLabel, 40),
+              String(key.available_invitations),
+            ]
+          : [
+              toTemplateParam(name, 60),
+              toTemplateParam(label, 80),
+              String(remaining),
+              toTemplateParam(endLabel, 40),
+            ];
       if (
         await sendClaimed({
           dedupKey: `MEMBER_J5:${key.id}`,
           keyId: key.id,
           clientId: key.client_id!,
           phone: key.wa_phone,
-          template: useInvitationVariant
-            ? config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE
-            : config.WA_KEY_MEMBER_J5_TEMPLATE,
-          language: useInvitationVariant
-            ? config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE_LANG
-            : config.WA_KEY_MEMBER_J5_TEMPLATE_LANG,
-          params: useInvitationVariant
-            ? [
-                toTemplateParam(name, 60),
-                toTemplateParam(label, 80),
-                String(remaining),
-                toTemplateParam(endLabel, 40),
-                String(key.available_invitations),
-              ]
-            : [
-                toTemplateParam(name, 60),
-                toTemplateParam(label, 80),
-                String(remaining),
-                toTemplateParam(endLabel, 40),
-              ],
+          template: useInvitationVariant ? invitationTemplate : baseTemplate,
+          language: isAqua
+            ? useInvitationVariant
+              ? config.WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE_LANG
+              : config.WA_AQUABIKE_MEMBER_J5_TEMPLATE_LANG
+            : useInvitationVariant
+              ? config.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE_LANG
+              : config.WA_KEY_MEMBER_J5_TEMPLATE_LANG,
+          params,
           transcript,
           log,
         })
       ) sent += 1;
     }
 
+    // Reformer family: fire once the balance is 0 AND the last booked session
+    // has started (Reformer bookings are tracked). Aquabike sessions aren't
+    // logged in key_reformer_bookings, so for that family fire on balance-0
+    // alone (Wix decrements the pool at booking time).
     const lastBooked = facts.reformerBookings.at(-1)?.slot_start;
-    if (reformerFamily && remaining === 0 && lastBooked && lastBooked.getTime() <= now.getTime()) {
+    const finishedDue = isAqua
+      ? remaining === 0
+      : remaining === 0 && !!lastBooked && lastBooked.getTime() <= now.getTime();
+    if (finishedDue) {
       if (
         await keyRepo.hasNextKeyCommitment({
           keyId: key.id,
@@ -305,16 +352,22 @@ export async function sweepKeyNudges(log: {
         );
         continue;
       }
-      const transcript = reformerFinishedTranscript(name, label);
+      const transcript = isAqua
+        ? aquabikeFinishedTranscript(name)
+        : reformerFinishedTranscript(name, label);
       if (
         await sendClaimed({
-          dedupKey: `REFORMER_FINISHED:${key.id}`,
+          dedupKey: `${isAqua ? "AQUABIKE_FINISHED" : "REFORMER_FINISHED"}:${key.id}`,
           keyId: key.id,
           clientId: key.client_id!,
           phone: key.wa_phone,
-          template: config.WA_KEY_FINISHED_TEMPLATE,
-          language: config.WA_KEY_FINISHED_TEMPLATE_LANG,
-          params: [toTemplateParam(name, 60), toTemplateParam(label, 80)],
+          template: isAqua ? config.WA_AQUABIKE_FINISHED_TEMPLATE : config.WA_KEY_FINISHED_TEMPLATE,
+          language: isAqua
+            ? config.WA_AQUABIKE_FINISHED_TEMPLATE_LANG
+            : config.WA_KEY_FINISHED_TEMPLATE_LANG,
+          params: isAqua
+            ? [toTemplateParam(name, 60)]
+            : [toTemplateParam(name, 60), toTemplateParam(label, 80)],
           transcript,
           log,
         })

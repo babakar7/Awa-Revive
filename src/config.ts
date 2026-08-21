@@ -314,6 +314,18 @@ export const config = {
   WA_KEY_MEMBER_J5_INVITATION_TEMPLATE_LANG: optional("WA_KEY_MEMBER_J5_INVITATION_TEMPLATE_LANG", "en"),
   WA_KEY_FINISHED_TEMPLATE: optional("WA_KEY_FINISHED_TEMPLATE", ""),
   WA_KEY_FINISHED_TEMPLATE_LANG: optional("WA_KEY_FINISHED_TEMPLATE_LANG", "fr"),
+  // Aquabike-family lifecycle templates. The Clé templates above are Reformer/
+  // Clé-worded, so the AQUABIKE family uses its own set (invitation = an Aquabike
+  // class; renewal/finished = the Aquabike abonnement). Empty = that Aquabike
+  // reminder stays dark (the send is skipped), never a wrong-worded Clé message.
+  WA_AQUABIKE_INVITATION_J10_TEMPLATE: optional("WA_AQUABIKE_INVITATION_J10_TEMPLATE", ""),
+  WA_AQUABIKE_INVITATION_J10_TEMPLATE_LANG: optional("WA_AQUABIKE_INVITATION_J10_TEMPLATE_LANG", "en"),
+  WA_AQUABIKE_MEMBER_J5_TEMPLATE: optional("WA_AQUABIKE_MEMBER_J5_TEMPLATE", ""),
+  WA_AQUABIKE_MEMBER_J5_TEMPLATE_LANG: optional("WA_AQUABIKE_MEMBER_J5_TEMPLATE_LANG", "en"),
+  WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE: optional("WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE", ""),
+  WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE_LANG: optional("WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE_LANG", "en"),
+  WA_AQUABIKE_FINISHED_TEMPLATE: optional("WA_AQUABIKE_FINISHED_TEMPLATE", ""),
+  WA_AQUABIKE_FINISHED_TEMPLATE_LANG: optional("WA_AQUABIKE_FINISHED_TEMPLATE_LANG", "en"),
   // J-5 conversion of a legacy Reformer subscriber to a Key. Kept separate
   // from WA_RENEWAL_TEMPLATE because closed legacy plans must not be renewed.
   WA_LEGACY_KEY_CONVERSION_TEMPLATE: optional("WA_LEGACY_KEY_CONVERSION_TEMPLATE", ""),

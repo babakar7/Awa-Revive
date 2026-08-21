@@ -26,6 +26,14 @@ const mockedConfig = vi.hoisted(() => ({
   WA_KEY_MEMBER_J5_INVITATION_TEMPLATE_LANG: "en",
   WA_KEY_FINISHED_TEMPLATE: "",
   WA_KEY_FINISHED_TEMPLATE_LANG: "fr",
+  WA_AQUABIKE_INVITATION_J10_TEMPLATE: "",
+  WA_AQUABIKE_INVITATION_J10_TEMPLATE_LANG: "en",
+  WA_AQUABIKE_MEMBER_J5_TEMPLATE: "",
+  WA_AQUABIKE_MEMBER_J5_TEMPLATE_LANG: "en",
+  WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE: "",
+  WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE_LANG: "en",
+  WA_AQUABIKE_FINISHED_TEMPLATE: "",
+  WA_AQUABIKE_FINISHED_TEMPLATE_LANG: "en",
 }));
 
 vi.mock("../src/config.js", () => ({ config: mockedConfig }));
@@ -74,6 +82,10 @@ beforeEach(() => {
   mockedConfig.WA_KEY_MEMBER_J5_TEMPLATE = "";
   mockedConfig.WA_KEY_MEMBER_J5_INVITATION_TEMPLATE = "";
   mockedConfig.WA_KEY_FINISHED_TEMPLATE = "";
+  mockedConfig.WA_AQUABIKE_INVITATION_J10_TEMPLATE = "";
+  mockedConfig.WA_AQUABIKE_MEMBER_J5_TEMPLATE = "";
+  mockedConfig.WA_AQUABIKE_MEMBER_J5_INVITATION_TEMPLATE = "";
+  mockedConfig.WA_AQUABIKE_FINISHED_TEMPLATE = "";
   mocks.claimKeyNudge.mockResolvedValue(true);
   mocks.completeKeyNudge.mockResolvedValue(undefined);
   mocks.addTurn.mockResolvedValue(undefined);
@@ -116,6 +128,28 @@ describe("Key invitation reminder sweep", () => {
     await expect(sweepKeyNudges(log)).resolves.toBe(0);
     expect(mocks.sendTemplate).not.toHaveBeenCalled();
     expect(mocks.claimKeyNudge).not.toHaveBeenCalled();
+  });
+
+  it("sends the Aquabike J+10 invitation template with Aquabike params when configured", async () => {
+    mockedConfig.WA_AQUABIKE_INVITATION_J10_TEMPLATE = "awa_aquabike_invitation_j10_v1";
+    mocks.listActiveKeysForNudges.mockResolvedValue([
+      activeKey({
+        key_type: "AQUABIKE",
+        family: "AQUABIKE",
+        wix_contact_id: null,
+        available_invitations: 1,
+      }),
+    ]);
+    mocks.planRemainingSessions.mockRejectedValue(new Error("Wix unavailable"));
+
+    await expect(sweepKeyNudges(log)).resolves.toBe(1);
+    // Aquabike param set drops the plan-name variable: [name, count, endDate].
+    expect(mocks.sendTemplate).toHaveBeenCalledWith(
+      "221770000001",
+      "awa_aquabike_invitation_j10_v1",
+      "en",
+      ["Aïda", "1", "20 septembre"],
+    );
   });
 
   it("keeps the J+10 send when the later Wix balance lookup fails", async () => {
