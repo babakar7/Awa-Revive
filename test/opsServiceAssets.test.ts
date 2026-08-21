@@ -22,7 +22,7 @@ describe("service PWA assets", () => {
 
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
     const version = serviceBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v29");
+    expect(version).toBe("v30");
     expect(SERVICE_SW).toContain(`service-${version}`);
   });
 
@@ -51,6 +51,8 @@ describe("service PWA assets", () => {
     expect(SERVICE_APP_JS).toContain("window.__deliveryComposer");
     expect(SERVICE_APP_JS).toContain("/deliveries");
     expect(SERVICE_SW).toContain("navigate(url)");
+    // Tabs are also swipeable (same gesture as the supervision PWA).
+    expect(SERVICE_APP_JS).toContain("window.__swipe.bind");
   });
 
   it("keeps cart persistent without taking width from the category scroller", () => {

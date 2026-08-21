@@ -10,6 +10,7 @@ import {
   opsHead,
 } from "./opsTheme.js";
 import { OPS_PICKER_HELPERS } from "./opsPicker.js";
+import { OPS_SWIPE_HELPER } from "./opsSwipe.js";
 import { OPS_DELIVERY_COMPOSER, OPS_DELIVERY_COMPOSER_CSS } from "./opsDeliveryComposer.js";
 
 /**
@@ -31,7 +32,7 @@ import { OPS_DELIVERY_COMPOSER, OPS_DELIVERY_COMPOSER_CSS } from "./opsDeliveryC
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v29";
+const ASSET_VERSION = "v30";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -340,7 +341,7 @@ self.addEventListener('notificationclick',e=>{
 });`;
 
 // ── Client app ───────────────────────────────────────────────────────────────
-export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_DELIVERY_COMPOSER + String.raw`(function(){
+export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY_COMPOSER + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
   var cursor=0;                    // event cursor; seeded from /state before SSE opens
   var connected=false;             // SSE opened once, after the first /state
@@ -372,6 +373,8 @@ export const SERVICE_APP_JS = OPS_PICKER_HELPERS + OPS_DELIVERY_COMPOSER + Strin
   function setTab(tab){ activeTab=tab==='livraisons'?'livraisons':'salle'; board.hidden=activeTab!=='salle'; deliveryBoard.hidden=activeTab!=='livraisons'; tabSalle.classList.toggle('on',activeTab==='salle'); tabDeliveries.classList.toggle('on',activeTab==='livraisons'); try{sessionStorage.setItem('service.tab',activeTab);}catch(e){} if(activeTab==='livraisons')refreshDeliveries(); }
   (function(){var q=new URLSearchParams(location.search).get('tab');try{q=q||sessionStorage.getItem('service.tab');}catch(e){}setTab(q);})();
   tabSalle.onclick=function(){setTab('salle');};tabDeliveries.onclick=function(){setTab('livraisons');};
+  // Swipe left = go right in the tab strip (livraisons), swipe right = back.
+  if(window.__swipe)window.__swipe.bind(function(){setTab('livraisons');},function(){setTab('salle');});
 
   // Paint + load the board FIRST, before any optional audio/push/composer setup —
   // so a throw in any of that can never leave the board stuck on "Chargement…"

@@ -160,14 +160,30 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v16");
+    expect(version).toBe("v17");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 
-  it("has the delivery column and shared composer", () => {
+  it("has the delivery board and shared composer", () => {
     expect(ownerBoardPage()).toContain("delivery-list");
     expect(OWNER_APP_JS).toContain("window.__deliveryComposer");
     expect(OWNER_APP_JS).toContain("/deliveries");
+  });
+
+  it("livraisons is its own board, reachable by tab or swipe — not stacked on the tickets", () => {
+    const page = ownerBoardPage();
+    // Two boards, the livraison one starting hidden…
+    expect(page).toContain('id="owner-tabs"');
+    expect(page).toContain('id="tab-livraisons"');
+    expect(page).toContain('<section id="delivery-board" hidden>');
+    // …and the old always-visible side-by-side layout is gone.
+    expect(page).not.toContain("owner-layout");
+    expect(page).not.toContain("owner-deliveries");
+    // ＋ Livraison moved out of the crowded header onto its own board.
+    expect(page).toContain('id="take-delivery"');
+    expect(page.split("</header>")[0]).not.toContain("take-delivery");
+    expect(OWNER_APP_JS).toContain("sessionStorage.setItem('owner.tab'");
+    expect(OWNER_APP_JS).toContain("window.__swipe.bind");
   });
 
   it("pages honour prefers-reduced-motion and only ever talk same-origin", () => {

@@ -71,6 +71,11 @@ export const OPS_TOKENS = `:root{color-scheme:light;
 // recreates an element (new ticket/spot, status change, qty change).
 export const OPS_BASE = `*{box-sizing:border-box}
 html,body{margin:0;min-height:100%}
+/* [hidden] must beat any author display: rule. Without this, a board styled
+   display:grid ignores el.hidden entirely (the UA rule is a lower origin) and
+   both boards render stacked — that is exactly how the service livraison board
+   used to bleed onto the salle screen with its sticky bar. */
+[hidden]{display:none!important}
 body{background:var(--bg);color:var(--ink-900);font-family:var(--sans);font-size:16px;line-height:1.5;
 font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;
 padding-top:env(safe-area-inset-top);-webkit-tap-highlight-color:transparent}

@@ -10,6 +10,7 @@ import {
   opsHead,
 } from "./opsTheme.js";
 import { OPS_PICKER_HELPERS } from "./opsPicker.js";
+import { OPS_SWIPE_HELPER } from "./opsSwipe.js";
 import { OPS_DELIVERY_COMPOSER, OPS_DELIVERY_COMPOSER_CSS } from "./opsDeliveryComposer.js";
 
 /**
@@ -25,7 +26,7 @@ import { OPS_DELIVERY_COMPOSER, OPS_DELIVERY_COMPOSER_CSS } from "./opsDeliveryC
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v16";
+const ASSET_VERSION = "v17";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -67,7 +68,21 @@ border-radius:999px;padding:.28rem .7rem;font-size:.8rem;font-weight:600}
 .dev.on{background:var(--ok-bg);color:var(--ok)}
 .dev.on .ddot{background:var(--ok-strong)}
 main{padding:.9rem 1rem 1rem;display:grid;gap:.9rem;grid-template-columns:repeat(auto-fill,minmax(18rem,1fr));align-content:start}
-#owner-layout{padding:.9rem 1rem 1rem;display:grid;grid-template-columns:minmax(18rem,1fr) minmax(18rem,2fr);gap:.9rem;align-items:start}#owner-layout main{padding:0;min-width:0}.owner-deliveries{display:grid;gap:.75rem}.owner-deliveries h2{margin:0;font-family:var(--serif);font-size:1.35rem}.delivery-card{background:var(--surface-raised);border:1px solid var(--border-soft);border-left:6px solid var(--info);border-radius:var(--radius-lg);padding:.85rem;display:grid;gap:.35rem;box-shadow:var(--shadow-1)}.delivery-card.ready{background:var(--ok-bg);border-color:var(--ok-border)}.delivery-name{font-family:var(--serif);font-size:1.2rem;font-weight:700}.delivery-meta{color:var(--ink-500);font-size:.9rem}.delivery-warn{color:var(--danger);font-weight:700}.delivery-actions{display:flex;flex-wrap:wrap;gap:.4rem}.delivery-actions button{padding:.5rem .65rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--surface);font:inherit;font-weight:700}.delivery-actions button.danger{color:var(--danger);border-color:var(--danger-border)}@media(max-width:52rem){#owner-layout{grid-template-columns:1fr}}
+/* Two boards, one at a time (same model as the salle PWA): tap a tab or swipe
+   left/right. The livraison board owns the ＋ Livraison button, which used to be
+   squeezed out of the crowded header. */
+#owner-tabs{position:sticky;top:0;z-index:8;display:flex;gap:.35rem;padding:.5rem 1rem;background:var(--surface);border-bottom:1px solid var(--border-soft)}
+#owner-tabs button{border:1px solid var(--border-strong);background:var(--surface-raised);color:var(--ink-700);border-radius:999px;padding:.55rem .8rem;font:inherit;font-weight:700}
+#owner-tabs button.on{background:var(--plum-600);border-color:var(--plum-600);color:#fff}
+#owner-tabs button.attention{box-shadow:0 0 0 2px var(--warn-border)}
+#delivery-board{padding:.9rem 1rem 1rem;display:grid;gap:.75rem;align-content:start}
+.delivery-top{display:flex;gap:.6rem;align-items:center}.delivery-top h2{margin:0;flex:1;font-family:var(--serif);font-size:1.35rem}
+.delivery-bottom{position:sticky;bottom:0;display:flex;gap:.6rem;padding:.7rem 0 calc(.7rem + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border-soft)}
+.delivery-bottom button{flex:1;background:var(--plum-600);border:0;border-radius:var(--radius);padding:.8rem;color:#fff;font:inherit;font-weight:800}
+.delivery-bottom a{align-self:center;color:var(--ink-500);font-size:.85rem}
+/* The clock is the first thing to go when the header runs out of room. */
+@media(max-width:26rem){#clock{display:none}}
+.delivery-card{background:var(--surface-raised);border:1px solid var(--border-soft);border-left:6px solid var(--info);border-radius:var(--radius-lg);padding:.85rem;display:grid;gap:.35rem;box-shadow:var(--shadow-1)}.delivery-card.ready{background:var(--ok-bg);border-color:var(--ok-border)}.delivery-name{font-family:var(--serif);font-size:1.2rem;font-weight:700}.delivery-meta{color:var(--ink-500);font-size:.9rem}.delivery-warn{color:var(--danger);font-weight:700}.delivery-actions{display:flex;flex-wrap:wrap;gap:.4rem}.delivery-actions button{padding:.5rem .65rem;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--surface);font:inherit;font-weight:700}.delivery-actions button.danger{color:var(--danger);border-color:var(--danger-border)}
 .card{background:var(--surface-raised);border:1px solid var(--border-soft);border-left:6px solid var(--plum-600);
 border-radius:var(--radius-lg);padding:.9rem 1rem;display:flex;flex-direction:column;gap:.5rem;box-shadow:var(--shadow-1)}
 .card.src-delivery{border-left-color:var(--info)}
@@ -256,10 +271,12 @@ export function ownerBoardPage(): string {
 <style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}${OPS_DELIVERY_COMPOSER_CSS}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Supervision</h1><span id="clock"></span><span class="spacer"></span>
-<button id="bell" type="button" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><button id="take" type="button">＋ Commande</button><button id="take-delivery" type="button">＋ Livraison</button><span class="count" id="count"></span></header>
+<button id="bell" type="button" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><button id="take" type="button">＋ Commande</button><span class="count" id="count"></span></header>
 <section id="kpi" class="kpi-bar"></section>
 <section id="devs" class="dev-bar"></section>
-<div id="owner-layout"><section class="owner-deliveries"><h2>🛵 Livraisons</h2><div id="delivery-list"><p class="empty">Chargement…</p></div></section><main id="board"><p class="empty" id="empty">Chargement…</p></main></div>
+<nav id="owner-tabs" aria-label="Espace de travail"><button id="tab-board" type="button" class="on">📋 Commandes</button><button id="tab-livraisons" type="button">🛵 Livraisons <span id="delivery-count"></span></button></nav>
+<main id="board"><p class="empty" id="empty">Chargement…</p></main>
+<section id="delivery-board" hidden><div class="delivery-top"><h2>🛵 Livraisons</h2></div><div id="delivery-list"><p class="empty">Chargement…</p></div><div class="delivery-bottom"><button id="take-delivery" type="button">＋ Livraison</button><a href="/admin/livraisons">Admin ↗</a></div></section>
 <noscript>Activez JavaScript pour la supervision.</noscript>
 <script src="${BASE}/app.js?b=${ASSET_VERSION}"></script>
 </body></html>`;
@@ -315,7 +332,7 @@ self.addEventListener('notificationclick',e=>{
 });`;
 
 // ── Client app (SSE cuisine channel + /stats poll; can also take an order) ───
-export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_DELIVERY_COMPOSER + String.raw`(function(){
+export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_SWIPE_HELPER + OPS_DELIVERY_COMPOSER + String.raw`(function(){
   var BASE=${JSON.stringify(BASE)};
   var cursor=0;             // event cursor; seeded from /state before SSE opens
   var booted=false;         // flips true after the first successful /state load
@@ -335,13 +352,45 @@ export const OWNER_APP_JS = OPS_PICKER_HELPERS + OPS_DELIVERY_COMPOSER + String.
   var kpiEl=document.getElementById('kpi');
   var devEl=document.getElementById('devs');
   var deliveryList=document.getElementById('delivery-list');
+  var deliveryBoard=document.getElementById('delivery-board');
+  var deliveryCount=document.getElementById('delivery-count');
+  var tabBoard=document.getElementById('tab-board');
+  var tabLivraisons=document.getElementById('tab-livraisons');
+  var activeTab='board';
+
+  // One board at a time — tabs or a horizontal swipe (same model as the salle
+  // PWA). The choice survives a reload so a supervisor watching livraisons
+  // doesn't land back on the tickets every time the app restarts.
+  function setTab(tab){
+    activeTab=tab==='livraisons'?'livraisons':'board';
+    board.hidden=activeTab!=='board';
+    deliveryBoard.hidden=activeTab!=='livraisons';
+    tabBoard.classList.toggle('on',activeTab==='board');
+    tabLivraisons.classList.toggle('on',activeTab==='livraisons');
+    try{sessionStorage.setItem('owner.tab',activeTab);}catch(e){}
+    if(activeTab==='livraisons')refreshDeliveries();
+  }
+  (function(){var q=new URLSearchParams(location.search).get('tab');try{q=q||sessionStorage.getItem('owner.tab');}catch(e){}setTab(q);})();
+  tabBoard.onclick=function(){setTab('board');};
+  tabLivraisons.onclick=function(){setTab('livraisons');};
+  // Swipe left = go right in the tab strip (livraisons), swipe right = back.
+  if(window.__swipe)window.__swipe.bind(function(){setTab('livraisons');},function(){setTab('board');});
 
   function el(tag,cls,txt){ var e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
   function showNotice(message){var old=document.querySelector('.toast');if(old&&old.parentNode)old.parentNode.removeChild(old);var n=el('div','toast',message);document.body.appendChild(n);setTimeout(function(){if(n.parentNode)n.parentNode.removeChild(n);},2800);}
   function deliveryActionLabel(a){return {mark_departed:'🛵 Partie',mark_delivered:'✅ Livrée',select_cash:'💵 Espèces',activate_now:'⚡ Activer',renotify_kitchen:'🔁 Renvoyer cuisine',cancel:'✕ Annuler'}[a]||a;}
   function deliveryActionPath(a){return {mark_departed:'depart',mark_delivered:'delivered',select_cash:'cash',activate_now:'activate-now',renotify_kitchen:'renotify-kitchen',cancel:'cancel'}[a]||'';}
   function deliveryCard(d){var c=el('article','delivery-card'+(d.group==='ready'?' ready':''));c.appendChild(el('div','delivery-name',d.client_name));c.appendChild(el('div','delivery-meta',(d.client_phone||'')+' · '+(d.address||'')));c.appendChild(el('div','delivery-meta',(d.items||[]).map(function(i){return i.qty+'× '+i.name+(i.choice?' ('+i.choice+')':'');}).join(' · ')));c.appendChild(el('div','delivery-meta',(d.amount_xof||0).toLocaleString('fr-FR')+' F · '+(d.payment_label||'')));if(d.kitchen_status)c.appendChild(el('div','delivery-meta','Cuisine : '+d.kitchen_status));if(d.blockingReason)c.appendChild(el('div','delivery-warn','⚠︎ '+d.blockingReason));var acts=el('div','delivery-actions');(d.allowedActions||[]).forEach(function(a){var b=el('button',a==='cancel'?'danger':'',deliveryActionLabel(a));b.onclick=function(){function go(){b.disabled=true;postJSON('/deliveries/'+encodeURIComponent(d.id)+'/'+deliveryActionPath(a),{}).then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {r:r,j:j};});}).then(function(x){if(!x.r.ok){showNotice(x.j.message||'Action impossible.');b.disabled=false;}refreshDeliveries();}).catch(function(){showNotice('Erreur réseau — réessaie.');b.disabled=false;});}if(a==='cancel')askConfirm('Annuler cette livraison ?','Oui, annuler','Non, garder',go);else go();};acts.appendChild(b);});if(acts.childNodes.length)c.appendChild(acts);return c;}
-  function renderDeliveries(){deliveryList.textContent='';if(!DELIVERIES.length){deliveryList.appendChild(el('p','empty',booted?'Aucune livraison ouverte':'Chargement…'));return;}DELIVERIES.forEach(function(d){deliveryList.appendChild(deliveryCard(d));});}
+  function renderDeliveries(){
+    deliveryList.textContent='';
+    if(!DELIVERIES.length)deliveryList.appendChild(el('p','empty',booted?'Aucune livraison ouverte':'Chargement…'));
+    else DELIVERIES.forEach(function(d){deliveryList.appendChild(deliveryCard(d));});
+    // The tab carries the count + a ring when something is ready, so the other
+    // board never hides an urgent livraison.
+    var n=DELIVERIES.length;
+    deliveryCount.textContent=n?'('+n+')':'';
+    tabLivraisons.classList.toggle('attention',DELIVERIES.some(function(d){return d.group==='ready';}));
+  }
   function refreshDeliveries(){return fetch(BASE+'/deliveries',{headers:{'X-Requested-With':'fetch'}}).then(function(r){if(r.status===401){location.reload();return null;}return r.ok?r.json():null;}).then(function(d){if(d){DELIVERIES=d.deliveries||[];renderDeliveries();}}).catch(function(){});}
   function fmtSecs(s){ s=Math.max(0,Math.floor(s)); var m=Math.floor(s/60), r=s%60; return (m<10?'0':'')+m+':'+(r<10?'0':'')+r; }
   function fmtElapsed(iso){ return fmtSecs((Date.now()-new Date(iso).getTime())/1000); }

@@ -6375,3 +6375,46 @@ complets passaient déjà via les composers salle) + smoke test DOM local
 (stub) : ouvrir → + article → choix obligatoire bloquant → étape 2 → client
 récent → POST payload vérifié → fermeture. Reste à valider sur iPhone réel
 (clavier iOS/visualViewport, PWA installée, les deux rôles).
+
+## 2026-08-21 — Livraisons : écran à part, navigation au swipe (+ bug `[hidden]`)
+
+Suite du retour de Babakar : « supprime les livraisons en bas de l'écran
+principal, passe à l'écran livraison en swipant vers la gauche ; de toute façon
+le bouton livraison est rogné, il n'y a pas assez de place ».
+
+**Le vrai bug derrière « les livraisons en bas de l'écran principal ».**
+`main{display:grid}` et `#delivery-board{display:grid}` sont des règles
+**auteur** : elles écrasent la règle **UA** `[hidden]{display:none}` (origine
+plus faible). Aucune règle `[hidden]` globale n'existait dans le CSS ops. Donc
+sur `/ops/service`, `board.hidden=true` / `deliveryBoard.hidden=false`
+**n'avaient aucun effet visuel** : les deux tableaux étaient empilés en
+permanence, barre collante `＋ Livraison` comprise, et les onglets Salle /
+Livraisons ne changeaient rien à l'écran. Corrigé par
+`[hidden]{display:none!important}` dans `OPS_BASE`
+([src/ops/opsTheme.ts](src/ops/opsTheme.ts)) — **piège à retenir : dans ces
+pages, tout `el.hidden` a besoin de cette règle pour marcher.**
+
+**Supervision (`/ops/owner`) : deux tableaux au lieu d'un fourre-tout.** La page
+n'avait aucune séparation — grille 2 colonnes `#owner-layout` (livraisons +
+tickets) sous les KPI, et un header qui empilait 🔔 Alertes + ＋ Commande +
+＋ Livraison sans `flex-wrap` → dernier bouton rogné sur iPhone. Désormais même
+modèle que la salle : onglets `📋 Commandes` / `🛵 Livraisons (n)` +
+`<section id="delivery-board" hidden>` avec sa barre basse portant
+`＋ Livraison` et le lien Admin. Le header ne garde que 🔔 Alertes et
+＋ Commande (et l'horloge se masque sous 26rem). Onglet actif mémorisé en
+`sessionStorage('owner.tab')` + `?tab=`, badge (n) et anneau `attention` quand
+une livraison est prête — l'autre écran ne peut plus cacher une urgence.
+
+**Swipe partagé** ([src/ops/opsSwipe.ts](src/ops/opsSwipe.ts), `window.__swipe`,
+injecté dans les deux bundles comme `OPS_PICKER_HELPERS`) : swipe gauche →
+livraisons, droite → retour, sur les DEUX PWA. Volontairement conservateur car
+le geste est en concurrence avec le scroll vertical et le scroller horizontal
+des chips du composer : ≥60px horizontaux, |dx| > 2×|dy|, <800ms, un seul
+doigt, ignoré si le geste démarre dans `.ov/.chips/input/textarea/select/
+[data-noswipe]` ou si un overlay composer est ouvert. Listeners `passive`.
+
+Tests : [test/opsSwipe.test.ts](test/opsSwipe.test.ts) (gardes + règle
+`[hidden]` présente dans les deux pages) + assertions owner (plus de
+`owner-layout`, `take-delivery` hors du header) ; smoke test DOM local des
+seuils du geste (court/lent/vertical/2 doigts/overlay = ignorés).
+`ASSET_VERSION` owner v17 / service v30.
