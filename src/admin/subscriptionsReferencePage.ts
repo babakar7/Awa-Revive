@@ -80,7 +80,7 @@ export function renderSubscriptionsReference(): string {
       </div>
       <div class="key-check-grid" aria-label="Conditions de l’invitation">
         <p><span aria-hidden="true">✓</span> Amie n’ayant jamais fait de Reformer chez Revive — ses autres venues ne bloquent pas</p>
-        <p><span aria-hidden="true">✓</span> Reformer à 12h30, du lundi au vendredi</p>
+        <p><span aria-hidden="true">✓</span> Reformer sur un créneau calme — 8h15, 9h15 ou 12h30 — du lundi au vendredi (le 7h15 n’est pas ouvert aux invitations)</p>
         <p><span aria-hidden="true">✓</span> Réservation sous le compte de la détentrice</p>
         <p><span aria-hidden="true">✓</span> Prénom et téléphone de l’amie dans la réservation</p>
       </div>
@@ -183,7 +183,7 @@ export function renderSubscriptionsReference(): string {
         <ul>
           <li>Piscine pendant toute la validité</li>
           <li>2 cours en plus (Aquabike, Yoga, Mat ou Step, lun–ven)</li>
-          <li>1 invitation Reformer (12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
+          <li>1 invitation Reformer (8h15, 9h15 ou 12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
           <li>Bibliothèque · massage membre · 7 jours de plus, une fois</li>
         </ul>
       </article>
@@ -191,18 +191,18 @@ export function renderSubscriptionsReference(): string {
         <header><h3>L’Abonnement Aquabike</h3><span class="key-cat-price">70 000 F · 8 séances · 30 j</span></header>
         <ul>
           <li>8 séances au prix de 7 — la huitième est offerte</li>
-          <li><strong>1 séance Reformer offerte</strong>, sur créneau calme (12h30, lun–ven) — passe par Awa (cours bonus)</li>
+          <li><strong>1 séance Reformer offerte</strong>, sur créneau calme (8h15, 9h15 ou 12h30, lun–ven) — passe par Awa (cours bonus)</li>
           <li><strong>1 invitation Aquabike</strong> pour une amie qui n’a jamais fait d’Aquabike chez Revive — cours Aquabike, lun–ven, à toute heure — passe par Awa</li>
           <li>7 jours de plus sur demande avant expiration</li>
         </ul>
-        <p class="key-cat-note">Règles différentes des Clés : l’invitation est un cours <em>Aquabike</em> (pas Reformer 12h30), et le bonus est une séance <em>Reformer</em> au créneau calme.</p>
+        <p class="key-cat-note">Règles différentes des Clés : l’invitation est un cours <em>Aquabike</em> à toute heure (pas Reformer sur créneau calme), et le bonus est une séance <em>Reformer</em> sur un créneau calme (8h15, 9h15 ou 12h30).</p>
       </article>
       <article class="key-cat-card key-cat-card--accent">
         <header><h3>1x Reformer · 1x Mat · 1x Step (par semaine)</h3><span class="key-cat-price">100 000 F · 12 séances · 30 j</span></header>
         <ul>
           <li>12 séances au choix : Reformer (Foundation/Sculpt/Intense), Pilates Mat, Step</li>
           <li>Piscine les jours de séance (serviette comprise) · bibliothèque · massage membre 25 000 F</li>
-          <li>1 invitation Reformer (12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
+          <li>1 invitation Reformer (8h15, 9h15 ou 12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
           <li>7 jours de plus sur demande avant expiration · pas de cours en plus (Mat/Step déjà couverts)</li>
         </ul>
         <p class="key-cat-note">Plan dédié à une cliente précise : Awa ne le propose jamais spontanément.</p>
@@ -212,7 +212,7 @@ export function renderSubscriptionsReference(): string {
         <ul>
           <li>16 séances au choix : Reformer (Foundation/Sculpt/Intense), Power Yoga, Step</li>
           <li>Accès piscine pendant toute la durée de la formule (serviette comprise) · bibliothèque · massage membre 25 000 F</li>
-          <li>1 invitation Reformer (12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
+          <li>1 invitation Reformer (8h15, 9h15 ou 12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
           <li>7 jours de plus sur demande avant expiration · pas de cours en plus (Yoga/Step déjà couverts)</li>
         </ul>
         <p class="key-cat-note">Plan dédié à une cliente précise : Awa ne le propose jamais spontanément. Piscine plus large que l’autre plan sur mesure : toute la durée, pas seulement les jours de séance.</p>
@@ -222,7 +222,7 @@ export function renderSubscriptionsReference(): string {
         <ul>
           <li>12 séances au choix : Reformer (Foundation/Sculpt/Intense) et Step</li>
           <li>Accès piscine pendant toute la durée de la formule (serviette comprise) · bibliothèque · massage membre 25 000 F</li>
-          <li>1 invitation Reformer (12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
+          <li>1 invitation Reformer (8h15, 9h15 ou 12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
           <li>7 jours de plus sur demande avant expiration · Step directement inclus dans les séances</li>
         </ul>
         <p class="key-cat-note">Plan dédié à une cliente précise : Awa ne le propose jamais spontanément.</p>

@@ -592,8 +592,8 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   {
     name: "book_key_invitation",
     description:
-      "Book an earned Clé invitation for a friend under the key holder's Wix account. Only Reformer at " +
-      "12:30 Monday-Friday is accepted. The friend must never have taken a Reformer class at Revive; prior " +
+      "Book an earned Clé invitation for a friend under the key holder's Wix account. Only Reformer on " +
+      "a calm slot — 8:15, 9:15 or 12:30 Monday-Friday — is accepted. The friend must never have taken a Reformer class at Revive; prior " +
       "Aquabike, Yoga, Mat, Step or other Revive visits do not disqualify. Provide first name and phone for " +
       "the server-side check. IMPORTANT: once confirmed, an invitation cannot be cancelled, moved " +
       "or carried over and the right remains consumed. Tell the client this before calling.",
@@ -601,7 +601,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
       type: "object",
       properties: {
         service_id: { type: "string", description: "Reformer service id from list_classes" },
-        event_id: { type: "string", description: "Chosen 12:30 slot choice_id" },
+        event_id: { type: "string", description: "Chosen calm-slot (8:15/9:15/12:30) choice_id" },
         slot_start: { type: "string", description: "ISO start time of the chosen slot" },
         client_name: { type: "string", description: "Key holder's first name" },
         friend_first_name: { type: "string", description: "Invited friend's first name" },
@@ -3580,8 +3580,8 @@ export async function executeTool(
       if (!slotStart || Number.isNaN(start.getTime()) || start.getTime() <= Date.now()) {
         return JSON.stringify({ error: "invalid_or_past_slot" });
       }
-      // Scope is per-plan-family: a Clé/sur-mesure invitation is Reformer at
-      // 12h30; an Aquabike invitation is an Aquabike class any weekday hour. The
+      // Scope is per-plan-family: a Clé/sur-mesure invitation is Reformer on a
+      // calm slot (CALM_SLOT_TIMES); an Aquabike invitation is an Aquabike class any weekday hour. The
       // pair must be admitted by at least one configured mapping's rule.
       const scopeAllowed = isInvitation
         ? anyInvitationScopeAllows(serviceId, start)
@@ -3590,8 +3590,8 @@ export async function executeTool(
         return JSON.stringify({
           error: isInvitation ? "invitation_slot_not_allowed" : "bonus_slot_not_allowed",
           message: isInvitation
-            ? "L'invitation Clé/sur mesure est limitée au Reformer à 12h30 (lun–ven) ; l'invitation Aquabike à un cours Aquabike (lun–ven, à toute heure). Ne propose aucun autre créneau."
-            : "Le cours en plus est limité à Aquabike, Yoga, Mat ou Step (lun–ven) ; la séance Reformer offerte de l'Abonnement Aquabike se prend au créneau calme de 12h30 (lun–ven).",
+            ? "L'invitation Clé/sur mesure est limitée au Reformer sur un créneau calme — 8h15, 9h15 ou 12h30 (lun–ven) ; l'invitation Aquabike à un cours Aquabike (lun–ven, à toute heure). Ne propose aucun autre créneau."
+            : "Le cours en plus est limité à Aquabike, Yoga, Mat ou Step (lun–ven) ; la séance Reformer offerte de l'Abonnement Aquabike se prend sur un créneau calme — 8h15, 9h15 ou 12h30 (lun–ven).",
         });
       }
       const service = await wix.getService(serviceId);

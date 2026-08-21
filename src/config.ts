@@ -14,6 +14,24 @@ function optional(name: string, fallback: string): string {
   return v && v.trim() !== "" ? v.trim() : fallback;
 }
 
+/** "08:15,09:15,12:30" → [{hour, minute}…]. Entrées invalides ignorées ; si
+ *  rien de valide ne reste, retour au défaut produit (fail-closed : la liste
+ *  ne s'élargit jamais silencieusement). */
+export function parseCalmSlotTimes(raw: string): Array<{ hour: number; minute: number }> {
+  const parsed = raw
+    .split(",")
+    .map((part) => /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(part.trim()))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => ({ hour: parseInt(m[1], 10), minute: parseInt(m[2], 10) }));
+  return parsed.length > 0
+    ? parsed
+    : [
+        { hour: 8, minute: 15 },
+        { hour: 9, minute: 15 },
+        { hour: 12, minute: 30 },
+      ];
+}
+
 const missing: string[] = [];
 
 export const config = {
@@ -274,7 +292,7 @@ export const config = {
     ),
   ],
   // L'Abonnement Aquabike : famille de Clé distincte. Son bonus = 1 séance
-  // Reformer sur le créneau calme 12h30 ; son invitation = 1 cours Aquabike
+  // Reformer sur un créneau calme (CALM_SLOT_TIMES) ; son invitation = 1 cours Aquabike
   // (lun–ven, toute heure) pour une amie jamais venue à Revive. Toutes vides
   // = type dark. L'invitation utilise un plan Wix SÉPARÉ, connecté uniquement
   // aux services Aquabike : l'ordre Invitation est créé avant vérification du
@@ -291,8 +309,12 @@ export const config = {
   // Both the retired full Pack Découverte and the new L'Invitée count toward
   // the once-per-person discovery entitlement.
   INVITEE_HISTORY_PLAN_IDS: optional("INVITEE_HISTORY_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
-  INVITATION_SLOT_HOUR: parseInt(optional("INVITATION_SLOT_HOUR", "12"), 10),
-  INVITATION_SLOT_MINUTE: parseInt(optional("INVITATION_SLOT_MINUTE", "30"), 10),
+  // Créneaux calmes (heure Dakar "HH:MM", séparés par des virgules) : les seuls
+  // départs de cours acceptés pour l'invitation Reformer des Clés/sur-mesure et
+  // pour la séance Reformer offerte de l'Abonnement Aquabike. Le 7h15 est
+  // volontairement exclu (il se remplit seul). Une liste invalide/vide retombe
+  // sur ce défaut — jamais sur « toute heure ».
+  CALM_SLOT_TIMES: parseCalmSlotTimes(optional("CALM_SLOT_TIMES", "08:15,09:15,12:30")),
   // Massage subscriber rate (server-decided, never the model). Holders of a
   // qualifying abonnement pay MASSAGE_MEMBER_RATE_XOF for the services listed in
   // MASSAGE_SERVICE_IDS instead of the Wix catalog price; everyone else pays the

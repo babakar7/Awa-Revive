@@ -16,7 +16,7 @@ function makeMapping(type: KeyType, over: Partial<KeyPlanMapping> = {}): KeyPlan
     invitation: {
       planId: "invitation-plan",
       serviceIds: ["svc-reformer"],
-      slotRule: "CALM_SLOT_1230",
+      slotRule: "CALM_SLOT",
       friendRule: "NEVER_REFORMER",
     },
     bonus: { planId: `${type.toLowerCase()}-bonus`, serviceIds: ["svc-mat"], slotRule: "ANY_WEEKDAY_HOUR" },
@@ -37,7 +37,7 @@ const aquabikeMapping = makeMapping("AQUABIKE", {
     slotRule: "ANY_WEEKDAY_HOUR",
     friendRule: "NEVER_AQUABIKE",
   },
-  bonus: { planId: "aquabike-bonus", serviceIds: ["svc-reformer"], slotRule: "CALM_SLOT_1230" },
+  bonus: { planId: "aquabike-bonus", serviceIds: ["svc-reformer"], slotRule: "CALM_SLOT" },
 });
 
 const surMesureMapping = makeMapping("SUR_MESURE", {

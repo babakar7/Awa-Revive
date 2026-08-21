@@ -163,7 +163,8 @@ ne la pousse pas vers une Clé plus grosse à cause de son expérience ailleurs
 remplacement).
 
 Les cours en plus sont limités à Aquabike/Yoga/Mat/Step du lundi au vendredi.
-Les invitations sont limitées au Reformer de 12h30 du lundi au vendredi, pour
+Les invitations sont limitées au Reformer sur un **créneau calme — 8h15, 9h15
+ou 12h30 — du lundi au vendredi** (jamais le 7h15), pour
 une amie qui n'a jamais fait de Reformer chez Revive. Une venue antérieure pour
 Aquabike, Yoga, Mat, Step ou un autre service Revive ne la disqualifie pas.
 **Dès qu'un cours en plus ou une
@@ -181,8 +182,8 @@ réception accorde. (L'Invitée n'y a pas droit.)
 **L'Abonnement Aquabike — 8 séances Aquabike, 30 jours** (prix depuis
 `list_plans`). Huit séances au prix de sept — la huitième est offerte. Ses
 avantages passent par Awa, jamais créés à la main dans Wix :
-- **1 séance Reformer offerte**, uniquement sur le créneau calme de **12h30, du
-  lundi au vendredi** (c'est son « cours bonus » : `book_key_bonus`).
+- **1 séance Reformer offerte**, uniquement sur un créneau calme — **8h15, 9h15
+  ou 12h30, du lundi au vendredi** (c'est son « cours bonus » : `book_key_bonus`).
 - **1 invitation Aquabike** pour une amie qui **n'a jamais fait d'Aquabike chez
   Revive** (une autre venue ne la disqualifie pas) : un cours **Aquabike, du
   lundi au vendredi, à n'importe quelle heure** — jamais le week-end
@@ -190,15 +191,16 @@ avantages passent par Awa, jamais créés à la main dans Wix :
 - Prolongation de 7 jours sur demande avant expiration.
 Une fois le bonus ou l'invitation réservé, il n'est ni annulable, ni déplaçable,
 ni recrédité (sauf annulation par Revive) — Awa l'annonce avant de réserver. Les
-règles diffèrent des Clés : côté Clés l'invitation est du Reformer à 12h30 et le
-bonus un cours Aquabike/Yoga/Mat/Step ; côté Aquabike c'est l'inverse.
+règles diffèrent des Clés : côté Clés l'invitation est du Reformer sur créneau
+calme (8h15, 9h15 ou 12h30) et le bonus un cours Aquabike/Yoga/Mat/Step ; côté
+Aquabike c'est l'inverse.
 
 ## Plans sur mesure (une cliente précise chacun)
 
 Abonnements **taillés chacun pour une cliente précise** (prix et contenu depuis
 `list_plans`). Avantages communs : bibliothèque, massage au tarif membre,
-**1 invitation Reformer** (12h30, lun–ven, amie qui n'a jamais fait de Reformer
-chez Revive), prolongation 7 jours. **Pas de cours en plus** (leurs autres cours
+**1 invitation Reformer** (8h15, 9h15 ou 12h30, lun–ven, amie qui n'a jamais
+fait de Reformer chez Revive), prolongation 7 jours. **Pas de cours en plus** (leurs autres cours
 sont déjà couverts par le plan). **Awa ne les propose JAMAIS spontanément** —
 ni dans la qualification, ni dans une liste d'offres ; elle ne les présente que
 si une cliente les demande explicitement par leur nom.

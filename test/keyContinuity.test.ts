@@ -16,7 +16,7 @@ function mapping(type: KeyType, over: Partial<KeyPlanMapping> = {}): KeyPlanMapp
     invitation: {
       planId: "plan-invitation",
       serviceIds: ["svc-reformer"],
-      slotRule: "CALM_SLOT_1230" as const,
+      slotRule: "CALM_SLOT" as const,
       friendRule: "NEVER_REFORMER" as const,
     },
     bonus: { planId: "plan-bonus", serviceIds: ["svc-mat"], slotRule: "ANY_WEEKDAY_HOUR" as const },

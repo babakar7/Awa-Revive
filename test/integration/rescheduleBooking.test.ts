@@ -225,7 +225,7 @@ describe("reschedule_booking", () => {
         invitation: {
           planId: "invitation-plan",
           serviceIds: ["svc-reformer"],
-          slotRule: "CALM_SLOT_1230",
+          slotRule: "CALM_SLOT",
           friendRule: "NEVER_REFORMER",
         },
         bonus: { planId: "hab-bonus", serviceIds: ["svc-mat"], slotRule: "ANY_WEEKDAY_HOUR" },

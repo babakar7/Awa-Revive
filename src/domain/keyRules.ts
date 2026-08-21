@@ -17,8 +17,10 @@ export type KeyType =
  */
 export type ContinuityFamily = "REFORMER" | "AQUABIKE";
 
-/** 12h30 lun–ven (créneau calme) vs. n'importe quelle heure lun–ven. */
-export type SlotRule = "CALM_SLOT_1230" | "ANY_WEEKDAY_HOUR";
+/** Créneaux calmes lun–ven (config.CALM_SLOT_TIMES : 8h15, 9h15, 12h30 — le
+ *  7h15 est volontairement exclu, il se remplit seul) vs. n'importe quelle
+ *  heure lun–ven. */
+export type SlotRule = "CALM_SLOT" | "ANY_WEEKDAY_HOUR";
 
 /**
  * NEVER_REFORMER: the friend must never have done Reformer at Revive (a visit
@@ -72,7 +74,7 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
   const reformerInvitation = (): InvitationRule => ({
     planId: config.INVITATION_PLAN_ID,
     serviceIds: config.KEY_REFORMER_SERVICE_IDS,
-    slotRule: "CALM_SLOT_1230",
+    slotRule: "CALM_SLOT",
     friendRule: "NEVER_REFORMER",
   });
 
@@ -136,8 +138,8 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
       },
     })),
     {
-      // Aquabike: its own family. Bonus = 1 Reformer session on the calm 12h30
-      // slot; invitation = 1 Aquabike class (any weekday hour) for a friend who
+      // Aquabike: its own family. Bonus = 1 Reformer session on a calm slot
+      // (CALM_SLOT_TIMES); invitation = 1 Aquabike class (any weekday hour) for a friend who
       // never came to Revive. Needs all four Aquabike vars set.
       requires: [
         config.AQUABIKE_ABO_PLAN_ID,
@@ -161,7 +163,7 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
         bonus: {
           planId: config.AQUABIKE_BONUS_PLAN_ID,
           serviceIds: config.KEY_REFORMER_SERVICE_IDS,
-          slotRule: "CALM_SLOT_1230",
+          slotRule: "CALM_SLOT",
         },
       },
     },
@@ -206,19 +208,19 @@ export function isDakarWeekday(date: Date): boolean {
 export function slotRuleAllows(rule: SlotRule, start: Date): boolean {
   if (!isDakarWeekday(start)) return false;
   if (rule === "ANY_WEEKDAY_HOUR") return true;
-  return (
-    start.getUTCHours() === config.INVITATION_SLOT_HOUR &&
-    start.getUTCMinutes() === config.INVITATION_SLOT_MINUTE
+  return config.CALM_SLOT_TIMES.some(
+    (slot) =>
+      start.getUTCHours() === slot.hour && start.getUTCMinutes() === slot.minute,
   );
 }
 
-/** Legacy Clé helpers kept for existing callers/tests (Reformer 12h30 / weekday). */
+/** Legacy Clé helpers kept for existing callers/tests (Reformer créneau calme / weekday). */
 export function isBonusSlotAllowed(start: Date): boolean {
   return isDakarWeekday(start);
 }
 
 export function isInvitationSlotAllowed(start: Date): boolean {
-  return slotRuleAllows("CALM_SLOT_1230", start);
+  return slotRuleAllows("CALM_SLOT", start);
 }
 
 /** Whether an invitation on `serviceId` at `start` fits this key's invitation rule. */

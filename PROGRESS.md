@@ -1,5 +1,34 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Créneaux calmes élargis : invitations & bonus Reformer à 8h15/9h15/12h30 (21 août 2026)
+
+**Décision Babakar (21/08)** : pour remplir les cours du matin, l'invitation
+Reformer des Clés/plans sur mesure et la séance Reformer offerte de
+l'Abonnement Aquabike passent de « 12h30 uniquement » aux **créneaux calmes
+8h15, 9h15 et 12h30 (lun–ven)**. Le **7h15 est volontairement exclu** («
+7h15 va se remplir je pense » — il tournait déjà à 6/7 dès sa première
+semaine). Contexte : analyse de remplissage du 21/08 — samedis Sculpt
+complets d'avance, mercredi 12h30 à 117 %, mais 8h15/9h15 quasi vides
+(4 annulations auto pour cours vide depuis le 17/08).
+
+**Implémentation.** La règle vivait dans `slotRuleAllows` (keyRules.ts) sur
+`INVITATION_SLOT_HOUR/MINUTE` (12/30). Remplacée par **`CALM_SLOT_TIMES`**
+(config, défaut `"08:15,09:15,12:30"`, format `HH:MM` séparés par virgules,
+heure Dakar) ; `SlotRule` renommé `CALM_SLOT_1230` → `CALM_SLOT`. Entrée
+invalide ignorée, liste vide → retour au défaut (fail-closed : jamais « toute
+heure »). Textes alignés : systemPrompt (règles 187–188), descriptions/erreurs
+de `book_key_invitation`/`book_key_bonus` (tools.ts), business-info.md, et la
+**référence réception /admin** (subscriptionsReferencePage.ts — grille de
+conditions + cartes des plans, avec mention explicite « le 7h15 n'est pas
+ouvert aux invitations »). Tests keyRules/configKeys/adminSubscriptionsReference
+étendus (8h15/9h15 acceptés, 7h15 refusé, parse de `CALM_SLOT_TIMES`).
+
+**Piège évité** : les variables Railway `INVITATION_SLOT_HOUR/MINUTE` étaient
+posées explicitement en prod (12/30) — elles ne sont plus lues par le code ;
+les retirer du service pour éviter qu'une future session croie qu'elles font
+encore foi. Pour rouvrir le 7h15 un jour : poser
+`CALM_SLOT_TIMES=07:15,08:15,09:15,12:30`, rien d'autre à toucher.
+
 ## Alerte « 1re séance L'Invitée » : matcha de bienvenue (21 août 2026)
 
 **Besoin (Babakar).** La Clé L'Invitée inclut un matcha offert ; le staff doit

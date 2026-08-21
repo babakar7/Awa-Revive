@@ -24,7 +24,7 @@ function mapping(type: KeyType): KeyPlanMapping {
     invitation: {
       planId: "plan-invitation",
       serviceIds: [REFORMER_SVC],
-      slotRule: "CALM_SLOT_1230" as const,
+      slotRule: "CALM_SLOT" as const,
       friendRule: "NEVER_REFORMER" as const,
     },
     bonus: {
@@ -56,7 +56,7 @@ function mapping(type: KeyType): KeyPlanMapping {
       bonus: {
         planId: "plan-aquabike-bonus",
         serviceIds: [REFORMER_SVC],
-        slotRule: "CALM_SLOT_1230",
+        slotRule: "CALM_SLOT",
       },
     };
   return base;
@@ -96,12 +96,18 @@ describe("invitationEarnings", () => {
 
 describe("invitation & bonus scope", () => {
   const weekday1230 = new Date("2026-07-27T12:30:00Z"); // Monday
+  const weekday0815 = new Date("2026-07-27T08:15:00Z");
+  const weekday0915 = new Date("2026-07-27T09:15:00Z");
+  const weekday0715 = new Date("2026-07-27T07:15:00Z");
   const weekday10 = new Date("2026-07-27T10:00:00Z");
   const saturday = new Date("2026-08-01T10:00:00Z");
 
-  it("Clé invitation: Reformer at 12:30 on a weekday only", () => {
+  it("Clé invitation: Reformer on a calm slot (8:15/9:15/12:30) on a weekday only", () => {
     const m = mapping("RESIDENTE");
     expect(invitationScopeAllows(m, REFORMER_SVC, weekday1230)).toBe(true);
+    expect(invitationScopeAllows(m, REFORMER_SVC, weekday0815)).toBe(true);
+    expect(invitationScopeAllows(m, REFORMER_SVC, weekday0915)).toBe(true);
+    expect(invitationScopeAllows(m, REFORMER_SVC, weekday0715)).toBe(false);
     expect(invitationScopeAllows(m, REFORMER_SVC, weekday10)).toBe(false);
     expect(invitationScopeAllows(m, AQUABIKE_SVC, weekday1230)).toBe(false);
   });
@@ -114,9 +120,12 @@ describe("invitation & bonus scope", () => {
     expect(invitationScopeAllows(m, REFORMER_SVC, weekday10)).toBe(false);
   });
 
-  it("Aquabike bonus: a Reformer session only on the 12:30 calm slot", () => {
+  it("Aquabike bonus: a Reformer session only on a calm slot", () => {
     const m = mapping("AQUABIKE");
     expect(bonusScopeAllows(m, REFORMER_SVC, weekday1230)).toBe(true);
+    expect(bonusScopeAllows(m, REFORMER_SVC, weekday0815)).toBe(true);
+    expect(bonusScopeAllows(m, REFORMER_SVC, weekday0915)).toBe(true);
+    expect(bonusScopeAllows(m, REFORMER_SVC, weekday0715)).toBe(false);
     expect(bonusScopeAllows(m, REFORMER_SVC, weekday10)).toBe(false);
   });
 
@@ -134,9 +143,13 @@ describe("legacy slot helpers", () => {
     expect(isBonusSlotAllowed(new Date("2026-08-03T00:00:00Z"))).toBe(true);
   });
 
-  it("accepts invitations exactly at 12:30 on weekdays", () => {
+  it("accepts invitations exactly on the calm slots (8:15, 9:15, 12:30) on weekdays", () => {
     expect(isInvitationSlotAllowed(new Date("2026-07-27T12:30:00Z"))).toBe(true);
+    expect(isInvitationSlotAllowed(new Date("2026-07-27T08:15:00Z"))).toBe(true);
+    expect(isInvitationSlotAllowed(new Date("2026-07-27T09:15:00Z"))).toBe(true);
+    expect(isInvitationSlotAllowed(new Date("2026-07-27T07:15:00Z"))).toBe(false);
     expect(isInvitationSlotAllowed(new Date("2026-07-27T12:29:00Z"))).toBe(false);
     expect(isInvitationSlotAllowed(new Date("2026-08-01T12:30:00Z"))).toBe(false);
+    expect(isInvitationSlotAllowed(new Date("2026-08-01T08:15:00Z"))).toBe(false);
   });
 });

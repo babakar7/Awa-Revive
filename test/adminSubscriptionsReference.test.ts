@@ -16,7 +16,9 @@ describe("Abonnements — référence réception", () => {
     expect(html).toContain("1 pour L’Invitée et L’Habituée · 2 pour La Résidente");
     expect(html).toContain("Toute invitation passe par Awa/Resabot");
     expect(html).toContain("Amie n’ayant jamais fait de Reformer chez Revive — ses autres venues ne bloquent pas");
-    expect(html).toContain("Reformer à 12h30, du lundi au vendredi");
+    expect(html).toContain("Reformer sur un créneau calme — 8h15, 9h15 ou 12h30 — du lundi au vendredi");
+    expect(html).toContain("le 7h15 n’est pas ouvert aux invitations");
+    expect(html).toContain("1 invitation Reformer (8h15, 9h15 ou 12h30, lun–ven)");
     expect(html).toContain("Prolongation de 7 jours");
     expect(html).toContain("Membres Fondatrices");
     expect(html).toContain("Carnet de 10 Bébé nageur et Natation — 70 000 F");

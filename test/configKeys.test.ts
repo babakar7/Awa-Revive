@@ -132,6 +132,30 @@ describe("Clés production preflight", () => {
       bonus: null,
     });
     // Type lookup stays safe: every SUR_MESURE mapping carries identical rules.
-    expect(keyMappingForType("SUR_MESURE")?.invitation.slotRule).toBe("CALM_SLOT_1230");
+    expect(keyMappingForType("SUR_MESURE")?.invitation.slotRule).toBe("CALM_SLOT");
+  });
+});
+
+describe("parseCalmSlotTimes", () => {
+  it("parses the default trio", async () => {
+    const { parseCalmSlotTimes } = await loadConfig();
+    expect(parseCalmSlotTimes("08:15,09:15,12:30")).toEqual([
+      { hour: 8, minute: 15 },
+      { hour: 9, minute: 15 },
+      { hour: 12, minute: 30 },
+    ]);
+  });
+
+  it("drops invalid entries and falls back to the default trio when nothing valid remains", async () => {
+    const { parseCalmSlotTimes } = await loadConfig();
+    expect(parseCalmSlotTimes("8h15, 25:00, oops")).toEqual([
+      { hour: 8, minute: 15 },
+      { hour: 9, minute: 15 },
+      { hour: 12, minute: 30 },
+    ]);
+    expect(parseCalmSlotTimes(" 12:30 , 07:15")).toEqual([
+      { hour: 12, minute: 30 },
+      { hour: 7, minute: 15 },
+    ]);
   });
 });
