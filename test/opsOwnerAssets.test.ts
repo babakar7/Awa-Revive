@@ -160,7 +160,7 @@ describe("owner supervision PWA assets", () => {
 
   it("cache-bust version is identical in app.js query and SW cache name", () => {
     const version = ownerBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v15");
+    expect(version).toBe("v16");
     expect(OWNER_SW).toContain(`owner-${version}`);
   });
 

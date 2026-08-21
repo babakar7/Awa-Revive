@@ -22,7 +22,7 @@ describe("service PWA assets", () => {
 
   it("cache-bust version is identical in the app.js query and the SW cache name", () => {
     const version = serviceBoardPage().match(/app\.js\?b=(v\d+)/)?.[1];
-    expect(version).toBe("v28");
+    expect(version).toBe("v29");
     expect(SERVICE_SW).toContain(`service-${version}`);
   });
 

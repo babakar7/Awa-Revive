@@ -10,7 +10,7 @@ import {
   opsHead,
 } from "./opsTheme.js";
 import { OPS_PICKER_HELPERS } from "./opsPicker.js";
-import { OPS_DELIVERY_COMPOSER } from "./opsDeliveryComposer.js";
+import { OPS_DELIVERY_COMPOSER, OPS_DELIVERY_COMPOSER_CSS } from "./opsDeliveryComposer.js";
 
 /**
  * The owner supervision PWA (owner.revive.sn) — an overview of all live activity
@@ -25,7 +25,7 @@ import { OPS_DELIVERY_COMPOSER } from "./opsDeliveryComposer.js";
  */
 
 const BASE = "/ops/owner";
-const ASSET_VERSION = "v15";
+const ASSET_VERSION = "v16";
 
 /** Same relaxed-but-sandboxed CSP as the other ops PWAs. */
 export function hardenOwner(reply: FastifyReply): void {
@@ -253,7 +253,7 @@ export function ownerBoardPage(): string {
   // No inline boot: script-src 'self' blocks it. The client fetches /state before
   // opening SSE, so the board is DB-authoritative from the first paint.
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Supervision")}<title>Supervision Revive</title>
-<style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
+<style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}${OPS_DELIVERY_COMPOSER_CSS}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Supervision</h1><span id="clock"></span><span class="spacer"></span>
 <button id="bell" type="button" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><button id="take" type="button">＋ Commande</button><button id="take-delivery" type="button">＋ Livraison</button><span class="count" id="count"></span></header>

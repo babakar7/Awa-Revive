@@ -10,7 +10,7 @@ import {
   opsHead,
 } from "./opsTheme.js";
 import { OPS_PICKER_HELPERS } from "./opsPicker.js";
-import { OPS_DELIVERY_COMPOSER } from "./opsDeliveryComposer.js";
+import { OPS_DELIVERY_COMPOSER, OPS_DELIVERY_COMPOSER_CSS } from "./opsDeliveryComposer.js";
 
 /**
  * The reception PWA (service.revive.sn) — HTML shell, manifest, service worker
@@ -31,7 +31,7 @@ import { OPS_DELIVERY_COMPOSER } from "./opsDeliveryComposer.js";
 const BASE = "/ops/service";
 // Bumped whenever app.js/sw change — used as the SW cache name AND an app.js
 // query string, so a fresh build can't be served stale from any cache.
-const ASSET_VERSION = "v28";
+const ASSET_VERSION = "v29";
 
 /** Same relaxed-but-sandboxed CSP as the cuisine PWA: script/worker/connect 'self'
  *  only, no external origin. */
@@ -275,7 +275,7 @@ export function serviceBoardPage(): string {
   // No inline boot: script-src 'self' blocks it. The client fetches /state before
   // opening SSE, so the board is DB-authoritative from the first paint.
   return `<!doctype html><html lang="fr"><head>${opsHead(BASE, "Salle")}<title>Salle Revive</title>
-<style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}</style></head><body>
+<style>${OPS_TOKENS}${OPS_BASE}${APP_STYLE}${OPS_DELIVERY_COMPOSER_CSS}</style></head><body>
 <div id="offline">Hors ligne — reconnexion…</div>
 <header><span id="dot" class="dot"></span><span class="logo">${OPS_LOGO_SVG}</span><h1>Salle</h1><span class="spacer"></span><button id="hist" aria-label="Tables récentes">🕐</button><button id="snd" class="sndbtn" aria-label="Activer/couper le son">🔊</button><button id="bell" class="off" aria-label="Alertes commandes prêtes">🔔 Alertes</button><span class="count" id="count"></span></header>
 <nav id="service-tabs" aria-label="Espace de travail"><button id="tab-salle" class="on">🍽️ Salle</button><button id="tab-deliveries">🛵 Livraisons <span id="delivery-count"></span></button></nav>

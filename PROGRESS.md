@@ -6328,3 +6328,50 @@ brouillon en 404, publication, instantané qui résiste à une édition de
 brouillon, refus serveur d'envoyer un brouillon, refus sans destinataire,
 rotation de lien invalidant l'ancien, audit sans token — sur un rôle ne
 correspondant à personne, donc zéro WhatsApp envoyé, puis fiche supprimée.
+
+## 2026-08-21 — Composer Livraison plein écran 2 étapes (ops owner + service)
+
+Refonte UX du composer « ＋ Livraison » partagé par `/ops/owner` (supervision)
+et `/ops/service`, sur retour de Babakar : « impossible de scroller pour
+ajouter des articles, et je ne veux plus d'un modal ».
+
+**Cause racine du scroll cassé.** L'ancien composer empilait tout en enfants
+directs de `.sheet` (hauteur fixe `96dvh`, `overflow:hidden`) et mettait la
+liste d'articles dans `.delivery-menu` — une classe **sans aucun CSS dans le
+repo**. Seule `.list` (`flex:1;min-height:0;overflow-y:auto`) scrolle dans ces
+pages ; les 5 champs texte mangeaient la hauteur, la liste était clippée et le
+bouton « Envoyer » pouvait sortir de l'écran. `.field`, `.client-results`,
+`label.check` étaient aussi sans style.
+
+**Nouveau design** ([src/ops/opsDeliveryComposer.ts](src/ops/opsDeliveryComposer.ts),
+réécrit) : page plein écran (opaque, sans scrim ni poignée, sans fermeture
+tap-outside) en 2 étapes — **étape 1 articles** (portage du picker salle :
+recherche + chips catégories + 🔥 Populaires enfin branché sur `opt.top`, liste
+`.list` scrollable, mise à jour des quantités EN PLACE — plus de rebuild
+complet qui perdait le scroll), **étape 2 client/livraison** (autocomplete
+inchangé, segment Maintenant/⏰Programmée qui révèle `scheduled_for`+délai).
+Footer persistant total + action principale sur les deux étapes.
+
+Durcissements issus de la revue croisée du plan : `setStep()` appelle
+`finishSearch()` (jamais de mode `.searching` fuité en étape 2) ; `×`/`←`/
+« Modifier » verrouillés pendant le POST (une commande peut déjà être créée
+côté serveur) ; compteur de requête sur l'autocomplete (réponse périmée
+ignorée) ; nettoyage timers/listeners au close ; `.trim()` + `scheduled_for`
+validés avant POST et focus du champ désigné par `j.field` en erreur serveur ;
+caps serveur (qty ≤ 10, ≤ 15 lignes) reflétés côté client.
+
+**Contrats intouchés** : signature `open({base,menu,top,recent,post,onDone})`,
+payload `POST {base}/deliveries` identique (selections indexées
+`{group_index,value}`, `client_request_id` généré une fois par ouverture →
+retry idempotent). Le CSS delta est exporté (`OPS_DELIVERY_COMPOSER_CSS`)
+depuis le composer et injecté par LES DEUX pages (contrat de ~20 classes
+partagées documenté en tête de fichier — piège : ces classes sont dupliquées
+owner/service, un restyle d'une page seule fera diverger le composer).
+`ASSET_VERSION` bumpé owner v16 / service v29 (sinon SW périmé).
+
+Tests : nouveau [test/opsDeliveryComposer.test.ts](test/opsDeliveryComposer.test.ts)
+qui assert sur les EXPORTS du composer (des sentinelles sur les bundles
+complets passaient déjà via les composers salle) + smoke test DOM local
+(stub) : ouvrir → + article → choix obligatoire bloquant → étape 2 → client
+récent → POST payload vérifié → fermeture. Reste à valider sur iPhone réel
+(clavier iOS/visualViewport, PWA installée, les deux rôles).
