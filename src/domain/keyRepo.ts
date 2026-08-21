@@ -613,6 +613,48 @@ export async function inviteeGuaranteeFacts(keyId: string): Promise<{
   };
 }
 
+/**
+ * Clients attending `eventId` on the FIRST (earliest non-cancelled) session of
+ * their Clé L'Invitée — the welcome-matcha audience of the staff alert.
+ * Ordering reads pending_bookings.slot_start (kept current on reschedule),
+ * never the frozen key_reformer_bookings.slot_start. Coverage: only bookings
+ * made through Awa exist here (key_reformer_bookings is written by the
+ * redemption path); a first session booked by reception directly in Wix has no
+ * row and raises no alert.
+ */
+export async function firstInviteeSessionAttendees(
+  eventId: string,
+): Promise<Array<{ clientName: string | null; waPhone: string; isTest: boolean }>> {
+  const res = await pool.query(
+    `select c.name as client_name, c.wa_phone, c.is_test
+       from key_reformer_bookings r
+       join pending_bookings b on b.id = r.local_booking_id
+       join key_registry k on k.id = r.key_id
+       join clients c on c.id = b.client_id
+      where b.event_id = $1
+        and b.status <> 'CANCELLED'
+        and k.key_type = 'INVITEE'
+        and k.status in ('SCHEDULED','ACTIVE')
+        and not exists (
+          select 1
+            from key_reformer_bookings r2
+            join pending_bookings b2 on b2.id = r2.local_booking_id
+           where r2.key_id = r.key_id
+             and b2.status <> 'CANCELLED'
+             and (b2.slot_start < b.slot_start
+                  or (b2.slot_start = b.slot_start
+                      and r2.wix_booking_id < r.wix_booking_id))
+        )
+      order by c.name nulls last, c.wa_phone`,
+    [eventId],
+  );
+  return res.rows.map((row: any) => ({
+    clientName: row.client_name ?? null,
+    waPhone: row.wa_phone as string,
+    isTest: !!row.is_test,
+  }));
+}
+
 export async function recordGuaranteeRequest(
   keyId: string,
   detail: Record<string, unknown>,

@@ -10,6 +10,7 @@ import { syncCancellations } from "./domain/cancellationSync.js";
 import { sweepWaitlist } from "./domain/waitlistSweep.js";
 import { sweepRenewalNudges } from "./domain/renewalNudge.js";
 import { sweepStaffNotifications } from "./domain/notificationSweep.js";
+import { sweepFirstSessionAlerts } from "./domain/firstSessionAlert.js";
 import { sweepContactGapAlert } from "./domain/bookingContactWatch.js";
 import { sweepAutoCancellations } from "./domain/autoCancelSweep.js";
 import { sweepDeliveries } from "./domain/deliveryNotify.js";
@@ -179,6 +180,15 @@ async function main() {
       if (notified > 0) app.log.info({ notified }, "Staff notifications sent");
     } catch (err) {
       app.log.error({ err }, "Staff-notification sweep failed");
+    }
+    // « 1re séance L'Invitée » (matcha de bienvenue) : ping accueil-en-service
+    // + owner ~1 h avant le cours concerné. Own try/catch; shares the staff
+    // notification schedule cache; needs ≤1-min granularity → the 60s loop.
+    try {
+      const matcha = await sweepFirstSessionAlerts(app.log);
+      if (matcha > 0) app.log.info({ matcha }, "First-session matcha alerts sent");
+    } catch (err) {
+      app.log.error({ err }, "First-session alert sweep failed");
     }
     // Empty-class auto-cancellation. Own try/catch: a Wix hiccup must never
     // block the sweeps around it, and vice-versa. Needs ≤1-min granularity for

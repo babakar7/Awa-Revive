@@ -1,5 +1,44 @@
 # PROGRESS — Revive Bookings ("Awa")
 
+## Alerte « 1re séance L'Invitée » : matcha de bienvenue (21 août 2026)
+
+**Besoin (Babakar).** La Clé L'Invitée inclut un matcha offert ; le staff doit
+le proposer à l'arrivée SANS que la cliente le demande. Wix ne permet ni colonne
+personnalisée dans la liste des participants ni note visible sans ouvrir chaque
+participante (vérifié doc Wix) → alerte WhatsApp ~1 h avant le cours, envoyée à
+**owner + accueil en service à l'heure du cours** (pas à l'heure de l'alerte).
+
+**Architecture.** Sweep 60 s [src/domain/firstSessionAlert.ts](src/domain/firstSessionAlert.ts)
+(logique pure : [firstSessionAlertRules.ts](src/domain/firstSessionAlertRules.ts)) :
+- **Détection** : `keyRepo.firstInviteeSessionAttendees(eventId)` —
+  `key_reformer_bookings ⋈ pending_bookings ⋈ key_registry(INVITEE,
+  SCHEDULED|ACTIVE) ⋈ clients`, « première » = plus petit `slot_start` non
+  annulé de la Clé, lu depuis **pending_bookings** (mis à jour au report ;
+  `key_reformer_bookings.slot_start` est figé à la résa). Validé en lecture
+  seule sur la prod : 49 Clés Invitée / 55 redemptions, 2 vraies premières
+  séances à venir détectées, 0 faux positif sur les séances suivantes.
+- **Fenêtre** : due si `start − 60 min ≤ now < start` (patron dueClassReminders).
+  Pas de course « résa tardive après l'alerte » : plus de résa possible < 16 h.
+- **Destinataires** : `OWNER_PHONE` + contacts `accueil` non muets à numéro
+  valide dont le shift du planning publié couvre l'heure de début du cours
+  (`onShiftStaffIds` sur les coordonnées du cours — Dakar == UTC). Pas de
+  planning publié → tout l'accueil joignable ; aucun accueil résoluble →
+  repli `RECEPTION_PHONE` (posture deliveryNotify). Dédup par chiffres.
+- **Envoi** : machinerie `notification_log` (claim-before-send, source
+  `invitee_first_session`, dedup `INVITEE_FIRST:<eventId>:<digits>`,
+  template-first via `WA_RECEPTION_TEMPLATE`, 131047 dur / transitoire
+  re-claimé à 2 min). Planning Wix : cache 5 min partagé avec
+  `notificationSweep.getSchedule` (exporté).
+
+**Limites connues.** Couvre uniquement les résas passées par Awa
+(`key_reformer_bookings` est écrit par le chemin de redemption) : une 1re séance
+posée par la réception directement dans Wix ne déclenche rien. Kill switch :
+`INVITEE_FIRST_SESSION_ALERT_ENABLED=false` (Railway), défaut actif.
+
+**Validation.** Build + 1 524 tests unitaires verts (11 nouveaux,
+`test/firstSessionAlertRules.test.ts`). Requête de détection rejouée sur la
+prod en lecture seule avant le ship.
+
 ## Commandes « offertes » : hors chiffre d'affaires (21 août 2026)
 
 **Pourquoi.** Les offres du type « pack 3 cours + 1 boisson offerte » et les

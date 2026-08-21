@@ -44,9 +44,10 @@ let scheduleCache: {
  * Upcoming class sessions enriched with their service name. Cached 5 min; on a
  * refresh failure the last-good cache is served (a Wix hiccup must not blind
  * the sweep). The −6h lookback lets back-to-back suppression see a session that
- * already started.
+ * already started. Exported so sibling 60s sweeps (firstSessionAlert) share the
+ * one cache instead of hitting Wix again.
  */
-async function getSchedule(log: SweepLog): Promise<SlotWithName[]> {
+export async function getSchedule(log: SweepLog): Promise<SlotWithName[]> {
   if (scheduleCache && Date.now() - scheduleCache.at < SCHEDULE_TTL_MS) {
     return scheduleCache.slots;
   }

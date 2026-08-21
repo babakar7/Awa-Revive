@@ -247,6 +247,12 @@ export const config = {
   // Clés de la Maison. Sales are governed separately by
   // AWA_SELLABLE_PLAN_IDS; this switch controls provisioning/lifecycle only.
   KEYS_AUTOMATION_ENABLED: optional("KEYS_AUTOMATION_ENABLED", "false") === "true",
+  // Alerte staff « 1re séance L'Invitée » (matcha de bienvenue offert) :
+  // WhatsApp à l'accueil en service à l'heure du cours + owner, ~1 h avant le
+  // cours (domain/firstSessionAlert.ts). "false" coupe le sweep sans toucher
+  // aux autres alertes.
+  INVITEE_FIRST_SESSION_ALERT_ENABLED:
+    optional("INVITEE_FIRST_SESSION_ALERT_ENABLED", "true") === "true",
   INVITEE_PLAN_ID: optional("INVITEE_PLAN_ID", ""),
   INVITEE_BONUS_PLAN_ID: optional("INVITEE_BONUS_PLAN_ID", ""),
   HABITUEE_PLAN_ID: optional("HABITUEE_PLAN_ID", ""),

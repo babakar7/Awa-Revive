@@ -924,7 +924,9 @@ alter table notification_rules
 
 -- Journal de tout envoi. source ∈ rule | reception | owner_alert | new_chat | technical |
 -- delivery | invoice | gift_card | staff_planning | ops_ticket | auto_cancel |
--- fiche_poste | test.
+-- fiche_poste | invitee_first_session | test.
+-- invitee_first_session = alerte « matcha de bienvenue » ~1 h avant un cours
+-- contenant une 1re séance de Clé L'Invitée (domain/firstSessionAlert.ts).
 -- new_chat = ping owner (NEW_CHAT_NOTIFY_PHONE) uniquement — ne pas confondre
 -- avec reception. owner_alert = copie OWNER_PHONE d'une alerte réception qui
 -- demande une intervention humaine (domain/ownerAlertRules.ts).
