@@ -13,7 +13,6 @@ function mapping(type: KeyType, over: Partial<KeyPlanMapping> = {}): KeyPlanMapp
     durationDays: 30,
     baseInvitations: type === "RESIDENTE" ? 1 : 0,
     continuityInvitation: true,
-    reviewGateEligible: true,
     invitation: {
       planId: "plan-invitation",
       serviceIds: ["svc-reformer"],
@@ -116,7 +115,6 @@ describe("keyPurchaseContinuityDecision — flat-1 plans & early flag", () => {
       mapping: mapping("SUR_MESURE", {
         baseInvitations: 1,
         continuityInvitation: false,
-        reviewGateEligible: false,
         bonus: null,
       }),
       purchasedAt: at,
@@ -133,7 +131,6 @@ describe("keyPurchaseContinuityDecision — flat-1 plans & early flag", () => {
         family: "AQUABIKE",
         baseInvitations: 1,
         continuityInvitation: false,
-        reviewGateEligible: false,
       }),
       purchasedAt: at,
       source,

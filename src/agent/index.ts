@@ -1233,16 +1233,6 @@ export async function handleInboundText(args: {
     faqRepo.publishedFaqEntries().catch(() => []),
   ]);
 
-  // Google-review gate state: "announce" (no gate yet — mention the condition
-  // during an early-renewal pitch), "pending" (invitations locked, awaiting her
-  // review), or null (feature off, or already activated → nothing to say).
-  let reviewGate: "announce" | "pending" | null = null;
-  if (config.KEYS_AUTOMATION_ENABLED && config.GOOGLE_REVIEW_URL) {
-    const gate = await keyRepo.reviewGateForClient(client.id).catch(() => null);
-    if (!gate) reviewGate = "announce";
-    else if (!gate.activated_at) reviewGate = "pending";
-  }
-
   const system: Anthropic.TextBlockParam[] = [
     // Stable prefix — cached.
     { type: "text", text: systemPrompt(), cache_control: { type: "ephemeral" } },
@@ -1271,8 +1261,6 @@ export async function handleInboundText(args: {
         packDiscoveryMetaNewLead,
         cleInviteeAdLead,
         omOutageActive,
-        reviewGate,
-        reviewLink: config.GOOGLE_REVIEW_URL || undefined,
         conversationGapDays,
         priorConversationSummary,
         studioClosures,

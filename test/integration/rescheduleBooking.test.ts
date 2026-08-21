@@ -222,7 +222,6 @@ describe("reschedule_booking", () => {
         durationDays: 30,
         baseInvitations: 0,
         continuityInvitation: true,
-        reviewGateEligible: true,
         invitation: {
           planId: "invitation-plan",
           serviceIds: ["svc-reformer"],

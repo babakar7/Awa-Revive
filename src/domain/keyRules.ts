@@ -53,8 +53,6 @@ export interface KeyPlanMapping {
   baseInvitations: number;
   /** Whether an early renewal grants +1 invitation (Clés only). */
   continuityInvitation: boolean;
-  /** Whether this type can trigger the one-time Google-review gate (Clés only). */
-  reviewGateEligible: boolean;
   invitation: InvitationRule;
   /** null when the plan has no "cours en plus" (sur-mesure covers Mat/Step itself). */
   bonus: BonusRule | null;
@@ -88,7 +86,6 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
         durationDays: 21,
         baseInvitations: 0,
         continuityInvitation: true,
-        reviewGateEligible: true,
         invitation: reformerInvitation(),
         bonus: clePlanBonus(config.INVITEE_BONUS_PLAN_ID),
       },
@@ -102,7 +99,6 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
         durationDays: 30,
         baseInvitations: 0,
         continuityInvitation: true,
-        reviewGateEligible: true,
         invitation: reformerInvitation(),
         bonus: clePlanBonus(config.HABITUEE_BONUS_PLAN_ID),
       },
@@ -116,7 +112,6 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
         durationDays: 60,
         baseInvitations: 1,
         continuityInvitation: true,
-        reviewGateEligible: true,
         invitation: reformerInvitation(),
         bonus: clePlanBonus(config.RESIDENTE_BONUS_PLAN_ID),
       },
@@ -136,7 +131,6 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
         durationDays: 30,
         baseInvitations: 1,
         continuityInvitation: false,
-        reviewGateEligible: false,
         invitation: reformerInvitation(),
         bonus: null,
       },
@@ -158,7 +152,6 @@ export function configuredKeyMappings(): KeyPlanMapping[] {
         durationDays: 30,
         baseInvitations: 1,
         continuityInvitation: false,
-        reviewGateEligible: false,
         invitation: {
           planId: config.AQUABIKE_INVITATION_PLAN_ID,
           serviceIds: config.AQUABIKE_SERVICE_IDS,
@@ -202,32 +195,6 @@ export function invitationEarnings(
       ? 1
       : 0;
   return mapping.baseInvitations + continuity;
-}
-
-/**
- * Whether THIS verified Key purchase triggers the one-time Google-review gate:
- * its invitations are created PENDING_REVIEW until the client leaves a review.
- * The gate changes the born-status of the invitation rows, never their count
- * (that stays governed by invitationEarnings). Only Clé types are eligible, and
- * only on an early renewal — never AQUABIKE/SUR_MESURE, even when they earn an
- * invitation on a first (or early) purchase.
- */
-export function reviewGateApplies(args: {
-  featureEnabled: boolean; // KEYS_AUTOMATION_ENABLED && GOOGLE_REVIEW_URL set
-  typeEligible: boolean; // mapping.reviewGateEligible (Clés only)
-  earlyRenewal: boolean; // purchasedAt < continuity source expiry
-  clientKnown: boolean; // gate is per-client; anonymous purchases never gate
-  clientAlreadyGated: boolean; // a google_review_gates row already exists
-  invitationCount: number; // from invitationEarnings, unchanged by this feature
-}): boolean {
-  return (
-    args.featureEnabled &&
-    args.typeEligible &&
-    args.earlyRenewal &&
-    args.clientKnown &&
-    !args.clientAlreadyGated &&
-    args.invitationCount > 0
-  );
 }
 
 export function isDakarWeekday(date: Date): boolean {

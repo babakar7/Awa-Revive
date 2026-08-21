@@ -3,7 +3,6 @@ import {
   invitationEarnings,
   invitationScopeAllows,
   bonusScopeAllows,
-  reviewGateApplies,
   isBonusSlotAllowed,
   isInvitationSlotAllowed,
   type KeyPlanMapping,
@@ -22,7 +21,6 @@ function mapping(type: KeyType): KeyPlanMapping {
     durationDays: 30,
     baseInvitations: 0,
     continuityInvitation: true,
-    reviewGateEligible: true,
     invitation: {
       planId: "plan-invitation",
       serviceIds: [REFORMER_SVC],
@@ -41,7 +39,6 @@ function mapping(type: KeyType): KeyPlanMapping {
       ...base,
       baseInvitations: 1,
       continuityInvitation: false,
-      reviewGateEligible: false,
       bonus: null,
     };
   if (type === "AQUABIKE")
@@ -50,7 +47,6 @@ function mapping(type: KeyType): KeyPlanMapping {
       family: "AQUABIKE",
       baseInvitations: 1,
       continuityInvitation: false,
-      reviewGateEligible: false,
       invitation: {
         planId: "plan-aquabike-invitation",
         serviceIds: [AQUABIKE_SVC],
@@ -128,39 +124,6 @@ describe("invitation & bonus scope", () => {
     const m = mapping("SUR_MESURE");
     expect(bonusScopeAllows(m, BONUS_SVC, weekday10)).toBe(false);
     expect(bonusScopeAllows(m, REFORMER_SVC, weekday1230)).toBe(false);
-  });
-});
-
-describe("reviewGateApplies", () => {
-  const base = {
-    featureEnabled: true,
-    typeEligible: true,
-    earlyRenewal: true,
-    clientKnown: true,
-    clientAlreadyGated: false,
-    invitationCount: 1,
-  };
-
-  it("gates a Clé's first early renewal that earns an invitation", () => {
-    expect(reviewGateApplies(base)).toBe(true);
-  });
-
-  it.each([
-    ["feature dark", { featureEnabled: false }],
-    ["type not eligible (Aquabike/sur-mesure)", { typeEligible: false }],
-    ["not an early renewal", { earlyRenewal: false }],
-    ["anonymous purchase", { clientKnown: false }],
-    ["already gated once", { clientAlreadyGated: true }],
-    ["no invitation earned", { invitationCount: 0 }],
-  ] as const)("does not gate: %s", (_label, override) => {
-    expect(reviewGateApplies({ ...base, ...override })).toBe(false);
-  });
-
-  it("never gates an early-renewed Aquabike/sur-mesure even if it earns an invitation", () => {
-    // typeEligible=false is what the mapping supplies for these plans.
-    expect(
-      reviewGateApplies({ ...base, typeEligible: false, earlyRenewal: true, invitationCount: 1 }),
-    ).toBe(false);
   });
 });
 

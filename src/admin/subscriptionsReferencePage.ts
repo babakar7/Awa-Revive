@@ -225,7 +225,7 @@ export function renderSubscriptionsReference(): string {
           <li>1 invitation Reformer (12h30, lun–ven) pour une amie qui n’a jamais fait de Reformer chez Revive</li>
           <li>7 jours de plus sur demande avant expiration · Step directement inclus dans les séances</li>
         </ul>
-        <p class="key-cat-note">Plan dédié à une cliente précise : Awa ne le propose jamais spontanément. Lors du premier renouvellement anticipé, l’invitation s’active après l’avis Google envoyé à Awa.</p>
+        <p class="key-cat-note">Plan dédié à une cliente précise : Awa ne le propose jamais spontanément.</p>
       </article>
       <article class="key-cat-card key-cat-card--plain">
         <header><h3>Carnet natation (sans avantages annexes)</h3><span class="key-cat-price">10 séances à utiliser librement</span></header>

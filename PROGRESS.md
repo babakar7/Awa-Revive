@@ -202,7 +202,7 @@ le runbook. Non traité dans ce chantier.
 
 - Nouveau plan Wix créé : **120 000 F · 12 séances · 30 jours** (`a3e4c40e-7088-42f7-b04e-49ff7bc9b192`), avec un seul pool de 12 crédits relié aux trois niveaux Reformer et au Step.
 - Avantages : piscine pendant toute la durée (serviette comprise), bibliothèque, massage membre à 25 000 F, prolongation de 7 jours et une invitation Reformer à 12h30 lun–ven. La référence réception et les règles Awa listent le plan comme sur-mesure dédié : jamais proposé spontanément.
-- Le plan doit figurer dans Railway dans `SUR_MESURE_PLAN_IDS`, `AWA_SELLABLE_PLAN_IDS` et `MASSAGE_MEMBER_PLAN_IDS`. Cela le fait bénéficier de l'invitation et de la mécanique existante : au premier renouvellement anticipé, Awa déverrouille l'invitation à réception de la capture de l'avis Google. La mise à jour Railway reste à faire si elle n'a pas encore été appliquée.
+- Le plan doit figurer dans Railway dans `SUR_MESURE_PLAN_IDS`, `AWA_SELLABLE_PLAN_IDS` et `MASSAGE_MEMBER_PLAN_IDS` pour bénéficier de l'invitation et des automatismes de Clé. La mise à jour Railway reste à faire si elle n'a pas encore été appliquée.
 - Provisionneur idempotent : `scripts/provision-custom-reformer-step-wix.ts` (sans argument = lecture seule ; `--apply` crée/raccorde le plan).
 
 ## Annulation automatique des cours vides (17 août 2026)
@@ -1640,8 +1640,8 @@ surveiller le portail marchand et réconcilier via `/admin/paiements-om`.
 
 ## Abonnements généralisés : L'Abonnement Aquabike + plan sur mesure (3 août 2026)
 
-**Contexte :** la machinerie des Clés (registre, cours bonus, invitations,
-prolongation, gate avis Google) ne gérait que 3 types Reformer. On l'a
+**Contexte :** la machinerie des Clés (registre, cours bonus, invitations et
+prolongation) ne gérait que 3 types Reformer. On l'a
 généralisée pour deux nouveaux abonnements, en gérant l'axe que les 3 Clés
 n'exerçaient jamais : **la coexistence de deux _familles_ de clés** (REFORMER =
 les Clés + le sur-mesure ; AQUABIKE) actives/programmées chez une même cliente.
@@ -1649,7 +1649,7 @@ les Clés + le sur-mesure ; AQUABIKE) actives/programmées chez une même client
 **Ce qui est en prod :**
 - **`keyRules`** : 5 types (`KeyType` += `AQUABIKE`, `SUR_MESURE`) ; mapping
   imbriqué par type (`family`, `invitation{planId,serviceIds,slotRule,friendRule}`,
-  `bonus|null`, `baseInvitations`, `continuityInvitation`, `reviewGateEligible`).
+  `bonus|null`, `baseInvitations`, `continuityInvitation`).
 - **Schéma** : `key_type` CHECK étendu ; `bonus_plan_id` nullable (le sur-mesure
   n'a pas de cours en plus) ; colonne `family` ; unicité SCHEDULED désormais
   **par (cliente, famille)** sur `key_registry` ET `pending_plan_orders` (une
@@ -1659,10 +1659,6 @@ les Clés + le sur-mesure ; AQUABIKE) actives/programmées chez une même client
   l'inverse. **Bug corrigé** : la garantie L'Invitée cherchait la clé active la
   plus récente (`activeKeyForClient`) — un Aquabike plus récent l'aurait masquée ;
   passée à `activeKeyOfType(…, 'INVITEE')`.
-- **Gate avis Google** : fondée sur `decision.earlyRenewal` (post-famille) +
-  `mapping.reviewGateEligible` → jamais déclenchée pour AQUABIKE/SUR_MESURE, ni
-  par erreur sur une Résidente achetée pendant un Aquabike actif. **Aucune
-  extension de la gate** (décision Babakar).
 - **Réclamation** (`book_key_invitation`/`book_key_bonus`) : périmètre par
   candidate (mapping de chaque clé) ; règle d'amie selon le service.
   **Invitation Aquabike : amie qui n'a jamais fait d'AQUABIKE à Revive**
@@ -2089,44 +2085,6 @@ Revue des 20 dernières conversations prod. Corrigés dans `agent/awa-convo-fixe
 - Fix : allowlist explicite et testée des six outils serveur autorisés à
   produire un lien. Les outils non listés et les noms ressemblants restent
   refusés ; le garde anti-liens inventés n'est pas élargi à tous les résultats.
-
-## Machine à avis Google — invitation du 1er renouvellement anticipé (31 juillet 2026)
-
-- **Objectif** : la **première fois** (à vie) qu'une cliente renouvelle une Clé
-  **avant expiration**, l'invitation gagnée naît **verrouillée** (`PENDING_REVIEW`)
-  et s'active quand elle laisse un **avis Google** puis envoie une **capture
-  d'écran**. Awa active sur capture — la capture suffit, pas de validation
-  réception (celle-ci reçoit une notif FYI). Un seul avis débloque **toutes** les
-  invitations de la clé (cas Résidente : les 2). Une fois par cliente : ses
-  renouvellements anticipés suivants donnent l'invitation sans condition.
-- **Périmètre** : la condition est **annoncée dès l'argumentaire de vente** d'un
-  renouvellement anticipé (contexte dynamique `reviewGate: "announce"`). Les
-  **achats au comptoir** (webhook Wix) ne sont **jamais** gated — le provisioning
-  comptoir ne passe pas `reviewGatePlanOrderId`, seule la voie Awa/fulfillment le
-  fait. **Risque assumé par Babakar** : conditionner un avis est contraire à la
-  policy Google (avis incitatifs) ; décision produit prise en connaissance de cause.
-- **Modèle** : nouveau statut `PENDING_REVIEW` sur `key_invitations` (invisible à
-  `availableInvitationForKey`) + table `google_review_gates` (PK `client_id` =
-  règle à-vie), créée au paiement vérifié dans `finalizeVerifiedKeyContinuity`
-  (re-entrante : insert idempotent). Une clé chaînée naît plus tard, à
-  l'activation ; le gate porté par la cliente survit à ce décalage (capture avant
-  provisioning → invitations nées `GRANTED`).
-- **Décision pure** : `reviewGateApplies()` dans `keyRules.ts` (feature on +
-  early renewal + cliente connue + pas déjà gated + invitationCount > 0). Le gate
-  change le **statut de naissance** des invitations, jamais leur nombre
-  (`invitationEarnings` inchangé).
-- **Flux** : message de demande envoyé après paiement dans `processPlanPayment`
-  (`maybeSendGoogleReviewAsk`, claim atomique `ask_sent_at` → retries webhook
-  no-op, couvre Wave + OM). Outil `record_google_review` (activation atomique +
-  idempotente + notif FYI). `book_key_invitation` renvoie `invitation_pending_review`
-  + lien quand la seule invitation est verrouillée → rappel doux piloté par l'outil.
-- **Config** : `GOOGLE_REVIEW_URL` (vide = feature éteinte ; effective seulement
-  avec `KEYS_AUTOMATION_ENABLED`). Lien prod : `https://g.page/r/CQm4IE7CTYQYEBM/review`.
-  Le lien n'est pas une URL de paiement → `outboundLint` ne le bloque pas.
-- **Tests** : `test/googleReviewGate.test.ts` (table `reviewGateApplies` + copie
-  fr/en/wo), `test/integration/googleReviewGate.test.ts` (à-vie PK, invisibilité
-  redemption, activation atomique + idempotente, claim one-shot, capture avant
-  provisioning, Résidente 2 invitations).
 
 ## Relais technique fiable + Clé avec première séance (31 juillet 2026)
 

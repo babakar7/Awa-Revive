@@ -300,11 +300,6 @@ export const config = {
   MASSAGE_SERVICE_IDS: optional("MASSAGE_SERVICE_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   MASSAGE_MEMBER_PLAN_IDS: optional("MASSAGE_MEMBER_PLAN_IDS", "").split(",").map((id) => id.trim()).filter(Boolean),
   MASSAGE_MEMBER_RATE_XOF: parseInt(optional("MASSAGE_MEMBER_RATE_XOF", "25000"), 10),
-  // Google-review gate on a client's FIRST early Key renewal. Empty = feature
-  // dark (invitations grant unconditionally, as before). Effective only with
-  // KEYS_AUTOMATION_ENABLED. The link is sent verbatim to the client; it is not
-  // a payment URL, so outboundLint never blocks it.
-  GOOGLE_REVIEW_URL: optional("GOOGLE_REVIEW_URL", ""),
   // Clés lifecycle templates. Each feature stays dark until its exact Meta
   // template name is configured; language codes must match Meta approval.
   WA_KEY_INVITEE_J5_TEMPLATE: optional("WA_KEY_INVITEE_J5_TEMPLATE", ""),

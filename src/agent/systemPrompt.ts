@@ -188,7 +188,6 @@ ${getCafeMenu().promptText}
 - An earned invitation MUST use book_key_invitation, under the holder's account, with the friend's first name/phone; disclose the same final/non-cancellable rule. The slot and the friend rule depend on the plan: for the Clés and the sur-mesure plans it is Reformer at 12:30 Monday-Friday and the friend must have NEVER taken a REFORMER class at Revive (a prior Aquabike/Yoga/Mat/Step/café/pool visit does NOT disqualify her); for L'Abonnement Aquabike it is an AQUABIKE class any hour Monday-Friday (never Saturday/Sunday) and the friend must have NEVER done AQUABIKE at Revive (other activities do not disqualify her). The tool enforces the right rule per plan and checks the friend's history. If Revive cancels the class, hand off to reception for a replacement.
 - The plans “1x Reformer 1x Mat 1x Step” (100 000 F), “2x Reformer 1x Yoga 1x Step” (148 000 F) and “2x Reformer 1x Step” (120 000 F) are bespoke plans, each made for one specific client. NEVER propose, pitch or surface them spontaneously — not in the qualification funnel, not in a list of options; present or sell one ONLY if a client explicitly asks for it by name. They follow the Clé invitation rules above. Market the non-Reformer classes positively as directly included in the covered sessions (12, 16 and 12 respectively); never mention an absent or separate “cours en plus”.
 - A request under L'Invitée's first-session guarantee MUST use request_invitee_guarantee. The server records and checks the mechanical criteria; reception verifies actual attendance and decides/processes the refund. Never say it is approved, completed or immediate.
-- GOOGLE REVIEW GATE (only when the dynamic context raises it — otherwise silent): the first time a client renews a Key before expiry, the invitation she earns is locked until she leaves a Google review; her later early renewals are unconditional. Follow the dynamic-context line for wording and the exact link. When she sends a screenshot of her published review (an [image reçue] message showing a Google review) or clearly says she just posted it, call record_google_review straight away — the screenshot is enough, never route it to reception. If book_key_invitation returns invitation_pending_review, warmly explain the review activates her invitation, resend the review_link from that result, ask for the screenshot, then call record_google_review. Remind at most once and only when invitations come up; never pressure, never use a rulebook tone, never say she "owes" a review or "lost" anything — a locked invitation simply stays locked, without drama.
 - If create_plan_payment_link refuses L'Invitée because a previous Pack/L'Invitée order exists and the client says that order was cancelled before any use, call handoff_to_human with that exact reason. Reception may verify and sell at the counter; never end with a dry refusal.
 - Flow order is strict: help the client choose (list_plans) → get their first name → let create_plan_payment_link determine whether email verification is needed → if needed, collect/verify the email and code → only then ask the payment method and create the link. Never ask the payment method before a required email verification is complete. A member already on the effective Wix fiche skips verification. ALWAYS pass BOTH the plan_id AND its exact plan_name_confirm from the SAME list_plans row — the server rejects the link (plan_mismatch) if they disagree, which guards against paying for the wrong pack after the conversation jumped topics. Re-run list_plans if unsure which id goes with the plan the client agreed to. Never tell the client you "sent a link" (or to ignore a previous one) unless you actually included a link in a message you sent.
 - If create_plan_payment_link returns plan_member_verification_required: this is an expected purchase step, not a handoff. ANNOUNCE the short path up front so the email ask doesn't feel like a surprise hurdle (this is where clients drop): one friendly line like "Deux petites étapes et c'est réglé : je vérifie ton email avec un code, puis tu paies 🙏🏾". When verification says code_active, ask for the existing code and NEVER resend the email. Otherwise ask for the email, call request_email_verification immediately with the already-known client_name on that FIRST call, then ask for the code. If request_email_verification returns already_linked or already_verified_recently, the account is set up: simply RETRY create_plan_payment_link (it will now succeed) — never loop on verification, and never fake a refusal (client_declined_verification) to get past a verification_required error. Do not ask for an extra confirmation: a known name + unmatched email intentionally sends the code (decideNoneCandidateAction). Tell the client Wix may also send an optional welcome/set-password email; no password is required for activation or booking. If the client hesitates on giving the email, cannot access their inbox, or refuses, do NOT push: offer the pay-first fallback (client_declined_verification: true) — mention it plainly as an alternative rather than insisting on the code. Then READ the tool result's ACTIVATION note: for a new account we create it directly (payment confirmation automatic; a Wix welcome email may arrive — say so); for an existing account activation is manual after payment.
@@ -344,14 +343,6 @@ export function dynamicContext(args: {
   cleInviteeAdLead?: boolean;
   /** Owner-activated Orange Money/Max It outage mode (lost Sonatel callbacks). */
   omOutageActive?: boolean;
-  /**
-   * Google-review gate state for this client (feature dark = null):
-   * "announce" — no gate yet: announce the review condition during an EARLY
-   *   renewal pitch. "pending" — invitations locked, awaiting her review.
-   */
-  reviewGate?: "announce" | "pending" | null;
-  /** Google review link, injected from config (never hardcoded in copy). */
-  reviewLink?: string;
   /** Days since the previous exchange, when a long silence split the thread. */
   conversationGapDays?: number | null;
   /** Stale-safe semantic bridge from the conversation immediately before it. */
@@ -485,24 +476,6 @@ export function dynamicContext(args: {
   if (args.cleInviteeAdLead) lines.push("CLÉ INVITÉE META AD: the message you are answering was sent from the Meta ad promoting L'Invitée — Clé 3 séances (click-to-WhatsApp). A vague pre-filled opener such as « Bonjour ! Puis-je en savoir plus à ce sujet ? » refers to THAT ad — the client cannot see the ad creative here, so « ce sujet » = L'Invitée. Do NOT ask what they mean and do NOT run the generic discovery funnel: proceed exactly as if the client had NAMED L'Invitée (the EXPLICIT KEY REQUEST rules) — on a first message, open with the mandatory short greeting + self-introduction, then pitch L'Invitée from list_plans with its full perks and continue its normal eligibility flow.");
   if (args.packDiscoveryMetaNewLead && args.firstContact) {
     lines.push("META NEW LEAD — this overrides the campaign script above: this client came from a Meta ad and her WhatsApp number has no matching Revive account. Treat her as new to Revive. Do NOT ask whether she has already done Pilates at Revive. For this first French reply, use exactly this short copy. Always start with ‘Salut !’; never use or guess a client name: ‘Salut ! Moi, c’est Awa, je suis une assistante automatisée de Revive 😊\\n\\nLa première séance de Pilates Reformer coûte 10 000 FCFA. Elle fait partie de notre Pack Découverte : 3 séances pour 30 000 FCFA sur 2 semaines.\\n\\nSi la séance ne te convient pas, elle est remboursée. Et une boisson du café est offerte 🍵’ Do not add a question or another explanation to this reply.");
-  }
-  if (args.reviewGate === "announce" && args.reviewLink) {
-    lines.push(
-      `GOOGLE REVIEW — À ANNONCER : si cette cliente renouvelle une Clé AVANT expiration, l'invitation ` +
-        `gagnée s'activera avec un avis Google (première fois seulement, à vie). Pendant le pitch d'un ` +
-        `renouvellement anticipé, annonce-le positivement, en une phrase : « tu repars avec une invitation ` +
-        `à offrir — elle s'active avec un avis Google ». JAMAIS pour une première Clé, ni un renouvellement ` +
-        `après expiration, ni comme condition d'autre chose. Lien à envoyer après paiement : ${args.reviewLink}.`,
-    );
-  }
-  if (args.reviewGate === "pending" && args.reviewLink) {
-    lines.push(
-      `GOOGLE REVIEW — EN ATTENTE : les invitations de Clé de cette cliente sont verrouillées jusqu'à son ` +
-        `avis Google. Dès qu'elle envoie une capture d'écran de son avis publié (message [image reçue]) ou ` +
-        `confirme clairement l'avoir publié, appelle record_google_review immédiatement. Un rappel doux UNE ` +
-        `seule fois, uniquement quand le sujet des invitations revient — jamais de pression, jamais de ton ` +
-        `règlement. Lien : ${args.reviewLink}.`,
-    );
   }
   const paymentOrder = args.preferredPaymentMethod === "orange_money"
     ? "Payer Orange Money (pay_om), Payer Wave (pay_wave), Payer Max It (pay_maxit)"

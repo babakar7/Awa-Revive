@@ -632,20 +632,6 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
-    name: "record_google_review",
-    description:
-      "Activate the client's review-locked Clé invitation(s) after she leaves a Google review. " +
-      "Call ONLY once she has sent a screenshot of her published review (an [image reçue] message " +
-      "showing a Google review) or clearly confirmed she just published it — never on a mere promise " +
-      "to do it later. The server checks that a pending review gate exists for this client; the " +
-      "screenshot is sufficient (no reception approval). Idempotent: a second screenshot is harmless.",
-    input_schema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-  },
-  {
     name: "create_cafe_payment_link",
     description:
       "Create a payment link for a MENU (bar) order after a class is booked, or a standalone counter order. " +
@@ -3566,53 +3552,6 @@ export async function executeTool(
       });
     }
 
-    case "record_google_review": {
-      if (!config.KEYS_AUTOMATION_ENABLED || !config.GOOGLE_REVIEW_URL) {
-        return JSON.stringify({
-          error: "review_gate_not_enabled",
-          message: "L'activation par avis n'est pas ouverte. Remercie pour l'avis, n'active ni ne promets rien.",
-        });
-      }
-      const activated = await keyRepo.activateReviewGate(client.id);
-      if (!activated) {
-        const existing = await keyRepo.reviewGateForClient(client.id);
-        if (existing?.activated_at) {
-          return JSON.stringify({
-            already_activated: true,
-            message: "Ses invitations sont déjà actives — remercie-la simplement pour son avis.",
-          });
-        }
-        return JSON.stringify({
-          error: "no_pending_review_gate",
-          message:
-            "Aucune invitation en attente d'avis pour cette cliente. Remercie pour l'avis ; n'active ni ne promets rien.",
-        });
-      }
-      const unlocked = activated.key_id
-        ? await keyRepo.activatePendingInvitations(activated.key_id)
-        : 0;
-      const holderPhone = `+${client.wa_phone.replace(/^\+/, "")}`;
-      notifyReception(
-        "⭐ Avis Google reçu — invitation activée",
-        `Une cliente a laissé son avis Google ; ses invitations sont désormais actives.\n` +
-          `  Cliente : ${client.name ?? "?"} (${holderPhone})\n` +
-          `  Commande Clé : ${activated.plan_order_id}\n` +
-          (activated.key_id
-            ? `  Invitations débloquées : ${unlocked}\n`
-            : `  Clé encore programmée — ses invitations naîtront actives au démarrage.\n`) +
-          `\nAucune action requise : la capture d'écran suffit (FYI).`,
-      );
-      return JSON.stringify({
-        review_recorded: true,
-        invitations_activated: unlocked,
-        key_scheduled: activated.key_id === null,
-        message:
-          "Remercie chaleureusement et confirme que son invitation est active" +
-          (activated.key_id === null ? " (elle le sera dès le démarrage de sa Clé)" : "") +
-          ". Rappelle qu'elle s'offre sur le créneau Reformer de 12h30, du lundi au vendredi, à une amie jamais venue chez Revive.",
-      });
-    }
-
     case "book_key_bonus":
     case "book_key_invitation": {
       if (!config.KEYS_AUTOMATION_ENABLED) {
@@ -3836,19 +3775,6 @@ export async function executeTool(
         }
       }
       if (!invitationSelection) {
-        if (
-          config.GOOGLE_REVIEW_URL &&
-          (await keyRepo.hasPendingReviewInvitation(activeKeys.map((k) => k.id)))
-        ) {
-          return JSON.stringify({
-            error: "invitation_pending_review",
-            review_link: config.GOOGLE_REVIEW_URL,
-            message:
-              "L'invitation de cette cliente s'active avec son avis Google (une seule fois, sans jamais insister). " +
-              "Explique-le gentiment, renvoie le lien review_link, demande une capture d'écran de l'avis publié, " +
-              "puis appelle record_google_review dès qu'elle l'envoie.",
-          });
-        }
         return JSON.stringify({
           error: "no_invitation_available",
           message:

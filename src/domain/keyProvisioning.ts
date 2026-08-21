@@ -27,7 +27,6 @@ export async function registerPaidKey(args: {
   continuitySourcePlanId?: string | null;
   continuityExpiresAt?: Date | null;
   previousKeyId?: string | null;
-  reviewGatePlanOrderId?: string | null;
 }): Promise<keys.KeyRegistry | null> {
   if (!config.KEYS_AUTOMATION_ENABLED) return null;
   const mapping = keyMappingForPlan(args.planId);
@@ -72,21 +71,7 @@ export async function registerPaidKey(args: {
     continuityExpiresAt: args.continuityExpiresAt ?? previous?.effective_ends_at ?? null,
     invitationsGranted: earned,
   });
-  // Lock this Key's invitations behind the Google review only when the gate was
-  // created for THIS purchase (matched by plan order) and not yet satisfied. A
-  // screenshot that arrived before provisioning leaves activated_at set → the
-  // invitations are born GRANTED. Counter purchases pass no id → never gated.
-  const gate =
-    args.reviewGatePlanOrderId && args.clientId
-      ? await keys.reviewGateForClient(args.clientId)
-      : null;
-  const gatedForThisKey =
-    !!gate && gate.plan_order_id === args.reviewGatePlanOrderId;
-  const locked = gatedForThisKey && gate!.activated_at === null;
-  await keys.createInvitationRights(row.id, earned, locked ? "PENDING_REVIEW" : "GRANTED");
-  if (gatedForThisKey && earned > 0) {
-    await keys.linkReviewGateKey(gate!.client_id, row.id);
-  }
+  await keys.createInvitationRights(row.id, earned);
   return row;
 }
 
@@ -161,7 +146,6 @@ export async function registerAndEnsureKey(args: {
   continuitySourcePlanId?: string | null;
   continuityExpiresAt?: Date | null;
   previousKeyId?: string | null;
-  reviewGatePlanOrderId?: string | null;
 }): Promise<boolean> {
   const row = await registerPaidKey(args);
   if (!row) return false;

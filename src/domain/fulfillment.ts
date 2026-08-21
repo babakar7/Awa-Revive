@@ -31,7 +31,7 @@ import {
   resolveContinuitySource,
   type ContinuitySource,
 } from "./keyContinuity.js";
-import { keyMappingForPlan, reviewGateApplies } from "./keyRules.js";
+import { keyMappingForPlan } from "./keyRules.js";
 import { createBarTicket } from "./kitchenTicketRepo.js";
 import { applyFrenchRegister } from "../lib/frenchRegister.js";
 import { handleTechnicalFailure } from "./technicalFailure.js";
@@ -643,50 +643,6 @@ export async function processPlanPayment(order: any, log: PaymentLog): Promise<v
     await finalizeVerifiedKeyContinuity(current, log);
   }
   await fulfillPlanOrder(order.id, log);
-  await maybeSendGoogleReviewAsk(order.id, log);
-}
-
-/**
- * One-time "leave a Google review" ask, sent right after a gated early-renewal
- * payment. The atomic claim on ask_sent_at makes webhook retries a no-op, and
- * both Wave and OM funnels reach here via processPlanPayment.
- */
-async function maybeSendGoogleReviewAsk(planOrderId: string, log: PaymentLog): Promise<void> {
-  if (!config.GOOGLE_REVIEW_URL) return;
-  const gate = await keyRepo.claimReviewAskSend(planOrderId);
-  if (!gate) return;
-  const clientRes = await pool.query(`select * from clients where id=$1`, [gate.client_id]);
-  const client = clientRes.rows[0];
-  if (!client) return;
-  const lang: string = client.language ?? "fr";
-  const msg = applyFrenchRegister(
-    googleReviewAskMessage(lang, config.GOOGLE_REVIEW_URL),
-    lang === "fr" && client.fr_register === "vous",
-  );
-  await sendText(client.wa_phone, msg).catch((err) =>
-    log.error({ err, planOrderId }, "Failed to send Google review ask"),
-  );
-  await repo.addTurn(gate.client_id, "assistant", msg).catch(() => undefined);
-}
-
-export function googleReviewAskMessage(lang: string, reviewUrl: string): string {
-  switch (lang) {
-    case "en":
-      return (
-        `🌟 Thank you for your trust! Quick note: the invitation you earned activates with a Google review.\n\n` +
-        `Leave yours here: ${reviewUrl}\nThen send me a screenshot of your published review — I'll unlock your invitation right away 💛`
-      );
-    case "wo":
-      return (
-        `🌟 Jërëjëf ci sa kóllëre! Xibaar bu gaaw: invitation bi nga jot day ubbiku ak benn avis Google.\n\n` +
-        `Bindal sa bos fii: ${reviewUrl}\nBu ko defee, yónnee ma benn foto (capture) bu sa avis bi — dinaa ubbi sa invitation ci saa si 💛`
-      );
-    default:
-      return (
-        `🌟 Merci pour ta confiance ! Petit rappel : l'invitation que tu as gagnée s'active avec un avis Google.\n\n` +
-        `Laisse le tien ici : ${reviewUrl}\nEnvoie-moi ensuite une capture d'écran de ton avis publié — j'active ton invitation aussitôt 💛`
-      );
-  }
 }
 
 async function finalizeVerifiedKeyContinuity(
@@ -749,26 +705,6 @@ async function finalizeVerifiedKeyContinuity(
     sourceExpiresAt: decision.sourceExpiresAt,
     sourceRemaining: decision.sourceRemaining,
   });
-  // Google-review gate: the client's FIRST early Clé renewal locks its
-  // invitations until she leaves a review. Created here (runs once per verified
-  // Key order, re-entrant on webhook retries via the idempotent insert) because
-  // a chained renewal's Key row and invitations are only born later, at
-  // activation. earlyRenewal is taken from the family-scoped decision (never a
-  // raw source presence), so a Résidente bought while an Aquabike is active is
-  // not mis-gated; typeEligible keeps AQUABIKE/SUR_MESURE out entirely.
-  if (
-    order.client_id &&
-    reviewGateApplies({
-      featureEnabled: config.KEYS_AUTOMATION_ENABLED && !!config.GOOGLE_REVIEW_URL,
-      typeEligible: mapping.reviewGateEligible,
-      earlyRenewal: decision.earlyRenewal,
-      clientKnown: !!order.client_id,
-      clientAlreadyGated: !!(await keyRepo.reviewGateForClient(order.client_id)),
-      invitationCount: decision.invitationCount,
-    })
-  ) {
-    await keyRepo.insertReviewGate(order.client_id, order.id);
-  }
   if (
     source?.kind === "LEGACY_REFORMER" &&
     (source.remaining === 0 || source.remaining === null) &&
@@ -892,7 +828,6 @@ export async function fulfillPlanOrder(planOrderId: string, log: PaymentLog): Pr
         continuitySourceOrderId: order.continuity_source_order_id,
         continuitySourcePlanId: order.continuity_source_plan_id,
         continuityExpiresAt: order.continuity_expires_at,
-        reviewGatePlanOrderId: order.id,
       });
     } catch (err) {
       // The paid Key is already active. Provisioning has its own retry/audit

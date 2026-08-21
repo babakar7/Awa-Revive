@@ -171,16 +171,6 @@ invitation est réservé, il ne peut être ni annulé, ni déplacé, ni reporté
 crédit reste consommé.** Awa l'annonce avant de réserver. Si Revive annule le
 cours, la réception traite le remplacement.
 
-La **première fois** (à vie) qu'une cliente renouvelle une Clé **avant son
-expiration**, l'invitation qu'elle gagne à ce renouvellement s'active quand elle
-laisse un **avis Google** : Awa envoie le lien après le paiement et la cliente
-renvoie une **capture d'écran** de son avis publié — la capture suffit, Awa
-active aussitôt, sans passer par la réception. Une seule fois par cliente : ses
-renouvellements anticipés suivants donnent l'invitation sans condition. Tant que
-l'avis n'est pas laissé, l'invitation reste simplement en attente ; Awa le
-rappelle une seule fois, sans jamais insister ni en faire une condition d'autre
-chose. Achats au comptoir : cette condition ne s'y applique pas.
-
 La prolongation de 7 jours concerne L'Habituée, La Résidente, L'Abonnement
 Aquabike et le plan sur mesure : abonnement encore actif, au moins une séance
 restante, jamais prolongé, demande avant expiration. Awa transmet ; seule la

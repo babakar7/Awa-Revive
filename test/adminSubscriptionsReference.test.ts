@@ -27,7 +27,6 @@ describe("Abonnements — référence réception", () => {
     expect(html).toContain("148 000 F · 16 séances · 30 j");
     expect(html).toContain("120 000 F · 12 séances · 30 j");
     expect(html).toContain("Accès piscine pendant toute la durée de la formule");
-    expect(html).toContain("l’invitation s’active après l’avis Google envoyé à Awa");
     expect(html).not.toContain("Carnet de 10 Reformer");
     expect(html).not.toContain("Carnet de 10 Aquabike");
     expect(html).toContain("ne rien créer en double dans Wix");

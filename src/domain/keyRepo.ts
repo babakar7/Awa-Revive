@@ -433,105 +433,21 @@ export async function keysMissingBonusForClient(clientId: string): Promise<KeyRe
 export async function createInvitationRights(
   keyId: string,
   count: number,
-  status: "GRANTED" | "PENDING_REVIEW" = "GRANTED",
 ): Promise<void> {
   for (let ordinal = 1; ordinal <= count; ordinal += 1) {
     await pool.query(
-      `insert into key_invitations (key_id, ordinal, status)
-       values ($1,$2,$3) on conflict (key_id, ordinal) do nothing`,
-      [keyId, ordinal, status],
+      `insert into key_invitations (key_id, ordinal)
+       values ($1,$2) on conflict (key_id, ordinal) do nothing`,
+      [keyId, ordinal],
     );
   }
-}
-
-/** Unlock a key's review-gated invitations once the review lands. */
-export async function activatePendingInvitations(keyId: string): Promise<number> {
-  const result = await pool.query(
-    `update key_invitations set status='GRANTED', updated_at=now()
-      where key_id=$1 and status='PENDING_REVIEW'`,
-    [keyId],
-  );
-  return result.rowCount ?? 0;
-}
-
-/** True if any of the given keys still holds a review-locked invitation. */
-export async function hasPendingReviewInvitation(keyIds: string[]): Promise<boolean> {
-  if (keyIds.length === 0) return false;
-  const result = await pool.query(
-    `select 1 from key_invitations
-      where key_id = any($1::uuid[]) and status='PENDING_REVIEW'
-      limit 1`,
-    [keyIds],
-  );
-  return result.rows.length > 0;
-}
-
-export interface ReviewGate {
-  client_id: string;
-  plan_order_id: string;
-  key_id: string | null;
-  requested_at: Date;
-  ask_sent_at: Date | null;
-  activated_at: Date | null;
-}
-
-export async function reviewGateForClient(clientId: string): Promise<ReviewGate | null> {
-  const result = await pool.query(
-    `select * from google_review_gates where client_id=$1`,
-    [clientId],
-  );
-  return result.rows[0] ?? null;
-}
-
-/** Create the once-per-lifetime gate. Idempotent — a second call is a no-op. */
-export async function insertReviewGate(
-  clientId: string,
-  planOrderId: string,
-): Promise<boolean> {
-  const result = await pool.query(
-    `insert into google_review_gates (client_id, plan_order_id)
-     values ($1,$2) on conflict (client_id) do nothing`,
-    [clientId, planOrderId],
-  );
-  return (result.rowCount ?? 0) > 0;
-}
-
-/** Atomically claim the single post-payment "leave a review" message. */
-export async function claimReviewAskSend(planOrderId: string): Promise<ReviewGate | null> {
-  const result = await pool.query(
-    `update google_review_gates set ask_sent_at=now(), updated_at=now()
-      where plan_order_id=$1 and ask_sent_at is null
-      returning *`,
-    [planOrderId],
-  );
-  return result.rows[0] ?? null;
-}
-
-/** Atomically activate the gate; a losing (already-activated) call returns null. */
-export async function activateReviewGate(clientId: string): Promise<ReviewGate | null> {
-  const result = await pool.query(
-    `update google_review_gates set activated_at=now(), updated_at=now()
-      where client_id=$1 and activated_at is null
-      returning *`,
-    [clientId],
-  );
-  return result.rows[0] ?? null;
-}
-
-/** Stamp the Key the gate applies to, once it is provisioned. */
-export async function linkReviewGateKey(clientId: string, keyId: string): Promise<void> {
-  await pool.query(
-    `update google_review_gates set key_id=$2, updated_at=now()
-      where client_id=$1 and key_id is null`,
-    [clientId, keyId],
-  );
 }
 
 export interface KeyInvitation {
   id: string;
   key_id: string;
   ordinal: number;
-  status: "GRANTED" | "PENDING_REVIEW" | "ASSIGNED" | "USED" | "VOID";
+  status: "GRANTED" | "ASSIGNED" | "USED" | "VOID";
   friend_first_name: string | null;
   friend_phone: string | null;
   wix_invitation_order_id: string | null;

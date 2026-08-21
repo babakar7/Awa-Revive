@@ -13,7 +13,6 @@ function makeMapping(type: KeyType, over: Partial<KeyPlanMapping> = {}): KeyPlan
     durationDays: 60,
     baseInvitations: type === "RESIDENTE" ? 1 : 0,
     continuityInvitation: true,
-    reviewGateEligible: true,
     invitation: {
       planId: "invitation-plan",
       serviceIds: ["svc-reformer"],
@@ -32,7 +31,6 @@ const aquabikeMapping = makeMapping("AQUABIKE", {
   family: "AQUABIKE",
   baseInvitations: 1,
   continuityInvitation: false,
-  reviewGateEligible: false,
   invitation: {
     planId: "aquabike-invitation-plan",
     serviceIds: ["svc-aquabike"],
@@ -46,7 +44,6 @@ const surMesureMapping = makeMapping("SUR_MESURE", {
   planId: "sur-mesure-plan",
   baseInvitations: 1,
   continuityInvitation: false,
-  reviewGateEligible: false,
   bonus: null,
 });
 
@@ -93,7 +90,7 @@ describe("Clés registry", () => {
     ).toBe(2);
   });
 
-  it("counts only unlocked invitations that remain available for lifecycle reminders", async () => {
+  it("counts available invitations for lifecycle reminders", async () => {
     const client = await seedClient();
     const key = await keys.upsertKey({
       paidOrderId: "paid-reminder-count",
@@ -111,7 +108,7 @@ describe("Clés registry", () => {
           set status=case ordinal
             when 1 then 'GRANTED'
             when 2 then 'ASSIGNED'
-            when 3 then 'PENDING_REVIEW'
+            when 3 then 'GRANTED'
             when 4 then 'USED'
             else 'VOID'
           end,
@@ -125,7 +122,7 @@ describe("Clés registry", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       id: key.id,
-      available_invitations: 2,
+      available_invitations: 3,
     });
   });
 
