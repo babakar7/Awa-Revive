@@ -238,7 +238,7 @@ export const config = {
   // (a new lead, or a returning client after a quiet gap). Empty = disabled.
   // Free-text lands only inside the 24h window; outside it we fall back to the
   // reception Utility template (WA_RECEPTION_TEMPLATE) so it still arrives.
-  NEW_CHAT_NOTIFY_PHONE: optional("NEW_CHAT_NOTIFY_PHONE", "+221774982711"),
+  NEW_CHAT_NOTIFY_PHONE: optional("NEW_CHAT_NOTIFY_PHONE", ""),
   // A message counts as a NEW conversation when the client had no activity in
   // the last N hours (so a back-and-forth within one session pings only once).
   NEW_CHAT_NOTIFY_GAP_HOURS: parseInt(optional("NEW_CHAT_NOTIFY_GAP_HOURS", "6"), 10),

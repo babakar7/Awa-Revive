@@ -43,6 +43,11 @@ afterEach(() => {
 });
 
 describe("Clés production preflight", () => {
+  it("keeps new-conversation notifications disabled unless a phone is explicitly configured", async () => {
+    const { config } = await loadConfig();
+    expect(config.NEW_CHAT_NOTIFY_PHONE).toBe("");
+  });
+
   it("allows masked provisioning while paid Keys stay outside Awa's allowlist and templates stay dark", async () => {
     const { assertConfig } = await loadConfig({
       WA_KEY_INVITEE_J5_TEMPLATE: "",
